@@ -113,6 +113,16 @@ Run from the repository root; Turborepo fans each one out across the workspaces.
 `docker compose down -v`, which deletes the volumes and, on the next `pnpm db:up`,
 re-runs the first-boot SQL in `docker/postgres/initdb.d`.
 
+**`pnpm db:reset` has two guards, and both are deliberate.** In a non-interactive shell
+it refuses to run and tells you to pass `--force`. And Prisma 7 detects AI coding agents
+and blocks destructive commands outright unless `PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION`
+is set to the text of the message in which you consented. Neither guard affects a human at
+an interactive prompt; both will stop an agent, which matters for TAR-46's seed script and
+for any automated task that expects to reset the database unattended. The route back to a
+known-good state that passes both guards is
+`docker compose down -v && pnpm db:up && pnpm db:migrate:deploy` — equally destructive, but
+it never invokes `migrate reset`.
+
 ## Working with the database
 
 Postgres 17 and Redis 7 run from `docker-compose.yml`. Two details in there are
