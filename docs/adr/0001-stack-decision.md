@@ -356,10 +356,11 @@ taxonomy, and OpenAPI generation.
 - **Rejected — Biome.** Dramatically faster and one tool instead of two. Rejected because
   the rules we specifically want — Next's own plugin, and type-aware `typescript-eslint`
   rules such as `no-floating-promises` — are not equivalently covered.
-- **Follow-up for TAR-40.** The scaffold uses `typescript-eslint`'s **non-type-checked**
-  recommended set, to keep this task shippable. Enabling `recommendedTypeChecked` is
-  worth doing and belongs with the CI work, where the slower lint run is affordable.
-  `no-floating-promises` alone justifies it in a codebase full of queue producers.
+- **Follow-up for TAR-40 — done.** The scaffold shipped with `typescript-eslint`'s
+  **non-type-checked** recommended set. TAR-40 moved it to `recommendedTypeChecked`
+  with `parserOptions.projectService`, so `no-floating-promises` and the `no-unsafe-*`
+  family are live before the codebase fills up with queue producers. Plain JavaScript
+  sits outside every `tsconfig` and is excluded from the type-aware rules.
 
 ---
 
