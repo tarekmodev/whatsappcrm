@@ -108,17 +108,15 @@ hand-written `down.sql` — see
 every push to `main` and every pull request targeting it. They are exactly the three
 commands above, so a run that is green locally is green in CI.
 
-> **`main` is not protected yet, so CI reports but does not block a merge.** GitHub gates
-> branch protection _and_ repository rulesets on a private repository behind a paid plan,
-> and `tarekmodev` is on Free. Both APIs answer with a 403 telling you to upgrade to
-> GitHub Pro or make the repository public. This is a plan limit, not a permissions one:
-> the token holds repository admin. Until the plan or the repository visibility changes, a
-> red pull request can still be merged. Tracked on TAR-40.
+`main` is protected, and the three checks are **required** — they gate the merge rather
+than merely reporting on it. The branch must also be up to date with `main` before
+merging, review threads must be resolved, administrators are included, and force pushes
+and branch deletion are blocked.
 
-The rule to apply the moment that is unblocked: require **Lint**, **Type-check** and
-**Test**, require the branch to be up to date with `main` before merging, include
-administrators, and block force pushes and deletion. Renaming a job renames its required
-check, so update the rule in the same change.
+In practice that means every change lands through a pull request: a direct push to `main`
+is rejected with `GH006: Protected branch update failed`, because the commit being pushed
+carries no passing checks. Renaming a job in the workflow renames its required check and
+silently removes the gate, so update the protection rule in the same change.
 
 Lint runs `typescript-eslint`'s type-aware rules, which has two consequences worth
 knowing. Every linted TypeScript file needs a `tsconfig` that covers it — a new `.ts`
