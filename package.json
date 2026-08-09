@@ -13,8 +13,8 @@
     "dev": "turbo run dev",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "lint": "turbo run build --filter=./packages/* && eslint .",
+    "lint:fix": "turbo run build --filter=./packages/* && eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

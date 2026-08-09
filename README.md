@@ -66,6 +66,25 @@ Run from the repository root; Turborepo fans each one out across the workspaces.
 | `pnpm lint`      | ESLint across the whole repository                  |
 | `pnpm format`    | Applies Prettier                                    |
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs three jobs — **Lint**, **Type-check** and **Test** — on
+every push to `main` and every pull request targeting it. They are exactly the three
+commands above, so a run that is green locally is green in CI.
+
+`main` is protected: those three checks are **required**, the branch must be up to date
+with `main` before merging, and force pushes and deletion are blocked. In practice that
+means every change lands through a pull request — a direct push to `main` is rejected
+because its commit carries no passing checks. Rename a job in the workflow and the
+required check disappears with it, so update the protection rule in the same change.
+
+Lint runs `typescript-eslint`'s type-aware rules, which has two consequences worth
+knowing. Every linted TypeScript file needs a `tsconfig` that covers it — a new `.ts`
+file outside one fails lint with a parsing error rather than being silently skipped. And
+the rules resolve `@whatsappcrm/contracts` through its build output, so `pnpm lint`
+builds `packages/*` first; without that, a clean checkout lints an unresolved type as
+`any` and reports errors that do not exist.
+
 ## Configuration
 
 `.env.example` is the documented contract for every environment variable and is the file

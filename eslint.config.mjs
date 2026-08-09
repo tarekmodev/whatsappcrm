@@ -17,12 +17,27 @@ export default tseslint.config(
   },
 
   js.configs.recommended,
-  ...tseslint.configs.recommended,
+  ...tseslint.configs.recommendedTypeChecked,
 
   {
     languageOptions: {
       globals: { ...globals.node },
+      // Type-aware linting. `projectService` picks the nearest tsconfig per file,
+      // which is what a workspace with one tsconfig per package needs.
+      // `no-floating-promises` alone justifies the slower run in a codebase that
+      // will be full of queue producers.
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
     },
+  },
+
+  // Plain JavaScript is outside every tsconfig, so the type-aware rules have no
+  // program to work from and must be switched off for it.
+  {
+    files: ['**/*.{js,mjs,cjs}'],
+    ...tseslint.configs.disableTypeChecked,
   },
 
   // Tooling config files are CommonJS; the flat-config default of ESM would

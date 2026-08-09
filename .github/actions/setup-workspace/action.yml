@@ -1,0 +1,30 @@
+name: Set up workspace
+description: Installs Node and pnpm, restores the dependency and Turborepo caches, and installs the workspace.
+
+runs:
+  using: composite
+  steps:
+    # Reads the version from `packageManager` in package.json, so CI and a
+    # developer machine can never drift onto different pnpm majors.
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+
+    - name: Install Node
+      uses: actions/setup-node@v5
+      with:
+        node-version-file: .nvmrc
+        cache: pnpm
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+      shell: bash
+
+    # Keyed per job: each job runs a different Turborepo task, so they would
+    # otherwise overwrite one another's cache entry on every run.
+    - name: Restore Turborepo cache
+      uses: actions/cache@v4
+      with:
+        path: .turbo/cache
+        key: turbo-${{ github.job }}-${{ github.sha }}
+        restore-keys: |
+          turbo-${{ github.job }}-

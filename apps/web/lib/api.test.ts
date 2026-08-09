@@ -2,19 +2,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiRequestError, apiFetch } from './api';
 
 function mockFetch(status: number, body: unknown, jsonParses = true): void {
+  const json = (): Promise<unknown> =>
+    jsonParses ? Promise.resolve(body) : Promise.reject(new SyntaxError('not json'));
+
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => ({
-      ok: status >= 200 && status < 300,
-      status,
-      statusText: 'Bad Gateway',
-      json: async () => {
-        if (!jsonParses) {
-          throw new SyntaxError('not json');
-        }
-        return body;
-      },
-    })),
+    vi.fn(() =>
+      Promise.resolve({
+        ok: status >= 200 && status < 300,
+        status,
+        statusText: 'Bad Gateway',
+        json,
+      }),
+    ),
   );
 }
 

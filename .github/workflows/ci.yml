@@ -1,0 +1,57 @@
+name: CI
+
+# Gates everything that can reach `main`: pushes to the branch itself, and every
+# pull request targeting it. `main` is branch-protected on the three job names
+# below — renaming a job here means updating that protection rule too.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Read-only: nothing in this workflow writes back to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded pull request runs are worthless; superseded `main` runs are the
+  # record of what was merged, so those are left to finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+  NEXT_TELEMETRY_DISABLED: 1
+  # Keep Turborepo's cache where the caching step in the setup action expects it.
+  TURBO_CACHE_DIR: .turbo/cache
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-workspace
+      - name: ESLint
+        run: pnpm lint
+
+  typecheck:
+    name: Type-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-workspace
+      - name: tsc --noEmit across every workspace
+        run: pnpm typecheck
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-workspace
+      - name: Jest (api) and Vitest (web, contracts)
+        run: pnpm test
