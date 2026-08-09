@@ -1,0 +1,13 @@
+# Normalise to LF in the repository and in every working copy. Without this,
+# Windows checkouts get CRLF and Prettier's check fails in Linux CI.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+pnpm-lock.yaml linguist-generated=true -diff

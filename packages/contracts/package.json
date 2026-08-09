@@ -1,0 +1,31 @@
+{
+  "name": "@whatsappcrm/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared API contract schemas and types. Single source of truth for both apps/api and apps/web.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@whatsappcrm/tsconfig": "workspace:^",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}
