@@ -16,7 +16,15 @@
     "lint": "turbo run build --filter=./packages/* && eslint .",
     "lint:fix": "turbo run build --filter=./packages/* && eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f",
+    "db:migrate": "pnpm --filter @whatsappcrm/api exec prisma migrate dev",
+    "db:migrate:deploy": "pnpm --filter @whatsappcrm/api exec prisma migrate deploy",
+    "db:migrate:status": "pnpm --filter @whatsappcrm/api exec prisma migrate status",
+    "db:reset": "pnpm --filter @whatsappcrm/api exec prisma migrate reset",
+    "db:studio": "pnpm --filter @whatsappcrm/api exec prisma studio"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
