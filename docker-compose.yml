@@ -1,0 +1,81 @@
+# Local development dependencies: PostgreSQL and Redis.
+#
+# This file exists so a clean clone can reach a real database in one command.
+# It is NOT a deployment artifact — staging and production run Render's managed
+# Postgres and Key Value (docs/adr/0001-stack-decision.md, decision 9).
+#
+# Values come from `.env` (copied from `.env.example`), which Compose reads
+# automatically from this directory. The defaults below are what `.env.example`
+# ships, so `docker compose up` works even before you copy it.
+
+name: whatsappcrm
+
+services:
+  postgres:
+    # Pinned to the major line Render's managed Postgres offers. Patch floats so
+    # a `docker compose pull` picks up security fixes; the major does not move
+    # without a deliberate change here.
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-whatsappcrm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_only}
+      POSTGRES_DB: ${POSTGRES_DB:-whatsappcrm}
+      # Deterministic collation. Left to the host locale, two developers can get
+      # different index orderings for the same data, which is a genuinely
+      # confusing class of bug to chase later.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    command:
+      - postgres
+      # Surfaces slow queries in `docker compose logs postgres` during local
+      # work, so a bad plan is visible before it reaches staging.
+      - -c
+      - log_min_duration_statement=500
+    ports:
+      # Host port is configurable because 5432 is often already taken by a
+      # locally installed Postgres. Change POSTGRES_PORT in `.env` and the
+      # matching port in DATABASE_URL together.
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Runs once, when the volume is first created. Creates the shadow
+      # database Prisma needs to generate down migrations.
+      - ./docker/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # `--wait` on `docker compose up` blocks on this, so `pnpm db:up` returns
+      # only once the server actually accepts connections — otherwise the
+      # migration step that follows it races the container.
+      test:
+        ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-whatsappcrm} -d ${POSTGRES_DB:-whatsappcrm}']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      # BullMQ requires `noeviction`: under memory pressure any other policy
+      # lets Redis silently discard job data. Render's Key Value must be
+      # configured the same way (TAR-41).
+      - --maxmemory-policy
+      - noeviction
+      # Append-only so a container restart does not wipe queued jobs mid-debug.
+      - --appendonly
+      - 'yes'
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  pgdata:
+  redisdata:

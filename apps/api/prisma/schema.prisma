@@ -1,0 +1,18 @@
+// Prisma schema — the single source of truth for the database shape.
+//
+// It is deliberately empty of models. TAR-38's ADR picks Prisma; TAR-42 (this
+// file) wires up the local runner; **TAR-39 owns the data model** and adds the
+// first entities, along with the tenant-scoping mechanism (RLS session variable
+// or a query-level guard). Adding speculative models here would pre-empt that
+// decision.
+//
+// The connection URL lives in `prisma.config.mjs`, not here: Prisma 7 reads the
+// datasource URL from the config file and no longer loads `.env` on its own.
+//
+// No `generator` block yet, so no client is generated and `@prisma/client` is
+// not a dependency. The story that writes the first query adds both — Prisma 7
+// clients need a driver adapter, which is a choice for whoever writes that code.
+
+datasource db {
+  provider = "postgresql"
+}
