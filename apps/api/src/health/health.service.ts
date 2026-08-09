@@ -1,23 +1,59 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { HealthResponse } from '@whatsappcrm/contracts';
+import type { HealthCheck, HealthResponse, HealthStatus } from '@whatsappcrm/contracts';
+import type { Env } from '../config/env.schema';
+import { PrismaService } from '../infra/prisma/prisma.service';
+import { RedisService } from '../infra/redis/redis.service';
 
 @Injectable()
 export class HealthService {
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService<Env, true>,
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+  ) {}
 
-  check(): HealthResponse {
-    // TAR-41 adds `database` and `queue` probes here and downgrades `status` to
-    // `degraded`/`down` accordingly. Until those services exist this endpoint
-    // reports process liveness only — it must never claim dependency health it
-    // has not actually measured, or the uptime alert becomes a lie.
-    const checks: HealthResponse['checks'] = {};
+  /**
+   * Liveness: is this process running at all.
+   *
+   * Deliberately probes nothing. A liveness check that fails when the database
+   * blinks tells the platform to restart a perfectly healthy process, which turns
+   * a dependency outage into a restart storm on top of it.
+   */
+  liveness(): HealthResponse {
+    return this.envelope('ok', {});
+  }
 
+  /**
+   * Readiness: can this process actually serve traffic.
+   *
+   * Both probes run concurrently and both are bounded, so the answer arrives in
+   * roughly one probe's time even when a dependency is hanging.
+   */
+  async readiness(): Promise<HealthResponse> {
+    const [database, queue] = await Promise.all([this.prisma.ping(), this.redis.ping()]);
+    const checks = { database, queue };
+
+    return this.envelope(aggregate(checks), checks);
+  }
+
+  private envelope(status: HealthStatus, checks: HealthResponse['checks']): HealthResponse {
     return {
-      status: 'ok',
-      version: this.config.get<string>('APP_VERSION') ?? '0.0.0',
+      status,
+      version: this.config.get('APP_VERSION', { infer: true }),
       uptimeSeconds: Math.floor(process.uptime()),
       checks,
     };
   }
+}
+
+/** The worst check wins: a service missing either dependency cannot serve a request. */
+function aggregate(checks: Record<string, HealthCheck>): HealthStatus {
+  const statuses = Object.values(checks).map((check) => check.status);
+
+  if (statuses.includes('down')) {
+    return 'down';
+  }
+
+  return statuses.includes('degraded') ? 'degraded' : 'ok';
 }

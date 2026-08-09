@@ -36,6 +36,12 @@ jobs:
       - name: ESLint
         run: pnpm lint
 
+      # Prisma does not generate down migrations, so reversibility is a convention
+      # (docs/runbooks/migrations.md). A convention nothing checks is a convention
+      # that lasts until the first busy afternoon.
+      - name: Every migration has a down.sql
+        run: pnpm --filter @whatsappcrm/api db:check-migrations
+
   typecheck:
     name: Type-check
     runs-on: ubuntu-latest

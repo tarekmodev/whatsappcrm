@@ -29,6 +29,8 @@ story that first needs it.
 | `packages/contracts` | Zod schemas and types shared by both apps — the API contract |
 | `packages/tsconfig`  | Shared TypeScript configuration                              |
 | `docs/adr`           | Architecture decision records                                |
+| `docs/runbooks`      | Operational procedures — environments, migrations            |
+| `render.yaml`        | The three hosted environments, defined as a Render blueprint |
 
 ## Getting started
 
@@ -50,8 +52,10 @@ curl http://localhost:3001/api/health
 # {"status":"ok","version":"0.0.0","uptimeSeconds":3,"checks":{}}
 ```
 
-No database or Redis is needed yet — `DATABASE_URL` and `REDIS_URL` are optional until
-TAR-41 provisions them.
+No database or Redis is needed to boot locally — `DATABASE_URL` and `REDIS_URL` are
+optional outside production. Readiness will report `down` until they are set, which is
+the correct answer, not a failure. TAR-42 adds the docker-compose harness that supplies
+them.
 
 ## Commands
 
@@ -65,6 +69,38 @@ Run from the repository root; Turborepo fans each one out across the workspaces.
 | `pnpm test`      | Runs all tests — Jest for the API, Vitest elsewhere |
 | `pnpm lint`      | ESLint across the whole repository                  |
 | `pnpm format`    | Applies Prettier                                    |
+
+Database commands run from `apps/api` (or with `pnpm --filter @whatsappcrm/api <script>`):
+
+| Command               | What it does                                                      |
+| --------------------- | ----------------------------------------------------------------- |
+| `db:migrate --name X` | Creates a migration **and** its `down.sql`. Local only            |
+| `db:deploy`           | Applies pending migrations — what runs on every deploy            |
+| `db:rollback`         | Prints the plan to undo the newest migration; `--confirm` runs it |
+| `db:check-migrations` | Fails if any migration has no `down.sql`. CI runs this            |
+| `db:generate`         | Regenerates the Prisma client                                     |
+
+## Environments
+
+Three hosted environments — development, staging and production — each with its own
+database, its own Key Value instance and its own WhatsApp and Polar credentials. They
+are defined in [`render.yaml`](render.yaml); provisioning them, the secrets you are
+prompted for, and the alerting wired to them are in
+[`docs/runbooks/environments.md`](docs/runbooks/environments.md).
+
+Health:
+
+| Endpoint            | Answers                           |
+| ------------------- | --------------------------------- |
+| `/api/health`       | is the process alive              |
+| `/api/health/ready` | can it serve — database and queue |
+
+`/api/health/ready` answers `503` when a dependency is down and still returns the full
+body, so an alert says which one.
+
+Migrations apply automatically as part of every deploy and each one ships a
+hand-written `down.sql` — see
+[`docs/runbooks/migrations.md`](docs/runbooks/migrations.md).
 
 ## Continuous integration
 
@@ -112,7 +148,15 @@ to start if a required key is missing or malformed.
   know a shape, it is a Zod schema there, not a duplicated interface.
 - **Errors have one envelope** (`ApiErrorSchema`), and the frontend has one error type
   (`ApiRequestError` in `apps/web/lib/api.ts`). Every response carries `x-request-id`,
-  which ties a user-reported error to a log line.
+  which ties a user-reported error to a log line. Throwing an `HttpException` is enough
+  — `AllExceptionsFilter` turns it into that envelope, logs it, and reports the 5xx ones
+  to the error tracker.
+- **Never `console.log`.** Nest's `Logger` writes through `AppLoggerService`, which
+  emits JSON and attaches the tenant automatically. For structured fields, inject
+  `AppLoggerService` and call `structured('MyContext')`.
+- **Never read `process.env`.** Add the key to `apps/api/src/config/env.schema.ts` and
+  `.env.example` in the same commit, then read it from `ConfigService`. The process
+  refuses to boot on an invalid environment.
 
 ## License
 

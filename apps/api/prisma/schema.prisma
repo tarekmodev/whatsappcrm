@@ -1,0 +1,22 @@
+// Datasource and generator only — deliberately no models.
+//
+// TAR-41 owns the migration *pipeline* (generate at build, `migrate deploy` in the
+// deploy hook, a reversible rollback path); TAR-39 owns the data model and TAR-42
+// owns local invocation. Adding entities here before TAR-39 publishes them would
+// be inventing a schema this task has no mandate for.
+//
+// Every migration generated from this schema must ship a hand-written `down.sql`
+// alongside Prisma's `migration.sql` — see docs/runbooks/migrations.md. That
+// convention is enforced by `pnpm --filter @whatsappcrm/api db:check-migrations`,
+// which CI runs on every pull request.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+
