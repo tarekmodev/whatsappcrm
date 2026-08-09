@@ -78,9 +78,12 @@ means every change lands through a pull request — a direct push to `main` is r
 because its commit carries no passing checks. Rename a job in the workflow and the
 required check disappears with it, so update the protection rule in the same change.
 
-Lint runs `typescript-eslint`'s type-aware rules, so it needs a `tsconfig` to cover every
-linted TypeScript file. A new `.ts` file outside one will fail lint with a parsing error
-rather than being silently skipped.
+Lint runs `typescript-eslint`'s type-aware rules, which has two consequences worth
+knowing. Every linted TypeScript file needs a `tsconfig` that covers it — a new `.ts`
+file outside one fails lint with a parsing error rather than being silently skipped. And
+the rules resolve `@whatsappcrm/contracts` through its build output, so `pnpm lint`
+builds `packages/*` first; without that, a clean checkout lints an unresolved type as
+`any` and reports errors that do not exist.
 
 ## Configuration
 
