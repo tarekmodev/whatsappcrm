@@ -487,15 +487,25 @@ so it is not discovered late.
   in its acceptance criteria no longer applies. Note the sequencing: a required status
   check cannot be configured before the workflow that produces it exists, so TAR-40
   lands the CI workflow first and applies protection second, in that order.
-  **Blocked in practice — on the plan, not on permissions.** TAR-40 landed the workflow
-  and then found that GitHub gates branch protection _and_ repository rulesets on a
-  private repository behind a paid plan. `tarekmodev` is on Free, and both APIs answer
-  `403 Upgrade to GitHub Pro or make this repository public`. The token does hold
-  repository admin, so Tarek's answer stands; the obstacle is that the feature is not
-  sold on this plan. Until either the plan or the repository visibility changes, `main`
-  carries reporting checks and no enforced gate — the outcome TAR-45 is told to reject.
-  Recorded rather than quietly downgraded; the choice is Tarek's and is escalated on
-  TAR-40.
+  **Resolved, via a second decision this ADR now has to record.** TAR-40 landed the
+  workflow and then found that GitHub gates branch protection _and_ repository rulesets
+  on a private repository behind a paid plan; `tarekmodev` is on Free, and both APIs
+  answered `403 Upgrade to GitHub Pro or make this repository public`. Repository admin
+  was never the obstacle — the feature is simply not sold on that plan. Offered the
+  choice between GitHub Pro and publishing the repository, **Tarek made
+  `tarekmodev/whatsappcrm` public**, and protection was applied and verified: a direct
+  push to `main` is rejected with `GH006`, and a pull request with a failing check cannot
+  be merged.
+
+  The consequence belongs here rather than only in a comment thread: **this repository is
+  now world-readable, permanently.** Forks, clones and search-engine caches survive a
+  later flip back to private, so every future story has to treat the source as public.
+  Nothing secret may enter the repository or its history — no credentials, no customer
+  data, no tenant identifiers, no internal hostnames — and `.env.example` stays a list of
+  key names with no values, as decision 10's configuration rule already requires.
+  TAR-41's provisioning work should assume any operator making a mistake here is
+  disclosing to the internet, not to a private team.
+
 - **Question 1 — data residency: NOT answered; assumed not required.** Raised twice and
   not addressed, against two explicit instructions to continue. Proceeding on the
   assumption that no residency requirement exists — no compliance constraint has been
