@@ -487,6 +487,15 @@ so it is not discovered late.
   in its acceptance criteria no longer applies. Note the sequencing: a required status
   check cannot be configured before the workflow that produces it exists, so TAR-40
   lands the CI workflow first and applies protection second, in that order.
+  **Blocked in practice — on the plan, not on permissions.** TAR-40 landed the workflow
+  and then found that GitHub gates branch protection _and_ repository rulesets on a
+  private repository behind a paid plan. `tarekmodev` is on Free, and both APIs answer
+  `403 Upgrade to GitHub Pro or make this repository public`. The token does hold
+  repository admin, so Tarek's answer stands; the obstacle is that the feature is not
+  sold on this plan. Until either the plan or the repository visibility changes, `main`
+  carries reporting checks and no enforced gate — the outcome TAR-45 is told to reject.
+  Recorded rather than quietly downgraded; the choice is Tarek's and is escalated on
+  TAR-40.
 - **Question 1 — data residency: NOT answered; assumed not required.** Raised twice and
   not addressed, against two explicit instructions to continue. Proceeding on the
   assumption that no residency requirement exists — no compliance constraint has been
