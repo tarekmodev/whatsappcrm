@@ -478,6 +478,26 @@ so it is not discovered late.
 | 6   | **Scale ceiling.** This design is sized for the low hundreds of concurrent agent connections and a single Postgres primary — correct for a product with zero tenants. The breaking point is single-primary write throughput and Socket.IO connection count per instance. Next steps in order: read replicas for reporting, then partitioning `messages` by tenant or time, then a dedicated realtime tier | Low now                                                                       | Revisit when a real tenant load exists; do not pre-build                                                |
 | 7   | **TypeScript 7** is available and deliberately not adopted                                                                                                                                                                                                                                                                                                                                                | Low                                                                           | Revisit once `typescript-eslint` supports it                                                            |
 
+### Questions 1 and 2 — proceeding under a stated assumption
+
+Both were raised on TAR-38 and left unanswered across two explicit instructions to
+continue. Rather than stall the epic on them, they are resolved by assumption here so
+downstream stories have something definite to build against. Either can be overturned by
+a one-line answer; both are recorded so the choice is visible rather than silently
+inherited.
+
+- **Question 1 — data residency: assumed NOT required.** No compliance or data-residency
+  requirement has been stated for this product at any point. Decision 9 therefore stands
+  and **TAR-41 provisions on Render as specified.** _Trigger to revisit:_ any statement
+  that WhatsApp conversation content must remain in-region, or a client contract clause
+  to that effect. Cost of a late reversal is a full environment migration to AWS
+  `me-central-1`, so TAR-41 should provision development and staging first and confirm
+  before production carries real tenant data.
+- **Question 2 — branch protection: assumed squad-applied.** TAR-40 requests repository
+  admin on `tarekmodev/whatsappcrm` and applies required checks itself. If admin is not
+  granted, TAR-40 must say so on its issue rather than downgrading the criterion to a
+  documented intention — an ungated `main` is the one outcome TAR-45 will reject.
+
 ## Consequences for downstream issues
 
 - **TAR-39** — build within `apps/api/src`; fill `packages/contracts`; decide RLS vs.
