@@ -615,29 +615,77 @@ steps, in order: read replicas for reporting, then partition `messages` by
 TAR-18 already carries the story breakdown, so this section maps the contract onto those
 stories rather than creating new ones. **No sub-issues are created by this issue.**
 
-| Order | Story                       | Delivers from this contract                                                                    | Unblocks   |
-| ----- | --------------------------- | ---------------------------------------------------------------------------------------------- | ---------- |
-| 1     | **TAR-19**                  | Prisma models, RLS migration, `TenantPrisma`/`SystemPrisma`, host→tenant guard, isolation test | everything |
-| 2     | TAR-35                      | Sessions, login, invites, `AuthGuard`, `setTenant()`                                           | TAR-20/22  |
-| 2     | TAR-22                      | Roles, teams, `PermissionGuard`                                                                | TAR-23/24  |
-| 3     | TAR-20                      | WhatsApp accounts, ingest + processors, inbox, realtime                                        | TAR-21/28  |
-| 3     | TAR-46                      | Seed data against the entities above                                                           | TAR-45     |
-| 4     | TAR-21/25/26/32             | Tickets, status, SLA, event log                                                                | TAR-30     |
-| 4     | TAR-37                      | `PolarBillingProvider`, plans, entitlements, usage counters                                    | TAR-36     |
-| 5     | TAR-23/24/27/28/29/30/31/33 | Feature modules against fixed boundaries                                                       | —          |
+| Order | Story                       | Delivers from this contract                                                                    | Unblocks      |
+| ----- | --------------------------- | ---------------------------------------------------------------------------------------------- | ------------- |
+| 1     | **TAR-19**                  | Prisma models, RLS migration, `TenantPrisma`/`SystemPrisma`, host→tenant guard, isolation test | everything    |
+| 1a    | TAR-47 ✅                   | Prisma models and the initial migration — landed on `main`                                     | TAR-48/49     |
+| 1b    | **TAR-48**                  | RLS policies, `FORCE ROW LEVEL SECURITY`, the non-`BYPASSRLS` app role, isolation test         | the guarantee |
+| 1c    | **TAR-49**                  | `TenantPrisma`/`SystemPrisma` split and the client extension that sets the GUC                 | every query   |
+| 1d    | TAR-50/51                   | Tenant provisioning and deactivation flows                                                     | TAR-36        |
+| 2     | TAR-35                      | Sessions, login, invites, `AuthGuard`, `setTenant()`                                           | TAR-20/22     |
+| 2     | TAR-22                      | Roles, teams, `PermissionGuard`                                                                | TAR-23/24     |
+| 3     | TAR-20                      | WhatsApp accounts, ingest + processors, inbox, realtime                                        | TAR-21/28     |
+| 3     | TAR-46                      | Seed data against the entities above                                                           | TAR-45        |
+| 4     | TAR-21/25/26/32             | Tickets, status, SLA, event log                                                                | TAR-30        |
+| 4     | TAR-37                      | `PolarBillingProvider`, plans, entitlements, usage counters                                    | TAR-36        |
+| 5     | TAR-23/24/27/28/29/30/31/33 | Feature modules against fixed boundaries                                                       | —             |
 
 The ordering constraint that matters: **TAR-19 is a hard prerequisite for everything
 else**, because it lands the schema and the scoping mechanism every other story writes
 against. See the note on promotion in the publishing comment.
 
+> **The schema is not the guarantee.** TAR-47 has landed every `tenant_id` column and
+> every uniqueness constraint this document specifies — but until **TAR-48** creates the
+> policies and **TAR-49** sets the GUC, row-level security is not switched on and tenant
+> isolation is enforced by nothing at all. A schema that merely _has_ `tenant_id`
+> columns looks identical, in review, to one that enforces them. Any story writing
+> queries before those two land must not assume isolation is handled.
+
 ## Open Questions and Risks
 
-| #   | Item                                                                                                                                                                      | Severity | Resolution                                                                      |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------- |
-| 1   | **Prisma 7 + RLS ergonomics.** The batched `set_config` + query pattern needs verification against Prisma 7's driver-adapter client — including that it is one round trip | High     | TAR-19 spikes it first. Fallback: one connection per unit of work, GUC set once |
-| 2   | **RLS query-plan cost** on `messages` and `conversations` at volume is unmeasured. No benchmark is claimed here                                                           | Medium   | Measure in TAR-19 with realistic seed data from TAR-46                          |
-| 3   | **Tenant-scoped users** assumes nobody works for two client organisations                                                                                                 | Medium   | Additive migration path recorded above; confirm with Tarek before TAR-35 ships  |
-| 4   | **Custom-domain TLS issuance** (TAR-29) is unspecified and depends on Render's capabilities                                                                               | Medium   | TAR-41 verifies at provisioning; TAR-29 designs against the answer              |
-| 5   | **Data residency** — inherited, still unanswered. ADR 0001 assumes none required                                                                                          | High     | Unchanged; TAR-41 provisions dev/staging first                                  |
-| 6   | **WhatsApp templates** are approved per WABA. Whether tenants share one WABA or each brings their own changes the template model                                          | Medium   | Confirm with Tarek before TAR-20 builds template management                     |
-| 7   | **Data retention** on tenant deletion — TAR-18 says 30 days "pending client policy"                                                                                       | Low now  | Must be settled before TAR-36 ships deletion                                    |
+| #   | Item                                                                                                                                                                      | Severity | Resolution                                                                    |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------- |
+| 1   | **Prisma 7 + RLS ergonomics.** The batched `set_config` + query pattern needs verification against Prisma 7's driver-adapter client — including that it is one round trip | High     | **TAR-49** spikes it. Fallback: one connection per unit of work, GUC set once |
+| 2   | **RLS query-plan cost** on `messages` and `conversations` at volume is unmeasured. No benchmark is claimed here                                                           | Medium   | Measure in **TAR-48** with realistic seed data from TAR-46                    |
+| 3   | **Tenant-scoped users** assumes nobody works for two client organisations                                                                                                 | Medium   | **Assumed, not answered** — see below. Additive migration path recorded above |
+| 4   | **Custom-domain TLS issuance** (TAR-29) is unspecified and depends on Render's capabilities                                                                               | Medium   | TAR-41 verifies at provisioning; TAR-29 designs against the answer            |
+| 5   | **Data residency** — inherited, still unanswered. ADR 0001 assumes none required                                                                                          | High     | Unchanged; TAR-41 provisions dev/staging first                                |
+| 6   | **WhatsApp templates** are approved per WABA. Whether tenants share one WABA or each brings their own changes the template model                                          | Medium   | **Assumed, not answered** — see below. Revisit before TAR-20 builds templates |
+| 7   | **Data retention** on tenant deletion — TAR-18 says 30 days "pending client policy"                                                                                       | Low now  | Must be settled before TAR-36 ships deletion                                  |
+
+### Questions 3 and 6 — assumed, so they stop blocking
+
+Both were raised on this issue and left unanswered across three instructions to continue.
+Following the precedent ADR 0001 set for data residency, they are recorded here as
+assumptions rather than re-asked, so downstream stories are not held hostage to them.
+Either is cheap to overturn with one line; both get more expensive after the story that
+depends on them ships.
+
+**Question 6 — WhatsApp Business Account model: assume one WABA per tenant.**
+
+Each tenant owns its own WABA and phone numbers, onboarded through Meta's Embedded
+Signup under our app acting as a Tech Provider. The deciding argument is blast radius:
+Meta assigns quality ratings and messaging limits per number and approves templates per
+WABA, so a shared WABA couples every tenant's Meta standing together — one client's
+policy violation would throttle everyone else's messaging. That is unacceptable for a
+reseller platform whose tenants are separate legal businesses messaging their own
+customers.
+
+This changes nothing about the ingestion design above: with the Tech Provider model,
+every tenant's webhooks still arrive at one callback URL signed with **our** app secret,
+and `phone_number_id` remains the routing key. What it does fix is the template model —
+`message_templates` is per tenant, as the data model above already has it, and template
+approval status is per tenant rather than platform-wide.
+
+_Trigger to revisit:_ a decision to resell under a single platform-owned WhatsApp
+identity. _Needs verification at implementation time:_ the exact Embedded Signup flow and
+permission scopes, against Meta's current documentation — not asserted here.
+
+**Question 3 — tenant-scoped users: assume no cross-tenant people.**
+
+`UNIQUE (tenant_id, email)` stands, as already landed in TAR-47's migration. A person
+working for two client organisations gets two accounts with two passwords.
+
+_Trigger to revisit:_ the first real request for one login across two tenants. The
+migration is additive — keep `users` as the tenant-scoped membership row, add a global
+`identities` table, and join — so this is a change of shape, not a rewrite.
