@@ -41,6 +41,11 @@ services:
       # Runs once, when the volume is first created. Creates the shadow
       # database Prisma needs to generate down migrations.
       - ./docker/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
+      # Operational SQL that is not a migration — the application roles and the
+      # tenant isolation check (TAR-48). Mounted rather than piped on stdin so
+      # `pnpm db:roles` and `pnpm db:verify:rls` are a plain `psql -f`, with no
+      # shell redirection to break between bash, PowerShell and cmd.
+      - ./apps/api/prisma/sql:/sql:ro
     healthcheck:
       # `--wait` on `docker compose up` blocks on this, so `pnpm db:up` returns
       # only once the server actually accepts connections — otherwise the
