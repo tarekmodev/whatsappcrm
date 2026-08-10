@@ -825,7 +825,8 @@ could not carry the header this amendment publishes, the ruled sort key did not 
 published cursor, and the text claimed the platform-operator surface did not exist when it
 is shipped on `main`. Round two: the resume predicate the cursor rule reached for was
 correct but not index-served, a static text header was forced to send an empty header
-object, and `filename` broke the repo's `fileName` spelling. Revised in place rather than
+object, `filename` broke the repo's `fileName` spelling, and the button exclusion named no
+derivation rule while every other exclusion here has one. Revised in place rather than
 superseded — one canonical statement of this contract is worth more than a trail._
 
 The published surface has no way to list templates, and TAR-72's composer cannot work
@@ -865,15 +866,16 @@ route.
 permission costs TAR-22 a matrix change and buys no separation, since anyone who may read
 this list may already send from it.
 
-`MessageTemplateResponseSchema` carries three fields derived server-side from Meta's
-component tree, alongside the verbatim `components` passthrough:
+`MessageTemplateResponseSchema` carries these fields, derived server-side from Meta's
+component tree in one pass, alongside the verbatim `components` passthrough:
 
-| Field                  | Type                                                     | Why                                                                    |
-| ---------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `bodyText`             | string \| null                                           | The BODY text with `{{n}}` placeholders intact, for the preview        |
-| `parameterCount`       | int ≥ 0                                                  | Exactly the length `SendTemplateInput.variables` must have — BODY only |
-| `headerFormat`         | `text`\|`image`\|`video`\|`document`\|`location` \| null | What the header expects, if anything                                   |
-| `headerParameterCount` | int ≥ 0                                                  | Placeholders in a `text` header; `0` for every other format            |
+| Field                      | Type                                                     | Why                                                                    |
+| -------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `bodyText`                 | string \| null                                           | The BODY text with `{{n}}` placeholders intact, for the preview        |
+| `parameterCount`           | int ≥ 0                                                  | Exactly the length `SendTemplateInput.variables` must have — BODY only |
+| `headerFormat`             | `text`\|`image`\|`video`\|`document`\|`location` \| null | What the header expects, if anything                                   |
+| `headerParameterCount`     | int ≥ 0                                                  | Placeholders in a `text` header; `0` for every other format            |
+| `requiresButtonParameters` | boolean                                                  | Any button needs a send-time parameter — the v1 exclusion predicate    |
 
 `SendTemplateInputSchema.variables` is a _positional_ array. With `components` as the only
 source, every consumer — the composer, the AI chatbot, the workflow builder — walks Meta's
@@ -918,16 +920,42 @@ opens the picker and finds it empty, with nothing in the product explaining why.
 endpoint that would have to grow the slot is TAR-68, unbuilt — this is as cheap as it will
 ever be.
 
-**Buttons with dynamic parameters are out of scope for v1**, and the list excludes them.
-Meta's URL buttons take a dynamic suffix and quick-reply buttons a payload; both need
-composer UX that nothing in TAR-20 designs, and unlike headers there is no confirmed
-demand to design it against. Excluded rather than listed-and-unsendable, for the same
-reason unapproved templates are. The cost is the one just rejected for headers, and it is
-accepted here only because the case is rarer: such a template is missing from the picker
-with no in-product explanation. The mitigation is the template-administration surface
-under `channel:manage`, which shows every template with its status and is where "approved
-by Meta, not yet sendable from this product" belongs. _Trigger to revisit:_ the first
-tenant with a dynamic URL button.
+**Buttons that take a send-time parameter are out of scope for v1**, and the list excludes
+them. They need composer UX that nothing in TAR-20 designs, and unlike headers there is no
+confirmed demand to design it against. Excluded rather than listed-and-unsendable, for the
+same reason unapproved templates are.
+
+The predicate is `requiresButtonParameters`, and it is stated as an invariant rather than
+as a list of Meta's button types: **a template is excluded when any button in its `BUTTONS`
+component requires a parameter in the send call.** A button whose behaviour is fixed at
+approval — a static URL, a phone number — changes nothing about what the send path must
+supply and does not exclude anything. Nothing else about a `BUTTONS` component matters.
+
+Both ways of getting this wrong fail silently, so the derivation **fails closed**: a button
+type it does not recognise counts as requiring a parameter. The two errors are not
+symmetric. Too narrow and an unsendable template reaches the picker — the exact failure
+approved-only exists to prevent, surfacing as a send that fails at Meta. Too broad and a
+sendable template goes missing, which is visible to the tenant, explainable on the
+administration surface, and fixed by widening the predicate. When Meta adds a button type,
+the second is the one to be holding.
+
+_Needs verification at implementation time,_ against Meta's current documentation and not
+asserted here: exactly which button types require a send-time parameter. A dynamic URL
+suffix does — identifiable by the `example` Meta attaches to that button — and a static URL
+or phone number does not. **Quick replies are the one to check first**, because the answer
+decides whether this exclusion is a rare edge or a common hole: quick-reply templates are
+one of the most common utility shapes, and excluding all of them would drop far more from
+the picker than this ruling intends. Because the predicate is the invariant and not a type
+list, whatever verification finds is a change to the derivation, not to this contract.
+
+The cost is the one just rejected for headers, accepted here only because the case is
+expected to be rarer: such a template is missing from the picker with no in-product
+explanation. `requiresButtonParameters` is published rather than kept internal so the
+mitigation can work — the template-administration surface under `channel:manage` shows
+every template and is where "approved by Meta, not yet sendable from this product"
+belongs, and it cannot say that about a template it cannot identify. On this list the field
+is `false` for every row by construction. _Triggers to revisit:_ the first tenant with a
+dynamic URL button, or verification finding that quick replies fall inside the predicate.
 
 **Cursor.** `(name, language, id)` is the contract's first multi-column sort, and the
 worked example under [Cursor encoding](#data-model): `k: [name, language]`, `id` last,
