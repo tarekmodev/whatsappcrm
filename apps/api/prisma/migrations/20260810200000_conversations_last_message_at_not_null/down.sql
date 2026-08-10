@@ -1,0 +1,42 @@
+-- Reverses 20260810200000_conversations_last_message_at_not_null.
+--
+-- Prisma does not generate down migrations; every migration directory carries a
+-- hand-written one, per docs/adr/0001-stack-decision.md (decision 6).
+--
+-- ---------------------------------------------------------------------------
+-- What this restores, and what it does not
+-- ---------------------------------------------------------------------------
+--
+-- The schema reverses exactly: the column goes back to nullable, no index is
+-- touched, no data is destroyed.
+--
+-- The backfill does not reverse, and cannot. Once a row holds
+-- `last_message_at = created_at`, nothing distinguishes it from a row that was
+-- always going to hold that value, so there is no predicate that would restore
+-- the NULLs. This is not a data-loss warning — for a thread with no messages,
+-- created_at is the semantically correct value either way, and the up migration
+-- would simply re-derive it — but it means running this file leaves the
+-- database at the old *type* and the new *data*, not at the old state.
+--
+-- The practical consequence: re-applying the up migration after this is a
+-- no-op backfill plus a SET NOT NULL, which is safe. Rolling back in order to
+-- reintroduce NULLs is not something this file can do.
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+-- Locks:     ACCESS EXCLUSIVE on conversations, momentary.
+-- Duration:  instant. DROP NOT NULL is a catalogue update with no table scan.
+-- Blocking:  momentary, and lock_timeout bounds the wait for the lock itself.
+-- Caution:   application code compiled against the NOT NULL schema — Prisma
+--            types and ConversationResponseSchema without `.nullable()` — will
+--            still refuse to represent a NULL after this runs. Roll the
+--            application back with it, or this only widens the database while
+--            the code above it stays narrow.
+--
+-- ---------------------------------------------------------------------------
+
+SET LOCAL lock_timeout = '3s';
+
+ALTER TABLE "public"."conversations" ALTER COLUMN "last_message_at" DROP NOT NULL;

@@ -32,7 +32,12 @@ export const ConversationResponseSchema = z.object({
   /** True while the AI chatbot (TAR-28) is answering and no human has taken over. */
   botHandling: z.boolean(),
   lastMessagePreview: z.string().nullable(),
-  lastMessageAt: TimestampSchema.nullable(),
+  /**
+   * Never null: it is the inbox's keyset sort column, and a nullable sort column
+   * truncates pagination (TAR-39, amendment 2). A thread with no messages yet
+   * carries its `createdAt`, which is what the list sorts it by.
+   */
+  lastMessageAt: TimestampSchema,
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });

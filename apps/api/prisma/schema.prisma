@@ -778,7 +778,18 @@ model Conversation {
   serviceWindowExpiresAt DateTime?          @map("service_window_expires_at") @db.Timestamptz(3)
   /// Denormalised from `messages` to keep the inbox list a single-table scan.
   /// Maintained in the same transaction as the message insert.
-  lastMessageAt          DateTime?          @map("last_message_at") @db.Timestamptz(3)
+  ///
+  /// NOT NULL because it leads a keyset sort (TAR-39, amendment 2): under
+  /// three-valued logic a NULL row fails `last_message_at <= $cursor`, so it
+  /// shows on page one — where there is no cursor — and on no page after it.
+  ///
+  /// Deliberately **no `@default`**. A default makes the field optional in
+  /// Prisma's create input, and an insert that omits it would record the row's
+  /// creation time as message activity — which the ingest path's high-water
+  /// mark then reads as newer than the message that caused the insert. Required
+  /// here means the caller states the value: `sentAt` when a message creates the
+  /// thread, `createdAt` when nothing has arrived yet.
+  lastMessageAt          DateTime           @map("last_message_at") @db.Timestamptz(3)
   unreadCount            Int                @default(0) @map("unread_count")
   createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
