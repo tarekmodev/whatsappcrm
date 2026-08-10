@@ -715,6 +715,16 @@ model MessageTemplate {
   /// WABA" already has one. A second index on the same prefix would cost write
   /// throughput and serve no read.
   @@unique([tenantId, whatsappBusinessAccountId, name, language])
+  /// Serves `GET /api/v1/message-templates` (TAR-20a, shape ruled in 0002
+  /// amendment 1): approved templates for the tenant in scope, ordered by name,
+  /// keyset-paginated. The unique index above cannot serve it — it leads with
+  /// the WABA, while this list may span a tenant's WABAs — so without this the
+  /// composer's template picker is a sequential scan of every tenant's
+  /// templates. `status` sits second because the endpoint filters on exactly one
+  /// value; `tenant_id` leads it because RLS supplies that equality on every
+  /// query (TAR-39, decision 1, rule 3); `name, language, id` are the three sort
+  /// keys, and a name-leading order is also what makes the `q` prefix a range.
+  @@index([tenantId, status, name, language, id])
   @@map("message_templates")
 }
 
@@ -819,7 +829,16 @@ model Conversation {
   serviceWindowExpiresAt DateTime?          @map("service_window_expires_at") @db.Timestamptz(3)
   /// Denormalised from `messages` to keep the inbox list a single-table scan.
   /// Maintained in the same transaction as the message insert.
-  lastMessageAt          DateTime?          @map("last_message_at") @db.Timestamptz(3)
+  ///
+  /// NOT NULL, and that is load-bearing rather than tidiness (TAR-92): this is
+  /// the leading *sort* column of all three inbox keyset indexes below.
+  /// Postgres orders NULLs FIRST under DESC, so a message-less conversation
+  /// would pin itself to page one, and the ruled resume predicate
+  /// (`last_message_at <= $1 AND NOT (…)`) evaluates to NULL — not TRUE — for
+  /// that cursor, silently dropping every row after it. A thread with no
+  /// message yet sorts by when it was opened: the default is the row's own
+  /// insert time, matching `created_at`.
+  lastMessageAt          DateTime           @default(now()) @map("last_message_at") @db.Timestamptz(3)
   unreadCount            Int                @default(0) @map("unread_count")
   createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)

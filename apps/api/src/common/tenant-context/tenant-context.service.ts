@@ -11,11 +11,16 @@ export interface TenantContext {
   userId: string | null;
   /**
    * The caller's role, permissions and team memberships, resolved once per
-   * request (TAR-79). `null` on an unauthenticated path — the platform admin
-   * surface, the health probe — which is why every reader has to handle it
-   * rather than assume it.
+   * request (TAR-22, TAR-79).
+   *
+   * Optional, and absent means the same thing as `null`: nobody has been
+   * resolved yet. `PrincipalGuard` is what fills it, and it runs at pipeline
+   * slot 3 — so every path that opens a scope earlier (the middleware, a queue
+   * worker, a fixture) legitimately has no caller, and requiring each of them to
+   * write `principal: null` would be ceremony that buys nothing. Readers go
+   * through `principal` / `requirePrincipal()` below, which normalise both.
    */
-  principal: SessionPrincipal | null;
+  principal?: SessionPrincipal | null;
 }
 
 /**

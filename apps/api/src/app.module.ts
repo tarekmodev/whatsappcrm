@@ -10,6 +10,7 @@ import { PeopleModule } from './people/people.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RbacModule } from './rbac/rbac.module';
 import { TenancyModule } from './tenancy/tenancy.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
 /**
  * One `.env` for the whole repository, at the root — the same file
@@ -37,6 +38,7 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     HealthModule,
     TenancyModule,
     PeopleModule,
+    WhatsAppModule,
   ],
 })
 export class AppModule implements NestModule {
