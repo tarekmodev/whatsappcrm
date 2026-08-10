@@ -4,10 +4,12 @@ Multi-tenant, white-label WhatsApp CRM and helpdesk platform, built on the offic
 WhatsApp Business Cloud API.
 
 > **Status: scaffold.** This repository currently contains the project skeleton, the stack
-> decision, the local development harness, the database schema, its tenant isolation and
-> the two Prisma clients that enforce it — no product features. Feature work is tracked as
-> the TAR-18 epic. The database has **tables but no rows**: the data model landed with
-> TAR-47, row-level security with TAR-48, the client split with TAR-49, and seed data
+> decision, the local development harness, the database schema, its tenant isolation, the
+> two Prisma clients that enforce it and the platform admin surface that provisions and
+> deactivates tenants — no product features. Feature work is tracked as the TAR-18 epic.
+> The database has **tables but no rows**: the data model landed with TAR-47, row-level
+> security with TAR-48, the client split with TAR-49, provisioning and deactivation with
+> TAR-50 and TAR-51, the WhatsApp Business Account entity with TAR-52, and seed data
 > arrives with TAR-46. Everything below works today.
 
 ## Stack
@@ -40,6 +42,20 @@ not yet installed; each arrives with the story that first needs it.
 | `docker-compose.yml`       | Local PostgreSQL and Redis                                   |
 | `docker/postgres/initdb.d` | First-boot SQL for the local Postgres container              |
 | `docs/adr`                 | Architecture decision records                                |
+| `docs/architecture`        | Cross-cutting design documents                               |
+| `docs/reference`           | Data model, admin API and tenant isolation reference         |
+
+## Documentation
+
+| Document                                                                                 | What it answers                                                             |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| [ADR 0001 — stack decision](docs/adr/0001-stack-decision.md)                             | Why each piece of the stack, and what it costs                              |
+| [Architecture and API contract](docs/architecture/0002-architecture-and-api-contract.md) | Module boundaries, tenant resolution, the endpoint surface, webhooks        |
+| [Data model reference](docs/reference/data-model.md)                                     | Every entity, which are tenant-scoped, which constraints and indexes matter |
+| [Tenant isolation contract](docs/reference/tenancy.md)                                   | Which Prisma client to inject, and what the database refuses                |
+| [Platform admin API](docs/reference/admin-api.md)                                        | Provisioning and deactivation: request, response, errors, retention         |
+| [Documentation style guide](docs/STYLE.md)                                               | How to write the above                                                      |
+| [Changelog](CHANGELOG.md)                                                                | What has landed so far                                                      |
 
 ## Getting started
 
@@ -82,7 +98,7 @@ pnpm db:verify:rls
 # PASS — tenant isolation is enforced at the data layer
 
 pnpm test:db
-# Tests: 33 passed — the same guarantee through TenantPrisma, plus provisioning
+# Tests: 53 passed — the same guarantee through TenantPrisma, plus provisioning
 ```
 
 The `checks` object is empty on purpose: the endpoint reports process liveness only and
@@ -90,7 +106,8 @@ must never claim dependency health it has not measured. Real database and queue 
 arrive with TAR-41.
 
 **The database has tables but no rows — that is the expected state.** Seeding is TAR-46.
-Provision a tenant to get one (see [Provisioning a tenant](#provisioning-a-tenant)). To see
+Provision a tenant to get one (see
+[Provisioning and deactivating tenants](#provisioning-and-deactivating-tenants)). To see
 what step 4 built:
 
 ```bash
@@ -177,27 +194,14 @@ expresses the entity table in `docs/architecture/0002-architecture-and-api-contr
 (TAR-39) — read that first for _why_ the entities are shaped this way; the schema file
 carries the per-model reasoning next to each model.
 
-Six conventions hold across every model, and a change that breaks one needs a reason:
+37 models. 34 are tenant-scoped: they carry a non-null `tenant_id`, and row-level security
+filters them. Three are not — `tenants`, `plans` and `webhook_events`, each deliberately.
+Six conventions hold across every model, starting with a non-null `tenant_id` on every
+scoped table and composite `(tenant_id, <parent_id>)` foreign keys.
 
-1. **Every tenant-scoped table carries a non-null `tenant_id`**, even where the tenant is
-   already reachable through a foreign key. An RLS policy is a row predicate and cannot
-   join. Exactly three tables do not have one, all deliberately: `tenants`, `plans`
-   (platform-wide product data) and `webhook_events` (written before the tenant is known,
-   so its `tenant_id` is nullable and it is never RLS-protected).
-2. **Tenant-scoped foreign keys are composite** — `(tenant_id, <parent_id>)` referencing
-   the parent's `UNIQUE (tenant_id, id)`, never the parent's `id` alone. RLS stops a
-   tenant _reading_ another tenant's row; this is what stops one being _referenced_ by a
-   handler that took an id from a request body.
-3. **Composite indexes lead with `tenant_id`**, and sort keys are
-   `(<timestamp> DESC, id DESC)` so keyset pagination has a total order.
-4. **Referential actions are only ever `Cascade` or `NoAction`** — never `Restrict` (it is
-   checked immediately and would abort a legitimate cascading tenant delete) and never
-   `SetNull` (on a composite key it would null `tenant_id`, which is `NOT NULL`).
-5. **Ids are UUIDv7**, generated by the Prisma client. Postgres 17 has no native
-   `uuidv7()`, so there is no column default — anything inserting outside the client must
-   supply the id.
-6. **Timestamps are `timestamptz`**, money is integer minor units plus an ISO 4217 code,
-   phone numbers are E.164, and emails/slugs/hostnames are `citext`.
+**[Data model reference](docs/reference/data-model.md)** — every entity, its constraints,
+its load-bearing indexes and the story that owns it, plus the six conventions in full and
+what TAR-52 changed about the WhatsApp entities.
 
 ### Tenant isolation
 
@@ -211,52 +215,28 @@ CREATE POLICY tenant_isolation ON conversations
 ```
 
 `app.tenant_id` is a per-transaction setting the Prisma client extension sets before each
-query (TAR-49). Three properties fall out, and all three are what make this worth having:
+query. A connection that has not set it sees **nothing** — not everything. `FORCE` includes
+the table owner, so migrations are not exempt. `WITH CHECK` means a cross-tenant write is
+rejected rather than merely unreadable.
 
-- **A connection that has not set it sees nothing.** Not "everything" — nothing. Both the
-  never-set case (`current_setting` returns NULL) and the cleared case (it returns the
-  empty string, which is why the `NULLIF` is there) fail closed.
-- **`FORCE` includes the table owner.** Without it, migrations — and anything else
-  connecting as the owner — would be exempt, which is the opposite of what you want.
-- **Writes are checked too.** `WITH CHECK` means a handler that takes a `tenant_id` from a
-  request body cannot write into another tenant; the insert is rejected outright.
+Two roles back it up, created by `apps/api/prisma/sql/app-roles.sql`:
 
-Three tables deliberately carry no policy: `tenants` (it _is_ the tenant, and provisioning
-reads it before one is in scope), `plans` (the shared product catalogue) and
-`webhook_events` (written before the tenant is known — TAR-39's documented exception).
-
-Two roles back this up, created by `apps/api/prisma/sql/app-roles.sql`:
-
-| Role                 | Holds                                                | Sees                                           |
-| -------------------- | ---------------------------------------------------- | ---------------------------------------------- |
-| `whatsappcrm_app`    | No `SUPERUSER`, no `BYPASSRLS`. DML on scoped tables | Only the tenant in `app.tenant_id`             |
-| `whatsappcrm_system` | The same, plus a `system_unrestricted` policy        | Everything — the five `SystemPrisma` uses only |
-
-`SUPERUSER` and `BYPASSRLS` skip policy evaluation entirely, so the app role must hold
-neither; `pnpm db:verify:rls` fails if it ever does. Both roles are created `NOLOGIN` —
-granting login means handing out a password, which comes from the environment's secret
-store, never from this repository:
-
-```sql
-ALTER ROLE whatsappcrm_app LOGIN PASSWORD '<value from the secret store>';
-```
+| Role                 | Holds                                                | Sees                               |
+| -------------------- | ---------------------------------------------------- | ---------------------------------- |
+| `whatsappcrm_app`    | No `SUPERUSER`, no `BYPASSRLS`. DML on scoped tables | Only the tenant in `app.tenant_id` |
+| `whatsappcrm_system` | The same, plus a `system_unrestricted` policy        | Everything — five call sites only  |
 
 **`pnpm db:verify:rls` is the proof, not the documentation.** It creates two tenants,
-reconnects so the connection has genuinely never set the GUC, and asserts that all 34
-tables return zero rows; that each tenant then sees its own rows and none of the other's;
-that a cross-tenant insert is rejected and a cross-tenant update or delete matches
-nothing. It exits non-zero on the first failure and cleans up after itself. CI runs it on
-every pull request. It writes to the database it is pointed at, so point it at a local or
-disposable one.
+reconnects so the connection has genuinely never set the GUC, and asserts that all 34 tables
+return zero rows; that each tenant then sees its own rows and none of the other's; that a
+cross-tenant insert is rejected and a cross-tenant update or delete matches nothing. It
+reads the catalog rather than a list, exits non-zero on the first failure, and cleans up
+after itself. CI runs it on every pull request. It writes to the database it is pointed at,
+so point it at a local or disposable one.
 
-**RLS carries the guarantee; it does not always carry the plan.** Measured by TAR-48 on
-50k conversations across 20 tenants, the inbox query drops from an index-only scan reading
-50 rows to a bitmap scan of the whole tenant plus a top-N sort. The cause is that
-`enum_eq` is not leakproof, so under RLS a `status = 'open'` qual cannot be pushed into
-the index condition. It does not matter at this size and it will at a large tenant's. Two
-things restore the plan when it does: a partial index, or an explicit `tenantId` in the
-query's own `where`. The client does **not** inject that automatically — see the caveat at
-the end of the next section.
+**[Tenant isolation contract](docs/reference/tenancy.md)** — which client to inject,
+`$tenantTransaction`, the three tables with no policy, the deactivation gate, the errors the
+data layer throws, and the rules a new module has to follow.
 
 ### The two Prisma clients
 
@@ -273,12 +253,13 @@ constructor(@Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma) {}
 ```
 
 `SystemPrisma` is a **separate client, not a flag** on the tenant one. A flag is one typo
-away from being set, invisible at the injection site, and impossible to review by search;
-a token appears in the constructor of every class allowed to use it. TAR-39 permits five
-such classes — provisioning, login before a tenant is known, webhook ingest, the sweeper,
-and platform reporting — and a sixth needs a justification in review.
+away from being set, invisible at the injection site, and impossible to review by search; a
+token appears in the constructor of every class allowed to use it. TAR-39 permits five such
+classes — provisioning, login before a tenant is known, webhook ingest, the sweeper, and
+platform reporting — and a sixth needs a justification in review.
 
-`TenantPrisma` sets the GUC by wrapping every statement in a transaction:
+`TenantPrisma` sets the GUC by wrapping every statement in a transaction, with TAR-51's
+deactivation gate in front of it:
 
 ```sql
 BEGIN;
@@ -287,46 +268,17 @@ SELECT set_config('app.tenant_id', assert_tenant_active($1), true);  -- true = t
 COMMIT;
 ```
 
-The tenant comes from `TenantContextService`'s `AsyncLocalStorage`, which HTTP requests,
-queue jobs and WebSocket handlers all share. **No tenant in scope throws**, before
-anything is sent — the query never happens, rather than happening and returning nothing.
-That distinction is the whole point: zero rows is indistinguishable from an empty table,
-so a code path that forgot to resolve its tenant would look like a working one.
+**No tenant in scope throws**, before anything is sent. Three things to know before writing
+a query: it costs extra round trips, so use `prisma.$tenantTransaction(async (tx) => …)` for
+multi-statement work; batch `$transaction([…])` does not work on it; and `tenants`, `plans`
+and `webhook_events` have client-side rules because they carry no policy. The reference
+covers each.
 
-`assert_tenant_active` is the deactivation gate (TAR-51, below). It returns the id when
-that tenant is `active` and raises `TenantNotActiveError` otherwise, and Postgres evaluates
-it before `set_config` — so a deactivated tenant never sets the GUC, and the statement
-batched behind it never runs.
+### Provisioning and deactivating tenants
 
-Three things to know before writing a query against it:
-
-- **It costs three extra round trips.** Measured against the local Compose stack:
-  0.7 ms for a plain query, 2.3–3.4 ms for a scoped one. Prisma 7's driver-adapter client
-  sends `BEGIN`, `set_config`, the query and `COMMIT` as four separate messages, not one
-  batched round trip. For anything issuing several statements, use
-  `prisma.$tenantTransaction(async (tx) => …)`: it opens one transaction, sets the GUC
-  once, and pays that cost a single time instead of per query. The status check adds no
-  round trip of its own — it is a primary-key lookup inside the `set_config` statement
-  that was already being sent.
-- **Batch `$transaction([…])` does not work on it.** The extension hook is async, so the
-  client returns ordinary promises rather than the `PrismaPromise`s a batch needs. Use
-  `$tenantTransaction`.
-- **`tenants`, `plans` and `webhook_events` have no RLS policy**, so the client applies
-  one itself: `Tenant` reads are narrowed to the tenant in scope and its writes refused,
-  `Plan` is read-only, and `WebhookEvent` is refused outright. Inside
-  `$tenantTransaction` the client handed to your callback is the un-extended one, so
-  those three rules do not apply there — RLS still covers everything else.
-
-**Not built here, and deliberately:** the extension does not inject `tenantId` into
-`where`/`data` for the 33 scoped models. RLS already filters them correctly, and a
-generic injection has to get nested writes, `connect`, `upsert` and relation filters right
-or it silently drops rows — worse than not having it. Where a plan needs the explicit
-predicate (see the measurement above), pass `tenantId` in the query's own `where`.
-
-### Provisioning a tenant
-
-Tenants are admin-provisioned; there is no self-signup. Provisioning is one call, and it
-writes the tenant, its settings and its platform subdomain in a single transaction:
+Tenants are admin-provisioned; there is no self-signup. Both operations are one call,
+authenticated by `PLATFORM_ADMIN_TOKEN` rather than by a session, and both are idempotent on
+the tenant's slug.
 
 ```bash
 curl -X POST http://localhost:3001/api/v1/admin/tenants \
@@ -334,75 +286,31 @@ curl -X POST http://localhost:3001/api/v1/admin/tenants \
   -H 'Content-Type: application/json' \
   -d '{"slug":"acme","name":"Acme Ltd","timezone":"Europe/London","locale":"en-GB"}'
 
-# 201 Created
-# {"id":"019f…","slug":"acme","name":"Acme Ltd","status":"active",
-#  "primaryHostname":"acme.app.localhost",
+# 201 Created — 200 if it already existed
+# {"id":"019fed83-ebd1-774d-86e4-46137546a539","slug":"acme","name":"Acme Ltd",
+#  "status":"active","primaryHostname":"acme.app.localhost",
 #  "settings":{"timezone":"Europe/London","locale":"en-GB"},"createdAt":"…"}
-```
 
-Things worth knowing before you call it:
-
-- **`201` means provisioned, `200` means it already existed.** The call is idempotent on
-  `slug`, so re-running a provisioning script is safe. A repeat never renames the tenant,
-  never changes its status and never resets its settings — those are `PATCH /tenant` and
-  TAR-36's lifecycle, not a side effect of replaying a script. It does add a settings row
-  or a platform domain that is missing.
-- **The hostname is derived from the slug**, `<slug>.$PLATFORM_DOMAIN`, and is never taken
-  from the request. If another tenant already holds that host, the whole call is refused
-  with `409 conflict` and nothing is written — there is no half-provisioned tenant to
-  clean up.
-- **It authenticates with `PLATFORM_ADMIN_TOKEN`, not a session.** The platform operator
-  is not a user inside any tenant, and provisioning has to work before the first user
-  exists. Leave the variable unset and the whole admin surface refuses every request.
-  This is a placeholder for a real platform-admin identity, which arrives with TAR-35's
-  and TAR-22's work.
-- **A provisioned tenant has no users yet.** Inviting the first one is TAR-35.
-
-The route runs on `SystemPrisma` — the only client that can write `tenants` — and is one
-of the five call sites TAR-39 permits for it.
-
-### Deactivating a tenant
-
-Deactivation takes a tenant's access away and keeps its data. One call, and it is in force
-the moment it commits:
-
-```bash
 curl -X POST http://localhost:3001/api/v1/admin/tenants/acme/deactivate \
   -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"reason":"Non-payment, ticket OPS-412"}'
 
 # 200 OK
-# {"id":"019f…","slug":"acme","name":"Acme Ltd","status":"suspended",
-#  "suspendedAt":"…"}
+# {"id":"019fed83-ebd1-774d-86e4-46137546a539","slug":"acme","name":"Acme Ltd",
+#  "status":"suspended","suspendedAt":"…"}
 ```
 
-Things worth knowing before you call it:
+Provisioning writes the tenant, its settings and its platform subdomain in one transaction,
+and nothing else — no users, no branding, no subscription. The hostname is derived from the
+slug and never taken from the request. Deactivation writes two columns and an audit entry:
+the data is retained and reachable through `SystemPrisma`, while the tenant's agents stop
+reaching it on their very next query, because the block lives in the database rather than in
+a guard.
 
-- **It is not a delete, and there is no data loss to undo.** Two columns are written —
-  `tenants.status` and `tenants.suspended_at` — and nothing else. Every contact,
-  conversation, ticket and message stays where it was and stays reachable through
-  `SystemPrisma` for support, billing and export.
-- **The block is in the database, not in a guard.** `assert_tenant_active` is called by
-  every `TenantPrisma` statement (see "The two Prisma clients" above), so the tenant's
-  agents stop reaching their data on their very next query — through open sessions,
-  in-flight background jobs, WebSocket handlers and raw SQL alike. There is no cache to
-  expire, and no new route can forget to apply it.
-- **No other tenant is affected.** One row is written and the gate reads only the row the
-  GUC names. `apps/api/src/tenancy/tenant-deactivation.int-spec.ts` is the regression
-  proof: it deactivates one tenant and asserts its neighbour still reads, writes and runs
-  transactions normally.
-- **It is idempotent.** A repeat call answers `200` and changes nothing — including
-  `suspendedAt`, which records when access was actually revoked and must survive a
-  replayed script. A slug no tenant carries answers `404`, so a typo during an incident is
-  visible rather than silently successful.
-- **Reactivation is not here.** `suspended → active` belongs to TAR-36's lifecycle state
-  machine; an endpoint that exists to take access away should not also be the one that
-  gives it back. Until it ships, an operator restores a tenant by setting `status` back to
-  `active` through the platform's own database access.
-- **A `pending` or `cancelled` tenant is blocked by the same gate.** Only `active` reaches
-  data, so a half-provisioned tenant is closed by the mechanism rather than by a second
-  rule.
+**[Platform admin API](docs/reference/admin-api.md)** — parameters, every response and error
+shape, idempotency and retention semantics, and what each call deliberately leaves to
+another story.
 
 ### Adding a migration
 
