@@ -324,9 +324,28 @@ tenant-facing code. `tenant_id` is filled in during processing, for forensics.
 Sort keys are `(timestamp DESC, id DESC)` throughout, which is what makes UUIDv7 ids
 worth having: the id is a stable tie-breaker for two rows in the same millisecond.
 
-**Cursor encoding.** `base64url(JSON.stringify({ v: 1, k: <sortValue>, id: <uuid> }))`,
+**Cursor encoding.** `base64url(JSON.stringify({ v: 1, k: [<sortValue>, ...], id: <uuid> }))`,
 opaque to clients. Keyset, never `OFFSET` — an offset page duplicates and skips rows in
 a feed that is being appended to while it is read.
+
+`k` is **always an array**, one entry per sort column in declared order, with `id` as the
+final tie-breaker — `k: [lastMessageAt]` for the inbox, `k: [name, language]` for a
+two-column sort. It is an array even at length one, so that adding a second sort column to
+a list later is not a cursor format change. Comparison is tuple order: left to right, each
+column deciding only when every column before it is equal.
+
+Postgres expresses that resume predicate directly as a row comparison —
+`(name, language, id) > ($1, $2, $3)` — and Prisma's query API does not, so a composite
+sort resolves to the equivalent nested form:
+
+```sql
+name > $1 OR (name = $1 AND (language > $2 OR (language = $2 AND id > $3)))
+```
+
+Both forms are served by an index leading with those columns in that order. What is **not**
+equivalent is comparing only the first column and the id — `(name, id) > ($1, $3)` — which
+drops every row sharing a `name` with the page boundary whose id sorts before it. That
+failure is silent: no error, a row simply never appears.
 
 ---
 
@@ -379,6 +398,16 @@ Order is not arbitrary — each stage depends on the last:
 
 `@Public()` opts an endpoint out of 3–6: login, password reset, webhooks,
 `GET /tenant/public`, health.
+
+`/api/v1/admin/*` does not run this pipeline at all. It is the **platform-operator**
+surface — us, not a customer inside a tenant — and it is authenticated by
+`PlatformAdminGuard` (TAR-19, hardened in TAR-51): a fail-closed, timing-safe shared
+bearer token, deliberately not a session, because the operator is not a user in any tenant
+and provisioning has to work before the first user exists. Stages 2–6 have nothing to
+resolve for such a caller. The trade the guard's own comment states plainly: a shared
+secret has no per-operator identity, no revocation and no audit trail beyond "someone with
+the token" — right-sized for provisioning, and the thing to replace when a platform-admin
+identity exists.
 
 ### Endpoint surface
 
@@ -446,6 +475,10 @@ GET    /api/v1/billing/subscription          → BillingSummaryResponse     bill
 GET    /api/v1/billing/usage                 → UsageSummaryResponse       billing:read
 POST   /api/v1/billing/checkout              → HostedSession              billing:manage
 POST   /api/v1/billing/portal                → HostedSession              billing:manage
+
+# Platform operator — PlatformAdminGuard bearer token, never a session   TAR-19/51
+POST   /api/v1/admin/tenants                 → ProvisionedTenantResponse
+POST   /api/v1/admin/tenants/{slug}/deactivate → DeactivatedTenantResponse
 
 # Webhooks — public, signature-verified, never cookie-authenticated
 GET    /api/webhooks/whatsapp                → hub.challenge echo
@@ -745,6 +778,12 @@ emerged from whichever implementation happened to need it first.
 
 ### Amendment 1 — message templates (TAR-20a)
 
+_Revised once, before anything shipped against it, on three findings from review: the send
+contract could not carry the header this amendment publishes, the ruled sort key did not
+fit the published cursor, and the original text claimed the platform-operator surface did
+not exist when it is shipped on `main`. Revised in place rather than superseded — one
+canonical statement of this contract is worth more than a trail._
+
 The published surface has no way to list templates, and TAR-72's composer cannot work
 without one: the moment the 24-hour service window closes, a template is the only thing an
 agent can send, and the picker has to be populated from somewhere. TAR-66 proposed the
@@ -785,11 +824,12 @@ this list may already send from it.
 `MessageTemplateResponseSchema` carries three fields derived server-side from Meta's
 component tree, alongside the verbatim `components` passthrough:
 
-| Field            | Type                                                     | Why                                                             |
-| ---------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
-| `bodyText`       | string \| null                                           | The BODY text with `{{n}}` placeholders intact, for the preview |
-| `parameterCount` | int ≥ 0                                                  | Exactly the length `SendTemplateInput.variables` must have      |
-| `headerFormat`   | `text`\|`image`\|`video`\|`document`\|`location` \| null | What the header expects, if anything                            |
+| Field                  | Type                                                     | Why                                                                    |
+| ---------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `bodyText`             | string \| null                                           | The BODY text with `{{n}}` placeholders intact, for the preview        |
+| `parameterCount`       | int ≥ 0                                                  | Exactly the length `SendTemplateInput.variables` must have — BODY only |
+| `headerFormat`         | `text`\|`image`\|`video`\|`document`\|`location` \| null | What the header expects, if anything                                   |
+| `headerParameterCount` | int ≥ 0                                                  | Placeholders in a `text` header; `0` for every other format            |
 
 `SendTemplateInputSchema.variables` is a _positional_ array. With `components` as the only
 source, every consumer — the composer, the AI chatbot, the workflow builder — walks Meta's
@@ -801,6 +841,53 @@ leaves nothing to drift. `components` itself stays unvalidated — its shape is 
 change, and a schema that guessed at it would reject valid templates the first time Meta
 added a field.
 
+**Publishing `headerFormat` obliges the send contract to carry a header.**
+`SendTemplateInputSchema` is `{ type, templateName, languageCode, variables }` — one flat
+positional array, with nowhere to put the image an `image`-header template requires. Left
+there, an approved template with an IMAGE header and two BODY placeholders passes the
+approved-only filter, renders two inputs, satisfies the arity check, and fails at Meta:
+the opaque provider error `parameterCount` was added to prevent, reached through the field
+added to prevent it. `SendTemplateInput` therefore gains an optional header slot,
+discriminated on the same `headerFormat` vocabulary:
+
+```ts
+header:
+  | { format: 'text'; variables: string[] }                                  // headerParameterCount long
+  | { format: 'image' | 'video' | 'document'; mediaId: Id; filename?: string } // filename: documents only
+  | { format: 'location'; latitude: number; longitude: number; name?: string; address?: string }
+```
+
+Required exactly when `headerFormat` is non-null, absent otherwise, and its `format` must
+equal the template's — all three checkable server-side before the Cloud API call, which is
+the whole point. `parameterCount` keeps its published meaning: BODY placeholders, matching
+`variables`. Header placeholders are counted separately in `headerParameterCount` rather
+than folded into one total, because they are supplied through a different slot and a
+single number could not say which.
+
+_Rejected:_ scoping header templates out of v1 and filtering them from the list. It is the
+smaller change, but it means a tenant whose approved templates all carry a logo header
+opens the picker and finds it empty, with nothing in the product explaining why. The send
+endpoint that would have to grow the slot is TAR-68, unbuilt — this is as cheap as it will
+ever be.
+
+**Buttons with dynamic parameters are out of scope for v1**, and the list excludes them.
+Meta's URL buttons take a dynamic suffix and quick-reply buttons a payload; both need
+composer UX that nothing in TAR-20 designs, and unlike headers there is no confirmed
+demand to design it against. Excluded rather than listed-and-unsendable, for the same
+reason unapproved templates are. The cost is the one just rejected for headers, and it is
+accepted here only because the case is rarer: such a template is missing from the picker
+with no in-product explanation. The mitigation is the template-administration surface
+under `channel:manage`, which shows every template with its status and is where "approved
+by Meta, not yet sendable from this product" belongs. _Trigger to revisit:_ the first
+tenant with a dynamic URL button.
+
+**Cursor.** `(name, language, id)` is the contract's first multi-column sort. It resolves
+under the composite-key rule in [Cursor encoding](#data-model) — `k: [name, language]`,
+tuple comparison, `id` last. Comparing `name` and `id` alone silently drops one language of
+a two-language template at a page boundary, which is the normal case here:
+`UNIQUE (tenant_id, whatsapp_business_account_id, name, language)` exists precisely so one
+name spans languages.
+
 The filter takes a phone number rather than a business account because
 `ConversationResponse` publishes `whatsappAccountId` and nothing maps one to the other.
 The composer holds a number; asking it for a WABA would make it either call unfiltered —
@@ -811,8 +898,27 @@ into every inbox row to serve one consumer, and contradicts the principle the se
 already follows: the server resolves the WABA, the caller does not name it.
 
 _Still open:_ TAR-66 also introduces `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts`
-and its `template-sync` sibling. This document defines no admin surface at all — no path
-convention, no permission, no guard — and whether a tenant may connect its own WABA or
-only the platform operator may is a product call, pending with Tarek on TAR-20. Ruled on
-in a later amendment once that answer lands; until then no story should treat that path
-shape as contract.
+and its `template-sync` sibling. The platform-operator surface those follow is real and
+shipped — `PlatformAdminGuard`, `admin.ts`, `admin-tenants.controller.ts`, from TAR-19 and
+TAR-51 — and this revision records it in the endpoint surface and the request pipeline,
+where it had been omitted. TAR-66 is following that convention, not proposing one.
+
+What is open is narrower: whether a tenant may connect its own WABA, which is a product
+call pending with Tarek on TAR-20. It decides the path, not the guard — a tenant-facing
+route is `POST /api/v1/whatsapp/business-accounts` under `channel:manage`, because a
+tenant-facing route never names its own tenant in the path (decision 2). Operator-only is
+close to zero marginal work: the principal, the guard and the path convention all exist.
+Adding the tenant-facing route later is additive either way.
+
+One caveat that is not a reason to answer differently, but is a reason to add something:
+what flows through this endpoint is a WABA access token, the most sensitive credential in
+the system, and `PlatformAdminGuard` is a shared secret with no per-operator identity and
+no audit trail. Provisioning a tenant under that guard is one thing; writing a customer's
+Meta credential under it is another. Whichever way the product call goes, the operator
+path needs an audit record of who connected what and when.
+
+Also unruled and independent of the product call: `0002` records Embedded Signup as the
+onboarding path, which returns a code the server exchanges for a token, while TAR-66's
+endpoint accepts a pasted `accessToken`. There is no code-exchange endpoint in the
+contract. Amendment 2 covers the path shape, the audit record and the code exchange
+together once Tarek answers.
