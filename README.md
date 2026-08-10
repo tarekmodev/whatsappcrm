@@ -759,11 +759,12 @@ the Prisma client is generated rather than committed. **Lint** covers both
 ADR 0001's decision 12. An unformatted file therefore fails the **Lint** check — run
 `pnpm format` and push again.
 
-`main` is protected, and **Lint**, **Type-check** and **Test** are **required** — they
-gate the merge rather than merely reporting on it. **Database** is not yet in that list;
-adding it is a change to the repository's protection rule, not to the workflow file. The
-branch must also be up to date with `main` before merging, review threads must be
-resolved, administrators are included, and force pushes and branch deletion are blocked.
+`main` is protected, and **Lint**, **Type-check**, **Test** and **Database** are all
+**required** — they gate the merge rather than merely reporting on it. **Database** joined
+that list in TAR-96: it is the only check that proves tenant isolation, so leaving it
+advisory meant a broken policy could go red and merge anyway. The branch must also be up
+to date with `main` before merging, review threads must be resolved, administrators are
+included, and force pushes and branch deletion are blocked.
 
 In practice that means every change lands through a pull request: a direct push to `main`
 is rejected with `GH006: Protected branch update failed`, because the commit being pushed
