@@ -66,6 +66,11 @@ export class WebhookSweeperService {
         // a failed job `removeOnFail` retains, and BullMQ ignores an `add` for
         // an id it holds. See `sweptWebhookEventJobId`.
         jobId: sweptWebhookEventJobId(webhookEventId, now),
+        // The extra read is worth it here and nowhere else: this sweep's count
+        // is a recovery report, and a duplicate counted as a re-enqueue is the
+        // log line lying. It runs off the request path, at most once per stuck
+        // event per interval.
+        detectDuplicate: true,
         attempts: this.maxAttempts,
         backoff: { type: 'exponential', delay: 1_000 },
         removeOnComplete: 1_000,
