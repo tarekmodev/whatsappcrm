@@ -32,7 +32,13 @@ export const ConversationResponseSchema = z.object({
   /** True while the AI chatbot (TAR-28) is answering and no human has taken over. */
   botHandling: z.boolean(),
   lastMessagePreview: z.string().nullable(),
-  lastMessageAt: TimestampSchema.nullable(),
+  /**
+   * Never null: the column is `NOT NULL` (TAR-92) because it leads the inbox's
+   * keyset index, and a null there silently drops rows from page two onward. A
+   * conversation with no message yet carries its own `createdAt`, so a client
+   * can sort and render every row without a null branch.
+   */
+  lastMessageAt: TimestampSchema,
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });
