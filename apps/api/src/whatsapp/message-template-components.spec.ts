@@ -169,6 +169,10 @@ describe('requiresButtonParameters', () => {
     ['a copy-code button, which takes a coupon', withButtons([{ type: 'COPY_CODE' }])],
     ['a button type this build has never seen', withButtons([{ type: 'FLOW' }])],
     ['a button whose type is unreadable', withButtons([{ label: 'mystery' }])],
+    [
+      'a url button whose url this build cannot read, which it cannot prove is static',
+      withButtons([{ type: 'URL', text: 'Visit' }]),
+    ],
   ])('hides %s, because nothing in the composer can fill it', (_case, components) => {
     expect(requiresButtonParameters(components)).toBe(true);
   });

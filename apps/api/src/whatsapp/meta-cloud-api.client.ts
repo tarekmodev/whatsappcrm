@@ -69,7 +69,7 @@ export interface SendMediaCommand {
   /** Ignored by Meta for `audio`, which has nowhere to render one. */
   caption?: string;
   /** `document` only; what the recipient sees as the file name. */
-  filename?: string;
+  fileName?: string;
 }
 
 /**
@@ -184,7 +184,9 @@ export class MetaCloudApiClient {
       [command.kind]: {
         ...('link' in command.media ? { link: command.media.link } : { id: command.media.mediaId }),
         ...(command.caption === undefined ? {} : { caption: command.caption }),
-        ...(command.filename === undefined ? {} : { filename: command.filename }),
+        // `filename` is Meta's spelling on the wire; see the note on the header
+        // mapper below, which crosses the same boundary.
+        ...(command.fileName === undefined ? {} : { filename: command.fileName }),
       },
     });
   }
@@ -382,8 +384,11 @@ function mediaOrLocationParameter(
     type: header.format,
     [header.format]: {
       ...('link' in header.media ? { link: header.media.link } : { id: header.media.mediaId }),
-      // `filename` is Meta's spelling on the wire; `fileName` is this codebase's,
-      // and the boundary between them is here.
+      // `filename` is Meta's spelling on the wire; `fileName` is this codebase's
+      // (`MessageAttachmentSchema`, and the contract's camelCase rule). This
+      // file is the whole boundary between them: every command it accepts says
+      // `fileName`, and the two request builders are the only places the wire
+      // spelling appears.
       ...(header.fileName === undefined ? {} : { filename: header.fileName }),
     },
   };

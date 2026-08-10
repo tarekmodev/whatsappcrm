@@ -70,6 +70,13 @@ describe('keyset cursor', () => {
       'an id that is not a string',
       Buffer.from('{"v":1,"k":["x"],"id":7}', 'utf8').toString('base64url'),
     ],
+    [
+      // Every id column here is `@db.Uuid`: a non-uuid is refused by the driver
+      // rather than filtered on, so without this check one class of malformed
+      // cursor answers 500 while the rest answer `validation_failed`.
+      'an id that is a string but not a uuid',
+      Buffer.from('{"v":1,"k":["x"],"id":"b"}', 'utf8').toString('base64url'),
+    ],
     ['an empty string', ''],
   ])('refuses %s', (_case, value) => {
     expect(decodeKeysetCursor(value)).toBeNull();

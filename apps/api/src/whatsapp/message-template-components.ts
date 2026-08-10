@@ -62,12 +62,21 @@ const EMPTY_SUMMARY: MessageTemplateComponentSummary = {
  * broad and a sendable one goes missing, which is visible to the tenant,
  * explainable on the administration surface, and fixed by widening this list.
  *
- * `quick_reply` is deliberately **not** here, and is the entry to revisit first.
- * Meta's send examples always carry a `payload` parameter for a quick reply, and
- * the amendment asks for that to be verified against Meta's current
- * documentation — which this build could not reach. Held closed until it is:
- * quick-reply templates are a common shape, so widening this is worth an
- * evidence-based decision rather than an assumption in either direction.
+ * **Both sides of this list are pending the same verification**, which the
+ * amendment asks for against Meta's current documentation and which no build so
+ * far has been able to reach (its pages answered 404 and 500).
+ *
+ *   * `quick_reply` is deliberately **not** here, and is the entry to revisit
+ *     first. Meta's send examples always carry a `payload` parameter for one.
+ *     Held closed until that is confirmed: quick replies are a common template
+ *     shape, so widening this is worth evidence rather than an assumption.
+ *   * `voice_call` **is** here, which is the fail-open side and therefore the
+ *     quieter risk: nothing watches for a template that was listed and should
+ *     not have been. If it turns out to take a send-time parameter, that is the
+ *     same defect as a too-narrow quick-reply rule.
+ *
+ * Both are answerable in one sitting by whoever first has live access — a
+ * connected WABA under TAR-91, or Meta's console.
  */
 const PARAMETERLESS_BUTTON_TYPES: readonly string[] = ['phone_number', 'voice_call'];
 
@@ -135,10 +144,16 @@ function requiresParameter(button: unknown): boolean {
     // suffix the send call has to supply. A url without one is a fixed link that
     // needs nothing, and excluding every url button would hide the common
     // "visit our site" template.
-    return (
-      (typeof button.url === 'string' && HAS_POSITIONAL_PLACEHOLDER.test(button.url)) ||
-      button.example !== undefined
-    );
+    //
+    // A url this build cannot read is the unreadable-type case again, one field
+    // down: the branch cannot prove the button is static, so it does not claim
+    // it. Answering `false` here would leave one path through a fail-closed
+    // predicate that fails open.
+    if (typeof button.url !== 'string') {
+      return true;
+    }
+
+    return HAS_POSITIONAL_PLACEHOLDER.test(button.url) || button.example !== undefined;
   }
 
   return !PARAMETERLESS_BUTTON_TYPES.includes(type);

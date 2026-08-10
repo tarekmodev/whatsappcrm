@@ -29,7 +29,7 @@ export interface SendMediaMessageCommand extends SendCommandBase {
   kind: 'image' | 'video' | 'audio' | 'document';
   media: MediaReference;
   caption?: string;
-  filename?: string;
+  fileName?: string;
 }
 
 export interface SendTemplateMessageCommand extends SendCommandBase {
@@ -100,7 +100,7 @@ export class WhatsAppSenderService {
       kind: command.kind,
       media: command.media,
       caption: command.caption,
-      filename: command.filename,
+      fileName: command.fileName,
     });
   }
 

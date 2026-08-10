@@ -1,3 +1,5 @@
+import { IdSchema } from '@whatsappcrm/contracts';
+
 /**
  * TAR-39's cursor encoding, in one place:
  *
@@ -51,13 +53,20 @@ export function encodeKeysetCursor({ sortValues, id }: KeysetCursor): string {
 /**
  * Returns `null` for anything this build cannot act on — malformed base64, JSON
  * that is not an object, a version it does not emit, a missing field, a `k` that
- * is not an array of strings.
+ * is not an array of strings, an `id` that is not a uuid.
  *
  * Null rather than a throw, and rather than a silent fall back to the first
  * page: the caller turns it into `validation_failed`, so a client that corrupted
  * a cursor is told so instead of quietly re-reading page one forever. A caller
  * that expects a particular arity checks `sortValues.length` itself — a cursor
  * from a list with a different sort key decodes cleanly and is still wrong.
+ *
+ * The id is checked as a uuid and not merely as a string because it is the one
+ * field that reaches a query as a value rather than as a bound: every id column
+ * here is `@db.Uuid`, and a non-uuid is rejected by the driver rather than
+ * filtered on — a 500 for input that every other malformed cursor answers with
+ * `validation_failed`. Checked here rather than per list, so no list can inherit
+ * the gap.
  */
 export function decodeKeysetCursor(value: string): KeysetCursor | null {
   const parsed = parseJson(Buffer.from(value, 'base64url').toString('utf8'));
@@ -67,9 +76,10 @@ export function decodeKeysetCursor(value: string): KeysetCursor | null {
   }
 
   const { v, k, id } = parsed;
+  const cursorId = IdSchema.safeParse(id);
 
-  return v === CURSOR_VERSION && isStringArray(k) && typeof id === 'string'
-    ? { sortValues: k, id }
+  return v === CURSOR_VERSION && isStringArray(k) && cursorId.success
+    ? { sortValues: k, id: cursorId.data }
     : null;
 }
 
