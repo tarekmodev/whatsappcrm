@@ -108,15 +108,60 @@ export const SendMediaInputSchema = z.object({
 });
 
 /**
+ * What a template's header needs at send time, discriminated on the same
+ * vocabulary `MessageTemplateResponse.headerFormat` publishes (0002, amendment
+ * 1).
+ *
+ * Without this slot a template with an IMAGE header passes the approved-only
+ * filter, renders its body inputs, satisfies the arity check, and then fails at
+ * Meta for want of a header — the opaque provider error `parameterCount` exists
+ * to prevent, reached through the field added to prevent it.
+ *
+ * A `location` header carries no placeholder, which is why it takes coordinates
+ * rather than variables: Meta renders the map from the values supplied at send
+ * time, and the approved template fixes nothing about it.
+ */
+export const SendTemplateHeaderSchema = z.discriminatedUnion('format', [
+  z.object({
+    format: z.literal('text'),
+    /** Positional, and exactly `headerParameterCount` long. */
+    variables: z.array(z.string()).min(1),
+  }),
+  z.object({
+    format: z.enum(['image', 'video', 'document']),
+    /** Id returned by `POST /api/v1/media`; the API re-hosts before sending. */
+    mediaId: IdSchema,
+    /** `document` only; what the recipient sees as the file name. */
+    fileName: z.string().min(1).max(255).optional(),
+  }),
+  z.object({
+    format: z.literal('location'),
+    latitude: z.number().min(-90).max(90),
+    longitude: z.number().min(-180).max(180),
+    name: z.string().min(1).max(200).optional(),
+    address: z.string().min(1).max(500).optional(),
+  }),
+]);
+
+/**
  * The only message type permitted once the 24-hour customer service window has
  * closed. Anything else in that state returns `whatsapp_window_expired`.
+ *
+ * `variables` matches the template's `parameterCount` — BODY placeholders only.
+ * A header is supplied through `header` and counted separately in
+ * `headerParameterCount`, because the two go through different slots and one
+ * total could not say which. The send handler (TAR-68) requires `header`
+ * exactly when the named template publishes a non-null `headerFormat`, refuses
+ * it otherwise, and requires the two formats to agree — all three before the
+ * Cloud API call, which is the point of publishing the fields at all.
  */
 export const SendTemplateInputSchema = z.object({
   type: z.literal('template'),
   templateName: z.string().min(1),
   languageCode: z.string().min(2).max(10),
-  /** Positional substitutions, matching the approved template's placeholders. */
+  /** Positional substitutions, matching the approved template's BODY placeholders. */
   variables: z.array(z.string()).default([]),
+  header: SendTemplateHeaderSchema.optional(),
 });
 
 export const SendMessageInputSchema = z.discriminatedUnion('type', [
@@ -134,5 +179,6 @@ export type MessageDirection = z.infer<typeof MessageDirectionSchema>;
 export type MessageType = z.infer<typeof MessageTypeSchema>;
 export type MessageAttachment = z.infer<typeof MessageAttachmentSchema>;
 export type MessageResponse = z.infer<typeof MessageResponseSchema>;
+export type SendTemplateHeader = z.infer<typeof SendTemplateHeaderSchema>;
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
 export type MessageListQuery = z.infer<typeof MessageListQuerySchema>;

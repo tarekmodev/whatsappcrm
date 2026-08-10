@@ -64,6 +64,97 @@ export const envSchema = z.object({
   PLATFORM_ADMIN_TOKEN: z.string().min(32).optional(),
 
   // ---------------------------------------------------------------------------
+  // WhatsApp webhook ingestion (TAR-20)
+  //
+  // One Meta app serves every tenant, so both secrets below are platform-level
+  // rather than per-tenant: tenant routing is `phone_number_id` →
+  // `whatsapp_accounts` (TAR-39, webhook ingestion), not a per-tenant secret.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The Meta app secret. `X-Hub-Signature-256` is HMAC-SHA256 of the **raw**
+   * request body under this key, and that signature is the only thing standing
+   * between an unauthenticated public route and the inbox.
+   *
+   * Optional here and **absent means every inbound webhook is rejected**, on the
+   * same reasoning as `PLATFORM_ADMIN_TOKEN`: an environment that was never
+   * given the secret must fail closed rather than accept unsigned payloads.
+   * Requiring it outright would instead stop the API booting everywhere the
+   * channel is not configured, which trades a local refusal for a global outage.
+   */
+  WHATSAPP_APP_SECRET: z.string().min(1).optional(),
+
+  /**
+   * The token echoed back to Meta during the `GET` verification handshake.
+   * Absent means the handshake always answers 403 — the same fail-closed
+   * default, and it is only ever read once, when the webhook URL is registered.
+   */
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().min(1).optional(),
+
+  /**
+   * How long a stored event may sit in `received` or `processing` before the
+   * sweeper treats it as stuck and re-enqueues it. Well under the five minutes
+   * TAR-39 says should page someone, so recovery is attempted before an alert
+   * fires.
+   */
+  WEBHOOK_STUCK_AFTER_MS: z.coerce.number().int().min(1_000).default(60_000),
+
+  /** How often the sweeper runs. */
+  WEBHOOK_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1_000).default(30_000),
+
+  /**
+   * Processing attempts a stored event gets before it is parked `failed`. It is
+   * parked, never dropped: a failed row stays queryable and re-runnable.
+   */
+  WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  // ---------------------------------------------------------------------------
+  // WhatsApp Cloud API (TAR-20)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * AES-256-GCM key for the per-WABA access token, base64-encoded — 32 bytes,
+   * which `openssl rand -base64 32` produces.
+   *
+   * Optional here and **absent means every WhatsApp connection and every send is
+   * refused**, on the same reasoning as `PLATFORM_ADMIN_TOKEN`: an environment
+   * that was never given a key must not fall back to storing the most sensitive
+   * credential in the schema in clear text. Requiring it outright would instead
+   * stop the API booting in every environment that does not use the channel,
+   * which trades a loud, local failure for a global one.
+   *
+   * It is a key, not a password, so it is checked for length rather than
+   * strength — 32 bytes from a CSPRNG, held in the platform's secret store.
+   * Rotating it needs the tokens re-encrypted; see `access-token.cipher.ts`,
+   * whose payloads carry a version tag for exactly that reason.
+   */
+  WHATSAPP_TOKEN_ENCRYPTION_KEY: z
+    .string()
+    .refine(isBase64EncodedKey, 'Must be 32 bytes of base64 (openssl rand -base64 32)')
+    .optional(),
+
+  /**
+   * Meta's Graph API origin. Configurable so tests and a local stub can point
+   * the client somewhere else; there is no other reason to change it.
+   */
+  META_GRAPH_API_BASE_URL: z.url().default('https://graph.facebook.com'),
+
+  /**
+   * The Graph API version every request is issued against. Pinned rather than
+   * floating: Meta deprecates versions on a published schedule, and a silent
+   * bump is how a response shape changes underneath a parser.
+   */
+  META_GRAPH_API_VERSION: z
+    .string()
+    .regex(/^v\d+\.\d+$/, 'Must look like `v23.0`')
+    .default('v23.0'),
+
+  /**
+   * Per-request timeout for a Graph API call. Every outbound call has one — an
+   * unbounded wait on Meta becomes an unbounded wait on a queue worker.
+   */
+  META_GRAPH_API_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
+
+  // ---------------------------------------------------------------------------
   // Infrastructure. Optional at scaffold time so the API boots with no backing
   // services. TAR-41 provisions these and promotes them to required.
   // ---------------------------------------------------------------------------
@@ -78,3 +169,21 @@ export const envSchema = z.object({
 });
 
 export type Env = z.infer<typeof envSchema>;
+
+/** The key length AES-256 requires, in bytes. */
+export const WHATSAPP_TOKEN_KEY_BYTES = 32;
+
+/**
+ * True when `value` is base64 that decodes to exactly `WHATSAPP_TOKEN_KEY_BYTES`.
+ *
+ * The round-trip is what makes this a real check: `Buffer.from(…, 'base64')`
+ * ignores every character outside the alphabet rather than failing, so a
+ * truncated or hand-edited value would otherwise decode to something shorter and
+ * be caught only by `createCipheriv` at first use — in production, on the first
+ * connection attempt.
+ */
+function isBase64EncodedKey(value: string): boolean {
+  const decoded = Buffer.from(value, 'base64');
+
+  return decoded.length === WHATSAPP_TOKEN_KEY_BYTES && decoded.toString('base64') === value;
+}

@@ -16,6 +16,17 @@
     "test": {
       "dependsOn": ["^build", "generate"]
     },
+    "test:db": {
+      "dependsOn": ["^build", "generate"],
+      "cache": false,
+      "passThroughEnv": [
+        "APP_DATABASE_URL",
+        "SYSTEM_DATABASE_URL",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "PLATFORM_DOMAIN"
+      ]
+    },
     "dev": {
       "dependsOn": ["^build", "generate"],
       "cache": false,

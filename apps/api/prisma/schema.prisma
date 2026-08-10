@@ -112,8 +112,21 @@ enum TenantDomainKind {
   @@map("tenant_domain_kind")
 }
 
+/// The role vocabulary, and it is exactly `TENANT_ROLES` in
+/// `packages/contracts/src/rbac.ts` — no more and no less (TAR-80).
+///
+/// TAR-39's contract is what every guard, every response schema and the session
+/// principal speak, and it names three roles. This enum carried a fourth,
+/// `owner`, which no code has ever written and which no `TenantRoleSchema` would
+/// accept: a row holding it would fail response validation at the serializer and
+/// answer 500, not 200. Removed rather than added to the contract, because
+/// TAR-22 records "three roles cover v1" as a settled assumption.
+///
+/// The direction matters if that assumption changes. Adding a value back is one
+/// `ALTER TYPE ... ADD VALUE`, online and non-blocking. Removing one is a type
+/// swap and a table rewrite — which is precisely why this is done now, while
+/// `users` and `invites` are empty in every environment, rather than later.
 enum UserRole {
-  owner
   admin
   supervisor
   agent
@@ -240,6 +253,14 @@ enum MessageContentType {
   interactive
   template
   system
+  /// Anything Meta sends that is not modelled yet — `reaction`, `order`,
+  /// `button`, and whatever it ships next. Added by TAR-20's ingestion pipeline
+  /// (`20260810180000_message_content_type_unsupported`) to close the drift with
+  /// `MESSAGE_TYPES` in `@whatsappcrm/contracts`, which has always published it.
+  /// Recording the message is the point: the raw payload is on `webhook_events`,
+  /// so a type the product learns to render later can be backfilled, and in the
+  /// meantime the thread shows that *something* arrived rather than a gap.
+  unsupported
 
   @@map("message_content_type")
 }
@@ -470,6 +491,16 @@ model User {
   status       UserStatus       @default(invited)
   availability UserAvailability @default(offline)
   lastLoginAt  DateTime?        @map("last_login_at") @db.Timestamptz(3)
+  /// `UserResponse.lastSeenAt` (TAR-39's users contract), and not the same thing
+  /// as `last_login_at`: an agent who logged in on Monday and is working now is
+  /// "last seen" now. The truth lives in `sessions.last_seen_at`, but reading it
+  /// per row would make the people list an aggregate over `sessions` for every
+  /// user, and sessions are swept on expiry, so the history disappears with
+  /// them. Denormalised here instead, written by the same session-touch path
+  /// that maintains `sessions.last_seen_at` (TAR-35), which is already rate
+  /// limited by the principal cache TTL — so this is at most one extra UPDATE
+  /// per user per minute, not one per request.
+  lastSeenAt   DateTime?        @map("last_seen_at") @db.Timestamptz(3)
   createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -536,12 +567,24 @@ model Invite {
   @@map("invites")
 }
 
+/// The routing unit of TAR-22: a conversation assigned to a team is visible to
+/// every member of that team, whatever their own assignment.
 model Team {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  tenantId  String   @map("tenant_id") @db.Uuid
-  name      String
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id          String   @id @default(uuid(7)) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  /// `citext`, on the same reasoning as `tenants.slug` and every email column
+  /// (conventions, rule 6): this is a *unique* key within the tenant that a
+  /// human types, so `Billing` and `billing` colliding on the unique index is
+  /// the correct answer. Without it an admin creating "billing" next to an
+  /// existing "Billing" gets two teams that look identical in every picker, and
+  /// conversations routed to one are invisible to the members of the other.
+  name        String   @db.Citext
+  /// `TeamResponse.description` in TAR-39's users contract, which had nowhere to
+  /// land. `TeamCreateInput` caps it at 500 characters; that bound is the
+  /// contract's to enforce, not a column type's.
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   members               TeamMember[]
@@ -567,7 +610,13 @@ model TeamMember {
   user   User   @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: Cascade)
 
   @@unique([tenantId, teamId, userId])
-  @@index([tenantId, userId])
+  /// "Which teams is this user in" — resolved on every session bootstrap to fill
+  /// `SessionPrincipal.teamIds`, and again wherever a role-scoped list needs the
+  /// user's team set. `team_id` is trailing rather than absent so the answer
+  /// comes out of the index without touching the heap; it replaces the narrower
+  /// `(tenant_id, user_id)` index, which was a prefix of this one and therefore
+  /// served nothing extra.
+  @@index([tenantId, userId, teamId])
   @@map("team_members")
 }
 
@@ -674,6 +723,16 @@ model MessageTemplate {
   /// WABA" already has one. A second index on the same prefix would cost write
   /// throughput and serve no read.
   @@unique([tenantId, whatsappBusinessAccountId, name, language])
+  /// Serves `GET /api/v1/message-templates` (TAR-20a, shape ruled in 0002
+  /// amendment 1): approved templates for the tenant in scope, ordered by name,
+  /// keyset-paginated. The unique index above cannot serve it — it leads with
+  /// the WABA, while this list may span a tenant's WABAs — so without this the
+  /// composer's template picker is a sequential scan of every tenant's
+  /// templates. `status` sits second because the endpoint filters on exactly one
+  /// value; `tenant_id` leads it because RLS supplies that equality on every
+  /// query (TAR-39, decision 1, rule 3); `name, language, id` are the three sort
+  /// keys, and a name-leading order is also what makes the `q` prefix a range.
+  @@index([tenantId, status, name, language, id])
   @@map("message_templates")
 }
 
@@ -778,7 +837,16 @@ model Conversation {
   serviceWindowExpiresAt DateTime?          @map("service_window_expires_at") @db.Timestamptz(3)
   /// Denormalised from `messages` to keep the inbox list a single-table scan.
   /// Maintained in the same transaction as the message insert.
-  lastMessageAt          DateTime?          @map("last_message_at") @db.Timestamptz(3)
+  ///
+  /// NOT NULL, and that is load-bearing rather than tidiness (TAR-92): this is
+  /// the leading *sort* column of all three inbox keyset indexes below.
+  /// Postgres orders NULLs FIRST under DESC, so a message-less conversation
+  /// would pin itself to page one, and the ruled resume predicate
+  /// (`last_message_at <= $1 AND NOT (…)`) evaluates to NULL — not TRUE — for
+  /// that cursor, silently dropping every row after it. A thread with no
+  /// message yet sorts by when it was opened: the default is the row's own
+  /// insert time, matching `created_at`.
+  lastMessageAt          DateTime           @default(now()) @map("last_message_at") @db.Timestamptz(3)
   unreadCount            Int                @default(0) @map("unread_count")
   createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -797,9 +865,21 @@ model Conversation {
   @@unique([tenantId, id])
   /// The inbox list — the hottest query in the product (TAR-39, index table).
   @@index([tenantId, status, lastMessageAt(sort: Desc), id(sort: Desc)])
-  /// An agent's default view.
-  @@index([tenantId, assignedUserId, status])
-  @@index([tenantId, assignedTeamId, status])
+  /// An agent's default view — the `conversation:read` (no `_all`) inbox, which
+  /// is the whole difference between an agent and a supervisor (TAR-22).
+  ///
+  /// The sort key is part of the index, not an afterthought. Without it the
+  /// planner drops the scope predicate to a filter and walks the tenant-wide
+  /// index above instead, so the work scales with the *tenant's* conversation
+  /// count rather than with the principal's. Measured on 120 000 conversations
+  /// where the principal holds 2 000 of them: 3 094 buffers and 39 333
+  /// `Rows Removed by Filter` for one 25-row page, against 6 buffers and an
+  /// Index Only Scan once the sort key is in the index.
+  ///
+  /// Explicitly named because Prisma's generated name for five columns exceeds
+  /// Postgres's 63-character identifier limit and would be silently truncated.
+  @@index([tenantId, assignedUserId, status, lastMessageAt(sort: Desc), id(sort: Desc)], map: "conversations_tenant_assigned_user_inbox_idx")
+  @@index([tenantId, assignedTeamId, status, lastMessageAt(sort: Desc), id(sort: Desc)], map: "conversations_tenant_assigned_team_inbox_idx")
   @@index([tenantId, contactId])
   @@map("conversations")
 }
@@ -921,8 +1001,14 @@ model Ticket {
   @@unique([tenantId, id])
   /// Ticket queues and supervisor dashboards (TAR-39, index table).
   @@index([tenantId, status, priority, createdAt(sort: Desc)])
-  @@index([tenantId, assignedUserId, status])
-  @@index([tenantId, assignedTeamId, status])
+  /// The `ticket:read` (no `_all`) queue, the ticket half of the same agent
+  /// scope as `conversations` above, carrying its own sort key for the same
+  /// reason. Measured: the narrower index still applied the scope, but every
+  /// page paid a top-N sort over the principal's whole matching set — 43 buffers
+  /// against 6 for one page at 500 matching tickets, and that gap grows with the
+  /// principal's backlog rather than staying flat.
+  @@index([tenantId, assignedUserId, status, createdAt(sort: Desc), id(sort: Desc)], map: "tickets_tenant_assigned_user_queue_idx")
+  @@index([tenantId, assignedTeamId, status, createdAt(sort: Desc), id(sort: Desc)], map: "tickets_tenant_assigned_team_queue_idx")
   @@index([tenantId, conversationId])
   @@index([tenantId, contactId])
   @@map("tickets")
