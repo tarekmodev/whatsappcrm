@@ -152,6 +152,13 @@ export const MessageTemplateResponseSchema = z.object({
   parameterCount: z.int().nonnegative(),
   /** What the header expects, if the template has one. */
   headerFormat: MessageTemplateHeaderFormatSchema.nullable(),
+  /**
+   * Placeholders in a `text` header, and `0` for every other format. Counted
+   * apart from `parameterCount` rather than folded into one total: the two are
+   * supplied through different slots of `SendTemplateInput`, and a single number
+   * could not say which.
+   */
+  headerParameterCount: z.int().nonnegative(),
   /** Meta's id for the template, once it has issued one. */
   providerTemplateId: z.string().nullable(),
   createdAt: TimestampSchema,
@@ -289,6 +296,17 @@ export const SyncMessageTemplatesResponseSchema = z.object({
  * parameter would make that reachable by accident, so there is none. Template
  * *administration*, which does need to show the rejected ones, is a separate
  * surface with its own permission.
+ *
+ * **Sendable only, on the same reasoning.** Templates whose buttons take a
+ * parameter — a dynamic URL suffix, a quick-reply payload — are out of scope for
+ * v1 and are excluded here too, because nothing in TAR-20 designs the composer
+ * UX to fill one, so listing them would offer a send that cannot be completed.
+ * They remain visible on the administration surface, where "approved by Meta,
+ * not yet sendable from this product" is a state a supervisor can be shown.
+ * Because the exclusion is a property of Meta's component tree rather than a
+ * column, it is applied to the page after it is read: a page may therefore hold
+ * fewer than `limit` items while `nextCursor` is non-null, and a caller reads to
+ * the end of the feed by paging until `nextCursor` is null — never by counting.
  *
  * **The composer filters by phone number, not by business account.**
  * `ConversationResponseSchema` publishes `whatsappAccountId` — a number — and

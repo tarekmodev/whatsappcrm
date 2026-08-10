@@ -72,6 +72,27 @@ export interface SendMediaCommand {
   filename?: string;
 }
 
+/**
+ * What the template's header needs, when it has one. Mirrors
+ * `SendTemplateHeaderSchema` (0002, amendment 1) with the media reference this
+ * client already speaks in, because a header image may be a Meta media id or a
+ * link exactly as a media message's may.
+ *
+ * Whether a header is required at all, and whether its format matches the
+ * approved template's, is checked by the send handler that holds the template
+ * row (TAR-68). This client is a transport: it maps what it is given.
+ */
+export type TemplateHeader =
+  | { format: 'text'; variables: readonly string[] }
+  | { format: 'image' | 'video' | 'document'; media: MediaReference; filename?: string }
+  | {
+      format: 'location';
+      latitude: number;
+      longitude: number;
+      name?: string;
+      address?: string;
+    };
+
 export interface SendTemplateCommand {
   phoneNumberId: string;
   accessToken: string;
@@ -81,6 +102,8 @@ export interface SendTemplateCommand {
   languageCode: string;
   /** Positional body substitutions, in the order the approved template declares them. */
   variables?: readonly string[];
+  /** Required by Meta exactly when the approved template declares a header. */
+  header?: TemplateHeader;
 }
 
 export interface SentMessage {
@@ -168,6 +191,12 @@ export class MetaCloudApiClient {
 
   async sendTemplate(command: SendTemplateCommand): Promise<SentMessage> {
     const variables = command.variables ?? [];
+    const components = [
+      ...(command.header === undefined ? [] : [headerComponent(command.header)]),
+      ...(variables.length === 0
+        ? []
+        : [{ type: 'body', parameters: variables.map((text) => ({ type: 'text', text })) }]),
+    ];
 
     return this.send(command.phoneNumberId, command.accessToken, {
       ...recipient(command.to),
@@ -177,16 +206,7 @@ export class MetaCloudApiClient {
         language: { code: command.languageCode },
         // Omitted entirely when there is nothing to substitute: Meta rejects an
         // empty `components` array on a template with no placeholders.
-        ...(variables.length === 0
-          ? {}
-          : {
-              components: [
-                {
-                  type: 'body',
-                  parameters: variables.map((text) => ({ type: 'text', text })),
-                },
-              ],
-            }),
+        ...(components.length === 0 ? {} : { components }),
       },
     });
   }
@@ -318,6 +338,53 @@ export class MetaCloudApiClient {
  */
 function recipient(to: string): Record<string, unknown> {
   return { recipient_type: 'individual', to };
+}
+
+/**
+ * The header as Meta's template `components` entry. Each format names its own
+ * parameter type and nests the value under a key of that same name — the
+ * asymmetry is Meta's, not ours.
+ *
+ * Coordinates go out as strings: Meta's location parameter is documented as
+ * strings, and a number here would be serialised without a trailing zero it may
+ * expect.
+ */
+function headerComponent(header: TemplateHeader): Record<string, unknown> {
+  return {
+    type: 'header',
+    parameters:
+      header.format === 'text'
+        ? // Positional, exactly as for the body. Meta approves at most one
+          // placeholder in a header today, so this is normally one parameter —
+          // written as a map rather than a special case so a second one does not
+          // need this code changed.
+          header.variables.map((text) => ({ type: 'text', text }))
+        : [mediaOrLocationParameter(header)],
+  };
+}
+
+function mediaOrLocationParameter(
+  header: Exclude<TemplateHeader, { format: 'text' }>,
+): Record<string, unknown> {
+  if (header.format === 'location') {
+    return {
+      type: 'location',
+      location: {
+        latitude: String(header.latitude),
+        longitude: String(header.longitude),
+        ...(header.name === undefined ? {} : { name: header.name }),
+        ...(header.address === undefined ? {} : { address: header.address }),
+      },
+    };
+  }
+
+  return {
+    type: header.format,
+    [header.format]: {
+      ...('link' in header.media ? { link: header.media.link } : { id: header.media.mediaId }),
+      ...(header.filename === undefined ? {} : { filename: header.filename }),
+    },
+  };
 }
 
 /** `Retry-After` is seconds or an HTTP date; only the seconds form is acted on. */

@@ -131,9 +131,8 @@ function translateQueryFailure(error: unknown): never {
  * against before it calls Meta.
  */
 function toResponse(template: ListedMessageTemplate): MessageTemplateResponse {
-  const { bodyText, parameterCount, headerFormat } = describeTemplateComponents(
-    template.components,
-  );
+  const { bodyText, parameterCount, headerFormat, headerParameterCount } =
+    describeTemplateComponents(template.components);
 
   return {
     id: template.id,
@@ -146,6 +145,7 @@ function toResponse(template: ListedMessageTemplate): MessageTemplateResponse {
     bodyText,
     parameterCount,
     headerFormat,
+    headerParameterCount,
     providerTemplateId: template.providerTemplateId,
     createdAt: template.createdAt.toISOString(),
     updatedAt: template.updatedAt.toISOString(),

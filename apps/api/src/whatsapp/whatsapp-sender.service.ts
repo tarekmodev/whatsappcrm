@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { MetaCloudApiClient, type MediaReference, type SentMessage } from './meta-cloud-api.client';
+import {
+  MetaCloudApiClient,
+  type MediaReference,
+  type SentMessage,
+  type TemplateHeader,
+} from './meta-cloud-api.client';
 import { WhatsAppCredentialResolver } from './whatsapp-credential.resolver';
 
 /**
@@ -31,6 +36,8 @@ export interface SendTemplateMessageCommand extends SendCommandBase {
   templateName: string;
   languageCode: string;
   variables?: readonly string[];
+  /** What the approved template's header needs, when it declares one. */
+  header?: TemplateHeader;
 }
 
 /**
@@ -116,6 +123,7 @@ export class WhatsAppSenderService {
       templateName: command.templateName,
       languageCode: command.languageCode,
       variables: command.variables,
+      header: command.header,
     });
   }
 }

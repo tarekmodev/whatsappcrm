@@ -96,6 +96,45 @@ describe('send message input', () => {
   it('requires a template name for a template send', () => {
     expect(() => SendMessageInputSchema.parse({ type: 'template', languageCode: 'en' })).toThrow();
   });
+
+  describe('a template header', () => {
+    const send = { type: 'template', templateName: 'order_update', languageCode: 'en_US' };
+
+    it('carries the media a media-header template needs', () => {
+      // Without a slot for it, an approved IMAGE-header template passes the
+      // picker and the arity check and still fails at Meta.
+      const parsed = SendMessageInputSchema.parse({
+        ...send,
+        header: { format: 'image', mediaId: '90444444-4444-7444-8444-444444444401' },
+      });
+
+      expect(parsed).toMatchObject({ header: { format: 'image' } });
+    });
+
+    it('carries the variables a text-header template needs, apart from the body ones', () => {
+      const parsed = SendMessageInputSchema.parse({
+        ...send,
+        variables: ['A', 'B'],
+        header: { format: 'text', variables: ['C'] },
+      });
+
+      expect(parsed).toMatchObject({ variables: ['A', 'B'], header: { variables: ['C'] } });
+    });
+
+    it('stays optional, because most templates have no header', () => {
+      expect(SendMessageInputSchema.parse(send)).not.toHaveProperty('header');
+    });
+
+    it.each([
+      ['a media header with no media', { format: 'image' }],
+      ['a text header with no variables', { format: 'text', variables: [] }],
+      ['a media id that is not an id', { format: 'image', mediaId: 'nope' }],
+      ['a format outside the published set', { format: 'carousel', mediaId: 'x' }],
+      ['coordinates outside the globe', { format: 'location', latitude: 200, longitude: 0 }],
+    ])('rejects %s', (_case, header) => {
+      expect(() => SendMessageInputSchema.parse({ ...send, header })).toThrow();
+    });
+  });
 });
 
 describe('E.164 phone numbers', () => {
@@ -320,6 +359,7 @@ describe('a listed message template', () => {
     bodyText: 'Order {{1}}',
     parameterCount: 1,
     headerFormat: null,
+    headerParameterCount: 0,
     providerTemplateId: '1001',
     createdAt: '2026-08-10T09:00:00.000Z',
     updatedAt: '2026-08-10T09:00:00.000Z',

@@ -6,6 +6,7 @@ import {
 } from '../common/pagination/keyset-cursor';
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
+import { hasUnsupportedButtons } from './message-template-components';
 
 /** Exactly the columns the response is built from — nothing wider. */
 const TEMPLATE_PROJECTION = {
@@ -80,6 +81,21 @@ export class UnknownWhatsAppAccountError extends Error {
  * service. Template *administration*, which does need to show the rejected ones,
  * is a different read with a different permission.
  *
+ * ## Sendable only, for the same reason
+ *
+ * A template whose buttons take a parameter cannot be completed by any composer
+ * TAR-20 builds, so it is dropped from the page — the same rule as approved-only,
+ * applied to the other way a listed template turns out to be unsendable. It is a
+ * property of Meta's component tree rather than of a column, so it is applied
+ * after the read instead of in the `where`: expressing it in SQL means either a
+ * raw JSONB predicate in place of the typed query, or a denormalised flag that
+ * a template sync has to keep true. Both cost more than they save while a page
+ * is capped at 100 rows.
+ *
+ * The consequence is published: a page may hold fewer than `limit` items while
+ * `nextCursor` is non-null. What it may never do is skip a row, which is why the
+ * cursor comes from the last row *read* rather than the last row returned.
+ *
  * ## Filtering by number, not by business account
  *
  * A conversation names a phone number, and only the templates of the WABA behind
@@ -136,14 +152,19 @@ export class MessageTemplateQueryService {
       select: TEMPLATE_PROJECTION,
     });
 
-    const items = rows.slice(0, query.limit);
-    const last = items.at(-1);
+    // The page this request covers, before the button exclusion. The cursor is
+    // taken from its last row rather than from the last row returned, so the
+    // next page resumes after everything already considered — including a row
+    // dropped below. Dropping rows shortens a page; it must never move where the
+    // next one starts.
+    const window = rows.slice(0, query.limit);
+    const last = window.at(-1);
 
     return {
-      items,
+      items: window.filter((row) => !hasUnsupportedButtons(row.components)),
       nextCursor:
         rows.length > query.limit && last !== undefined
-          ? encodeKeysetCursor({ sortValue: encodeSortValue(last), id: last.id })
+          ? encodeKeysetCursor({ sortValues: [last.name, last.language], id: last.id })
           : null,
     };
   }
@@ -180,23 +201,11 @@ interface TemplateCursor {
 }
 
 /**
- * The sort key spans two columns, and `KeysetCursor` carries one sort value plus
- * the id. It is serialised as a JSON pair rather than joined with a separator
- * because a template name and a language tag are both free text out of Meta, and
- * any separator character they could contain would split the cursor in the wrong
- * place. The encoding stays local to this query: the shared helper still owns the
- * envelope, the version and the base64url.
- */
-function encodeSortValue(row: { name: string; language: string }): string {
-  return JSON.stringify([row.name, row.language]);
-}
-
-/**
- * A cursor that decodes but whose sort value is not the pair this query emits is
- * rejected here rather than passed on. Prisma would refuse an `undefined`
+ * A cursor whose sort key is not the `[name, language]` pair this ordering emits
+ * is rejected here rather than passed on. Prisma would refuse an `undefined`
  * comparison too, but as a 500 — and a corrupted cursor is bad input, not a
- * fault. This is also what rejects a cursor issued by the previous
- * `created_at DESC` ordering: its sort value is a timestamp string, not a pair.
+ * fault. The arity check is also what rejects a cursor issued by the superseded
+ * `created_at DESC` ordering: it decodes cleanly and carries one value.
  */
 function readCursor(value: string | undefined): TemplateCursor | null {
   if (value === undefined) {
@@ -204,35 +213,13 @@ function readCursor(value: string | undefined): TemplateCursor | null {
   }
 
   const cursor: KeysetCursor | null = decodeKeysetCursor(value);
+  const [name, language, ...rest] = cursor?.sortValues ?? [];
 
-  if (cursor === null) {
+  if (cursor === null || name === undefined || language === undefined || rest.length > 0) {
     throw new InvalidCursorError();
   }
-
-  const [name, language] = parseSortValue(cursor.sortValue);
 
   return { name, language, id: cursor.id };
-}
-
-function parseSortValue(sortValue: string): [string, string] {
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(sortValue);
-  } catch {
-    throw new InvalidCursorError();
-  }
-
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length !== 2 ||
-    typeof parsed[0] !== 'string' ||
-    typeof parsed[1] !== 'string'
-  ) {
-    throw new InvalidCursorError();
-  }
-
-  return [parsed[0], parsed[1]];
 }
 
 /**

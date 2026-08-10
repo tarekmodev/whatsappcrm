@@ -38,13 +38,27 @@ export interface MessageTemplateComponentSummary {
   bodyText: string | null;
   parameterCount: number;
   headerFormat: MessageTemplateHeaderFormat | null;
+  headerParameterCount: number;
 }
 
 const EMPTY_SUMMARY: MessageTemplateComponentSummary = {
   bodyText: null,
   parameterCount: 0,
   headerFormat: null,
+  headerParameterCount: 0,
 };
+
+/**
+ * Button types that never take a parameter at send time. A `url` button is the
+ * one that depends on its own content — Meta allows a dynamic suffix, so it is
+ * static only when its url carries no placeholder — and is handled separately.
+ *
+ * An allowlist rather than a list of the dynamic types: Meta adds button types,
+ * and one this build has never seen is far more likely to need a parameter than
+ * not. Failing closed hides a sendable template from the picker; failing open
+ * offers a send that dies at Meta.
+ */
+const STATIC_BUTTON_TYPES: readonly string[] = ['phone_number', 'voice_call'];
 
 /**
  * Positional placeholders only. Meta also allows named parameters
@@ -55,6 +69,13 @@ const EMPTY_SUMMARY: MessageTemplateComponentSummary = {
  */
 const POSITIONAL_PLACEHOLDER = /\{\{\s*(\d+)\s*\}\}/g;
 
+/**
+ * The same pattern without `g`. A global regex carries `lastIndex` between
+ * calls, so reusing the one above for `test` would answer differently on
+ * alternating calls with the same input.
+ */
+const HAS_POSITIONAL_PLACEHOLDER = /\{\{\s*\d+\s*\}\}/;
+
 export function describeTemplateComponents(components: unknown): MessageTemplateComponentSummary {
   if (!Array.isArray(components)) {
     return EMPTY_SUMMARY;
@@ -63,12 +84,54 @@ export function describeTemplateComponents(components: unknown): MessageTemplate
   const body = findComponent(components, 'body');
   const header = findComponent(components, 'header');
   const bodyText = readText(body);
+  const headerFormat = header === undefined ? null : readHeaderFormat(header);
+  const headerText = readText(header);
 
   return {
     bodyText,
     parameterCount: bodyText === null ? 0 : highestPlaceholder(bodyText),
-    headerFormat: header === undefined ? null : readHeaderFormat(header),
+    headerFormat,
+    // Only a text header carries placeholders; media and location headers are
+    // filled from the send input's own slot, so their count is zero rather than
+    // whatever a stray `{{1}}` in a caption-like field might suggest.
+    headerParameterCount:
+      headerFormat === 'text' && headerText !== null ? highestPlaceholder(headerText) : 0,
   };
+}
+
+/**
+ * Whether any of this template's buttons would need a parameter the composer has
+ * no way to collect — the exclusion the list applies on top of approved-only
+ * (0002, amendment 1). A template with no buttons, or with only static ones, is
+ * sendable and stays in the picker.
+ */
+export function hasUnsupportedButtons(components: unknown): boolean {
+  if (!Array.isArray(components)) {
+    return false;
+  }
+
+  const buttons = findComponent(components, 'buttons')?.buttons;
+
+  return Array.isArray(buttons) && buttons.some(needsParameter);
+}
+
+function needsParameter(button: unknown): boolean {
+  if (!isRecord(button) || typeof button.type !== 'string') {
+    // A button this build cannot even read the type of is not one it can prove
+    // is sendable.
+    return true;
+  }
+
+  const type = button.type.toLowerCase();
+
+  if (type === 'url') {
+    // Meta permits a placeholder in the last path or query segment; a url
+    // without one is a fixed link that needs nothing at send time. Excluding
+    // every url button would hide the common "visit our site" template.
+    return typeof button.url === 'string' && HAS_POSITIONAL_PLACEHOLDER.test(button.url);
+  }
+
+  return !STATIC_BUTTON_TYPES.includes(type);
 }
 
 /**

@@ -16,7 +16,7 @@ import {
 const WABA_ROW_ID = '60444444-4444-7444-8444-444444444401';
 const ACCOUNT_ROW_ID = '70444444-4444-7444-8444-444444444401';
 
-function template(id: string, name: string, language = 'en_US') {
+function template(id: string, name: string, language = 'en_US', components: unknown = null) {
   return {
     id,
     whatsappBusinessAccountId: WABA_ROW_ID,
@@ -24,16 +24,24 @@ function template(id: string, name: string, language = 'en_US') {
     language,
     category: 'UTILITY',
     status: 'approved' as const,
-    components: null,
+    components,
     providerTemplateId: '1001',
     createdAt: new Date('2026-08-10T09:00:00.000Z'),
     updatedAt: new Date('2026-08-10T09:00:00.000Z'),
   };
 }
 
+/** A template the composer cannot fill, and the list therefore hides. */
+function templateWithQuickReply(id: string, name: string) {
+  return template(id, name, 'en_US', [
+    { type: 'BODY', text: 'Hello.' },
+    { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY' }] },
+  ]);
+}
+
 /** The cursor this ordering emits: the `(name, language)` pair, plus the id. */
 function cursorFor(name: string, language: string, id: string) {
-  return encodeKeysetCursor({ sortValue: JSON.stringify([name, language]), id });
+  return encodeKeysetCursor({ sortValues: [name, language], id });
 }
 
 /** Only the fields these assertions read. */
@@ -179,16 +187,44 @@ describe('MessageTemplateQueryService', () => {
     it.each([
       ['a cursor that is not decodable', 'not-a-cursor'],
       [
-        'a cursor from the superseded created_at ordering',
-        encodeKeysetCursor({ sortValue: '2026-08-10T08:00:00.000Z', id: 'b' }),
+        'a cursor from a list that sorts on one column',
+        encodeKeysetCursor({ sortValues: ['2026-08-10T08:00:00.000Z'], id: 'b' }),
       ],
       [
-        'a cursor whose sort value is not a name and language pair',
-        encodeKeysetCursor({ sortValue: JSON.stringify(['order_update']), id: 'b' }),
+        'a cursor carrying more sort values than this order has columns',
+        encodeKeysetCursor({ sortValues: ['order_update', 'en_US', 'extra'], id: 'b' }),
       ],
     ])('rejects %s rather than silently re-reading the first page', async (_case, cursor) => {
       await expect(service.list({ limit: 25, cursor })).rejects.toBeInstanceOf(InvalidCursorError);
       expect(findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('templates the composer cannot send', () => {
+    it('hides a template whose buttons take a parameter', async () => {
+      findMany.mockResolvedValue([
+        template('a', 'appointment_reminder'),
+        templateWithQuickReply('b', 'order_update'),
+      ]);
+
+      const result = await service.list({ limit: 25 });
+
+      expect(result.items.map((item) => item.id)).toEqual(['a']);
+    });
+
+    it('takes the cursor from the last row read, not the last row returned', async () => {
+      // Otherwise the next page resumes before a row this one already
+      // considered, and the hidden template comes back around forever.
+      findMany.mockResolvedValue([
+        template('a', 'appointment_reminder'),
+        templateWithQuickReply('b', 'order_update'),
+        template('c', 'shipping_update'),
+      ]);
+
+      const result = await service.list({ limit: 2 });
+
+      expect(result.items.map((item) => item.id)).toEqual(['a']);
+      expect(result.nextCursor).toBe(cursorFor('order_update', 'en_US', 'b'));
     });
   });
 });

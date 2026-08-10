@@ -40,6 +40,7 @@ const TEMPLATE = {
   components: [
     { type: 'HEADER', format: 'IMAGE' },
     { type: 'BODY', text: 'Order {{1}} ships {{2}}' },
+    { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Visit', url: 'https://example.test' }] },
   ],
   providerTemplateId: '1001',
   createdAt: TIMESTAMP,
@@ -131,6 +132,7 @@ describe('GET /api/v1/message-templates', () => {
       bodyText: 'Order {{1}} ships {{2}}',
       parameterCount: 2,
       headerFormat: 'image',
+      headerParameterCount: 0,
     });
   });
 

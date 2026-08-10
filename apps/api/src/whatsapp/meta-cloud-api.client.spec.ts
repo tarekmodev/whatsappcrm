@@ -201,6 +201,91 @@ describe('MetaCloudApiClient', () => {
       // placeholders, so absent is not the same as empty here.
       expect(sentBody().template).not.toHaveProperty('components');
     });
+
+    it('sends the media a header template needs, ahead of the body', async () => {
+      // A template with an IMAGE header is unsendable without this component —
+      // the failure `headerFormat` is published to prevent.
+      await client.sendTemplate({
+        phoneNumberId: PHONE_NUMBER_ID,
+        accessToken: ACCESS_TOKEN,
+        to: RECIPIENT,
+        templateName: 'order_update',
+        languageCode: 'en_US',
+        variables: ['A-1001'],
+        header: { format: 'image', media: { mediaId: '9876' } },
+      });
+
+      expect(sentBody().template).toMatchObject({
+        components: [
+          { type: 'header', parameters: [{ type: 'image', image: { id: '9876' } }] },
+          { type: 'body', parameters: [{ type: 'text', text: 'A-1001' }] },
+        ],
+      });
+    });
+
+    it('names the document a document header carries', async () => {
+      await client.sendTemplate({
+        phoneNumberId: PHONE_NUMBER_ID,
+        accessToken: ACCESS_TOKEN,
+        to: RECIPIENT,
+        templateName: 'invoice_ready',
+        languageCode: 'en_US',
+        header: { format: 'document', media: { mediaId: '9876' }, filename: 'invoice.pdf' },
+      });
+
+      expect(sentBody().template).toMatchObject({
+        components: [
+          {
+            type: 'header',
+            parameters: [{ type: 'document', document: { id: '9876', filename: 'invoice.pdf' } }],
+          },
+        ],
+      });
+    });
+
+    it('sends a text header parameter apart from the body ones', async () => {
+      await client.sendTemplate({
+        phoneNumberId: PHONE_NUMBER_ID,
+        accessToken: ACCESS_TOKEN,
+        to: RECIPIENT,
+        templateName: 'order_update',
+        languageCode: 'en_US',
+        variables: ['tomorrow'],
+        header: { format: 'text', variables: ['A-1001'] },
+      });
+
+      expect(sentBody().template).toMatchObject({
+        components: [
+          { type: 'header', parameters: [{ type: 'text', text: 'A-1001' }] },
+          { type: 'body', parameters: [{ type: 'text', text: 'tomorrow' }] },
+        ],
+      });
+    });
+
+    it('sends location coordinates as strings, which is what Meta documents', async () => {
+      await client.sendTemplate({
+        phoneNumberId: PHONE_NUMBER_ID,
+        accessToken: ACCESS_TOKEN,
+        to: RECIPIENT,
+        templateName: 'store_directions',
+        languageCode: 'en_US',
+        header: { format: 'location', latitude: 24.7136, longitude: 46.6753, name: 'Branch' },
+      });
+
+      expect(sentBody().template).toMatchObject({
+        components: [
+          {
+            type: 'header',
+            parameters: [
+              {
+                type: 'location',
+                location: { latitude: '24.7136', longitude: '46.6753', name: 'Branch' },
+              },
+            ],
+          },
+        ],
+      });
+    });
   });
 
   describe('when Meta rejects the credential', () => {

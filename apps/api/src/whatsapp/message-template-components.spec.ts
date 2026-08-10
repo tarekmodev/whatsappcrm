@@ -1,9 +1,9 @@
-import { describeTemplateComponents } from './message-template-components';
+import { describeTemplateComponents, hasUnsupportedButtons } from './message-template-components';
 
 /**
- * The three derived fields, read out of a tree this codebase does not validate.
- * Half of these cases are malformed input on purpose: `components` is stored
- * exactly as Meta sent it, so this parser is the only thing standing between a
+ * The derived fields, read out of a tree this codebase does not validate. Half
+ * of these cases are malformed input on purpose: `components` is stored exactly
+ * as Meta sent it, so this parser is the only thing standing between a
  * surprising tree and a 500 on the composer's picker.
  */
 
@@ -69,6 +69,26 @@ describe('describeTemplateComponents', () => {
     expect(describeTemplateComponents([{ type: 'BODY', text: 'Hello.' }]).headerFormat).toBe(null);
   });
 
+  it('counts a text header placeholder separately from the body', () => {
+    // The two are supplied through different slots of `SendTemplateInput`, so a
+    // single total could not say which.
+    const summary = describeTemplateComponents([
+      { type: 'HEADER', format: 'TEXT', text: 'Order {{1}}' },
+      { type: 'BODY', text: 'Hi {{1}}, it ships {{2}}.' },
+    ]);
+
+    expect(summary).toMatchObject({ parameterCount: 2, headerParameterCount: 1 });
+  });
+
+  it('counts no header parameters for a media header, which is filled from its own slot', () => {
+    expect(
+      describeTemplateComponents([
+        { type: 'HEADER', format: 'IMAGE' },
+        { type: 'BODY', text: 'Hi {{1}}.' },
+      ]).headerParameterCount,
+    ).toBe(0);
+  });
+
   it.each([
     ['null components', null],
     ['a tree that is not an array', { type: 'BODY', text: 'Hello.' }],
@@ -81,6 +101,7 @@ describe('describeTemplateComponents', () => {
       bodyText: null,
       parameterCount: 0,
       headerFormat: null,
+      headerParameterCount: 0,
     });
   });
 
@@ -90,6 +111,69 @@ describe('describeTemplateComponents', () => {
       { type: 'body', text: 'Hi {{1}}.' },
     ]);
 
-    expect(summary).toEqual({ bodyText: 'Hi {{1}}.', parameterCount: 1, headerFormat: 'video' });
+    expect(summary).toEqual({
+      bodyText: 'Hi {{1}}.',
+      parameterCount: 1,
+      headerFormat: 'video',
+      headerParameterCount: 0,
+    });
+  });
+});
+
+/**
+ * Which templates the list has to hide. Buttons that take a parameter are out of
+ * scope for v1 (0002, amendment 1), and offering one in the picker is the same
+ * failure as offering an unapproved template: a send the agent cannot complete.
+ */
+describe('hasUnsupportedButtons', () => {
+  function withButtons(buttons: unknown[]) {
+    return [
+      { type: 'BODY', text: 'Hello.' },
+      { type: 'BUTTONS', buttons },
+    ];
+  }
+
+  it.each([
+    ['a template with no buttons at all', [{ type: 'BODY', text: 'Hello.' }]],
+    [
+      'a phone-number button',
+      withButtons([{ type: 'PHONE_NUMBER', phone_number: '+15550001111' }]),
+    ],
+    [
+      'a url button with a fixed link',
+      withButtons([{ type: 'URL', text: 'Visit', url: 'https://example.test/orders' }]),
+    ],
+  ])('keeps %s in the picker', (_case, components) => {
+    expect(hasUnsupportedButtons(components)).toBe(false);
+  });
+
+  it.each([
+    [
+      'a url button with a dynamic suffix',
+      withButtons([{ type: 'URL', text: 'Track', url: 'https://example.test/orders/{{1}}' }]),
+    ],
+    ['a quick-reply button, which takes a payload', withButtons([{ type: 'QUICK_REPLY' }])],
+    ['a copy-code button, which takes a coupon', withButtons([{ type: 'COPY_CODE' }])],
+    ['a button type this build has never seen', withButtons([{ type: 'FLOW' }])],
+    ['a button whose type is unreadable', withButtons([{ label: 'mystery' }])],
+  ])('hides %s, because nothing in the composer can fill it', (_case, components) => {
+    expect(hasUnsupportedButtons(components)).toBe(true);
+  });
+
+  it('answers the same way on a repeated call, rather than alternating', () => {
+    // A global regex carries `lastIndex` between calls; a stateful answer here
+    // would drop a template from every other page.
+    const components = withButtons([
+      { type: 'URL', text: 'Track', url: 'https://example.test/orders/{{1}}' },
+    ]);
+
+    expect([hasUnsupportedButtons(components), hasUnsupportedButtons(components)]).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  it('reads an unparseable tree as nothing to hide, leaving approved-only to decide', () => {
+    expect(hasUnsupportedButtons(null)).toBe(false);
   });
 });
