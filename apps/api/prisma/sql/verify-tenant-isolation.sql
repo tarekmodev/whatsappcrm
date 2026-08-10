@@ -16,7 +16,9 @@
 -- of a fail-closed policy. Point this at a local or disposable database. Every
 -- row it touches carries a `tar48-fixture` marker and a fixed id, and the
 -- script deletes those rows before it starts as well as after it finishes, so
--- an interrupted run cleans up on the next one.
+-- an interrupted run cleans up on the next one. Phase 1 also creates and drops
+-- one empty probe table, `tar95_default_privilege_probe`, inside a single
+-- transaction — it never outlives the statement that makes it, even on failure.
 --
 -- Reconnecting (`\connect -`) inherits psql's current connection parameters. On
 -- the local Docker stack that is a Unix socket and needs no password; over TCP,
@@ -32,7 +34,10 @@
 --   Structure   Every table carrying `tenant_id` has RLS enabled AND forced AND
 --               a `tenant_isolation` policy. Every table the app role can touch
 --               is either protected or on a two-entry read-only allowlist. The
---               app role holds neither SUPERUSER nor BYPASSRLS.
+--               app role holds neither SUPERUSER nor BYPASSRLS. A table created
+--               *after* `app-roles.sql` last ran is reachable by the system
+--               role and by nobody else — the grant waits for the policy
+--               instead of arriving ahead of it (TAR-95).
 --   Behaviour   On a connection that has never set the GUC, all 34 protected
 --               tables return zero rows. With the GUC set, each tenant sees its
 --               own rows and none of the other's. Writing another tenant's
@@ -201,6 +206,71 @@ BEGIN
     END IF;
 
     RAISE NOTICE 'ok: system_unrestricted covers every protected table';
+END
+$$;
+
+DO $$
+DECLARE
+    probe constant text := 'tar95_default_privilege_probe';
+    priv text;
+    app_granted text[] := '{}';
+    system_missing text[] := '{}';
+BEGIN
+    -- 1e. The default privileges themselves (TAR-95). Everything above reads
+    -- the tables that exist; this one asks what happens to the *next* table,
+    -- which is where the dangerous mistake lives — a migration that adds a
+    -- tenant-scoped table and forgets its RLS block. The grant must not arrive
+    -- ahead of the policy, so a table `app-roles.sql` has not seen must be
+    -- unreachable by the app role rather than wide open to it.
+    --
+    -- Created for real rather than read out of `pg_default_acl`: default
+    -- privileges are per creating role, and the ACL a new table actually ends
+    -- up with is the composition of that entry with the built-in default.
+    -- Creating one and asking is the only form of this check that cannot be
+    -- fooled by reasoning about the catalog incorrectly.
+    --
+    -- No cleanup branch: a DO block is one transaction and DDL is transactional
+    -- in PostgreSQL, so the probe table disappears on the RAISE below exactly
+    -- as it does on the DROP.
+    EXECUTE format(
+        'CREATE TABLE "public".%I ("id" uuid PRIMARY KEY, "tenant_id" uuid NOT NULL)',
+        probe
+    );
+
+    FOREACH priv IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
+        IF has_table_privilege('whatsappcrm_app', format('"public".%I', probe), priv) THEN
+            app_granted := app_granted || priv;
+        END IF;
+    END LOOP;
+
+    -- The other half, and the reason this is not simply "revoke everything":
+    -- SystemPrisma still has to reach a new table on the day it is created.
+    -- Losing that is a fail-closed outage rather than a leak, but it is an
+    -- outage, and it would be invisible until something queried the new table.
+    FOREACH priv IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE'] LOOP
+        IF NOT has_table_privilege('whatsappcrm_system', format('"public".%I', probe), priv) THEN
+            system_missing := system_missing || priv;
+        END IF;
+    END LOOP;
+
+    EXECUTE format('DROP TABLE "public".%I', probe);
+
+    IF array_length(app_granted, 1) > 0 THEN
+        RAISE EXCEPTION
+            E'a brand-new table is already reachable by whatsappcrm_app (%) — default privileges are fail-OPEN\n'
+            '  a migration that forgets its tenant_isolation block would ship a table every tenant can read\n'
+            '  fix: the ALTER DEFAULT PRIVILEGES block in app-roles.sql must not grant ON TABLES to the app role',
+            array_to_string(app_granted, ', ');
+    END IF;
+
+    IF array_length(system_missing, 1) > 0 THEN
+        RAISE EXCEPTION
+            E'a brand-new table is not reachable by whatsappcrm_system (missing %)\n'
+            '  re-run app-roles.sql; if that does not fix it, its ALTER DEFAULT PRIVILEGES block is wrong',
+            array_to_string(system_missing, ', ');
+    END IF;
+
+    RAISE NOTICE 'ok: a new table is unreachable by the app role until app-roles.sql grants it, and reachable by the system role';
 END
 $$;
 

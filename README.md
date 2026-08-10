@@ -356,6 +356,13 @@ language cannot express row-level security, so nothing generates them:
 Forgetting either fails `pnpm db:verify:rls` by name — it reads the catalog rather than a
 list, so a new table with no policy is caught rather than assumed to be fine.
 
+Step 2 is not a formality: until it runs, `whatsappcrm_app` holds **no privilege at all**
+on the new table and every query against it fails with a permission error. That is
+deliberate. The grant is automatic and the policy is hand-written, so letting the grant
+arrive first would mean a forgotten step 1 ships a table every tenant can read instead of
+one nobody can (TAR-95). A permission error on the first query is the cheap version of
+that mistake.
+
 **A migration that adds a function needs `pnpm db:roles` re-run too.** `app-roles.sql`
 names each one, revokes the default `EXECUTE TO PUBLIC` and grants it to the two
 application roles — so that a routine `REVOKE EXECUTE … FROM PUBLIC` hardening step is
