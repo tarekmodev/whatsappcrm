@@ -1,7 +1,11 @@
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from './prisma-client.factory';
-import { MissingTenantContextError, UnscopedModelAccessError } from './prisma.errors';
+import {
+  MissingTenantContextError,
+  TenantNotActiveError,
+  UnscopedModelAccessError,
+} from './prisma.errors';
 import { TENANT_GUC, withTenantScope, type TenantPrisma } from './tenant-scope.extension';
 
 /**
@@ -65,7 +69,13 @@ describe('withTenantScope', () => {
 
       // Interpolating the id into the SQL instead of binding it would be an
       // injection hole reachable from a session claim.
-      expect(fragments.join('?')).toBe('SELECT set_config(?, ?, true)');
+      //
+      // The nesting is the deactivation gate (TAR-51) and its order is the
+      // mechanism: Postgres evaluates `assert_tenant_active` first, so a
+      // deactivated tenant raises before `set_config` runs and the GUC is never
+      // set. Checking after setting it would leave a window in which the
+      // statement batched behind it could still run.
+      expect(fragments.join('?')).toBe('SELECT set_config(?, assert_tenant_active(?), true)');
       expect(values).toEqual([TENANT_GUC, TENANT_ID]);
     });
 
@@ -135,6 +145,61 @@ describe('withTenantScope', () => {
 
       expect(error).toBeInstanceOf(MissingTenantContextError);
       expect((error as MissingTenantContextError).message).toContain('Contact.findMany()');
+    });
+  });
+
+  describe('a deactivated tenant', () => {
+    /**
+     * The two shapes Prisma reports a driver failure in. Which one arrives
+     * depends on how the client reached the database, and the translation has
+     * to survive that changing — `tenant-deactivation.int-spec.ts` proves the
+     * real one against a real driver, and these pin the other.
+     */
+    const enginePathFailure = {
+      message: 'Raw query failed',
+      meta: { code: 'TN001', message: 'TENANT_NOT_ACTIVE: tenant … is suspended' },
+    };
+    const driverPathFailure = {
+      message: 'Invalid `prisma.contact.findMany()` invocation',
+      meta: {
+        driverAdapterError: {
+          cause: { originalMessage: 'TENANT_NOT_ACTIVE: tenant … is suspended' },
+        },
+      },
+    };
+
+    it.each([
+      ['the engine path', enginePathFailure],
+      ['the driver-adapter path', driverPathFailure],
+    ])('reports the refusal from %s as a deactivated tenant, not a fault', async (_, failure) => {
+      transaction.mockRejectedValue(failure);
+
+      const error = await asTenant(() => prisma.contact.findMany().catch((e: unknown) => e));
+
+      expect(error).toBeInstanceOf(TenantNotActiveError);
+      expect((error as TenantNotActiveError).tenantId).toBe(TENANT_ID);
+      expect((error as TenantNotActiveError).message).toContain('Contact.findMany()');
+    });
+
+    it('translates the same refusal inside $tenantTransaction', async () => {
+      transaction.mockRejectedValue(enginePathFailure);
+
+      const error = await asTenant(() =>
+        prisma.$tenantTransaction(async (tx) => tx.contact.findMany()).catch((e: unknown) => e),
+      );
+
+      expect(error).toBeInstanceOf(TenantNotActiveError);
+    });
+
+    it('leaves every other database failure exactly as it was', async () => {
+      // Translating anything that failed near the GUC would hide an outage
+      // behind a 403 and stop it reaching an error tracker.
+      const outage = new Error("Can't reach database server");
+      transaction.mockRejectedValue(outage);
+
+      await asTenant(async () => {
+        await expect(prisma.contact.findMany()).rejects.toBe(outage);
+      });
     });
   });
 

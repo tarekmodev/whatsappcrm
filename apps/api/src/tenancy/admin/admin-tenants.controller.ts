@@ -3,13 +3,19 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Res,
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
 import {
+  DeactivateTenantInputSchema,
+  DeactivateTenantParamsSchema,
   ProvisionTenantInputSchema,
+  type DeactivateTenantInput,
+  type DeactivateTenantParams,
+  type DeactivatedTenantResponse,
   type ProvisionTenantInput,
   type ProvisionedTenantResponse,
 } from '@whatsappcrm/contracts';
@@ -17,6 +23,11 @@ import type { Response } from 'express';
 import { ApiExceptionFilter } from '../../common/errors/api-exception.filter';
 import { ApiException } from '../../common/errors/api.exception';
 import { ZodValidationPipe } from '../../common/validation/zod-validation.pipe';
+import { TenantNotFoundError } from '../tenant-deactivation.errors';
+import {
+  TenantDeactivationService,
+  type DeactivateTenantResult,
+} from '../tenant-deactivation.service';
 import { PlatformHostnameTakenError, TenantSlugTakenError } from '../tenant-provisioning.errors';
 import {
   TenantProvisioningService,
@@ -36,7 +47,10 @@ import { PlatformAdminGuard } from './platform-admin.guard';
 @UseGuards(PlatformAdminGuard)
 @UseFilters(ApiExceptionFilter)
 export class AdminTenantsController {
-  constructor(private readonly provisioning: TenantProvisioningService) {}
+  constructor(
+    private readonly provisioning: TenantProvisioningService,
+    private readonly deactivation: TenantDeactivationService,
+  ) {}
 
   /**
    * `POST /api/v1/admin/tenants` — provision a tenant (TAR-19).
@@ -67,6 +81,34 @@ export class AdminTenantsController {
 
     return toResponse(result);
   }
+
+  /**
+   * `POST /api/v1/admin/tenants/{slug}/deactivate` — revoke a tenant's access
+   * while keeping its data (TAR-51).
+   *
+   * Always `200`, unlike provisioning: deactivation creates nothing, and a
+   * repeat call is a no-op on a tenant that is already inaccessible rather than
+   * a different outcome worth a different code. The body reports the state
+   * either way.
+   *
+   * The effect is immediate and platform-wide for that tenant — its agents stop
+   * reaching their data on their very next query, including through open
+   * sessions and in-flight background jobs — so this route is as destructive as
+   * the admin surface gets short of deletion, and it is the reason the guard is
+   * declared on the controller rather than per route.
+   */
+  @Post(':slug/deactivate')
+  @HttpCode(HttpStatus.OK)
+  async deactivate(
+    @Param(new ZodValidationPipe(DeactivateTenantParamsSchema)) params: DeactivateTenantParams,
+    @Body(new ZodValidationPipe(DeactivateTenantInputSchema)) input: DeactivateTenantInput,
+  ): Promise<DeactivatedTenantResponse> {
+    const result = await this.deactivation
+      .deactivate({ slug: params.slug, reason: input.reason })
+      .catch((error: unknown) => translateDeactivationFailure(error));
+
+    return toDeactivatedResponse(result);
+  }
 }
 
 function translateProvisioningFailure(error: unknown): never {
@@ -94,5 +136,26 @@ function toResponse({ tenant }: ProvisionTenantResult): ProvisionedTenantRespons
     primaryHostname: tenant.primaryHostname,
     settings: { timezone: tenant.timezone, locale: tenant.locale },
     createdAt: tenant.createdAt.toISOString(),
+  };
+}
+
+function translateDeactivationFailure(error: unknown): never {
+  if (error instanceof TenantNotFoundError) {
+    // The operator asked about a tenant that does not exist — a mistyped slug
+    // during an incident, most likely. Worth saying so: answering 200 would let
+    // them believe a tenant that is still serving traffic had been stopped.
+    throw new ApiException('not_found', error.message);
+  }
+
+  throw error;
+}
+
+function toDeactivatedResponse({ tenant }: DeactivateTenantResult): DeactivatedTenantResponse {
+  return {
+    id: tenant.id,
+    slug: tenant.slug,
+    name: tenant.name,
+    status: tenant.status,
+    suspendedAt: tenant.suspendedAt?.toISOString() ?? null,
   };
 }

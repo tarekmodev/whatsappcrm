@@ -85,5 +85,56 @@ export const ProvisionedTenantResponseSchema = z.object({
   createdAt: TimestampSchema,
 });
 
+/**
+ * `POST /api/v1/admin/tenants/{slug}/deactivate` — take a tenant's access away
+ * while keeping its data (TAR-51).
+ *
+ * A sub-resource POST rather than a `PATCH` that sets `status`: deactivation is
+ * an operation with consequences beyond the column — the tenant's agents stop
+ * reaching their data from the moment it commits — and the conventions in
+ * TAR-39 put a non-CRUD verb on a sub-resource rather than in a body field.
+ * Modelling it as a status write would also invite the inverse write, and
+ * reactivation is TAR-36's lifecycle to own.
+ *
+ * The slug identifies the tenant for the same reason it identifies a
+ * provisioning request: it is what an operator has in front of them, and unlike
+ * an id it cannot be a tenant they did not mean.
+ */
+export const DeactivateTenantParamsSchema = z.object({
+  slug: TenantSlugSchema,
+});
+
+/**
+ * `reason` is free text for the audit trail — why this tenant was deactivated,
+ * in the words of whoever did it. Optional, because an operator acting on an
+ * incident should not be blocked by a required field, and never rendered to the
+ * tenant.
+ */
+export const DeactivateTenantInputSchema = z.object({
+  reason: z.string().min(1).max(500).optional(),
+});
+
+/**
+ * What deactivation reports. Always `200`, whether this call deactivated the
+ * tenant or found it already deactivated: the operation is idempotent, and the
+ * state it describes — `status`, and when the tenant was suspended — is the
+ * same either way.
+ *
+ * `suspendedAt` is nullable because a tenant can reach a non-active status
+ * without going through this endpoint (a `pending` row abandoned by a failed
+ * provision, a `cancelled` one closed by TAR-36). It says when deactivation
+ * happened, not that it did.
+ */
+export const DeactivatedTenantResponseSchema = z.object({
+  id: IdSchema,
+  slug: TenantSlugSchema,
+  name: TenantNameSchema,
+  status: ProvisionedTenantStatusSchema,
+  suspendedAt: TimestampSchema.nullable(),
+});
+
 export type ProvisionTenantInput = z.infer<typeof ProvisionTenantInputSchema>;
 export type ProvisionedTenantResponse = z.infer<typeof ProvisionedTenantResponseSchema>;
+export type DeactivateTenantParams = z.infer<typeof DeactivateTenantParamsSchema>;
+export type DeactivateTenantInput = z.infer<typeof DeactivateTenantInputSchema>;
+export type DeactivatedTenantResponse = z.infer<typeof DeactivatedTenantResponseSchema>;

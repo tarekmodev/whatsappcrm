@@ -282,7 +282,7 @@ and platform reporting — and a sixth needs a justification in review.
 
 ```sql
 BEGIN;
-SELECT set_config('app.tenant_id', $1, true);   -- true = transaction-local
+SELECT set_config('app.tenant_id', assert_tenant_active($1), true);  -- true = transaction-local
 <the query>;
 COMMIT;
 ```
@@ -293,6 +293,11 @@ anything is sent — the query never happens, rather than happening and returnin
 That distinction is the whole point: zero rows is indistinguishable from an empty table,
 so a code path that forgot to resolve its tenant would look like a working one.
 
+`assert_tenant_active` is the deactivation gate (TAR-51, below). It returns the id when
+that tenant is `active` and raises `TenantNotActiveError` otherwise, and Postgres evaluates
+it before `set_config` — so a deactivated tenant never sets the GUC, and the statement
+batched behind it never runs.
+
 Three things to know before writing a query against it:
 
 - **It costs three extra round trips.** Measured against the local Compose stack:
@@ -300,7 +305,9 @@ Three things to know before writing a query against it:
   sends `BEGIN`, `set_config`, the query and `COMMIT` as four separate messages, not one
   batched round trip. For anything issuing several statements, use
   `prisma.$tenantTransaction(async (tx) => …)`: it opens one transaction, sets the GUC
-  once, and pays that cost a single time instead of per query.
+  once, and pays that cost a single time instead of per query. The status check adds no
+  round trip of its own — it is a primary-key lookup inside the `set_config` statement
+  that was already being sent.
 - **Batch `$transaction([…])` does not work on it.** The extension hook is async, so the
   client returns ordinary promises rather than the `PrismaPromise`s a batch needs. Use
   `$tenantTransaction`.
@@ -353,6 +360,49 @@ Things worth knowing before you call it:
 
 The route runs on `SystemPrisma` — the only client that can write `tenants` — and is one
 of the five call sites TAR-39 permits for it.
+
+### Deactivating a tenant
+
+Deactivation takes a tenant's access away and keeps its data. One call, and it is in force
+the moment it commits:
+
+```bash
+curl -X POST http://localhost:3001/api/v1/admin/tenants/acme/deactivate \
+  -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"Non-payment, ticket OPS-412"}'
+
+# 200 OK
+# {"id":"019f…","slug":"acme","name":"Acme Ltd","status":"suspended",
+#  "suspendedAt":"…"}
+```
+
+Things worth knowing before you call it:
+
+- **It is not a delete, and there is no data loss to undo.** Two columns are written —
+  `tenants.status` and `tenants.suspended_at` — and nothing else. Every contact,
+  conversation, ticket and message stays where it was and stays reachable through
+  `SystemPrisma` for support, billing and export.
+- **The block is in the database, not in a guard.** `assert_tenant_active` is called by
+  every `TenantPrisma` statement (see "The two Prisma clients" above), so the tenant's
+  agents stop reaching their data on their very next query — through open sessions,
+  in-flight background jobs, WebSocket handlers and raw SQL alike. There is no cache to
+  expire, and no new route can forget to apply it.
+- **No other tenant is affected.** One row is written and the gate reads only the row the
+  GUC names. `apps/api/src/tenancy/tenant-deactivation.int-spec.ts` is the regression
+  proof: it deactivates one tenant and asserts its neighbour still reads, writes and runs
+  transactions normally.
+- **It is idempotent.** A repeat call answers `200` and changes nothing — including
+  `suspendedAt`, which records when access was actually revoked and must survive a
+  replayed script. A slug no tenant carries answers `404`, so a typo during an incident is
+  visible rather than silently successful.
+- **Reactivation is not here.** `suspended → active` belongs to TAR-36's lifecycle state
+  machine; an endpoint that exists to take access away should not also be the one that
+  gives it back. Until it ships, an operator restores a tenant by setting `status` back to
+  `active` through the platform's own database access.
+- **A `pending` or `cancelled` tenant is blocked by the same gate.** Only `active` reaches
+  data, so a half-provisioned tenant is closed by the mechanism rather than by a second
+  rule.
 
 ### Adding a migration
 
