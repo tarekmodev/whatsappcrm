@@ -39,3 +39,23 @@ export type SweepWebhookEventsJob = TenantJobData;
 export function processWebhookEventJobId(webhookEventId: string): string {
   return `webhook-event-${webhookEventId}`;
 }
+
+/**
+ * The id a **sweep** re-enqueues under, which is deliberately not the one above.
+ *
+ * `removeOnFail` retains a failed job under its id for a long time, and BullMQ
+ * ignores an `add` for an id it still holds — in the failed set as much as in
+ * the waiting one. So a row whose terminal database write failed after the job
+ * exhausted its retries leaves a corpse holding exactly the id the sweeper would
+ * re-add under, and every sweep from then on is a silent no-op. The sweeper
+ * exists for precisely that row.
+ *
+ * Suffixed with the sweep's own timestamp rather than made unique per call: two
+ * events found in one sweep still get distinct ids, and a single event found
+ * twice in one sweep — impossible today, cheap to be right about — collapses
+ * into one job. The claim in `WebhookEventsRepository` remains what prevents
+ * double processing; this only decides whether the job is created at all.
+ */
+export function sweptWebhookEventJobId(webhookEventId: string, sweptAt: Date): string {
+  return `${processWebhookEventJobId(webhookEventId)}-sweep-${sweptAt.getTime()}`;
+}

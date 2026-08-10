@@ -61,6 +61,24 @@ export class WebhookEventsRepository {
    *
    * `processing` is deliberately re-claimable: an event stuck there is the case
    * the sweeper exists for, and refusing to re-claim it would strand it forever.
+   *
+   * **`failed` is deliberately not claimable, so re-enqueueing a parked event
+   * does nothing on its own.** Parking means "this will not succeed as it
+   * stands", and a queue that could pick a parked row back up would spend the
+   * retry budget on a refusal that has not changed. Replaying one is therefore
+   * an explicit operator act — reset the row, and the sweeper takes it from
+   * there:
+   *
+   * ```sql
+   * UPDATE webhook_events
+   *    SET status = 'received', attempts = 0, last_error = NULL
+   *  WHERE id = $1 AND status = 'failed';
+   * ```
+   *
+   * `findStale` picks a `received` row up on the next sweep, which is what makes
+   * that one statement the whole procedure. An endpoint for it belongs on the
+   * platform-admin surface, where an operator action can be authorised and
+   * audited; there is none yet.
    */
   async claim(id: string): Promise<ClaimedWebhookEvent | null> {
     const claimed = await this.prisma.webhookEvent.updateManyAndReturn({
@@ -89,7 +107,8 @@ export class WebhookEventsRepository {
    * Parked, never dropped (TAR-39, failure modes): the row keeps its raw payload
    * and stays queryable by `status = 'failed'`, so an unknown `phone_number_id`
    * — a number connected before its tenant record existed — can be replayed once
-   * the tenant is there rather than lost.
+   * the tenant is there rather than lost. Replay is the status reset described
+   * on `claim`, not a re-enqueue: a parked row is not claimable by design.
    */
   async markFailed(id: string, reason: string, tenantId: string | null = null): Promise<void> {
     await this.prisma.webhookEvent.update({

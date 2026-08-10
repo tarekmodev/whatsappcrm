@@ -12,22 +12,44 @@ const PHONE_NUMBER_ID = '1234567890';
 const TENANT_A = '00000000-0000-4000-8000-00000000000a';
 const ACCOUNT_A = '00000000-0000-4000-8000-0000000000aa';
 
-function notification(value: Record<string, unknown>, field = 'messages'): unknown {
+/**
+ * One change, shaped the way Meta shapes it for that `field`.
+ *
+ * `metadata` is attached **only** to a `messages` change, because that is the
+ * only change that carries one. A helper that injected it everywhere would test
+ * a payload Meta never sends, and would have hidden the batch-wide parse failure
+ * a template-status change used to cause.
+ */
+function change(field: string, value: Record<string, unknown>): unknown {
   return {
-    object: 'whatsapp_business_account',
-    entry: [
-      {
-        id: 'waba-1',
-        changes: [
-          {
-            field,
-            value: { metadata: { phone_number_id: PHONE_NUMBER_ID }, ...value },
-          },
-        ],
-      },
-    ],
+    field,
+    value:
+      field === 'messages' ? { metadata: { phone_number_id: PHONE_NUMBER_ID }, ...value } : value,
   };
 }
+
+function notification(value: Record<string, unknown>, field = 'messages'): unknown {
+  return batch(change(field, value));
+}
+
+/** Several changes in one delivery, which is how Meta actually batches them. */
+function batch(...changes: unknown[]): unknown {
+  return {
+    object: 'whatsapp_business_account',
+    entry: [{ id: 'waba-1', changes }],
+  };
+}
+
+/**
+ * A template-status change as Meta sends it: no `metadata`, no routing key, and
+ * nothing this pipeline reads.
+ */
+const TEMPLATE_STATUS_CHANGE = change('message_template_status_update', {
+  event: 'APPROVED',
+  message_template_id: 1234567890,
+  message_template_name: 'order_update',
+  message_template_language: 'en_US',
+});
 
 const INBOUND_TEXT = {
   messages: [
@@ -195,7 +217,7 @@ describe('WhatsAppEventProcessor', () => {
     it('processes a non-messages field as a successful no-op', async () => {
       events.claim.mockResolvedValue({
         id: 'event-1',
-        payload: notification({}, 'message_template_status_update'),
+        payload: batch(TEMPLATE_STATUS_CHANGE),
         attempts: 1,
       });
 
@@ -203,6 +225,46 @@ describe('WhatsAppEventProcessor', () => {
 
       expect(resolve).not.toHaveBeenCalled();
       expect(events.markProcessed).toHaveBeenCalledWith('event-1', null);
+    });
+
+    it('writes the message in a batch that also carries a template-status change', async () => {
+      // Meta batches several changes into one delivery, and only a `messages`
+      // change carries `metadata`. Validating every change against the messages
+      // shape fails the whole parse, and the customer's message — signed,
+      // stored, perfectly readable — is parked as unrecognisable.
+      events.claim.mockResolvedValue({
+        id: 'event-1',
+        payload: batch(TEMPLATE_STATUS_CHANGE, change('messages', INBOUND_TEXT)),
+        attempts: 1,
+      });
+
+      await processor.process('event-1');
+
+      expect(writer.applyInboundMessage).toHaveBeenCalledTimes(1);
+      expect(events.markFailed).not.toHaveBeenCalled();
+      expect(events.markProcessed).toHaveBeenCalledWith('event-1', TENANT_A);
+    });
+
+    it('parks an unreadable messages change without losing the rest of the batch', async () => {
+      // The strict schema still applies where it is read: a `messages` change
+      // with no routing key cannot be applied, but the change beside it can.
+      events.claim.mockResolvedValue({
+        id: 'event-1',
+        payload: batch(
+          { field: 'messages', value: { messages: [] } },
+          change('messages', INBOUND_TEXT),
+        ),
+        attempts: 1,
+      });
+
+      await processor.process('event-1');
+
+      expect(writer.applyInboundMessage).toHaveBeenCalledTimes(1);
+      expect(events.markFailed).toHaveBeenCalledWith(
+        'event-1',
+        expect.stringContaining(WEBHOOK_FAILURE_REASON.unrecognisedPayload),
+        TENANT_A,
+      );
     });
   });
 

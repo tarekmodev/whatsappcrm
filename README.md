@@ -466,6 +466,15 @@ FROM webhook_events WHERE status = 'failed' GROUP BY 1;
 --  tenant_not_active       | 2      deactivated tenant; replayable if it returns
 ```
 
+Replaying one is a deliberate operator act, not a re-enqueue: a parked row is not
+claimable, so a job that named it would no-op. Reset it and the next sweep collects it.
+
+```sql
+UPDATE webhook_events
+   SET status = 'received', attempts = 0, last_error = NULL
+ WHERE id = '<event id>' AND status = 'failed';
+```
+
 A repeatable sweep re-enqueues anything still `received`, or stuck in `processing`, past
 `WEBHOOK_STUCK_AFTER_MS`. That job is what converts a Redis outage into message
 _lateness_ rather than message _loss_, so an inbox that has stopped updating usually needs

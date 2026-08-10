@@ -224,7 +224,7 @@ describe('WhatsApp webhook ingestion, end to end', () => {
     tenantBase = createPrismaClient('tenant', requireEnv('APP_DATABASE_URL'));
     tenantPrisma = withTenantScope(tenantBase, tenantContext);
 
-    enqueue = jest.fn().mockResolvedValue(true);
+    enqueue = jest.fn().mockResolvedValue('added');
     const queue = { enqueue } as unknown as QueueService;
 
     repository = new WebhookEventsRepository(systemPrisma);

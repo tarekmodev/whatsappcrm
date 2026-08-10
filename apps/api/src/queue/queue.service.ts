@@ -19,6 +19,19 @@ export interface TenantJobData {
   readonly tenantId: string | null;
 }
 
+/**
+ * What an `enqueue` did. Four outcomes rather than a boolean, because "the job
+ * is queued" and "something with that id was already there" are different facts
+ * and only one of them means work was scheduled.
+ *
+ *   * `added`       — queued, and a worker will pick it up.
+ *   * `duplicate`   — an id already held, in any state. Nothing was queued.
+ *   * `unavailable` — no Redis configured. Expected in a bare clone.
+ *   * `failed`      — Redis refused or timed out. The caller's row is durable;
+ *                     the sweeper is the backstop.
+ */
+export type EnqueueOutcome = 'added' | 'duplicate' | 'unavailable' | 'failed';
+
 export type JobHandler<TData extends TenantJobData> = (job: Job<TData>) => Promise<void>;
 
 /** Job name → handler. A job whose name is not in the map fails loudly. */
@@ -103,34 +116,49 @@ export class QueueService implements OnApplicationShutdown {
   }
 
   /**
-   * Adds a job. Returns whether it reached Redis, and never throws.
+   * Adds a job. Reports what happened, and never throws.
    *
-   * `jobId` in `options` is the deduplication handle: BullMQ refuses a second
-   * job with an id already in the queue, which collapses a Meta retry and a
-   * sweeper re-enqueue of the same row into one job. It is an optimisation, not
-   * the correctness mechanism — BullMQ forgets the id once the job leaves the
-   * completed set — so handlers stay idempotent regardless.
+   * `jobId` in `options` is the deduplication handle: BullMQ ignores an `add`
+   * whose id it already holds, which collapses a Meta retry and a re-enqueue of
+   * the same row into one job. It is an optimisation, not the correctness
+   * mechanism — handlers stay idempotent regardless.
+   *
+   * **`duplicate` is a distinct outcome from `added`, and the distinction is
+   * load-bearing.** BullMQ's `add` does not throw or otherwise signal that it
+   * ignored the call, so a caller that treated any non-throwing `add` as work
+   * queued would report success for a job that will never run — and `add`
+   * ignores an id held in the *failed* set too, which `removeOnFail` retains
+   * long after the job stopped being alive. A sweeper counting those as
+   * re-enqueued reports recovery it did not perform.
+   *
+   * The check is a read before the write, so two producers racing on the same id
+   * can both be told `added`. That costs a log line, not correctness: BullMQ
+   * still keeps exactly one job, and the handler is idempotent either way.
    */
   async enqueue<TData extends TenantJobData>(
     queueName: string,
     jobName: string,
     data: TData,
     options?: JobsOptions,
-  ): Promise<boolean> {
+  ): Promise<EnqueueOutcome> {
     const queue = this.queue(queueName);
 
     if (queue === null) {
-      return false;
+      return 'unavailable';
     }
 
     try {
+      if (options?.jobId !== undefined && (await queue.getJob(options.jobId)) !== undefined) {
+        return 'duplicate';
+      }
+
       await queue.add(jobName, data, options);
-      return true;
+      return 'added';
     } catch (error: unknown) {
       this.logger.error(
         `Could not enqueue ${jobName} on ${queueName}; the sweeper will retry: ${describe(error)}`,
       );
-      return false;
+      return 'failed';
     }
   }
 

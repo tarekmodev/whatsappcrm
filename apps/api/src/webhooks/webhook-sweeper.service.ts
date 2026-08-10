@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PROCESS_WEBHOOK_EVENT_JOB, WEBHOOKS_QUEUE } from '../queue/queue.constants';
 import { QueueService } from '../queue/queue.service';
 import { WebhookEventsRepository } from './webhook-events.repository';
-import { processWebhookEventJobId, type ProcessWebhookEventJob } from './webhook-jobs';
+import { sweptWebhookEventJobId, type ProcessWebhookEventJob } from './webhook-jobs';
 
 /**
  * How many stuck events one sweep re-enqueues.
@@ -61,15 +61,18 @@ export class WebhookSweeperService {
     for (const webhookEventId of stale) {
       const job: ProcessWebhookEventJob = { tenantId: null, webhookEventId };
 
-      const queued = await this.queue.enqueue(WEBHOOKS_QUEUE, PROCESS_WEBHOOK_EVENT_JOB, job, {
-        jobId: processWebhookEventJobId(webhookEventId),
+      const outcome = await this.queue.enqueue(WEBHOOKS_QUEUE, PROCESS_WEBHOOK_EVENT_JOB, job, {
+        // Not the ingest path's deterministic id: that one may still be held by
+        // a failed job `removeOnFail` retains, and BullMQ ignores an `add` for
+        // an id it holds. See `sweptWebhookEventJobId`.
+        jobId: sweptWebhookEventJobId(webhookEventId, now),
         attempts: this.maxAttempts,
         backoff: { type: 'exponential', delay: 1_000 },
         removeOnComplete: 1_000,
         removeOnFail: 5_000,
       });
 
-      if (queued) {
+      if (outcome === 'added') {
         requeued += 1;
       }
     }
@@ -77,6 +80,10 @@ export class WebhookSweeperService {
     // Worth a log line every time it does something: a sweep that finds work is
     // either recovery in progress or a worker that is not keeping up, and both
     // are things an operator wants to see without turning on debug logging.
+    //
+    // It counts jobs actually created, not calls made. A sweep that reports
+    // fewer than it found is reporting a real failure to recover — which is the
+    // one thing this log line exists to make visible.
     this.logger.log(`Re-enqueued ${requeued} of ${stale.length} stuck webhook events`);
 
     return requeued;

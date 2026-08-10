@@ -81,6 +81,19 @@ const ProfileSchema = z.object({
   profile: z.object({ name: z.string().optional() }).optional(),
 });
 
+/**
+ * The value of a `messages` change, and **only** of a `messages` change.
+ *
+ * `metadata.phone_number_id` is required because it is the routing key this
+ * pipeline cannot work without — but it is required *here*, applied after the
+ * `field` filter, rather than in the envelope below. A
+ * `message_template_status_update` or `account_update` value carries no
+ * `metadata` at all, and Meta batches several changes into one delivery: a
+ * strict envelope would fail the whole parse over a template-status change
+ * riding alongside a real message, and the customer's message would be parked
+ * as unrecognisable. Strict where it is read, lenient where Meta's variety
+ * lives.
+ */
 export const WhatsAppChangeValueSchema = z.object({
   metadata: z.object({ phone_number_id: z.string().min(1) }),
   contacts: z.array(ProfileSchema).optional(),
@@ -100,7 +113,12 @@ export const WhatsAppNotificationSchema = z.object({
            * skipped rather than treated as an error.
            */
           field: z.string(),
-          value: WhatsAppChangeValueSchema,
+          /**
+           * Deliberately unvalidated at this level: the shape depends entirely
+           * on `field`, and this schema knows one of them. The processor applies
+           * `WhatsAppChangeValueSchema` to the changes it actually reads.
+           */
+          value: z.unknown(),
         }),
       ),
     }),

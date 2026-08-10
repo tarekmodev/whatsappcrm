@@ -104,7 +104,7 @@ export class WebhookIngestService {
   private async enqueue(webhookEventId: string): Promise<void> {
     const job: ProcessWebhookEventJob = { tenantId: null, webhookEventId };
 
-    const queued = await this.queue.enqueue(WEBHOOKS_QUEUE, PROCESS_WEBHOOK_EVENT_JOB, job, {
+    const outcome = await this.queue.enqueue(WEBHOOKS_QUEUE, PROCESS_WEBHOOK_EVENT_JOB, job, {
       jobId: processWebhookEventJobId(webhookEventId),
       attempts: this.config.getOrThrow<number>('WEBHOOK_MAX_ATTEMPTS'),
       backoff: { type: 'exponential', delay: 1_000 },
@@ -112,15 +112,20 @@ export class WebhookIngestService {
       removeOnFail: 5_000,
     });
 
-    if (!queued) {
-      // Not an error for the caller: the payload is durable and the sweeper
-      // re-enqueues anything nothing picked up. Logged at warn because a
-      // sustained run of these means the queue is down and the inbox is going
-      // stale even though nothing is being lost.
-      this.logger.warn(
-        `Stored webhook event ${webhookEventId} could not be enqueued; left to the sweeper`,
-      );
+    if (outcome === 'added' || outcome === 'duplicate') {
+      // `duplicate` means BullMQ already holds this row's job — the row was just
+      // inserted, so that is a retained job from an earlier life of the same id,
+      // and the sweeper reclaims the row under an id of its own. Nothing to say.
+      return;
     }
+
+    // Not an error for the caller: the payload is durable and the sweeper
+    // re-enqueues anything nothing picked up. Logged at warn because a
+    // sustained run of these means the queue is down and the inbox is going
+    // stale even though nothing is being lost.
+    this.logger.warn(
+      `Stored webhook event ${webhookEventId} was not enqueued (${outcome}); left to the sweeper`,
+    );
   }
 }
 

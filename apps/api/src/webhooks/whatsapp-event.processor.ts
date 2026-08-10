@@ -8,6 +8,7 @@ import { WhatsAppAccountResolver } from './whatsapp-account.resolver';
 import { WhatsAppInboundWriter, type RoutedWhatsAppAccount } from './whatsapp-inbound.writer';
 import {
   MESSAGES_FIELD,
+  WhatsAppChangeValueSchema,
   WhatsAppNotificationSchema,
   type WhatsAppChangeValue,
 } from './whatsapp-payload.schema';
@@ -92,7 +93,7 @@ export class WhatsAppEventProcessor {
    * partial batch is safe to replay: the parts that succeeded become no-ops.
    */
   private async apply(
-    changes: readonly { field: string; value: WhatsAppChangeValue }[],
+    changes: readonly { field: string; value: unknown }[],
   ): Promise<ApplyOutcome> {
     let tenantId: string | null = null;
     let parkedReason: string | null = null;
@@ -100,12 +101,31 @@ export class WhatsAppEventProcessor {
     for (const change of changes) {
       if (change.field !== MESSAGES_FIELD) {
         // `message_template_status_update`, `account_update` and friends arrive
-        // on the same URL. Recorded as processed; TAR-52's template sync owns
-        // them, not this pipeline.
+        // on the same URL, in the same delivery as real messages, and carry a
+        // different value shape — no `metadata`, so no routing key. Recorded as
+        // processed; TAR-52's template sync owns them, not this pipeline.
+        //
+        // Skipped *before* the value is parsed, which is the whole reason the
+        // envelope leaves it unvalidated: validating every change against the
+        // `messages` shape would fail the batch over a change this pipeline was
+        // never going to read, and the message beside it would be parked.
         continue;
       }
 
-      const phoneNumberId = change.value.metadata.phone_number_id;
+      const value = WhatsAppChangeValueSchema.safeParse(change.value);
+
+      if (!value.success) {
+        // A `messages` change this processor cannot read is genuinely
+        // unrecognisable, and no retry changes that — but only this change is
+        // parked, and the batch's other changes still apply.
+        parkedReason ??= describeFailure(
+          WEBHOOK_FAILURE_REASON.unrecognisedPayload,
+          value.error.message,
+        );
+        continue;
+      }
+
+      const phoneNumberId = value.data.metadata.phone_number_id;
       const account = await this.accounts.resolve(phoneNumberId);
 
       if (account === null) {
@@ -119,7 +139,7 @@ export class WhatsAppEventProcessor {
 
       tenantId ??= account.tenantId;
 
-      const reason = await this.applyForTenant(account, change.value);
+      const reason = await this.applyForTenant(account, value.data);
 
       parkedReason ??= reason;
     }

@@ -24,8 +24,10 @@ describe('QueueService with no Redis configured', () => {
    * durable in Postgres before anything is enqueued, so a missing queue is
    * lateness and must never become a failed request.
    */
-  it('reports a failed enqueue instead of throwing', async () => {
-    await expect(build().queue.enqueue('q', 'job', { tenantId: null })).resolves.toBe(false);
+  it('reports an unavailable queue instead of throwing', async () => {
+    await expect(build().queue.enqueue('q', 'job', { tenantId: null })).resolves.toBe(
+      'unavailable',
+    );
   });
 
   it('reports a failed schedule instead of throwing', async () => {
@@ -60,7 +62,7 @@ describe('QueueService with Redis configured but unreachable', () => {
   it('gives up on an enqueue rather than hanging the caller', async () => {
     const { queue } = build('redis://127.0.0.1:6399');
 
-    await expect(queue.enqueue('q', 'job', { tenantId: null })).resolves.toBe(false);
+    await expect(queue.enqueue('q', 'job', { tenantId: null })).resolves.toBe('failed');
 
     await queue.onApplicationShutdown();
   });

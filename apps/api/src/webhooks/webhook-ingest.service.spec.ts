@@ -36,7 +36,7 @@ describe('WebhookIngestService', () => {
 
   function build(env: Record<string, unknown> = ENV): WebhookIngestService {
     store = jest.fn().mockResolvedValue('event-1');
-    enqueue = jest.fn().mockResolvedValue(true);
+    enqueue = jest.fn().mockResolvedValue('added');
 
     const config = {
       get: (key: string) => env[key],
@@ -124,7 +124,7 @@ describe('WebhookIngestService', () => {
      * into a 500 that makes Meta retry.
      */
     it('reports success even when the queue is unavailable', async () => {
-      enqueue.mockResolvedValue(false);
+      enqueue.mockResolvedValue('failed');
 
       await expect(service.ingestWhatsApp(RAW_BODY, sign(RAW_BODY))).resolves.toBe('stored');
     });

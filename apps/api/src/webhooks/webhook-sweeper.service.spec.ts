@@ -15,7 +15,7 @@ describe('WebhookSweeperService', () => {
 
   beforeEach(() => {
     findStale = jest.fn().mockResolvedValue([]);
-    enqueue = jest.fn().mockResolvedValue(true);
+    enqueue = jest.fn().mockResolvedValue('added');
 
     sweeper = new WebhookSweeperService(
       {
@@ -36,7 +36,7 @@ describe('WebhookSweeperService', () => {
   /**
    * The property that turns a Redis outage into lateness rather than loss: a row
    * that was stored but never enqueued is put back on the queue by its durable
-   * id, under the same job id, so a duplicate collapses.
+   * row id.
    */
   it('re-enqueues each stuck event by its stored row id', async () => {
     findStale.mockResolvedValue(['event-1', 'event-2']);
@@ -47,9 +47,38 @@ describe('WebhookSweeperService', () => {
       WEBHOOKS_QUEUE,
       PROCESS_WEBHOOK_EVENT_JOB,
       { tenantId: null, webhookEventId: 'event-1' },
-      expect.objectContaining({ jobId: 'webhook-event-event-1', attempts: MAX_ATTEMPTS }),
+      expect.objectContaining({ attempts: MAX_ATTEMPTS }),
     );
     expect(enqueue).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * The id the ingest path uses may still be held by a job `removeOnFail`
+   * retained — and BullMQ ignores an `add` for an id it holds, in the failed set
+   * as much as the waiting one. Re-adding under that id is the silent no-op this
+   * sweep exists to avoid: it would report recovery it never performed, forever,
+   * for exactly the row whose terminal write failed.
+   */
+  it('re-enqueues under an id no retained corpse can be holding', async () => {
+    findStale.mockResolvedValue(['event-1']);
+
+    await sweeper.sweep(NOW);
+
+    const [, , , options] = enqueue.mock.calls[0] as [string, string, unknown, { jobId: string }];
+
+    expect(options.jobId).toBe(`webhook-event-event-1-sweep-${NOW.getTime()}`);
+    expect(options.jobId).not.toBe('webhook-event-event-1');
+  });
+
+  it('gives two events in one sweep two different job ids', async () => {
+    findStale.mockResolvedValue(['event-1', 'event-2']);
+
+    await sweeper.sweep(NOW);
+
+    const calls = enqueue.mock.calls as [string, string, unknown, { jobId: string }][];
+    const ids = calls.map(([, , , options]) => options.jobId);
+
+    expect(new Set(ids).size).toBe(2);
   });
 
   it('does nothing when nothing is stuck', async () => {
@@ -61,8 +90,20 @@ describe('WebhookSweeperService', () => {
   /** The sweep is itself best-effort: a queue that is still down is swept again next interval. */
   it('reports only what actually reached the queue', async () => {
     findStale.mockResolvedValue(['event-1', 'event-2']);
-    enqueue.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    enqueue.mockResolvedValueOnce('added').mockResolvedValueOnce('failed');
 
     await expect(sweeper.sweep(NOW)).resolves.toBe(1);
+  });
+
+  /**
+   * A job that was ignored as a duplicate was not queued, and counting it as
+   * recovery is how a sweep comes to log `Re-enqueued 1 of 1` while doing
+   * nothing at all.
+   */
+  it('does not count a duplicate as re-enqueued', async () => {
+    findStale.mockResolvedValue(['event-1']);
+    enqueue.mockResolvedValue('duplicate');
+
+    await expect(sweeper.sweep(NOW)).resolves.toBe(0);
   });
 });
