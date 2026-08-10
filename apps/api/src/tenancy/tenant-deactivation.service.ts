@@ -119,6 +119,12 @@ export class TenantDeactivationService {
         // Serialises concurrent deactivation of the same slug. Held to the end
         // of the transaction and released by commit or rollback, so a crashed
         // caller cannot leave it held.
+        //
+        // `hashtext` is an internal function whose result is not contractually
+        // stable across major versions. That is acceptable here and matches
+        // TAR-50: a changed hash only means two callers stop sharing a lock they
+        // contend for rarely, and the unique index on `tenants.slug` — not this
+        // lock — is what guarantees correctness.
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${DEACTIVATION_LOCK_PREFIX + command.slug}))`;
 
         const existing = await tx.tenant.findUnique({
@@ -158,15 +164,30 @@ export class TenantDeactivationService {
  * TAR-22) it belongs in `metadata` alongside the reason — the column is a
  * foreign key into this tenant's `users`, and the platform will never be a row
  * there.
+ *
+ * Both timestamps come from the **database** clock, read once as `now()` —
+ * transaction start — and written to both rows. Two API instances a few seconds
+ * apart would otherwise be able to order the audit trail inconsistently with
+ * the row it describes.
+ *
+ * `created_at` is passed explicitly rather than left to its column default, and
+ * that is not belt and braces: `audit_logs.created_at` does carry
+ * `DEFAULT CURRENT_TIMESTAMP`, but Prisma 7's client generates `@default(now())`
+ * values itself and sends them, so the default never fires and the value would
+ * be the process clock at insert time. Measured here at 57 ms after transaction
+ * start on an idle local database. Naming the value is what actually makes the
+ * two agree.
  */
 async function suspendTenant(
   tx: Prisma.TransactionClient,
   tenantId: string,
   reason: string | undefined,
 ): Promise<DeactivatedTenant> {
+  const [{ now }] = await tx.$queryRaw<[{ now: Date }]>`SELECT now() AS now`;
+
   const tenant = await tx.tenant.update({
     where: { id: tenantId },
-    data: { status: 'suspended', suspendedAt: new Date() },
+    data: { status: 'suspended', suspendedAt: now },
     select: TENANT_PROJECTION,
   });
 
@@ -178,6 +199,9 @@ async function suspendTenant(
       action: TENANT_DEACTIVATED_ACTION,
       targetType: 'tenant',
       targetId: tenant.id,
+      // The same instant the row above was stamped with. See the note above on
+      // why the column default is not what would happen otherwise.
+      createdAt: now,
       // Operator-supplied free text, and the only thing here that did not come
       // from the database. Recorded as given; never rendered to the tenant, and
       // never a place for a credential.

@@ -188,6 +188,47 @@ BEGIN
 END
 $$;
 
+\echo '== app roles: function privileges =='
+
+-- `assert_tenant_active` is TAR-51's deactivation gate, called by `TenantPrisma`
+-- around every `set_config('app.tenant_id', ...)`. Both roles need `EXECUTE`.
+--
+-- Named rather than swept from the catalog, unlike the table loop above: the
+-- `citext` and `pgcrypto` extensions put their own functions in `public` too,
+-- and revoking `PUBLIC`'s execute on those would be a change to roles this file
+-- knows nothing about. Only functions this project creates belong here.
+--
+-- Made explicit because the default is `EXECUTE TO PUBLIC`, which works right up
+-- until somebody applies the routine `REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA
+-- public FROM PUBLIC` hardening step — and then every tenant query in the
+-- product fails. Stating the grant means that step is survivable.
+--
+-- Skipped with a notice rather than failing when the function is absent: this
+-- file is documented to run after migrations, and a cluster that has not had
+-- them yet is mid-bootstrap rather than broken. The default grant still applies
+-- until it is re-run.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = 'assert_tenant_active'
+    ) THEN
+        -- Start from nothing, so a grant made by hand is taken back rather than
+        -- accumulated — the same discipline the table loop above follows.
+        REVOKE ALL ON FUNCTION "public"."assert_tenant_active"(text) FROM PUBLIC;
+        REVOKE ALL ON FUNCTION "public"."assert_tenant_active"(text)
+            FROM "whatsappcrm_app", "whatsappcrm_system";
+        GRANT EXECUTE ON FUNCTION "public"."assert_tenant_active"(text)
+            TO "whatsappcrm_app", "whatsappcrm_system";
+    ELSE
+        RAISE NOTICE
+            'assert_tenant_active is not present; re-run this file after applying migrations';
+    END IF;
+END
+$$;
+
 -- Future tables. Without this, a table created by the next migration is
 -- invisible to both roles until someone remembers to re-run this file, and the
 -- symptom is a permission error in production rather than at migrate time.

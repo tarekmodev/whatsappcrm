@@ -32,11 +32,15 @@ const ACTIVE: TenantRow = {
   suspendedAt: null,
 };
 
+/** What the stubbed `SELECT now()` returns — the database's clock, not the process's. */
+const DATABASE_NOW = new Date('2026-08-10T10:30:00.000Z');
+
 describe('TenantDeactivationService', () => {
   let findUnique: jest.Mock;
   let update: jest.Mock;
   let createAuditLog: jest.Mock;
   let executeRaw: jest.Mock;
+  let queryRaw: jest.Mock;
   let service: TenantDeactivationService;
 
   beforeEach(() => {
@@ -50,9 +54,11 @@ describe('TenantDeactivationService', () => {
     );
     createAuditLog = jest.fn().mockResolvedValue({ id: 'audit' });
     executeRaw = jest.fn().mockResolvedValue(1);
+    queryRaw = jest.fn().mockResolvedValue([{ now: DATABASE_NOW }]);
 
     const tx = {
       $executeRaw: executeRaw,
+      $queryRaw: queryRaw,
       tenant: { findUnique, update },
       auditLog: { create: createAuditLog },
     } as unknown as Prisma.TransactionClient;
@@ -72,11 +78,15 @@ describe('TenantDeactivationService', () => {
       expect(update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: TENANT_ID },
-          data: { status: 'suspended', suspendedAt: expect.any(Date) as Date },
+          // The database's clock, not the process's: the audit row's own
+          // `created_at` default resolves to the same `now()` inside this
+          // transaction, so the two cannot disagree by however far two API
+          // instances have drifted apart.
+          data: { status: 'suspended', suspendedAt: DATABASE_NOW },
         }),
       );
       expect(tenant.status).toBe('suspended');
-      expect(tenant.suspendedAt).toBeInstanceOf(Date);
+      expect(tenant.suspendedAt).toEqual(DATABASE_NOW);
     });
 
     it('writes nothing else, so the tenant keeps its data', async () => {
@@ -102,6 +112,10 @@ describe('TenantDeactivationService', () => {
             action: TENANT_DEACTIVATED_ACTION,
             targetType: 'tenant',
             targetId: TENANT_ID,
+            // Named rather than left to the column default: Prisma generates
+            // `@default(now())` itself, so the default never fires and the
+            // audit entry would carry the process clock at insert time.
+            createdAt: DATABASE_NOW,
             metadata: { reason: 'Non-payment, ticket OPS-412' },
           }) as unknown,
         }),

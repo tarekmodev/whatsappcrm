@@ -75,7 +75,13 @@ describe('withTenantScope', () => {
       // deactivated tenant raises before `set_config` runs and the GUC is never
       // set. Checking after setting it would leave a window in which the
       // statement batched behind it could still run.
-      expect(fragments.join('?')).toBe('SELECT set_config(?, assert_tenant_active(?), true)');
+      //
+      // The schema qualifier is load-bearing too: unqualified, the call
+      // resolves through the connection's `search_path`, and a connection
+      // without `public` on it fails every tenant statement.
+      expect(fragments.join('?')).toBe(
+        'SELECT set_config(?, public.assert_tenant_active(?), true)',
+      );
       expect(values).toEqual([TENANT_GUC, TENANT_ID]);
     });
 
