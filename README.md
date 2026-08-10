@@ -82,7 +82,8 @@ pnpm db:verify:rls
 # PASS — tenant isolation is enforced at the data layer
 
 pnpm test:db
-# Tests: 33 passed — the same guarantee through TenantPrisma, plus provisioning
+# Tests: 79 passed — the same guarantee through TenantPrisma, plus provisioning
+#                    and the ticket uniqueness constraint (TAR-74)
 ```
 
 The `checks` object is empty on purpose: the endpoint reports process liveness only and
@@ -202,7 +203,7 @@ Six conventions hold across every model, and a change that breaks one needs a re
 ### Tenant isolation
 
 Isolation is enforced by the database, not by application code remembering a `where`
-clause. All 34 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
+clause. All 35 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
 
 ```sql
 CREATE POLICY tenant_isolation ON conversations
@@ -318,7 +319,7 @@ Three things to know before writing a query against it:
   those three rules do not apply there — RLS still covers everything else.
 
 **Not built here, and deliberately:** the extension does not inject `tenantId` into
-`where`/`data` for the 33 scoped models. RLS already filters them correctly, and a
+`where`/`data` for the 35 scoped models. RLS already filters them correctly, and a
 generic injection has to get nested writes, `connect`, `upsert` and relation filters right
 or it silently drops rows — worse than not having it. Where a plan needs the explicit
 predicate (see the measurement above), pass `tenantId` in the query's own `where`.
@@ -428,6 +429,16 @@ language cannot express row-level security, so nothing generates them:
 
 Forgetting either fails `pnpm db:verify:rls` by name — it reads the catalog rather than a
 list, so a new table with no policy is caught rather than assumed to be fine.
+
+**A partial index has no safety net, so write one.** Prisma cannot express
+`CREATE INDEX … WHERE …`, and its Postgres describer skips indexes that carry a predicate
+— so `migrate dev` will neither generate one nor propose to drop one it finds, and it
+never shows up as drift. Convenient, but it means nothing regenerates the index from
+`schema.prisma` and nothing notices if it disappears. Hand-write it in the migration, note
+it in a comment on the model, and add a test that asserts the index definition —
+`tickets_one_active_per_contact` and `src/prisma/ticket-active-uniqueness.int-spec.ts` are
+the worked example. A missing unique index does not fail loudly; it silently starts
+allowing duplicates.
 
 **A migration that adds a function needs `pnpm db:roles` re-run too.** `app-roles.sql`
 names each one, revokes the default `EXECUTE TO PUBLIC` and grants it to the two
