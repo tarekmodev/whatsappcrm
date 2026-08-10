@@ -24,7 +24,10 @@
     "db:migrate:deploy": "pnpm --filter @whatsappcrm/api exec prisma migrate deploy",
     "db:migrate:status": "pnpm --filter @whatsappcrm/api exec prisma migrate status",
     "db:reset": "pnpm --filter @whatsappcrm/api exec prisma migrate reset",
-    "db:studio": "pnpm --filter @whatsappcrm/api exec prisma studio"
+    "db:studio": "pnpm --filter @whatsappcrm/api exec prisma studio",
+    "db:roles": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/app-roles.sql",
+    "db:roles:down": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/app-roles-down.sql",
+    "db:verify:rls": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/verify-tenant-isolation.sql"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
