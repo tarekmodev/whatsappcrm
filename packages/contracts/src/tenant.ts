@@ -88,15 +88,29 @@ export const TenantDomainSchema = z.object({
   isPrimary: z.boolean(),
 });
 
+/**
+ * Human-readable tenant handle. Immutable once issued: it is baked into the
+ * platform subdomain, so changing it would break every bookmark and every
+ * session cookie scoped to that host.
+ *
+ * The pattern forbids a leading or trailing hyphen because the slug becomes a
+ * DNS label, and a label may not start or end with one.
+ */
+export const TenantSlugSchema = z
+  .string()
+  .min(3)
+  .max(40)
+  .regex(
+    /^[a-z0-9][a-z0-9-]*[a-z0-9]$/,
+    'Must be lowercase letters, digits and hyphens, starting and ending with a letter or digit',
+  );
+
+export const TenantNameSchema = z.string().min(1).max(120);
+
 export const TenantResponseSchema = z.object({
   id: IdSchema,
-  name: z.string().min(1).max(120),
-  /** Immutable once issued: it is baked into the platform subdomain. */
-  slug: z
-    .string()
-    .min(3)
-    .max(40)
-    .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/),
+  name: TenantNameSchema,
+  slug: TenantSlugSchema,
   status: TenantStatusSchema,
   branding: TenantBrandingSchema,
   domains: z.array(TenantDomainSchema),
@@ -116,7 +130,7 @@ export const TenantPublicResponseSchema = z.object({
 });
 
 export const TenantUpdateInputSchema = z.object({
-  name: z.string().min(1).max(120).optional(),
+  name: TenantNameSchema.optional(),
   branding: TenantBrandingSchema.partial().optional(),
 });
 

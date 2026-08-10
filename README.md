@@ -82,7 +82,7 @@ pnpm db:verify:rls
 # PASS — tenant isolation is enforced at the data layer
 
 pnpm test:db
-# Tests: 21 passed — the same guarantee through TenantPrisma
+# Tests: 33 passed — the same guarantee through TenantPrisma, plus provisioning
 ```
 
 The `checks` object is empty on purpose: the endpoint reports process liveness only and
@@ -90,7 +90,8 @@ must never claim dependency health it has not measured. Real database and queue 
 arrive with TAR-41.
 
 **The database has tables but no rows — that is the expected state.** Seeding is TAR-46.
-To see what step 4 built:
+Provision a tenant to get one (see [Provisioning a tenant](#provisioning-a-tenant)). To see
+what step 4 built:
 
 ```bash
 docker compose exec postgres psql -U whatsappcrm -d whatsappcrm -c '\dt'
@@ -315,6 +316,44 @@ generic injection has to get nested writes, `connect`, `upsert` and relation fil
 or it silently drops rows — worse than not having it. Where a plan needs the explicit
 predicate (see the measurement above), pass `tenantId` in the query's own `where`.
 
+### Provisioning a tenant
+
+Tenants are admin-provisioned; there is no self-signup. Provisioning is one call, and it
+writes the tenant, its settings and its platform subdomain in a single transaction:
+
+```bash
+curl -X POST http://localhost:3001/api/v1/admin/tenants \
+  -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"slug":"acme","name":"Acme Ltd","timezone":"Europe/London","locale":"en-GB"}'
+
+# 201 Created
+# {"id":"019f…","slug":"acme","name":"Acme Ltd","status":"active",
+#  "primaryHostname":"acme.app.localhost",
+#  "settings":{"timezone":"Europe/London","locale":"en-GB"},"createdAt":"…"}
+```
+
+Things worth knowing before you call it:
+
+- **`201` means provisioned, `200` means it already existed.** The call is idempotent on
+  `slug`, so re-running a provisioning script is safe. A repeat never renames the tenant,
+  never changes its status and never resets its settings — those are `PATCH /tenant` and
+  TAR-36's lifecycle, not a side effect of replaying a script. It does add a settings row
+  or a platform domain that is missing.
+- **The hostname is derived from the slug**, `<slug>.$PLATFORM_DOMAIN`, and is never taken
+  from the request. If another tenant already holds that host, the whole call is refused
+  with `409 conflict` and nothing is written — there is no half-provisioned tenant to
+  clean up.
+- **It authenticates with `PLATFORM_ADMIN_TOKEN`, not a session.** The platform operator
+  is not a user inside any tenant, and provisioning has to work before the first user
+  exists. Leave the variable unset and the whole admin surface refuses every request.
+  This is a placeholder for a real platform-admin identity, which arrives with TAR-35's
+  and TAR-22's work.
+- **A provisioned tenant has no users yet.** Inviting the first one is TAR-35.
+
+The route runs on `SystemPrisma` — the only client that can write `tenants` — and is one
+of the five call sites TAR-39 permits for it.
+
 ### Adding a migration
 
 Edit `apps/api/prisma/schema.prisma`, then:
@@ -421,6 +460,11 @@ For the API, `.env.example` must stay in sync with
 to start if a required key is missing or malformed. `DATABASE_URL` and `REDIS_URL` are
 still optional there — the scaffold boots without them — and TAR-41 promotes both to
 required.
+
+`PLATFORM_ADMIN_TOKEN` is optional in a different sense: leaving it unset does not disable
+validation, it disables the whole platform admin surface. Every request to
+`/api/v1/admin/*` is refused, which is the safe default for routes that create tenants.
+Generate one with `openssl rand -base64 48` and keep it in the secret store.
 
 The Prisma CLI reads its own configuration from `apps/api/prisma.config.mjs`, which loads
 the repository-root `.env`. Prisma 7 does not load `.env` on its own and no longer accepts

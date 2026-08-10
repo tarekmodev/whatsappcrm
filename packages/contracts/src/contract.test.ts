@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { PhoneE164Schema } from './common';
+import { PROVISIONED_TENANT_STATUSES, ProvisionTenantInputSchema } from './admin';
+import { IanaTimezoneSchema, PhoneE164Schema } from './common';
 import { API_ERROR_CODES, API_ERROR_STATUS, httpStatusForErrorCode } from './error-codes';
 import { isMessageStatusAdvance, SendMessageInputSchema } from './messages';
 import { permissionsForRole, ROLE_PERMISSIONS, roleHasPermission, TENANT_ROLES } from './rbac';
@@ -99,6 +100,62 @@ describe('E.164 phone numbers', () => {
     expect(() => PhoneE164Schema.parse('0501234567')).toThrow();
     expect(() => PhoneE164Schema.parse('+966 50 123 4567')).toThrow();
     expect(() => PhoneE164Schema.parse('+0501234567')).toThrow();
+  });
+});
+
+describe('tenant provisioning input', () => {
+  const valid = { slug: 'acme', name: 'Acme Ltd' };
+
+  it('accepts the minimum an operator has to supply', () => {
+    expect(ProvisionTenantInputSchema.parse(valid)).toEqual(valid);
+  });
+
+  it('rejects a slug that would not survive being a DNS label', () => {
+    for (const slug of ['-acme', 'acme-', 'Acme', 'ac me', 'ac', 'acme_ltd', 'acme.ltd']) {
+      expect(() => ProvisionTenantInputSchema.parse({ ...valid, slug }), slug).toThrow();
+    }
+  });
+
+  it('strips a caller-supplied hostname rather than honouring it', () => {
+    // The platform subdomain is derived from the slug server-side. A client
+    // that sends one must not be able to claim another tenant's host.
+    const parsed = ProvisionTenantInputSchema.parse({
+      ...valid,
+      primaryHostname: 'globex.app.example.com',
+    });
+
+    expect(parsed).not.toHaveProperty('primaryHostname');
+  });
+
+  it('rejects a time zone the runtime cannot resolve', () => {
+    expect(IanaTimezoneSchema.parse('Europe/London')).toBe('Europe/London');
+    expect(() => IanaTimezoneSchema.parse('CET+1')).toThrow();
+    expect(() => IanaTimezoneSchema.parse('Mars/Olympus_Mons')).toThrow();
+  });
+});
+
+describe('the two tenant status vocabularies', () => {
+  // Pinned rather than asserted equal: they genuinely differ today, and the
+  // point of this test is that the difference cannot widen without someone
+  // reading the comment on PROVISIONED_TENANT_STATUSES. TAR-36 reconciles them.
+  it('agrees on every status they share', () => {
+    const shared = PROVISIONED_TENANT_STATUSES.filter((status) =>
+      (TENANT_STATUSES as readonly string[]).includes(status),
+    );
+
+    expect(shared).toEqual(['active', 'suspended', 'cancelled']);
+  });
+
+  it('records exactly the statuses each side has and the other does not', () => {
+    const onlyProvisioning = PROVISIONED_TENANT_STATUSES.filter(
+      (status) => !(TENANT_STATUSES as readonly string[]).includes(status),
+    );
+    const onlyCustomerFacing = TENANT_STATUSES.filter(
+      (status) => !(PROVISIONED_TENANT_STATUSES as readonly string[]).includes(status),
+    );
+
+    expect(onlyProvisioning).toEqual(['pending']);
+    expect(onlyCustomerFacing).toEqual(['trialing', 'past_due', 'deleted']);
   });
 });
 
