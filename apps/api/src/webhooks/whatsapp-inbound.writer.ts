@@ -294,13 +294,19 @@ export class WhatsAppInboundWriter {
    *
    * A thread that is being created carries its opening timestamps immediately,
    * rather than being created blank and advanced by the guarded update below.
-   * That is not a shortcut, it is what makes this correct independently of the
-   * column's default: `conversations.last_message_at` is nullable today, and a
-   * schema that gives it `DEFAULT CURRENT_TIMESTAMP` would otherwise start every
-   * new thread at *row creation time* — which is later than any provider
-   * timestamp, so the forward-only guard would never match again and the thread
-   * would be permanently stamped with when we happened to write it rather than
-   * when the customer wrote. Setting it here means neither shape can be wrong.
+   * That is not a shortcut, it is what makes this path correct at all now that
+   * TAR-92 has made `conversations.last_message_at` `NOT NULL DEFAULT
+   * CURRENT_TIMESTAMP`: left to the default, a new thread starts at *row
+   * creation time*, which is later than the provider timestamp that created it —
+   * `sent_at` is Meta's clock, in whole seconds, and this runs off the request
+   * path. The forward-only guard below would then never match for the first
+   * message, so `service_window_expires_at` would stay NULL, which reads as
+   * "window closed": a thread minutes old offering the agent a template-only
+   * composer. Setting both here is what opens the window.
+   *
+   * The default is still right for the thread TAR-68 opens with no message in
+   * it. It is only wrong when a message is what created the row, which is
+   * exactly this path, so this is where it is corrected.
    *
    * Updates stay empty on purpose: an existing thread's counters and timestamps
    * are conditional, and an upsert cannot express "only if this event is newer".
@@ -338,6 +344,12 @@ export class WhatsAppInboundWriter {
    * they may only move forward, and the guard lives in the `WHERE` clause so
    * the comparison and the write are one atomic UPDATE.
    *
+   * The guard is `lastMessageAt < sentAt` and nothing else: the column is
+   * `NOT NULL` since TAR-92, so a `lastMessageAt: null` branch would be dead
+   * code that reads as a case still being handled. For the message that created
+   * the thread the comparison is an equality and this correctly writes nothing —
+   * `upsertConversation` has already stamped both fields from that same message.
+   *
    * `status` is deliberately untouched. Whether an inbound message re-opens a
    * resolved conversation is a product rule that belongs with the inbox
    * (TAR-20c) and the ticket lifecycle (TAR-21), not with the transport.
@@ -354,11 +366,7 @@ export class WhatsAppInboundWriter {
     });
 
     await tx.conversation.updateMany({
-      where: {
-        tenantId,
-        id: conversationId,
-        OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: sentAt } }],
-      },
+      where: { tenantId, id: conversationId, lastMessageAt: { lt: sentAt } },
       data: { lastMessageAt: sentAt, serviceWindowExpiresAt: serviceWindowEnd(sentAt) },
     });
   }

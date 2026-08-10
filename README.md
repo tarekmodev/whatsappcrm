@@ -32,22 +32,22 @@ not yet installed and arrives with the realtime gateway.
 
 ## Layout
 
-| Path                       | What it is                                                   |
-| -------------------------- | ------------------------------------------------------------ |
-| `apps/api`                 | NestJS HTTP API                                              |
-| `apps/api/src/prisma`      | The `TenantPrisma` / `SystemPrisma` clients and RLS wiring   |
-| `apps/api/src/queue`       | BullMQ registration and tenant context propagation into jobs |
+| Path                       | What it is                                                    |
+| -------------------------- | ------------------------------------------------------------- |
+| `apps/api`                 | NestJS HTTP API                                               |
+| `apps/api/src/prisma`      | The `TenantPrisma` / `SystemPrisma` clients and RLS wiring    |
+| `apps/api/src/queue`       | BullMQ registration and tenant context propagation into jobs  |
 | `apps/api/src/webhooks`    | WhatsApp webhook ingest, its worker and the stuck-event sweep |
-| `apps/api/prisma`          | Database schema and migrations                               |
-| `apps/api/prisma/sql`      | Operational SQL that is not a migration — roles, RLS check   |
-| `apps/web`                 | Next.js agent console                                        |
-| `packages/contracts`       | Zod schemas and types shared by both apps — the API contract |
-| `packages/tsconfig`        | Shared TypeScript configuration                              |
-| `docker-compose.yml`       | Local PostgreSQL and Redis                                   |
-| `docker/postgres/initdb.d` | First-boot SQL for the local Postgres container              |
-| `docs/adr`                 | Architecture decision records                                |
-| `docs/architecture`        | Cross-cutting design documents                               |
-| `docs/reference`           | Data model, admin API and tenant isolation reference         |
+| `apps/api/prisma`          | Database schema and migrations                                |
+| `apps/api/prisma/sql`      | Operational SQL that is not a migration — roles, RLS check    |
+| `apps/web`                 | Next.js agent console                                         |
+| `packages/contracts`       | Zod schemas and types shared by both apps — the API contract  |
+| `packages/tsconfig`        | Shared TypeScript configuration                               |
+| `docker-compose.yml`       | Local PostgreSQL and Redis                                    |
+| `docker/postgres/initdb.d` | First-boot SQL for the local Postgres container               |
+| `docs/adr`                 | Architecture decision records                                 |
+| `docs/architecture`        | Cross-cutting design documents                                |
+| `docs/reference`           | Data model, admin API and tenant isolation reference          |
 
 ## Documentation
 
