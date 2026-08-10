@@ -32,6 +32,19 @@ export interface TenantJobData {
  */
 export type EnqueueOutcome = 'added' | 'duplicate' | 'unavailable' | 'failed';
 
+export interface EnqueueOptions extends JobsOptions {
+  /**
+   * Read the queue before writing, so `added` can be told from `duplicate`.
+   *
+   * **Off by default, because it is a second Redis round-trip.** The ingest path
+   * runs inside Meta's request timeout and has `PRODUCER_COMMAND_TIMEOUT_MS` set
+   * tight precisely so a slow Redis degrades quickly; a check that caller does
+   * not read would double its worst case for nothing. It is on where the answer
+   * changes what is reported — the sweeper, which counts recoveries.
+   */
+  readonly detectDuplicate?: boolean;
+}
+
 export type JobHandler<TData extends TenantJobData> = (job: Job<TData>) => Promise<void>;
 
 /** Job name → handler. A job whose name is not in the map fails loudly. */
@@ -71,8 +84,8 @@ const PRODUCER_COMMAND_TIMEOUT_MS = 2_000;
  *
  * Three decisions worth knowing:
  *
- *   * **Enqueueing never fails a caller.** `enqueue` reports a boolean and logs;
- *     it does not throw. ADR 0001 put both realtime and the queue on Redis, and
+ *   * **Enqueueing never fails a caller.** `enqueue` reports an outcome and
+ *     logs; it does not throw. ADR 0001 put both realtime and the queue on Redis, and
  *     the durability rule that follows from it is that a caller has already
  *     committed its work to Postgres before it enqueues. Turning a Redis blip
  *     into a 500 would undo exactly the property that design bought — the
@@ -123,13 +136,14 @@ export class QueueService implements OnApplicationShutdown {
    * the same row into one job. It is an optimisation, not the correctness
    * mechanism — handlers stay idempotent regardless.
    *
-   * **`duplicate` is a distinct outcome from `added`, and the distinction is
-   * load-bearing.** BullMQ's `add` does not throw or otherwise signal that it
-   * ignored the call, so a caller that treated any non-throwing `add` as work
-   * queued would report success for a job that will never run — and `add`
+   * **`duplicate` is reported only when `detectDuplicate` asks for it.** BullMQ's
+   * `add` does not throw or otherwise signal that it ignored the call — and it
    * ignores an id held in the *failed* set too, which `removeOnFail` retains
-   * long after the job stopped being alive. A sweeper counting those as
-   * re-enqueued reports recovery it did not perform.
+   * long after the job stopped being alive — so telling the two apart costs a
+   * read before the write. A caller that acts on the difference pays for it; one
+   * that treats both the same is not charged a round-trip on a hot path to learn
+   * something it discards. Without the check, `added` means the add was
+   * accepted, not that a job was necessarily created.
    *
    * The check is a read before the write, so two producers racing on the same id
    * can both be told `added`. That costs a log line, not correctness: BullMQ
@@ -139,7 +153,7 @@ export class QueueService implements OnApplicationShutdown {
     queueName: string,
     jobName: string,
     data: TData,
-    options?: JobsOptions,
+    options?: EnqueueOptions,
   ): Promise<EnqueueOutcome> {
     const queue = this.queue(queueName);
 
@@ -147,12 +161,20 @@ export class QueueService implements OnApplicationShutdown {
       return 'unavailable';
     }
 
+    // Split off our own flag: the rest is BullMQ's, and a library should not be
+    // handed options it did not define.
+    const { detectDuplicate = false, ...job } = options ?? {};
+
     try {
-      if (options?.jobId !== undefined && (await queue.getJob(options.jobId)) !== undefined) {
+      if (
+        detectDuplicate &&
+        job.jobId !== undefined &&
+        (await queue.getJob(job.jobId)) !== undefined
+      ) {
         return 'duplicate';
       }
 
-      await queue.add(jobName, data, options);
+      await queue.add(jobName, data, job);
       return 'added';
     } catch (error: unknown) {
       this.logger.error(

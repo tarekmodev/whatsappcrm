@@ -70,6 +70,23 @@ describe('WebhookSweeperService', () => {
     expect(options.jobId).not.toBe('webhook-event-event-1');
   });
 
+  /**
+   * The sweep is the one caller that acts on the difference — its count is a
+   * recovery report — so it is the one that pays for the extra read.
+   */
+  it('asks the queue to tell an add apart from a duplicate', async () => {
+    findStale.mockResolvedValue(['event-1']);
+
+    await sweeper.sweep(NOW);
+
+    expect(enqueue).toHaveBeenCalledWith(
+      WEBHOOKS_QUEUE,
+      PROCESS_WEBHOOK_EVENT_JOB,
+      expect.anything(),
+      expect.objectContaining({ detectDuplicate: true }),
+    );
+  });
+
   it('gives two events in one sweep two different job ids', async () => {
     findStale.mockResolvedValue(['event-1', 'event-2']);
 

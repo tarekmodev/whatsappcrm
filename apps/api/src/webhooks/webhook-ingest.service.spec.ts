@@ -85,6 +85,26 @@ describe('WebhookIngestService', () => {
       );
     });
 
+    /**
+     * This path runs inside Meta's request timeout, and treats `added` and
+     * `duplicate` identically — so it must not pay for the round-trip that tells
+     * them apart. `PRODUCER_COMMAND_TIMEOUT_MS` is set tight so a slow Redis
+     * degrades fast; a second bounded command doubles that worst case to learn
+     * something this caller discards.
+     */
+    it('does not pay for a duplicate check it would not act on', async () => {
+      await service.ingestWhatsApp(RAW_BODY, sign(RAW_BODY));
+
+      const [, , , options] = enqueue.mock.calls[0] as [
+        string,
+        string,
+        unknown,
+        { detectDuplicate?: boolean },
+      ];
+
+      expect(options.detectDuplicate).toBeUndefined();
+    });
+
     it('stores the parsed payload, not the raw text', async () => {
       await service.ingestWhatsApp(RAW_BODY, sign(RAW_BODY));
 

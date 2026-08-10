@@ -113,9 +113,10 @@ export class WebhookIngestService {
     });
 
     if (outcome === 'added' || outcome === 'duplicate') {
-      // `duplicate` means BullMQ already holds this row's job — the row was just
-      // inserted, so that is a retained job from an earlier life of the same id,
-      // and the sweeper reclaims the row under an id of its own. Nothing to say.
+      // No `detectDuplicate` on this call: this path is inside Meta's request
+      // timeout, and it would act on both answers identically anyway. If BullMQ
+      // does hold a retained job under this id, the row stays `received` and the
+      // sweeper reclaims it under an id of its own.
       return;
     }
 
