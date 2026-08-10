@@ -147,7 +147,7 @@ describe('MetaCloudApiClient', () => {
         to: RECIPIENT,
         kind: 'document',
         media: { mediaId: '9876' },
-        filename: 'invoice.pdf',
+        fileName: 'invoice.pdf',
       });
 
       expect(sentBody()).toMatchObject({
