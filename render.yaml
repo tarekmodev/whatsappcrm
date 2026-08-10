@@ -41,9 +41,16 @@ projects:
             # same build that produced that code. A failed pre-deploy aborts the
             # deploy, so a broken migration never reaches a running instance.
             preDeployCommand: pnpm --filter @whatsappcrm/api db:deploy
+            # "exec node", never "pnpm start" — this applies to every service below.
+            # Verified: with pnpm in between, SIGTERM kills the process without Nest's
+            # shutdown hooks ever running, so in-flight requests are cut, pools are left
+            # dangling and buffered error-tracker events are lost on every deploy.
+            # "exec" makes node PID 1, so the signal reaches its handler. Do not "tidy"
+            # this back into a pnpm script.
+            #
             # RENDER_GIT_COMMIT is injected by the platform; passing it through as
             # APP_VERSION keeps the application itself free of vendor variables.
-            startCommand: APP_VERSION=$RENDER_GIT_COMMIT pnpm --filter @whatsappcrm/api start
+            startCommand: exec env APP_VERSION=$RENDER_GIT_COMMIT node apps/api/dist/main.js
             healthCheckPath: /api/health/ready
             envVars:
               - key: NODE_ENV
@@ -76,7 +83,8 @@ projects:
             rootDir: .
             autoDeployTrigger: commit
             buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/web...
-            startCommand: pnpm --filter @whatsappcrm/web start
+            # Next's real entrypoint, not node_modules/.bin/next — that is a shell
+            startCommand: cd apps/web && exec node node_modules/next/dist/bin/next start
             envVars:
               - key: NODE_ENV
                 value: production
@@ -143,7 +151,7 @@ projects:
             autoDeployTrigger: checksPass
             buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/api...
             preDeployCommand: pnpm --filter @whatsappcrm/api db:deploy
-            startCommand: APP_VERSION=$RENDER_GIT_COMMIT pnpm --filter @whatsappcrm/api start
+            startCommand: exec env APP_VERSION=$RENDER_GIT_COMMIT node apps/api/dist/main.js
             healthCheckPath: /api/health/ready
             envVars:
               - key: NODE_ENV
@@ -174,7 +182,8 @@ projects:
             rootDir: .
             autoDeployTrigger: checksPass
             buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/web...
-            startCommand: pnpm --filter @whatsappcrm/web start
+            # Next's real entrypoint, not node_modules/.bin/next — that is a shell
+            startCommand: cd apps/web && exec node node_modules/next/dist/bin/next start
             envVars:
               - key: NODE_ENV
                 value: production
@@ -231,7 +240,7 @@ projects:
             rootDir: .
             buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/api...
             preDeployCommand: pnpm --filter @whatsappcrm/api db:deploy
-            startCommand: APP_VERSION=$RENDER_GIT_COMMIT pnpm --filter @whatsappcrm/api start
+            startCommand: exec env APP_VERSION=$RENDER_GIT_COMMIT node apps/api/dist/main.js
             healthCheckPath: /api/health/ready
             envVars:
               - key: NODE_ENV
@@ -262,7 +271,8 @@ projects:
             autoDeployTrigger: 'off'
             rootDir: .
             buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/web...
-            startCommand: pnpm --filter @whatsappcrm/web start
+            # Next's real entrypoint, not node_modules/.bin/next — that is a shell
+            startCommand: cd apps/web && exec node node_modules/next/dist/bin/next start
             envVars:
               - key: NODE_ENV
                 value: production

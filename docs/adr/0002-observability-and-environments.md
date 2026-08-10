@@ -124,6 +124,15 @@ anything but our own build, no connection strings.
 produced the application code, before the new instance serves traffic. A failing
 migration aborts the deploy and the previous instance keeps serving.
 
+Services start with `exec node <entrypoint>`, not with a package script. This looks
+like a triviality and is not: a dry run of the full pipeline in Linux containers
+showed that `pnpm --filter … start` swallows `SIGTERM`, so Nest's shutdown hooks
+never ran — every deploy would have cut in-flight requests, left Postgres and Redis
+connections dangling, and discarded exactly the buffered Sentry events that explain
+an incident. `exec` makes node PID 1 and the signal reaches its handler.
+`LifecycleLoggerService` logs one line on shutdown so the difference is visible in
+a log rather than inferred.
+
 - **Rejected — a manual step in the runbook.** Rejected outright: TAR-34 requires
   migrations be applied automatically, and a manual step is one someone skips.
 - **Rejected — running migrations at application boot.** Common and tempting.

@@ -119,6 +119,36 @@ created from this task — see the note on this issue. To finish it:
 4. In Render, add notification settings for **deploy failed** and **service
    unhealthy** on the production services.
 
+## Deploys and shutdown
+
+Each service starts with `exec node <entrypoint>` rather than a package script.
+That is load-bearing, not style: `exec` makes node PID 1, so Render's `SIGTERM`
+reaches Nest's shutdown hooks. Run it through `pnpm start` instead and the signal
+never arrives — the process is killed outright, cutting in-flight requests,
+leaving database and Redis connections dangling, and discarding buffered
+error-tracker events on every deploy. This was measured, not assumed.
+
+A clean shutdown logs one line before exiting:
+
+```json
+{ "context": "Lifecycle", "signal": "SIGTERM", "msg": "shutting down: draining connections" }
+```
+
+If a container's final output does not contain it, the process was killed rather
+than drained — which also means the errors explaining _why_ it died never reached
+Sentry. That line is the first thing to check when a deploy looks unhealthy.
+
+The API also refuses to boot at all if a required variable is missing, naming the
+key:
+
+```
+Error: Invalid environment configuration:
+  - DATABASE_URL: is required when NODE_ENV=production
+```
+
+That is a failed deploy with an obvious cause, which is the point — the previous
+instance keeps serving.
+
 ## Logging and error tracking
 
 Logs are structured JSON on stdout, which is what Render's log stream collects.

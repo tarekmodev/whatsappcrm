@@ -3,6 +3,7 @@ import { APP_FILTER } from '@nestjs/core';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 import { AppLoggerService } from './app-logger.service';
 import { ErrorTrackingService } from './error-tracking.service';
+import { LifecycleLoggerService } from './lifecycle-logger.service';
 import { RequestLoggingMiddleware } from './request-logging.middleware';
 
 /**
@@ -16,6 +17,7 @@ import { RequestLoggingMiddleware } from './request-logging.middleware';
   providers: [
     AppLoggerService,
     ErrorTrackingService,
+    LifecycleLoggerService,
     RequestLoggingMiddleware,
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
   ],
