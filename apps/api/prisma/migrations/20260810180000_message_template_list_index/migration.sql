@@ -1,0 +1,64 @@
+-- Index for the tenant-facing template list (TAR-20a).
+--
+-- `GET /api/v1/message-templates` answers "which templates may this tenant send
+-- right now", which — with the ordering ruled in 0002 amendment 1 — is:
+--
+--   WHERE tenant_id = <RLS> AND status = 'approved' [AND name LIKE 'q%']
+--   ORDER BY name, language, id
+--   LIMIT n
+--
+-- `tenant_id` is not written by the handler — TAR-48's `tenant_isolation` policy
+-- supplies it as an equality predicate on every query — which is exactly why it
+-- still leads the index (TAR-39, decision 1, rule 3). Verified: the plan is an
+-- Index Scan with `Index Cond: (tenant_id = current_setting(...) AND status =
+-- 'approved')` and no sort node.
+--
+-- Ordered by name rather than by approval time because an agent scans this
+-- picker looking for `order_update`, not for whatever Meta approved most
+-- recently. A name-leading index is also what makes the `q` prefix filter a
+-- range within the index rather than a filter applied after the fact — the
+-- database is provisioned `--locale=C` (docker-compose.yml) precisely so a text
+-- prefix is index-usable and index order is deterministic across machines.
+--
+-- The table's only other index is
+-- UNIQUE (tenant_id, whatsapp_business_account_id, name, language). It cannot
+-- serve this query: it leads with the WABA, while this list may span a tenant's
+-- WABAs. Without this one the composer's template picker is a sequential scan
+-- over every tenant's templates, which is invisible on a seeded database and
+-- painful on a real one — Meta permits thousands of templates per WABA.
+--
+-- The optional business-account filter is applied as a heap-side recheck rather
+-- than by a second index. That is deliberate: a tenant's approved set is small
+-- once the leading two columns have been applied, and an index on the same
+-- prefix would cost write throughput on every template sync for no read it
+-- uniquely serves.
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+--   Additive    One CREATE INDEX. No column, constraint, type or row is changed,
+--               so code running against the previous schema is unaffected.
+--   Idempotent  IF NOT EXISTS, so a re-run over a database that already has it
+--               succeeds quietly. Nothing here depends on being applied once.
+--   Duration    Milliseconds. `message_templates` is empty in every environment:
+--               TAR-52's migration refuses to run against a non-empty one, and
+--               nothing has written the table since.
+--   Locks       SHARE on message_templates, which blocks writes to that table
+--               only, for the duration of the build. Not CONCURRENTLY: Prisma
+--               runs a migration inside one transaction and Postgres forbids
+--               CREATE INDEX CONCURRENTLY there. Revisit if this ever has to be
+--               applied to a table with real volume — at that point it belongs
+--               in its own out-of-band statement, not in a migration.
+--   Blocking    lock_timeout caps the wait at three seconds, so a conflicting
+--               long-running transaction aborts this migration cleanly rather
+--               than queueing ahead of every new query. Re-run once it clears.
+--   Data loss   None. `down.sql` drops the index and nothing else.
+--
+-- No `pnpm db:roles` re-run: this adds no table, so no grant and no policy
+-- changes.
+
+SET LOCAL lock_timeout = '3s';
+
+-- CreateIndex
+CREATE INDEX IF NOT EXISTS "message_templates_tenant_id_status_name_language_id_idx" ON "message_templates"("tenant_id", "status", "name", "language", "id");

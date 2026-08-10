@@ -10,6 +10,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
 /**
  * One `.env` for the whole repository, at the root — the same file
@@ -39,6 +40,7 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     QueueModule,
     HealthModule,
     TenancyModule,
+    WhatsAppModule,
     WebhooksModule,
   ],
 })
