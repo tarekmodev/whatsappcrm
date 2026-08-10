@@ -335,17 +335,55 @@ a list later is not a cursor format change. Comparison is tuple order: left to r
 column deciding only when every column before it is equal.
 
 Postgres expresses that resume predicate directly as a row comparison —
-`(name, language, id) > ($1, $2, $3)` — and Prisma's query API does not, so a composite
-sort resolves to the equivalent nested form:
+`(name, language, id) > ($1, $2, $3)` — which a btree index leading with those columns
+serves as a **start condition**: the scan begins at the cursor and reads forward `LIMIT`
+rows. Prisma's query API has no row comparison, and the obvious translation is a nested
+disjunction:
 
 ```sql
+-- Correct, and the wrong shape. Do not write this.
 name > $1 OR (name = $1 AND (language > $2 OR (language = $2 AND id > $3)))
 ```
 
-Both forms are served by an index leading with those columns in that order. What is **not**
-equivalent is comparing only the first column and the id — `(name, id) > ($1, $3)` — which
-drops every row sharing a `name` with the page boundary whose id sorts before it. That
-failure is silent: no error, a row simply never appears.
+It returns the right rows and loses the property the rule exists for. A planner cannot
+turn a nested OR into one index start condition: it either scans the index from the
+beginning of the range and applies the disjunction as a filter, or bitmaps the branches
+together and sorts the result to restore `ORDER BY`. Either way the work grows with how
+far into the list the cursor sits, which is the `OFFSET` cost profile keyset pagination
+was chosen to avoid — on `messages` and `conversations`, the two hottest queries in this
+document.
+
+**The form to write** puts an inclusive bound on the leading column, which _is_ a start
+condition, and subtracts the part of that column's tie group already returned:
+
+```sql
+-- (sentAt DESC, id DESC)
+sentAt <= $1 AND NOT (sentAt = $1 AND id >= $2)
+
+-- (name ASC, language ASC, id ASC)
+name >= $1 AND NOT (name = $1 AND (language < $2 OR (language = $2 AND id <= $3)))
+```
+
+Both are expressible in Prisma's fluent API — `NOT` takes a nested `where` — so the typed
+client is kept.
+
+**Its breaking point, because it has one.** The rows the `NOT` discards are exactly those
+sharing the cursor's leading value and already returned, so the extra work per page is the
+size of that one tie group. For a timestamp or a template name that group holds one row or
+a handful. For a low-cardinality leading column — a status, a boolean — the group is the
+whole partition, the bound rewinds to the start of it on every page, and the form degrades
+to precisely the scan it was meant to replace. **No list in this document sorts that way,
+and none should start.** If one must, `$queryRaw` with a true row comparison is the
+sanctioned escape, on the same footing decision 1 already grants reporting: raw SQL is
+safe here because isolation is enforced by the database, not by the query that forgot it.
+
+Whichever form, verify with `EXPLAIN` that the plan shows an index scan with the predicate
+as an index condition rather than a filter, and no sort node. No plan is asserted here.
+
+What is **not** a correct predicate in any form is comparing only the leading column and
+the id — `(name, id) > ($1, $3)` — which drops every row sharing a `name` with the page
+boundary whose id sorts before it. That failure is silent: no error, a row simply never
+appears.
 
 ---
 
@@ -399,8 +437,12 @@ Order is not arbitrary — each stage depends on the last:
 `@Public()` opts an endpoint out of 3–6: login, password reset, webhooks,
 `GET /tenant/public`, health.
 
-`/api/v1/admin/*` does not run this pipeline at all. It is the **platform-operator**
-surface — us, not a customer inside a tenant — and it is authenticated by
+`/api/v1/admin/*` skips stages 2–6. Stage 1 still runs, and must: `TenantContextMiddleware`
+is registered at `{*path}` and opens the scope that carries `requestId`, which the error
+filter reads to correlate a failure. An admin route exempted from it would still work and
+would lose every correlation id it emits. What admin skips is tenant resolution and the
+guards above it. It is the **platform-operator** surface — us, not a customer inside a
+tenant — and it is authenticated by
 `PlatformAdminGuard` (TAR-19, hardened in TAR-51): a fail-closed, timing-safe shared
 bearer token, deliberately not a session, because the operator is not a user in any tenant
 and provisioning has to work before the first user exists. Stages 2–6 have nothing to
@@ -778,11 +820,13 @@ emerged from whichever implementation happened to need it first.
 
 ### Amendment 1 — message templates (TAR-20a)
 
-_Revised once, before anything shipped against it, on three findings from review: the send
-contract could not carry the header this amendment publishes, the ruled sort key did not
-fit the published cursor, and the original text claimed the platform-operator surface did
-not exist when it is shipped on `main`. Revised in place rather than superseded — one
-canonical statement of this contract is worth more than a trail._
+_Revised twice, both times before anything shipped against it. Round one: the send contract
+could not carry the header this amendment publishes, the ruled sort key did not fit the
+published cursor, and the text claimed the platform-operator surface did not exist when it
+is shipped on `main`. Round two: the resume predicate the cursor rule reached for was
+correct but not index-served, a static text header was forced to send an empty header
+object, and `filename` broke the repo's `fileName` spelling. Revised in place rather than
+superseded — one canonical statement of this contract is worth more than a trail._
 
 The published surface has no way to list templates, and TAR-72's composer cannot work
 without one: the moment the 24-hour service window closes, a template is the only thing an
@@ -853,13 +897,17 @@ discriminated on the same `headerFormat` vocabulary:
 ```ts
 header:
   | { format: 'text'; variables: string[] }                                  // headerParameterCount long
-  | { format: 'image' | 'video' | 'document'; mediaId: Id; filename?: string } // filename: documents only
+  | { format: 'image' | 'video' | 'document'; mediaId: Id; fileName?: string } // fileName: documents only
   | { format: 'location'; latitude: number; longitude: number; name?: string; address?: string }
 ```
 
-Required exactly when `headerFormat` is non-null, absent otherwise, and its `format` must
-equal the template's — all three checkable server-side before the Cloud API call, which is
-the whole point. `parameterCount` keeps its published meaning: BODY placeholders, matching
+Required when the header takes a parameter — `image`, `video`, `document` and `location`
+always do, `text` only when `headerParameterCount > 0` — forbidden otherwise, and its
+`format` must equal the template's. A static text header is approved with its text fixed,
+so it needs nothing at send time; requiring an empty `header` for it would invite a mapper
+to emit an empty Meta `header` component, which is not what a static header expects. All
+three rules are checkable server-side before the Cloud API call, which is the whole point.
+`parameterCount` keeps its published meaning: BODY placeholders, matching
 `variables`. Header placeholders are counted separately in `headerParameterCount` rather
 than folded into one total, because they are supplied through a different slot and a
 single number could not say which.
@@ -881,12 +929,13 @@ under `channel:manage`, which shows every template with its status and is where 
 by Meta, not yet sendable from this product" belongs. _Trigger to revisit:_ the first
 tenant with a dynamic URL button.
 
-**Cursor.** `(name, language, id)` is the contract's first multi-column sort. It resolves
-under the composite-key rule in [Cursor encoding](#data-model) — `k: [name, language]`,
-tuple comparison, `id` last. Comparing `name` and `id` alone silently drops one language of
-a two-language template at a page boundary, which is the normal case here:
-`UNIQUE (tenant_id, whatsapp_business_account_id, name, language)` exists precisely so one
-name spans languages.
+**Cursor.** `(name, language, id)` is the contract's first multi-column sort, and the
+worked example under [Cursor encoding](#data-model): `k: [name, language]`, `id` last,
+resumed with the inclusive-bound form given there. Comparing `name` and `id` alone silently
+drops one language of a two-language template at a page boundary, which is the normal case
+here — `UNIQUE (tenant_id, whatsapp_business_account_id, name, language)` exists precisely
+so one name spans languages. Templates sharing a name are few, so the tie group the
+predicate rescans is small; that is the condition the form depends on, and it holds here.
 
 The filter takes a phone number rather than a business account because
 `ConversationResponse` publishes `whatsappAccountId` and nothing maps one to the other.
