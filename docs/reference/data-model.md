@@ -612,7 +612,11 @@ row-level security:
    `system_unrestricted` policy.
 
 Forgetting either fails `pnpm db:verify:rls` by name. A tenant-scoped table without a policy
-looks finished in review and returns every tenant's rows at runtime.
+looks finished in review, which is exactly why the grant is not automatic: until step 2 runs,
+`whatsappcrm_app` holds no privilege at all on the new table and every query against it fails
+with a permission error (TAR-95). Step 1 forgotten used to mean a table returning every
+tenant's rows at runtime; now it means a table nobody can reach, which is the same mistake
+with a loud, local symptom instead of a silent, remote one.
 
 ### Adding a function
 

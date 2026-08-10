@@ -106,6 +106,16 @@ change.
 
 ### Security
 
+- **A table no migration has granted is unreachable by `whatsappcrm_app`.** `app-roles.sql`
+  no longer leaves `ALTER DEFAULT PRIVILEGES … ON TABLES` pointing at the app role, so a
+  migration that adds a tenant-scoped table and forgets its `tenant_isolation` block ships a
+  table nobody can read rather than one every tenant can. The grant now waits for the policy
+  instead of arriving ahead of it; `pnpm db:roles` — already the documented post-migration
+  step — issues it, and `pnpm db:verify:rls` then fails by name if the policy is still
+  missing. `whatsappcrm_system` keeps its default privileges: it is the cross-tenant role, and
+  a table it cannot reach is a bug rather than a safeguard. `db:verify:rls` creates a
+  throwaway table on every run to assert both halves, so the default cannot drift back open
+  unnoticed. No behaviour changes for tables that already exist. (TAR-95)
 - **The application database role holds neither `SUPERUSER` nor `BYPASSRLS`**, and
   `app-roles.sql` re-asserts that on every run rather than assuming it. `SystemPrisma`'s
   cross-tenant access is a per-table `system_unrestricted` policy rather than the cluster-wide
