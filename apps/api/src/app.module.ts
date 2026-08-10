@@ -7,6 +7,7 @@ import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TenancyModule } from './tenancy/tenancy.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
 /**
  * One `.env` for the whole repository, at the root — the same file
@@ -31,6 +32,7 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     PrismaModule,
     HealthModule,
     TenancyModule,
+    WhatsAppModule,
   ],
 })
 export class AppModule implements NestModule {

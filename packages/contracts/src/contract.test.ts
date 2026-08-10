@@ -6,7 +6,13 @@ import { isMessageStatusAdvance, SendMessageInputSchema } from './messages';
 import { permissionsForRole, ROLE_PERMISSIONS, roleHasPermission, TENANT_ROLES } from './rbac';
 import { canTransitionTenant, TENANT_STATUSES, TENANT_STATUS_EFFECTS } from './tenant';
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
-import { MessageTemplateResponseSchema, WhatsAppBusinessAccountResponseSchema } from './whatsapp';
+import {
+  ConnectedWhatsAppBusinessAccountResponseSchema,
+  ConnectWhatsAppBusinessAccountInputSchema,
+  MessageTemplateListQuerySchema,
+  MessageTemplateResponseSchema,
+  WhatsAppBusinessAccountResponseSchema,
+} from './whatsapp';
 
 describe('error taxonomy', () => {
   it('maps every code to an HTTP status', () => {
@@ -89,6 +95,45 @@ describe('send message input', () => {
 
   it('requires a template name for a template send', () => {
     expect(() => SendMessageInputSchema.parse({ type: 'template', languageCode: 'en' })).toThrow();
+  });
+
+  describe('a template header', () => {
+    const send = { type: 'template', templateName: 'order_update', languageCode: 'en_US' };
+
+    it('carries the media a media-header template needs', () => {
+      // Without a slot for it, an approved IMAGE-header template passes the
+      // picker and the arity check and still fails at Meta.
+      const parsed = SendMessageInputSchema.parse({
+        ...send,
+        header: { format: 'image', mediaId: '90444444-4444-7444-8444-444444444401' },
+      });
+
+      expect(parsed).toMatchObject({ header: { format: 'image' } });
+    });
+
+    it('carries the variables a text-header template needs, apart from the body ones', () => {
+      const parsed = SendMessageInputSchema.parse({
+        ...send,
+        variables: ['A', 'B'],
+        header: { format: 'text', variables: ['C'] },
+      });
+
+      expect(parsed).toMatchObject({ variables: ['A', 'B'], header: { variables: ['C'] } });
+    });
+
+    it('stays optional, because most templates have no header', () => {
+      expect(SendMessageInputSchema.parse(send)).not.toHaveProperty('header');
+    });
+
+    it.each([
+      ['a media header with no media', { format: 'image' }],
+      ['a text header with no variables', { format: 'text', variables: [] }],
+      ['a media id that is not an id', { format: 'image', mediaId: 'nope' }],
+      ['a format outside the published set', { format: 'carousel', mediaId: 'x' }],
+      ['coordinates outside the globe', { format: 'location', latitude: 200, longitude: 0 }],
+    ])('rejects %s', (_case, header) => {
+      expect(() => SendMessageInputSchema.parse({ ...send, header })).toThrow();
+    });
   });
 });
 
@@ -188,6 +233,153 @@ describe('whatsapp business account', () => {
 
   it('keys a template to its WABA, not to the tenant', () => {
     expect(Object.keys(MessageTemplateResponseSchema.shape)).toContain('whatsappBusinessAccountId');
+  });
+});
+
+describe('connecting a whatsapp business account', () => {
+  const valid = {
+    wabaId: '102290129340398',
+    accessToken: 'EAAG-a-real-looking-meta-access-token',
+    phoneNumbers: [{ phoneNumberId: '15550001111', displayPhoneNumber: '+15550001111' }],
+  };
+
+  it('accepts the minimum an operator has to supply', () => {
+    expect(ConnectWhatsAppBusinessAccountInputSchema.parse(valid)).toMatchObject({
+      wabaId: valid.wabaId,
+    });
+  });
+
+  it('requires at least one number, because a WABA without one cannot send or receive', () => {
+    expect(() =>
+      ConnectWhatsAppBusinessAccountInputSchema.parse({ ...valid, phoneNumbers: [] }),
+    ).toThrow();
+  });
+
+  it('rejects the same phone number twice in one request', () => {
+    expect(() =>
+      ConnectWhatsAppBusinessAccountInputSchema.parse({
+        ...valid,
+        phoneNumbers: [...valid.phoneNumbers, ...valid.phoneNumbers],
+      }),
+    ).toThrow();
+  });
+
+  it('rejects an id that is not a Meta Graph id', () => {
+    // Meta's ids exceed Number.MAX_SAFE_INTEGER, so they stay strings — but
+    // they are still digits, and an arbitrary string here becomes an index key.
+    for (const wabaId of ['not-an-id', '10229 0129', '', '1'.repeat(33)]) {
+      expect(
+        () => ConnectWhatsAppBusinessAccountInputSchema.parse({ ...valid, wabaId }),
+        wabaId,
+      ).toThrow();
+    }
+  });
+
+  it('rejects a display number that is not E.164', () => {
+    expect(() =>
+      ConnectWhatsAppBusinessAccountInputSchema.parse({
+        ...valid,
+        phoneNumbers: [{ phoneNumberId: '15550001111', displayPhoneNumber: '555-0001' }],
+      }),
+    ).toThrow();
+  });
+
+  it('strips a caller-supplied tenant id rather than honouring it', () => {
+    // The tenant comes from the path and the platform-admin guard. A body field
+    // that could redirect the connection to another tenant must not survive.
+    const parsed = ConnectWhatsAppBusinessAccountInputSchema.parse({
+      ...valid,
+      tenantId: '50444444-4444-7444-8444-4444444444c1',
+    });
+
+    expect(parsed).not.toHaveProperty('tenantId');
+  });
+
+  it('never publishes a token on the way back out', () => {
+    const parsed = ConnectedWhatsAppBusinessAccountResponseSchema.parse({
+      id: '01890a5d-ac96-774b-bcce-b302099a8057',
+      wabaId: valid.wabaId,
+      name: null,
+      verificationStatus: 'pending',
+      createdAt: '2026-08-10T09:30:24Z',
+      updatedAt: '2026-08-10T09:30:24Z',
+      accessTokenEncrypted: 'v1.leaked',
+      accounts: [],
+    });
+
+    expect(parsed).not.toHaveProperty('accessTokenEncrypted');
+  });
+});
+
+describe('the message template list', () => {
+  const WHATSAPP_ACCOUNT_ID = '70444444-4444-7444-8444-444444444401';
+  const WABA_ID = '60444444-4444-7444-8444-444444444401';
+
+  it('paginates by cursor with a documented default and cap', () => {
+    expect(MessageTemplateListQuerySchema.parse({})).toMatchObject({ limit: 25 });
+    expect(() => MessageTemplateListQuerySchema.parse({ limit: 1000 })).toThrow();
+  });
+
+  it('offers no way to ask for an unapproved template', () => {
+    // Meta refuses a send on anything but an approved template, so a `status`
+    // parameter would only make a failed send reachable from the picker.
+    const parsed = MessageTemplateListQuerySchema.parse({ status: 'rejected' });
+
+    expect(parsed).not.toHaveProperty('status');
+  });
+
+  it('filters by the phone number the composer actually holds', () => {
+    // `ConversationResponse` publishes `whatsappAccountId` and nothing maps one
+    // to a WABA, so a WABA-only filter would leave the composer listing
+    // unfiltered — offering templates that cannot be sent on that number.
+    expect(
+      MessageTemplateListQuerySchema.parse({ whatsappAccountId: WHATSAPP_ACCOUNT_ID }),
+    ).toMatchObject({ whatsappAccountId: WHATSAPP_ACCOUNT_ID });
+  });
+
+  it('refuses a number and a business account at once, which name two scopes', () => {
+    expect(() =>
+      MessageTemplateListQuerySchema.parse({
+        whatsappAccountId: WHATSAPP_ACCOUNT_ID,
+        whatsappBusinessAccountId: WABA_ID,
+      }),
+    ).toThrow();
+  });
+});
+
+describe('a listed message template', () => {
+  const template = {
+    id: '80444444-4444-7444-8444-444444444401',
+    whatsappBusinessAccountId: '60444444-4444-7444-8444-444444444401',
+    name: 'order_update',
+    language: 'en_US',
+    category: 'UTILITY',
+    status: 'approved',
+    components: [{ type: 'BODY', text: 'Order {{1}}' }],
+    bodyText: 'Order {{1}}',
+    parameterCount: 1,
+    headerFormat: null,
+    headerParameterCount: 0,
+    providerTemplateId: '1001',
+    createdAt: '2026-08-10T09:00:00.000Z',
+    updatedAt: '2026-08-10T09:00:00.000Z',
+  };
+
+  it('publishes the arity a send has to match, alongside the raw tree', () => {
+    // `SendTemplateInput.variables` is positional: without this every consumer
+    // parses Meta's component tree itself, and the send path cannot check the
+    // length before calling Meta.
+    expect(MessageTemplateResponseSchema.parse(template)).toMatchObject({
+      bodyText: 'Order {{1}}',
+      parameterCount: 1,
+      headerFormat: null,
+    });
+  });
+
+  it('refuses a header format outside the published set', () => {
+    expect(() =>
+      MessageTemplateResponseSchema.parse({ ...template, headerFormat: 'carousel' }),
+    ).toThrow();
   });
 });
 

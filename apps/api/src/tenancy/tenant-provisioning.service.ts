@@ -1,7 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma, type $Enums } from '../generated/prisma/client';
+import { type $Enums, type Prisma } from '../generated/prisma/client';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
+import { isUniqueViolationOn } from '../prisma/unique-violation';
 import { PlatformHostnameTakenError, TenantSlugTakenError } from './tenant-provisioning.errors';
 
 /**
@@ -275,53 +276,4 @@ async function completeTenant(
     timezone: settings.timezone,
     locale: settings.locale,
   };
-}
-
-/** True when `error` is a unique violation whose constraint mentions `column`. */
-function isUniqueViolationOn(error: unknown, column: string): boolean {
-  return (
-    error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === 'P2002' &&
-    describeFailedConstraint(error).includes(column)
-  );
-}
-
-/**
- * Everything the client will say about *which* constraint failed, as one
- * string.
- *
- * Prisma puts that in one of two places depending on how it reached the
- * database. The engine path fills `meta.target` with the column list; the
- * `@prisma/adapter-pg` driver path this application uses leaves `meta.target`
- * undefined and carries Postgres's own message instead:
- *
- *   meta.driverAdapterError.cause.originalMessage
- *     = 'duplicate key value violates unique constraint "tenant_domains_hostname_key"'
- *
- * Both are read, so the check survives a driver change in either direction
- * rather than silently classifying every collision as a fault. Matching on the
- * column name works for both spellings: Prisma's generated index names contain
- * the columns they cover.
- */
-function describeFailedConstraint(error: Prisma.PrismaClientKnownRequestError): string {
-  const meta: Record<string, unknown> = error.meta ?? {};
-  const target: unknown = meta.target;
-
-  return [
-    Array.isArray(target) ? target.join(',') : typeof target === 'string' ? target : '',
-    driverMessageOf(meta),
-  ].join(' ');
-}
-
-function driverMessageOf(meta: Record<string, unknown>): string {
-  const cause: unknown = asRecord(meta.driverAdapterError)?.cause;
-  const message: unknown = asRecord(cause)?.originalMessage;
-
-  return typeof message === 'string' ? message : '';
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
