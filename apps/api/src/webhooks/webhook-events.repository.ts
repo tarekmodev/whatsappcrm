@@ -1,0 +1,136 @@
+import { Inject, Injectable } from '@nestjs/common';
+import type { WebhookProvider } from '@whatsappcrm/contracts';
+import type { Prisma } from '../generated/prisma/client';
+import { WebhookEventStatus } from '../generated/prisma/enums';
+import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
+
+/**
+ * Every read and write of `webhook_events`, and the only place `SystemPrisma`
+ * is reached from this module.
+ *
+ * That table is TAR-39's deliberate exception to row-level security: it is
+ * written *before* the tenant is known, so it carries a nullable `tenant_id`,
+ * has no policy, and the application role is granted nothing on it at all —
+ * `TenantPrisma` refuses it outright (`MODEL_POLICIES`, `tenant-scope.extension`).
+ * Confining it to one class is what keeps that exception auditable: `SYSTEM_PRISMA`
+ * appears in this constructor and in no other file under `webhooks/`.
+ *
+ * Nothing here is tenant-facing. `tenant_id` is filled in during processing, for
+ * forensics and for the sweeper's per-tenant reporting — never to serve a read.
+ */
+@Injectable()
+export class WebhookEventsRepository {
+  constructor(@Inject(SYSTEM_PRISMA) private readonly prisma: SystemPrisma) {}
+
+  /**
+   * Stores a delivery, absorbing a replay.
+   *
+   * `skipDuplicates` compiles to `ON CONFLICT (provider, provider_event_id) DO
+   * NOTHING`, and `createManyAndReturn` gives back the rows that were actually
+   * inserted — so an empty result *is* the duplicate signal, with no second
+   * round trip and no read-then-write race between two concurrent deliveries of
+   * the same event.
+   *
+   * Returns `null` when the delivery was a duplicate: the caller answers 200 and
+   * enqueues nothing, because the first delivery already did.
+   */
+  async store(
+    provider: WebhookProvider,
+    providerEventId: string,
+    payload: Prisma.InputJsonValue,
+  ): Promise<string | null> {
+    const [stored] = await this.prisma.webhookEvent.createManyAndReturn({
+      data: [{ provider, providerEventId, payload, status: WebhookEventStatus.received }],
+      skipDuplicates: true,
+      select: { id: true },
+    });
+
+    return stored?.id ?? null;
+  }
+
+  /**
+   * Takes ownership of an event and returns its payload, or `null` when there is
+   * nothing to do.
+   *
+   * The `status` filter is the concurrency control. Two workers can hold the
+   * same job — a Meta retry the sweeper also re-enqueued, a job whose lock
+   * expired mid-flight — and `updateMany` scoped to `received`/`processing`
+   * means exactly one of them observes a row to work on. A `processed` event is
+   * never claimed twice, so replay costs one no-op UPDATE rather than a
+   * duplicated message.
+   *
+   * `processing` is deliberately re-claimable: an event stuck there is the case
+   * the sweeper exists for, and refusing to re-claim it would strand it forever.
+   */
+  async claim(id: string): Promise<ClaimedWebhookEvent | null> {
+    const claimed = await this.prisma.webhookEvent.updateManyAndReturn({
+      where: {
+        id,
+        status: { in: [WebhookEventStatus.received, WebhookEventStatus.processing] },
+      },
+      data: { status: WebhookEventStatus.processing, attempts: { increment: 1 } },
+      select: { id: true, payload: true, attempts: true },
+    });
+
+    return claimed[0] ?? null;
+  }
+
+  /** Records success, and the tenant the event turned out to belong to. */
+  async markProcessed(id: string, tenantId: string | null): Promise<void> {
+    await this.prisma.webhookEvent.update({
+      where: { id },
+      data: { status: WebhookEventStatus.processed, tenantId, processedAt: new Date() },
+    });
+  }
+
+  /**
+   * Parks an event, with the reason.
+   *
+   * Parked, never dropped (TAR-39, failure modes): the row keeps its raw payload
+   * and stays queryable by `status = 'failed'`, so an unknown `phone_number_id`
+   * — a number connected before its tenant record existed — can be replayed once
+   * the tenant is there rather than lost.
+   */
+  async markFailed(id: string, reason: string, tenantId: string | null = null): Promise<void> {
+    await this.prisma.webhookEvent.update({
+      where: { id },
+      data: { status: WebhookEventStatus.failed, lastError: reason, tenantId },
+    });
+  }
+
+  /** Records a retriable failure without giving up on the event. */
+  async recordAttemptFailure(id: string, reason: string): Promise<void> {
+    await this.prisma.webhookEvent.update({ where: { id }, data: { lastError: reason } });
+  }
+
+  /**
+   * Ids of events still `received`, or stuck in `processing`, since before
+   * `staleBefore` — what the sweeper re-enqueues.
+   *
+   * Ordered oldest first and bounded by `limit`, so a backlog drains in arrival
+   * order across several sweeps instead of one sweep trying to load all of it.
+   * Served by the `(status, received_at)` index the schema declares for exactly
+   * this query; only the id is selected, because that is all the job payload
+   * carries.
+   */
+  async findStale(staleBefore: Date, limit: number): Promise<string[]> {
+    const stale = await this.prisma.webhookEvent.findMany({
+      where: {
+        status: { in: [WebhookEventStatus.received, WebhookEventStatus.processing] },
+        receivedAt: { lt: staleBefore },
+      },
+      orderBy: { receivedAt: 'asc' },
+      take: limit,
+      select: { id: true },
+    });
+
+    return stale.map(({ id }) => id);
+  }
+}
+
+export interface ClaimedWebhookEvent {
+  readonly id: string;
+  readonly payload: Prisma.JsonValue;
+  /** How many times processing has been attempted, including this one. */
+  readonly attempts: number;
+}

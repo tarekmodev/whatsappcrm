@@ -1,0 +1,37 @@
+-- Record an inbound message whose type we do not model yet (TAR-20).
+--
+-- `@whatsappcrm/contracts` has published `unsupported` in `MESSAGE_TYPES` since
+-- TAR-39 — "anything Meta sends that we do not model yet, recorded rather than
+-- dropped" — but `message_content_type` never carried it. The webhook ingestion
+-- pipeline is the first code that has to answer the question, and without this
+-- value its only options are to drop the message or to mislabel it as `system`,
+-- which is a real Meta type with a different meaning.
+--
+-- Meta ships new message types on its own schedule (`reaction`, `order`,
+-- `button` all arrived after the Cloud API launched), so this is not a one-off
+-- gap: it is the value that keeps a new type from becoming an ingestion
+-- failure. The raw payload stays on `webhook_events`, so a type the product
+-- later learns to render can be backfilled from it.
+--
+-- ---------------------------------------------------------------------------
+-- Additive and idempotent
+-- ---------------------------------------------------------------------------
+--
+-- `ADD VALUE IF NOT EXISTS` re-runs cleanly, which is what the fleet runner
+-- needs: tenant databases sit at different versions and a run may resume
+-- mid-fleet. Nothing reads or writes the new value in this transaction —
+-- PostgreSQL forbids using an enum value in the transaction that added it — so
+-- the migration is safe on a fresh database, on one a version behind, and on
+-- one where a previous run stopped halfway.
+--
+-- No table is rewritten and no row is touched: adding a label to an enum is a
+-- catalogue update, so this is O(1) regardless of how large `messages` has
+-- grown. Expected runtime on the largest tenant: milliseconds.
+--
+-- Appended at the end of the label list rather than inserted next to `template`.
+-- Enum ordering is the sort order for `ORDER BY content_type`, and no query
+-- sorts by it, so position carries no meaning here — while `BEFORE`/`AFTER`
+-- placement would make the statement non-idempotent in a way `IF NOT EXISTS`
+-- cannot cover.
+
+ALTER TYPE "message_content_type" ADD VALUE IF NOT EXISTS 'unsupported';

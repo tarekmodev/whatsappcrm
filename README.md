@@ -3,12 +3,13 @@
 Multi-tenant, white-label WhatsApp CRM and helpdesk platform, built on the official
 WhatsApp Business Cloud API.
 
-> **Status: scaffold.** This repository currently contains the project skeleton, the stack
-> decision, the local development harness, the database schema, its tenant isolation and
-> the two Prisma clients that enforce it — no product features. Feature work is tracked as
-> the TAR-18 epic. The database has **tables but no rows**: the data model landed with
-> TAR-47, row-level security with TAR-48, the client split with TAR-49, and seed data
-> arrives with TAR-46. Everything below works today.
+> **Status: early.** This repository contains the project skeleton, the stack decision, the
+> local development harness, the database schema, its tenant isolation and the two Prisma
+> clients that enforce it, and the first product path end to end — inbound WhatsApp
+> webhooks. Feature work is tracked as the TAR-18 epic. The database has **tables but
+> almost no rows**: the data model landed with TAR-47, row-level security with TAR-48, the
+> client split with TAR-49, webhook ingestion with TAR-20, and seed data arrives with
+> TAR-46. Everything below works today.
 
 ## Stack
 
@@ -23,23 +24,26 @@ Prisma runs on the **`pg` driver adapter** (`@prisma/adapter-pg`), which Prisma 
 The generated client is **not committed**: `prisma generate` writes it to
 `apps/api/src/generated/prisma`, and `pnpm build`, `pnpm typecheck` and `pnpm test` all
 depend on a `generate` task so it cannot go stale. Run `pnpm db:generate` by hand after
-changing `schema.prisma` if you want it immediately. Socket.IO and BullMQ are decided but
-not yet installed; each arrives with the story that first needs it.
+changing `schema.prisma` if you want it immediately. BullMQ arrived with the webhook
+ingestion pipeline, which is the first thing that needed a queue; Socket.IO is decided but
+not yet installed and arrives with the realtime gateway.
 
 ## Layout
 
-| Path                       | What it is                                                   |
-| -------------------------- | ------------------------------------------------------------ |
-| `apps/api`                 | NestJS HTTP API                                              |
-| `apps/api/src/prisma`      | The `TenantPrisma` / `SystemPrisma` clients and RLS wiring   |
-| `apps/api/prisma`          | Database schema and migrations                               |
-| `apps/api/prisma/sql`      | Operational SQL that is not a migration — roles, RLS check   |
-| `apps/web`                 | Next.js agent console                                        |
-| `packages/contracts`       | Zod schemas and types shared by both apps — the API contract |
-| `packages/tsconfig`        | Shared TypeScript configuration                              |
-| `docker-compose.yml`       | Local PostgreSQL and Redis                                   |
-| `docker/postgres/initdb.d` | First-boot SQL for the local Postgres container              |
-| `docs/adr`                 | Architecture decision records                                |
+| Path                       | What it is                                                    |
+| -------------------------- | ------------------------------------------------------------- |
+| `apps/api`                 | NestJS HTTP API                                               |
+| `apps/api/src/prisma`      | The `TenantPrisma` / `SystemPrisma` clients and RLS wiring    |
+| `apps/api/src/queue`       | BullMQ registration and tenant context propagation into jobs  |
+| `apps/api/src/webhooks`    | WhatsApp webhook ingest, its worker and the stuck-event sweep |
+| `apps/api/prisma`          | Database schema and migrations                                |
+| `apps/api/prisma/sql`      | Operational SQL that is not a migration — roles, RLS check    |
+| `apps/web`                 | Next.js agent console                                         |
+| `packages/contracts`       | Zod schemas and types shared by both apps — the API contract  |
+| `packages/tsconfig`        | Shared TypeScript configuration                               |
+| `docker-compose.yml`       | Local PostgreSQL and Redis                                    |
+| `docker/postgres/initdb.d` | First-boot SQL for the local Postgres container               |
+| `docs/adr`                 | Architecture decision records                                 |
 
 ## Getting started
 
@@ -82,7 +86,8 @@ pnpm db:verify:rls
 # PASS — tenant isolation is enforced at the data layer
 
 pnpm test:db
-# Tests: 33 passed — the same guarantee through TenantPrisma, plus provisioning
+# Tests: 68 passed — the same guarantee through TenantPrisma, plus provisioning
+#                   and the WhatsApp webhook ingestion pipeline
 ```
 
 The `checks` object is empty on purpose: the endpoint reports process liveness only and
@@ -479,6 +484,75 @@ applied. Locally, `pnpm db:reset` is usually the faster path.
 The shadow database (`whatsappcrm_shadow`, created on the container's first boot) exists
 only for the `migrate diff` above. Prisma wipes it on every use.
 
+## Receiving WhatsApp webhooks
+
+Two public routes, deliberately outside the `/api/v1` version prefix because the URL is
+registered once inside Meta's dashboard:
+
+```
+GET  /api/webhooks/whatsapp   the verification handshake, performed once at registration
+POST /api/webhooks/whatsapp   every inbound message and delivery receipt
+```
+
+Both are authenticated by cryptography rather than by a session — there is no guard, and
+none should be added. `GET` compares `hub.verify_token` against
+`WHATSAPP_WEBHOOK_VERIFY_TOKEN` in constant time and echoes `hub.challenge` only on a
+match. `POST` verifies `X-Hub-Signature-256`, an HMAC-SHA256 of the **raw** body under
+`WHATSAPP_APP_SECRET`. Unset either variable and the corresponding route refuses
+everything; that is the intended default for an environment that was never given the
+secret.
+
+Try it locally with the placeholders `.env.example` ships:
+
+```bash
+# The handshake. Echoes the challenge verbatim, as text/plain.
+curl "http://localhost:3001/api/webhooks/whatsapp?hub.mode=subscribe\
+&hub.verify_token=local_dev_only_verify_token_not_a_secret&hub.challenge=echo-me"
+# echo-me
+
+# A delivery. The signature is over the exact bytes, so sign the file you send.
+BODY='{"object":"whatsapp_business_account","entry":[]}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac \
+  local_dev_only_meta_app_secret_not_a_secret -hex | awk '{print $2}')
+curl -X POST http://localhost:3001/api/webhooks/whatsapp \
+  -H 'Content-Type: application/json' -H "X-Hub-Signature-256: sha256=$SIG" -d "$BODY"
+# 200, empty body
+```
+
+### What happens after the 200
+
+The `200` means **stored**, not **processed**. The controller writes the raw payload to
+`webhook_events` and answers; a BullMQ job then routes it. That order is the durability
+rule from ADR 0001: Meta retries with backoff and eventually gives up, so enqueueing
+straight to Redis would turn a Redis outage into permanent message loss. Writing to
+Postgres first makes Redis a latency dependency instead of a durability one.
+
+The worker resolves `phone_number_id` → `whatsapp_accounts` → the owning tenant, opens a
+tenant context scope, and upserts the contact, the conversation and the message through
+`TenantPrisma`. Every write is idempotent and order-independent: threads sort by the
+provider's `sent_at`, `last_message_at` only moves forward, and a message status only ever
+advances, so a late `sent` webhook cannot un-read a message.
+
+**Nothing is ever dropped.** An event that cannot be applied is parked `failed` with its
+payload intact and a reason an operator can group by:
+
+```sql
+SELECT split_part(last_error, ':', 1) AS reason, count(*)
+FROM webhook_events WHERE status = 'failed' GROUP BY 1;
+--  unknown_phone_number_id | 3      a number connected before its tenant existed
+--  payload_unrecognised    | 1      signed by Meta, but not a shape we parse
+--  tenant_not_active       | 2      deactivated tenant; replayable if it returns
+```
+
+A repeatable sweep re-enqueues anything still `received`, or stuck in `processing`, past
+`WEBHOOK_STUCK_AFTER_MS`. That job is what converts a Redis outage into message
+_lateness_ rather than message _loss_, so an inbox that has stopped updating usually needs
+Redis looked at rather than anything replayed by hand. `webhook_events` in `received`
+older than five minutes is the condition worth alerting on.
+
+Without `REDIS_URL` the API still boots and still accepts and stores deliveries — it logs
+a warning at startup and nothing processes them until a worker exists.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs four jobs — **Lint**, **Type-check**, **Test** and
@@ -529,6 +603,13 @@ required.
 validation, it disables the whole platform admin surface. Every request to
 `/api/v1/admin/*` is refused, which is the safe default for routes that create tenants.
 Generate one with `openssl rand -base64 48` and keep it in the secret store.
+
+`WHATSAPP_APP_SECRET` and `WHATSAPP_WEBHOOK_VERIFY_TOKEN` are optional in exactly the same
+sense, and for a sharper reason: the webhook route is public and unauthenticated, so an
+environment with no app secret must refuse every delivery rather than accept unsigned
+ones. Both are platform-level and come from the Meta app dashboard — one Meta app serves
+every tenant, and tenant routing is `phone_number_id` → `whatsapp_accounts`, never a
+per-tenant secret.
 
 The Prisma CLI reads its own configuration from `apps/api/prisma.config.mjs`, which loads
 the repository-root `.env`. Prisma 7 does not load `.env` on its own and no longer accepts
