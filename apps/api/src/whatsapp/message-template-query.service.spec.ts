@@ -164,7 +164,7 @@ describe('MessageTemplateQueryService', () => {
 
       const result = await service.list({ limit: 2 });
 
-      expect(result.items.map((item) => item.id)).toEqual(['a', 'b']);
+      expect(result.items.map((item) => item.row.id)).toEqual(['a', 'b']);
       expect(result.nextCursor).toBe(cursorFor('order_update', 'en_US', 'b'));
     });
 
@@ -174,14 +174,32 @@ describe('MessageTemplateQueryService', () => {
       await expect(service.list({ limit: 25 })).resolves.toMatchObject({ nextCursor: null });
     });
 
-    it('resumes strictly after the cursor row, with language and id breaking a tie', async () => {
+    it('resumes with an index start condition, not a nested disjunction', async () => {
+      // 0002 rules the shape as well as the result: an inclusive bound on the
+      // leading column, minus the part of its tie group already returned. The
+      // nested OR returns the same rows and cannot be an index start condition,
+      // so its cost grows with how far into the list the cursor sits.
       await service.list({ limit: 25, cursor: cursorFor('order_update', 'en_US', 'b') });
 
-      expect(args().where.OR).toEqual([
-        { name: { gt: 'order_update' } },
-        { name: 'order_update', language: { gt: 'en_US' } },
-        { name: 'order_update', language: 'en_US', id: { gt: 'b' } },
-      ]);
+      expect(args().where).toMatchObject({
+        name: { gte: 'order_update' },
+        NOT: {
+          name: 'order_update',
+          OR: [{ language: { lt: 'en_US' } }, { language: 'en_US', id: { lte: 'b' } }],
+        },
+      });
+    });
+
+    it('keeps the name prefix and the cursor bound on one filter', async () => {
+      // Two `name` keys in the same object and the second silently replaces the
+      // first — dropping either the search or the resume point.
+      await service.list({
+        limit: 25,
+        q: 'order',
+        cursor: cursorFor('order_update', 'en_US', 'b'),
+      });
+
+      expect(args().where.name).toEqual({ startsWith: 'order', gte: 'order_update' });
     });
 
     it.each([
@@ -209,7 +227,7 @@ describe('MessageTemplateQueryService', () => {
 
       const result = await service.list({ limit: 25 });
 
-      expect(result.items.map((item) => item.id)).toEqual(['a']);
+      expect(result.items.map((item) => item.row.id)).toEqual(['a']);
     });
 
     it('takes the cursor from the last row read, not the last row returned', async () => {
@@ -223,7 +241,7 @@ describe('MessageTemplateQueryService', () => {
 
       const result = await service.list({ limit: 2 });
 
-      expect(result.items.map((item) => item.id)).toEqual(['a']);
+      expect(result.items.map((item) => item.row.id)).toEqual(['a']);
       expect(result.nextCursor).toBe(cursorFor('order_update', 'en_US', 'b'));
     });
   });

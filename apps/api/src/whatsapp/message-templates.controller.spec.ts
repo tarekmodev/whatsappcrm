@@ -31,20 +31,31 @@ const TENANT_ID = '50444444-4444-7444-8444-4444444444c1';
 const TIMESTAMP = new Date('2026-08-10T09:00:00.000Z');
 
 const TEMPLATE = {
-  id: '80444444-4444-7444-8444-444444444401',
-  whatsappBusinessAccountId: WABA_ROW_ID,
-  name: 'order_update',
-  language: 'en_US',
-  category: 'UTILITY',
-  status: 'approved' as const,
-  components: [
-    { type: 'HEADER', format: 'IMAGE' },
-    { type: 'BODY', text: 'Order {{1}} ships {{2}}' },
-    { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Visit', url: 'https://example.test' }] },
-  ],
-  providerTemplateId: '1001',
-  createdAt: TIMESTAMP,
-  updatedAt: TIMESTAMP,
+  row: {
+    id: '80444444-4444-7444-8444-444444444401',
+    whatsappBusinessAccountId: WABA_ROW_ID,
+    name: 'order_update',
+    language: 'en_US',
+    category: 'UTILITY',
+    status: 'approved' as const,
+    components: [
+      { type: 'HEADER', format: 'IMAGE' },
+      { type: 'BODY', text: 'Order {{1}} ships {{2}}' },
+      { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Visit', url: 'https://example.test' }] },
+    ],
+    providerTemplateId: '1001',
+    createdAt: TIMESTAMP,
+    updatedAt: TIMESTAMP,
+  },
+  // Derived by the query service in the same pass that applies the button
+  // exclusion, so the controller maps rather than parses.
+  summary: {
+    bodyText: 'Order {{1}} ships {{2}}',
+    parameterCount: 2,
+    headerFormat: 'image' as const,
+    headerParameterCount: 0,
+    requiresButtonParameters: false,
+  },
 };
 
 describe('GET /api/v1/message-templates', () => {
@@ -123,7 +134,7 @@ describe('GET /api/v1/message-templates', () => {
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
   });
 
-  it('derives the composer fields from the component tree', async () => {
+  it('publishes the composer fields derived from the component tree', async () => {
     // Without these the composer walks Meta's tree in the browser to learn how
     // many inputs to render, and the send path cannot check arity.
     const response = await get();
@@ -133,6 +144,7 @@ describe('GET /api/v1/message-templates', () => {
       parameterCount: 2,
       headerFormat: 'image',
       headerParameterCount: 0,
+      requiresButtonParameters: false,
     });
   });
 

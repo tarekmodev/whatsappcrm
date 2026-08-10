@@ -230,7 +230,7 @@ describe('MetaCloudApiClient', () => {
         to: RECIPIENT,
         templateName: 'invoice_ready',
         languageCode: 'en_US',
-        header: { format: 'document', media: { mediaId: '9876' }, filename: 'invoice.pdf' },
+        header: { format: 'document', media: { mediaId: '9876' }, fileName: 'invoice.pdf' },
       });
 
       expect(sentBody().template).toMatchObject({

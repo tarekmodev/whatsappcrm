@@ -84,7 +84,7 @@ export interface SendMediaCommand {
  */
 export type TemplateHeader =
   | { format: 'text'; variables: readonly string[] }
-  | { format: 'image' | 'video' | 'document'; media: MediaReference; filename?: string }
+  | { format: 'image' | 'video' | 'document'; media: MediaReference; fileName?: string }
   | {
       format: 'location';
       latitude: number;
@@ -382,7 +382,9 @@ function mediaOrLocationParameter(
     type: header.format,
     [header.format]: {
       ...('link' in header.media ? { link: header.media.link } : { id: header.media.mediaId }),
-      ...(header.filename === undefined ? {} : { filename: header.filename }),
+      // `filename` is Meta's spelling on the wire; `fileName` is this codebase's,
+      // and the boundary between them is here.
+      ...(header.fileName === undefined ? {} : { filename: header.fileName }),
     },
   };
 }
