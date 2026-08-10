@@ -1,7 +1,7 @@
 # Data model reference
 
-The database as it stands on `main` after TAR-47, TAR-48, TAR-51 and TAR-52. Written for
-engineers building against it.
+The database as it stands on `main` after TAR-47, TAR-48, TAR-51, TAR-52, TAR-66, TAR-80
+and TAR-92. Written for engineers building against it.
 
 `apps/api/prisma/schema.prisma` is the source of truth for columns, types and defaults,
 and carries the per-model reasoning next to each model. This document does not transcribe
@@ -130,6 +130,16 @@ The agents of a tenant. Identity is **tenant-scoped**, not global.
 - **Indexes:** `(tenant_id, status)`
 - **Owned by:** TAR-35
 
+`role` has three values, not four: TAR-80 removed `owner`, which no code ever wrote and
+which `TenantRoleSchema` would have rejected at the serializer. Adding a value back is one
+online `ALTER TYPE ... ADD VALUE`; removing one is a type swap and a table rewrite, which
+is why it was done while `users` and `invites` were empty everywhere.
+
+`last_seen_at` is denormalised from `sessions.last_seen_at` (TAR-80) and is not
+`last_login_at`: an agent who logged in on Monday and is working now was last seen now.
+Reading it per row would make the people list an aggregate over `sessions`, and sessions
+are swept on expiry, so the history would go with them.
+
 Someone who works for two client businesses gets two accounts with two passwords. The
 architecture document records the additive migration path — keep `users` as the
 tenant-scoped membership row, add a global `identities` table, join — should that turn out
@@ -155,10 +165,19 @@ live sessions.
 
 #### `teams`, `team_members`
 
-- **Unique:** `teams (tenant_id, name)`, `(tenant_id, id)`;
+- **Unique:** `teams (tenant_id, name)` on `citext`, `(tenant_id, id)`;
   `team_members (tenant_id, team_id, user_id)`
-- **Indexes:** `team_members (tenant_id, user_id)`
-- **Owned by:** TAR-22
+- **Indexes:** `team_members (tenant_id, user_id, team_id)` — "which teams is this user
+  in", answered on every session bootstrap to fill `SessionPrincipal.teamIds`. `team_id`
+  trails rather than being absent so the answer comes out of the index without touching the
+  heap; it replaces the narrower `(tenant_id, user_id)`, which was a prefix of it
+- **Owned by:** TAR-22, aligned to the contract by TAR-80
+
+`teams.name` is `citext` for the same reason every other human-typed unique key is: an
+admin creating `billing` beside an existing `Billing` would otherwise get two teams that
+look identical in every picker, and conversations routed to one would be invisible to the
+members of the other. `description` is nullable text; `TeamCreateInput` caps it at 500
+characters, which is the contract's bound to enforce rather than a column type's.
 
 ### WhatsApp channel — TAR-20 / TAR-52
 
@@ -231,11 +250,17 @@ it has confirmed it.
 A template belongs to the WABA that submitted it for approval.
 
 - **Unique:** `(tenant_id, whatsapp_business_account_id, name, language)`
-- **Indexes:** none beyond that unique index, deliberately — it leads with exactly
-  `(tenant_id, whatsapp_business_account_id)`, so "every template in this WABA" already has
-  an access path, and a second index on the same prefix would cost write throughput and
-  serve no read
-- **Owned by:** TAR-52, consumed by TAR-20
+- **Indexes:** `(tenant_id, status, name, language, id)` — added by TAR-20a to serve
+  `GET /api/v1/message-templates`. The unique index cannot: it leads with the WABA, while
+  that list may span a tenant's WABAs, so without this the composer's template picker is a
+  sequential scan. `status` sits second because the endpoint filters on exactly one value,
+  and a name-leading order is what makes the `q` prefix a range scan
+- **Owned by:** TAR-52, consumed by TAR-20 and TAR-66
+
+There is deliberately no separate `(tenant_id, whatsapp_business_account_id)` index: the
+unique index leads with exactly those two columns, so "every template in this WABA" already
+has an access path, and a second index on the same prefix would cost write throughput and
+serve no read.
 
 The key leads with `tenant_id` even though the WABA already implies one, because every
 unique index has to lead with `tenant_id` for RLS to use it. `components` stores Meta's
@@ -276,15 +301,29 @@ One thread per contact per WhatsApp number.
 - **Indexes:**
   - `(tenant_id, status, last_message_at DESC, id DESC)` — the inbox list, the hottest
     query in the product
-  - `(tenant_id, assigned_user_id, status)` — an agent's default view
-  - `(tenant_id, assigned_team_id, status)`
+  - `(tenant_id, assigned_user_id, status, last_message_at DESC, id DESC)` — an agent's
+    default view, the `conversation:read` (no `_all`) inbox
+  - `(tenant_id, assigned_team_id, status, last_message_at DESC, id DESC)`
   - `(tenant_id, contact_id)`
-- **Owned by:** TAR-20
+- **Owned by:** TAR-20, sort keys added by TAR-80
 
 `service_window_expires_at` is Meta's 24-hour customer service window. Past it, only an
 approved template may be sent — so it is a stored column, not a derived value.
 `last_message_at` and `unread_count` are denormalised from `messages` to keep the inbox
 list a single-table scan, and are maintained in the same transaction as the message insert.
+
+**`last_message_at` is `NOT NULL`, defaulting to the row's own insert time** (TAR-92), and
+that is load-bearing rather than tidiness: it is the leading sort column of all three inbox
+keyset indexes. PostgreSQL orders NULLs first under `DESC`, so a message-less conversation
+would pin itself to page one, and the ruled resume predicate evaluates to NULL — not TRUE —
+for that cursor, silently dropping every row after it. A thread with no message yet sorts
+by when it was opened.
+
+The two assigned-scope indexes carry their sort key rather than stopping at `status`.
+Without it the planner drops the scope predicate to a filter and walks the tenant-wide index
+instead, so the work scales with the tenant's conversation count rather than with the
+principal's. Both are named explicitly with `map:` because Prisma's generated name for five
+columns exceeds PostgreSQL's 63-character identifier limit and would be silently truncated.
 
 #### `messages`
 
@@ -325,10 +364,11 @@ with the note, and never queried the other way round.
 - **Unique:** `(tenant_id, number)` — per-tenant, human-facing; two tenants both having
   ticket #1 is correct; `(tenant_id, id)`
 - **Indexes:** `(tenant_id, status, priority, created_at DESC)` — ticket queues and
-  supervisor dashboards; `(tenant_id, assigned_user_id, status)`,
-  `(tenant_id, assigned_team_id, status)`, `(tenant_id, conversation_id)`,
-  `(tenant_id, contact_id)`
-- **Owned by:** TAR-21 / TAR-25
+  supervisor dashboards; `(tenant_id, assigned_user_id, status, created_at DESC, id DESC)`
+  and `(tenant_id, assigned_team_id, status, created_at DESC, id DESC)` — the
+  `ticket:read` (no `_all`) queue, carrying its own sort key for the same reason the inbox
+  ones do; `(tenant_id, conversation_id)`, `(tenant_id, contact_id)`
+- **Owned by:** TAR-21 / TAR-25, sort keys added by TAR-80
 
 TAR-21 owns how `number` is allocated; the unique constraint is what makes a racy allocator
 fail loudly instead of duplicating.
@@ -504,32 +544,32 @@ matches nothing. The trade-off is that adding a value is cheap (`ALTER TYPE ... 
 and removing one is not, so anything genuinely open-ended — `ticket_events.type`, workflow
 definitions — stays text or JSON.
 
-| Enum                                    | Values                                                                                                                |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `tenant_status`                         | `pending`, `active`, `suspended`, `cancelled`                                                                         |
-| `tenant_domain_kind`                    | `platform`, `custom`                                                                                                  |
-| `user_role`                             | `owner`, `admin`, `supervisor`, `agent`                                                                               |
-| `user_status`                           | `invited`, `active`, `suspended`, `removed`                                                                           |
-| `user_availability`                     | `available`, `away`, `offline`                                                                                        |
-| `whatsapp_business_verification_status` | `not_verified`, `pending`, `verified`, `rejected`                                                                     |
-| `whatsapp_account_status`               | `connected`, `disconnected`, `error`                                                                                  |
-| `whatsapp_quality_rating`               | `green`, `yellow`, `red`, `unknown`                                                                                   |
-| `message_template_status`               | `pending`, `approved`, `rejected`, `paused`, `disabled`                                                               |
-| `custom_field_type`                     | `text`, `number`, `date`, `boolean`, `select`, `multi_select`                                                         |
-| `conversation_status`                   | `open`, `pending`, `resolved`                                                                                         |
-| `message_direction`                     | `inbound`, `outbound`                                                                                                 |
-| `message_status`                        | `received`, `queued`, `sent`, `delivered`, `read`, `failed`                                                           |
-| `message_content_type`                  | `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `system` |
-| `ticket_status`                         | `open`, `pending`, `resolved`, `closed`                                                                               |
-| `ticket_priority`                       | `low`, `normal`, `high`, `urgent`                                                                                     |
-| `sla_target_kind`                       | `first_response`, `resolution`                                                                                        |
-| `sla_timer_state`                       | `running`, `met`, `breached`, `cancelled`                                                                             |
-| `workflow_run_status`                   | `pending`, `running`, `succeeded`, `failed`                                                                           |
-| `knowledge_document_status`             | `pending`, `indexed`, `failed`                                                                                        |
-| `billing_interval`                      | `month`, `year`                                                                                                       |
-| `subscription_status`                   | `trialing`, `active`, `past_due`, `cancelled`, `incomplete`                                                           |
-| `webhook_event_status`                  | `received`, `processing`, `processed`, `failed`                                                                       |
-| `idempotency_key_state`                 | `in_progress`, `completed`                                                                                            |
+| Enum                                    | Values                                                                                                                       |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `tenant_status`                         | `pending`, `active`, `suspended`, `cancelled`                                                                                |
+| `tenant_domain_kind`                    | `platform`, `custom`                                                                                                         |
+| `user_role`                             | `admin`, `supervisor`, `agent` — `owner` removed by TAR-80; it is exactly `TENANT_ROLES` in `packages/contracts/src/rbac.ts` |
+| `user_status`                           | `invited`, `active`, `suspended`, `removed`                                                                                  |
+| `user_availability`                     | `available`, `away`, `offline`                                                                                               |
+| `whatsapp_business_verification_status` | `not_verified`, `pending`, `verified`, `rejected`                                                                            |
+| `whatsapp_account_status`               | `connected`, `disconnected`, `error`                                                                                         |
+| `whatsapp_quality_rating`               | `green`, `yellow`, `red`, `unknown`                                                                                          |
+| `message_template_status`               | `pending`, `approved`, `rejected`, `paused`, `disabled`                                                                      |
+| `custom_field_type`                     | `text`, `number`, `date`, `boolean`, `select`, `multi_select`                                                                |
+| `conversation_status`                   | `open`, `pending`, `resolved`                                                                                                |
+| `message_direction`                     | `inbound`, `outbound`                                                                                                        |
+| `message_status`                        | `received`, `queued`, `sent`, `delivered`, `read`, `failed`                                                                  |
+| `message_content_type`                  | `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `system`        |
+| `ticket_status`                         | `open`, `pending`, `resolved`, `closed`                                                                                      |
+| `ticket_priority`                       | `low`, `normal`, `high`, `urgent`                                                                                            |
+| `sla_target_kind`                       | `first_response`, `resolution`                                                                                               |
+| `sla_timer_state`                       | `running`, `met`, `breached`, `cancelled`                                                                                    |
+| `workflow_run_status`                   | `pending`, `running`, `succeeded`, `failed`                                                                                  |
+| `knowledge_document_status`             | `pending`, `indexed`, `failed`                                                                                               |
+| `billing_interval`                      | `month`, `year`                                                                                                              |
+| `subscription_status`                   | `trialing`, `active`, `past_due`, `cancelled`, `incomplete`                                                                  |
+| `webhook_event_status`                  | `received`, `processing`, `processed`, `failed`                                                                              |
+| `idempotency_key_state`                 | `in_progress`, `completed`                                                                                                   |
 
 `message_status` is ordered, and the order is load-bearing: TAR-20's
 `isMessageStatusAdvance` reads it so a late `sent` webhook cannot un-read a message.
@@ -539,14 +579,17 @@ definitions — stays text or JSON.
 Applied in this order. Every directory carries a hand-written `down.sql` beside Prisma's
 `migration.sql`.
 
-| Migration                                         | What it does                                                                                | Story  |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------ |
-| `20260810120000_baseline_extensions`              | `pgcrypto` and `citext`. Creates no tables                                                  | TAR-42 |
-| `20260810130000_initial_data_model`               | Every table and enum above, as TAR-47 shipped them                                          | TAR-47 |
-| `20260810140000_tenant_isolation_rls`             | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables          | TAR-48 |
-| `20260810150000_tenant_deactivation_guard`        | `public.assert_tenant_active(text)`, the deactivation gate                                  | TAR-51 |
-| `20260810160000_whatsapp_business_account_entity` | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy  | TAR-52 |
-| `20260810170000_harden_tenant_deactivation_guard` | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02` | TAR-51 |
+| Migration                                               | What it does                                                                                                                                                    | Story   |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `20260810120000_baseline_extensions`                    | `pgcrypto` and `citext`. Creates no tables                                                                                                                      | TAR-42  |
+| `20260810130000_initial_data_model`                     | Every table and enum above, as TAR-47 shipped them                                                                                                              | TAR-47  |
+| `20260810140000_tenant_isolation_rls`                   | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                              | TAR-48  |
+| `20260810150000_tenant_deactivation_guard`              | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                      | TAR-51  |
+| `20260810160000_whatsapp_business_account_entity`       | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                      | TAR-52  |
+| `20260810170000_harden_tenant_deactivation_guard`       | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                     | TAR-51  |
+| `20260810180000_message_template_list_index`            | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                            | TAR-20a |
+| `20260810190000_agent_team_role_alignment`              | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes | TAR-80  |
+| `20260811120000_conversations_last_message_at_not_null` | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                     | TAR-92  |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's

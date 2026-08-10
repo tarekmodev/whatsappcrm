@@ -7,6 +7,15 @@ Every route here is operated by us, never by a customer. Nothing on this surface
 reachable by a tenant's own users under any role, and none of it goes through the session
 and RBAC model that TAR-35 and TAR-22 build for tenant-facing routes.
 
+**This page covers the two tenant lifecycle routes only.** `/api/v1/admin/*` also carries
+`POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts` and its
+`{wabaId}/template-sync` sibling, both behind the same `PlatformAdminGuard`. They are
+TAR-66's to document; see `apps/api/src/whatsapp/admin/admin-whatsapp.controller.ts` and
+amendment 1 of
+[the architecture document](../architecture/0002-architecture-and-api-contract.md#amendment-1--message-templates-tar-20a),
+which records what is still open about them — whether a tenant may connect its own WABA, a
+product call that decides the path but not the guard.
+
 Request and response shapes are defined in `packages/contracts/src/admin.ts` and validated
 at the boundary; the tables below are derived from those schemas and from
 `apps/api/src/tenancy/admin/admin-tenants.controller.ts`. Every example on this page was
@@ -321,12 +330,17 @@ inconsistently with the row it describes.
 
 ## Verification
 
-Every request and response on this page was executed on 2026-08-10 against a local stack
-built from `main` (`9319b1c`): `pnpm db:up`, `pnpm db:migrate:deploy`, `pnpm db:roles`,
-`pnpm db:roles:login`, then the built API on `http://localhost:3001` with `.env` copied from
-`.env.example`. Ids, hostnames, timestamps and request ids are the real values that run
-returned; the `.app.localhost` hostnames come from the local `PLATFORM_DOMAIN`, which is
-`app.example.com`-shaped in a deployed environment.
+Every request and response on this page was executed against a local stack: `pnpm db:up`,
+`pnpm db:migrate:deploy`, `pnpm db:roles`, `pnpm db:roles:login`, then the built API on
+`http://localhost:3001` with `.env` copied from `.env.example`. Ids, hostnames, timestamps
+and request ids are the real values that run returned; the `.app.localhost` hostnames come
+from the local `PLATFORM_DOMAIN`, which is `app.example.com`-shaped in a deployed
+environment.
+
+Re-run in full after `main` reached `6b900e2`, because TAR-66 refactored
+`TenantProvisioningService`'s unique-violation handling out into
+`apps/api/src/prisma/unique-violation.ts`. Every status code, body and error message below
+came back identical.
 
 The `409` example was produced by claiming `acme-three.app.localhost` for a different tenant
 and then provisioning the slug `acme-three`. That call wrote nothing: no `acme-three` row

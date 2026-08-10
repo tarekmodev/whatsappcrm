@@ -14,6 +14,16 @@ change.
 
 ### Added
 
+- **WhatsApp Business Account connection** — `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts`
+  and `.../{wabaId}/template-sync`, behind the same platform admin guard, plus the Meta
+  Cloud API client, the credential resolver and the sender service. (TAR-66)
+- **Template list endpoint** — `GET /api/v1/message-templates`, approved templates only,
+  keyset-paginated, with the `(tenant_id, status, name, language, id)` index that serves
+  it. (TAR-20a)
+- **Ticket auto-linking contract** — `docs/architecture/0003-ticket-auto-linking-contract.md`
+  and `packages/contracts/src/ticket-linking.ts`. (TAR-73)
+- **RBAC permission matrix** — `docs/architecture/0004-rbac-permission-matrix.md`, fixing
+  the agent, supervisor and admin permission sets. (TAR-79)
 - **Tenant provisioning endpoint** — `POST /api/v1/admin/tenants`. Creates the tenant, its
   settings and its platform subdomain in one transaction. Idempotent on `slug`: `201` when
   the call provisioned the tenant, `200` when it already existed, with the same body either
@@ -53,6 +63,16 @@ change.
 
 ### Changed
 
+- **`conversations.last_message_at` is `NOT NULL`, defaulting to the row's insert time.**
+  It leads all three inbox keyset indexes, and PostgreSQL orders NULLs first under `DESC`,
+  so a message-less conversation pinned itself to page one and the resume predicate
+  evaluated to NULL — silently dropping every row after that cursor. (TAR-92)
+- **The role vocabulary is three values, not four.** `user_role.owner` is dropped: no code
+  wrote it and `TenantRoleSchema` would have rejected it at the serializer. Done while
+  `users` and `invites` were empty everywhere, because removing an enum value is a type
+  swap and a table rewrite while adding one back is an online `ALTER TYPE`. The same change
+  adds `users.last_seen_at` and `teams.description`, moves `teams.name` to `citext`, and
+  puts sort keys on the four role-scoped inbox and queue indexes. (TAR-80)
 - **WhatsApp entities are scoped at three levels, not two.** `whatsapp_accounts` is now a
   phone number belonging to a WABA rather than a row that also stood in for the business.
   `message_templates` is re-keyed from `UNIQUE (tenant_id, name, language)` to

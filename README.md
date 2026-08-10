@@ -98,7 +98,7 @@ pnpm db:verify:rls
 # PASS — tenant isolation is enforced at the data layer
 
 pnpm test:db
-# Tests: 53 passed — the same guarantee through TenantPrisma, plus provisioning
+# Tests: 70 passed — the same guarantee through TenantPrisma, plus provisioning
 ```
 
 The `checks` object is empty on purpose: the endpoint reports process liveness only and

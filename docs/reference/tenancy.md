@@ -307,5 +307,5 @@ local or disposable one.
 deactivation. Isolation is a property of the database rather than of any one function, so a
 unit test cannot assert it.
 
-Both passed on `main` (`9319b1c`) on 2026-08-10: `PASS — tenant isolation is enforced at the
-data layer`, and 53 integration tests across 3 suites.
+Both passed with `main` at `6b900e2`: `PASS — tenant isolation is enforced at the data
+layer`, and 70 integration tests across 5 suites.
