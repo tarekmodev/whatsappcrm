@@ -5,7 +5,10 @@
  * apply it again.
  *
  * This is the operational half of "migrations are reversible": the convention
- * enforced by `check-down-migrations.mjs` produces the SQL, and this runs it.
+ * enforced by `check-down-migrations.mjs` produces the SQL, and this runs it —
+ * including the `_prisma_migrations` cleanup that is easy to forget when applying
+ * a down migration by hand, and without which `migrate deploy` will never
+ * re-apply it.
  *
  *   pnpm --filter @whatsappcrm/api db:rollback            # show the plan only
  *   pnpm --filter @whatsappcrm/api db:rollback --confirm  # actually roll back
@@ -13,57 +16,50 @@
  * Rolling back one migration at a time is deliberate. A "roll back to version N"
  * flag reads as convenience and behaves as a way to drop four releases of tables
  * with one mistyped argument.
+ *
+ * Uses `pg` directly rather than a Prisma client: TAR-47's schema has no
+ * `generator` block, so there is no generated client to import (TAR-49 owns
+ * that), and a rollback runner should not be the reason one appears.
  */
-import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PrismaClient } from '@prisma/client';
-
-const require = createRequire(import.meta.url);
-
-/**
- * Resolved from the package's own `bin` entry rather than a hardcoded path —
- * pnpm's store layout is not somewhere to hardcode a relative path into.
- */
-function prismaCliPath() {
-  const manifestPath = require.resolve('prisma/package.json');
-  const manifest = require('prisma/package.json');
-  const entry = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin.prisma;
-
-  return join(dirname(manifestPath), entry);
-}
+import { Client } from 'pg';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../prisma/migrations', import.meta.url));
-const SCHEMA_PATH = fileURLToPath(new URL('../prisma/schema.prisma', import.meta.url));
 
 /** Any value works as long as every runner uses the same one. */
 const ADVISORY_LOCK_KEY = 4_121_041;
 
 const confirmed = process.argv.includes('--confirm');
 
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
 async function main() {
   if (!process.env.DATABASE_URL) {
     fail('DATABASE_URL is not set.');
   }
 
-  const prisma = new PrismaClient();
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
 
   try {
     // Two runners rolling back concurrently would each undo a different migration
     // and leave the schema somewhere neither of them expects.
-    await prisma.$executeRaw`SELECT pg_advisory_lock(${ADVISORY_LOCK_KEY})`;
+    await client.query('SELECT pg_advisory_lock($1)', [ADVISORY_LOCK_KEY]);
 
-    const applied = await prisma.$queryRaw`
-      SELECT migration_name
-      FROM "_prisma_migrations"
-      WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
-      ORDER BY finished_at DESC
-      LIMIT 1
-    `;
+    const applied = await client.query(
+      `SELECT migration_name
+         FROM "_prisma_migrations"
+        WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
+        ORDER BY finished_at DESC
+        LIMIT 1`,
+    );
 
-    const target = applied[0]?.migration_name;
+    const target = applied.rows[0]?.migration_name;
 
     if (!target) {
       console.log('No applied migration to roll back.');
@@ -75,7 +71,7 @@ async function main() {
     if (!existsSync(downPath)) {
       fail(
         `Migration "${target}" has no down.sql, so it cannot be rolled back.\n` +
-          'See docs/runbooks/migrations.md.',
+          'See the "Rolling a migration back" section of README.md.',
       );
     }
 
@@ -89,30 +85,21 @@ async function main() {
 
     console.log(`Rolling back "${target}"...`);
 
-    // `prisma db execute` is the supported way to run a multi-statement SQL file;
-    // the client's raw helpers accept one statement at a time.
-    execFileSync(
-      process.execPath,
-      [prismaCliPath(), 'db', 'execute', '--file', downPath, '--schema', SCHEMA_PATH],
-      { stdio: 'inherit' },
-    );
+    // The whole down migration and its bookkeeping row go together: a rollback
+    // that half-applies is worse than one that does not run.
+    await client.query('BEGIN');
+    await client.query(readFileSync(downPath, 'utf8'));
+    await client.query('DELETE FROM "_prisma_migrations" WHERE migration_name = $1', [target]);
+    await client.query('COMMIT');
 
-    await prisma.$executeRaw`
-      DELETE FROM "_prisma_migrations" WHERE migration_name = ${target}
-    `;
-
-    console.log(`Rolled back "${target}". "prisma migrate deploy" will re-apply it.`);
+    console.log(`Rolled back "${target}". "pnpm db:migrate:deploy" will re-apply it.`);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
   } finally {
-    await prisma.$executeRaw`SELECT pg_advisory_unlock(${ADVISORY_LOCK_KEY})`.catch(
-      () => undefined,
-    );
-    await prisma.$disconnect();
+    await client.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_KEY]).catch(() => undefined);
+    await client.end();
   }
-}
-
-function fail(message) {
-  console.error(message);
-  process.exit(1);
 }
 
 await main();

@@ -48,8 +48,10 @@ if (offenders.length > 0) {
   console.error(
     `Missing or empty down.sql in ${offenders.length} migration(s):\n` +
       offenders.map((name) => `  - prisma/migrations/${name}/down.sql`).join('\n') +
-      '\n\nCreate migrations with `pnpm --filter @whatsappcrm/api db:migrate --name <name>`,\n' +
-      'which writes the down.sql for you. See docs/runbooks/migrations.md.',
+      '\n\nGenerate one BEFORE running `pnpm db:migrate` — see the "Rolling a migration\n' +
+      'back" section of README.md. Run the diff afterwards and both sides are already\n' +
+      'in sync, so it emits an empty migration that passes this check and reverses\n' +
+      'nothing.',
   );
   process.exit(1);
 }

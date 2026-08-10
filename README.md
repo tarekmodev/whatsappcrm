@@ -3,10 +3,11 @@
 Multi-tenant, white-label WhatsApp CRM and helpdesk platform, built on the official
 WhatsApp Business Cloud API.
 
-> **Status: scaffold.** This repository currently contains the project skeleton and the
-> stack decision only — no product features. Feature work is tracked as the TAR-18 epic.
-> The full local-development guide, including a seeded database, is owned by TAR-42; the
-> steps below are what works today.
+> **Status: scaffold.** This repository currently contains the project skeleton, the stack
+> decision, the local development harness and the database schema — no product features.
+> Feature work is tracked as the TAR-18 epic. The database has **tables but no rows**:
+> the data model landed with TAR-47 and seed data arrives with TAR-46. Everything below
+> works today.
 
 ## Stack
 
@@ -17,45 +18,77 @@ Every one of those choices, the alternatives weighed against it, and the failure
 they imply are recorded in **[`docs/adr/0001-stack-decision.md`](docs/adr/0001-stack-decision.md)**.
 Read that before proposing a change to any of them.
 
-Prisma, Socket.IO and BullMQ are decided but not yet installed — each arrives with the
-story that first needs it.
+Prisma is installed as a **CLI only** — schema and migrations, no generated client and no
+`@prisma/client` dependency. Prisma 7 clients need a driver adapter, which is a decision
+for the story that writes the first query (TAR-49) rather than one to inherit. Socket.IO and BullMQ
+are decided but not yet installed; each arrives with the story that first needs it.
 
 ## Layout
 
-| Path                 | What it is                                                   |
-| -------------------- | ------------------------------------------------------------ |
-| `apps/api`           | NestJS HTTP API                                              |
-| `apps/web`           | Next.js agent console                                        |
-| `packages/contracts` | Zod schemas and types shared by both apps — the API contract |
-| `packages/tsconfig`  | Shared TypeScript configuration                              |
-| `docs/adr`           | Architecture decision records                                |
-| `docs/runbooks`      | Operational procedures — environments, migrations            |
-| `render.yaml`        | The three hosted environments, defined as a Render blueprint |
+| Path                       | What it is                                                   |
+| -------------------------- | ------------------------------------------------------------ |
+| `apps/api`                 | NestJS HTTP API                                              |
+| `apps/api/prisma`          | Database schema and migrations                               |
+| `apps/web`                 | Next.js agent console                                        |
+| `packages/contracts`       | Zod schemas and types shared by both apps — the API contract |
+| `packages/tsconfig`        | Shared TypeScript configuration                              |
+| `docker-compose.yml`       | Local PostgreSQL and Redis                                   |
+| `docker/postgres/initdb.d` | First-boot SQL for the local Postgres container              |
+| `docs/adr`                 | Architecture decision records                                |
+| `docs/runbooks`            | Operational procedures — environments, migrations            |
+| `render.yaml`              | The three hosted environments, defined as a Render blueprint |
 
 ## Getting started
 
-Requires **Node 22** (`.nvmrc`) and **pnpm 9**.
+Requires **Node 22** (`.nvmrc`), **pnpm 9**, and **Docker** with Compose v2
+(Docker Desktop covers both).
 
 ```bash
-pnpm install
-cp .env.example .env     # defaults are enough to boot the scaffold
-pnpm dev
+pnpm install                 # 1. dependencies
+cp .env.example .env         # 2. config — the defaults match the Docker stack, no edits needed
+pnpm db:up                   # 3. start PostgreSQL and Redis, wait until both are healthy
+pnpm db:migrate:deploy       # 4. apply migrations to the empty database
+pnpm dev                     # 5. run the API and the frontend
 ```
+
+That is the whole setup. Step 3 blocks until both containers report healthy, so step 4
+never races the database.
 
 `pnpm dev` runs both apps: the API on <http://localhost:3001/api> and the frontend on
 <http://localhost:3000>.
 
-Check the API is up:
+### Check it worked
 
 ```bash
 curl http://localhost:3001/api/health
 # {"status":"ok","version":"0.0.0","uptimeSeconds":3,"checks":{}}
+
+pnpm db:migrate:status
+# Database schema is up to date!
 ```
 
-No database or Redis is needed to boot locally — `DATABASE_URL` and `REDIS_URL` are
-optional outside production. Readiness will report `down` until they are set, which is
-the correct answer, not a failure. TAR-42 adds the docker-compose harness that supplies
-them.
+Once the database and Redis are up, readiness reports them:
+
+```bash
+curl http://localhost:3001/api/health/ready
+# {"status":"ok",...,"checks":{"database":{"status":"ok"},"queue":{"status":"ok"}}}
+```
+
+`/api/health` stays a liveness probe and deliberately measures nothing — a liveness check
+that fails when the database blinks restarts a healthy process.
+
+**The database has tables but no rows — that is the expected state.** Seeding is TAR-46.
+To see what step 4 built:
+
+```bash
+docker compose exec postgres psql -U whatsappcrm -d whatsappcrm -c '\dt'
+docker compose exec postgres psql -U whatsappcrm -d whatsappcrm \
+  -c 'SELECT migration_name FROM _prisma_migrations;'
+```
+
+Port 5432 or 6379 already in use? Change `POSTGRES_PORT` / `REDIS_PORT` in `.env`, and the
+matching port inside `DATABASE_URL` / `REDIS_URL` — they are separate values and both have
+to move.
 
 ## Commands
 
@@ -71,25 +104,146 @@ Run from the repository root; Turborepo fans each one out across the workspaces.
 | `pnpm format`       | Applies Prettier                                    |
 | `pnpm format:check` | Fails if anything is unformatted — what CI runs     |
 
-Database commands run from `apps/api` (or with `pnpm --filter @whatsappcrm/api <script>`):
+### Database and queue
 
-| Command               | What it does                                                      |
-| --------------------- | ----------------------------------------------------------------- |
-| `db:migrate --name X` | Creates a migration **and** its `down.sql`. Local only            |
-| `db:deploy`           | Applies pending migrations — what runs on every deploy            |
-| `db:rollback`         | Prints the plan to undo the newest migration; `--confirm` runs it |
-| `db:check-migrations` | Fails if any migration has no `down.sql`. CI runs this            |
-| `db:generate`         | Regenerates the Prisma client                                     |
+| Command                  | What it does                                                          |
+| ------------------------ | --------------------------------------------------------------------- |
+| `pnpm db:up`             | Starts PostgreSQL and Redis, returning once both are healthy          |
+| `pnpm db:down`           | Stops both containers, **keeping** the data volumes                   |
+| `pnpm db:logs`           | Tails container logs — slow queries land here (see below)             |
+| `pnpm db:migrate`        | Creates and applies a migration from schema changes (local)           |
+| `pnpm db:migrate:deploy` | Applies pending migrations without generating any (deploy path)       |
+| `pnpm db:migrate:status` | Reports which migrations are applied and which are pending            |
+| `pnpm db:reset`          | **Destructive.** Drops the local database and replays every migration |
+| `pnpm db:studio`         | Opens Prisma Studio against the local database                        |
+
+`pnpm db:down` leaves your data in place. To throw it away as well —
+`docker compose down -v`, which deletes the volumes and, on the next `pnpm db:up`,
+re-runs the first-boot SQL in `docker/postgres/initdb.d`.
+
+**`pnpm db:reset` has two guards, and both are deliberate.** In a non-interactive shell
+it refuses to run and tells you to pass `--force`. And Prisma 7 detects AI coding agents
+and blocks destructive commands outright unless `PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION`
+is set to the text of the message in which you consented. Neither guard affects a human at
+an interactive prompt; both will stop an agent, which matters for TAR-46's seed script and
+for any automated task that expects to reset the database unattended. The route back to a
+known-good state that passes both guards is
+`docker compose down -v && pnpm db:up && pnpm db:migrate:deploy` — equally destructive, but
+it never invokes `migrate reset`.
+
+## Working with the database
+
+Postgres 17 and Redis 7 run from `docker-compose.yml`. Two details in there are
+deliberate and worth knowing:
+
+- Redis runs with `maxmemory-policy noeviction`, which **BullMQ requires** — under memory
+  pressure any other policy lets Redis silently discard job data.
+- Postgres logs any statement slower than 500 ms. `pnpm db:logs` is the fastest way to
+  catch a bad plan before it reaches staging.
+
+Connection details come from `.env` and are the same values Compose itself reads. The
+password there is a throwaway for a container bound to localhost; it is not a secret and
+must not be reused anywhere.
+
+### The data model
+
+`apps/api/prisma/schema.prisma` is the single source of truth for the database shape. It
+expresses the entity table in `docs/architecture/0002-architecture-and-api-contract.md`
+(TAR-39) — read that first for _why_ the entities are shaped this way; the schema file
+carries the per-model reasoning next to each model.
+
+Six conventions hold across every model, and a change that breaks one needs a reason:
+
+1. **Every tenant-scoped table carries a non-null `tenant_id`**, even where the tenant is
+   already reachable through a foreign key. An RLS policy is a row predicate and cannot
+   join. Exactly three tables do not have one, all deliberately: `tenants`, `plans`
+   (platform-wide product data) and `webhook_events` (written before the tenant is known,
+   so its `tenant_id` is nullable and it is never RLS-protected).
+2. **Tenant-scoped foreign keys are composite** — `(tenant_id, <parent_id>)` referencing
+   the parent's `UNIQUE (tenant_id, id)`, never the parent's `id` alone. RLS stops a
+   tenant _reading_ another tenant's row; this is what stops one being _referenced_ by a
+   handler that took an id from a request body.
+3. **Composite indexes lead with `tenant_id`**, and sort keys are
+   `(<timestamp> DESC, id DESC)` so keyset pagination has a total order.
+4. **Referential actions are only ever `Cascade` or `NoAction`** — never `Restrict` (it is
+   checked immediately and would abort a legitimate cascading tenant delete) and never
+   `SetNull` (on a composite key it would null `tenant_id`, which is `NOT NULL`).
+5. **Ids are UUIDv7**, generated by the Prisma client. Postgres 17 has no native
+   `uuidv7()`, so there is no column default — anything inserting outside the client must
+   supply the id.
+6. **Timestamps are `timestamptz`**, money is integer minor units plus an ISO 4217 code,
+   phone numbers are E.164, and emails/slugs/hostnames are `citext`.
+
+Row-level security itself is **not** in place yet: the columns are there, the policies are
+TAR-48. Until then nothing enforces isolation at the data layer, so do not treat a query
+as scoped because the column exists.
+
+### Adding a migration
+
+Edit `apps/api/prisma/schema.prisma`, then:
+
+```bash
+pnpm db:migrate --name add_conversations
+```
+
+That writes `apps/api/prisma/migrations/<timestamp>_add_conversations/migration.sql` and
+applies it. **Read the generated SQL before committing it** — Prisma will happily emit a
+statement that rewrites a large table or takes a long lock, and neither is visible from
+the schema diff.
+
+### Rolling a migration back
+
+Prisma does not generate down migrations. Per
+[ADR 0001](docs/adr/0001-stack-decision.md) (decision 6), **every migration directory
+carries a hand-written `down.sql`** next to Prisma's `migration.sql`, reviewed like any
+other code. Generate it _before_ running `pnpm db:migrate`, while the schema file holds
+the new shape and the migrations directory still holds the old one:
+
+```bash
+cd apps/api
+pnpm exec prisma migrate diff \
+  --from-schema prisma/schema.prisma \
+  --to-migrations prisma/migrations \
+  --script > down.sql
+```
+
+Then move `down.sql` into the migration directory `pnpm db:migrate` creates, and read it
+critically — the generated SQL is structurally correct but it is not a restore. A down
+migration that drops a column or a table **destroys the data in it**. Where that is
+unacceptable, the answer is not a better `down.sql`; it is the expand → migrate → contract
+sequence, so the destructive step lands in its own separately deployable migration.
+
+To apply one, against local or any other target:
+
+```bash
+pnpm --filter @whatsappcrm/api db:rollback            # prints the plan, changes nothing
+pnpm --filter @whatsappcrm/api db:rollback --confirm  # runs it
+```
+
+That undoes the single most recently applied migration: it takes a Postgres advisory
+lock so two runners cannot collide, runs that migration's `down.sql`, **and deletes its
+row from `_prisma_migrations`** — the step that is easy to forget by hand and that
+`migrate deploy` needs in order to re-apply the migration afterwards. `DATABASE_URL`
+decides which database is affected, so export it explicitly and read it back before
+adding `--confirm`. Locally, `pnpm db:reset` is often the faster path.
+
+The convention is enforced, not just documented: `pnpm --filter @whatsappcrm/api
+db:check-migrations` fails when a migration directory has no `down.sql`, and CI runs it
+on every pull request. A convention nothing checks is a convention that lasts until the
+first busy afternoon.
+
+The shadow database (`whatsappcrm_shadow`, created on the container's first boot) exists
+only for the `migrate diff` above. Prisma wipes it on every use.
 
 ## Environments
 
 Three hosted environments — development, staging and production — each with its own
-database, its own Key Value instance and its own WhatsApp and Polar credentials. They
-are defined in [`render.yaml`](render.yaml); provisioning them, the secrets you are
-prompted for, and the alerting wired to them are in
+database, its own Key Value instance and its own WhatsApp and Polar credentials. They are
+defined as a Render blueprint in [`render.yaml`](render.yaml); provisioning them, the
+secrets you are prompted for, and the alerting wired to them are in
 [`docs/runbooks/environments.md`](docs/runbooks/environments.md).
 
-Health:
+Health, deliberately split:
 
 | Endpoint            | Answers                           |
 | ------------------- | --------------------------------- |
@@ -97,11 +251,18 @@ Health:
 | `/api/health/ready` | can it serve — database and queue |
 
 `/api/health/ready` answers `503` when a dependency is down and still returns the full
-body, so an alert says which one.
+body, so an alert names the failing dependency rather than only saying something is wrong.
+It is the health check path on every deployed API service.
 
-Migrations apply automatically as part of every deploy and each one ships a
-hand-written `down.sql` — see
-[`docs/runbooks/migrations.md`](docs/runbooks/migrations.md).
+**Migrations apply automatically.** Each environment runs `pnpm db:migrate:deploy` as a
+pre-deploy hook, from the same build that produced the code, before the new instance
+serves traffic — a failing migration aborts the deploy and the previous instance keeps
+serving. Nobody applies a migration by hand.
+
+Services start with `exec node <entrypoint>`, never a package script. That is
+load-bearing: `exec` makes node PID 1 so `SIGTERM` reaches the shutdown hooks. Through
+`pnpm start` the signal is swallowed and the process is killed outright, cutting in-flight
+requests and discarding buffered error-tracker events on every deploy.
 
 ## Continuous integration
 
@@ -132,12 +293,21 @@ builds `packages/*` first; without that, a clean checkout lints an unresolved ty
 ## Configuration
 
 `.env.example` is the documented contract for every environment variable and is the file
-to update when a key is added. It holds **no values** — deployed environments read their
-secrets from the platform's secret store, never from a committed file.
+to update when a key is added. It carries **no secrets** — the only values in it are local
+Docker defaults, and deployed environments read everything from the platform's secret
+store, never from a committed file.
 
 For the API, `.env.example` must stay in sync with
 `apps/api/src/config/env.schema.ts`, which validates the environment at boot and refuses
-to start if a required key is missing or malformed.
+to start if a required key is missing or malformed. `DATABASE_URL` and `REDIS_URL` are
+still optional there — the scaffold boots without them — and TAR-41 promotes both to
+required.
+
+The Prisma CLI reads its own configuration from `apps/api/prisma.config.mjs`, which loads
+the repository-root `.env`. Prisma 7 does not load `.env` on its own and no longer accepts
+`url = env(...)` inside the schema, so that file is the single place the CLI learns where
+the database is. A variable already set in the real environment wins over the file, which
+is what makes `DATABASE_URL=… pnpm db:migrate:deploy` work against any target.
 
 ## Conventions worth knowing before you write code
 
@@ -150,15 +320,7 @@ to start if a required key is missing or malformed.
   know a shape, it is a Zod schema there, not a duplicated interface.
 - **Errors have one envelope** (`ApiErrorSchema`), and the frontend has one error type
   (`ApiRequestError` in `apps/web/lib/api.ts`). Every response carries `x-request-id`,
-  which ties a user-reported error to a log line. Throwing an `HttpException` is enough
-  — `AllExceptionsFilter` turns it into that envelope, logs it, and reports the 5xx ones
-  to the error tracker.
-- **Never `console.log`.** Nest's `Logger` writes through `AppLoggerService`, which
-  emits JSON and attaches the tenant automatically. For structured fields, inject
-  `AppLoggerService` and call `structured('MyContext')`.
-- **Never read `process.env`.** Add the key to `apps/api/src/config/env.schema.ts` and
-  `.env.example` in the same commit, then read it from `ConfigService`. The process
-  refuses to boot on an invalid environment.
+  which ties a user-reported error to a log line.
 
 ## License
 

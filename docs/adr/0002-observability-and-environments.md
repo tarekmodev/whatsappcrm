@@ -151,22 +151,22 @@ this task to write the convention down. It is:
 runs it on every pull request, and `db:rollback` applies the newest one under a
 Postgres advisory lock and deletes its `_prisma_migrations` row.
 
-The convention is wrapped rather than documented, because the manual version has a
-trap that fails silently. The down migration is the diff from the **new** datamodel
-back to the **current database**, so it has to be captured _before_ `migrate dev`
-applies anything — run the diff afterwards and Prisma emits
-`-- This is an empty migration.`, which passes the CI check and reverses nothing.
-`db:migrate` captures it in the right order, so nobody has to know that.
-_(This was found the way you would expect: by doing it in the wrong order first.)_
+The manual version has a trap that fails silently, and it is worth stating because
+the README's authoring instructions depend on getting it right: the down migration
+is the diff from the **new** datamodel back to the **current database**, so it has
+to be captured _before_ `migrate dev` applies anything. Run the diff afterwards and
+both sides are already in sync — Prisma emits `-- This is an empty migration.`,
+which passes the CI check and reverses nothing.
+_(Found the way you would expect: by doing it in the wrong order first.)_
 
 ADR 0001 asked for verification that `prisma migrate diff` produces usable down SQL
-for this schema's shape. **Verified against PostgreSQL 16** with a throwaway model:
-create → apply → re-apply (no-op) → roll back → re-apply produced correct SQL and a
-clean round trip. It has not been verified against a _realistic_ schema — there is
-no data model until TAR-39 lands, and constraints, enums and foreign keys are where
-generated rollbacks get interesting. TAR-42 should repeat the drill on the first
-real migration; ADR 0001's recorded fallback (Drizzle) still stands if it turns out
-to need more hand-editing than estimated.
+for this schema's shape, and this ADR previously recorded that as done only against
+a throwaway one-table model. **Now verified against the real schema** — TAR-47's
+initial data model, 37 tables with composite foreign keys, enums and RLS-bearing
+columns, on PostgreSQL 16: `db:rollback --confirm` dropped all 36 tables and the
+bookkeeping row in one transaction, `db:migrate:deploy` restored all 37, and
+`migrate status` reported clean. ADR 0001's open question 3 is closed and its
+recorded fallback (Drizzle) is not needed.
 
 - **Rejected — accepting irreversible migrations.** Rejected: TAR-34 names
   reversibility as acceptance criteria.
@@ -213,8 +213,19 @@ keeps Redis a latency dependency rather than a durability one.
 - **TAR-39** — an exception filter and the `ApiError` envelope now exist. Error
   _codes_ are derived from the HTTP status as a placeholder; the taxonomy is still
   yours, and a thrown `HttpException` can already carry its own `code`.
-- **TAR-42** — `apps/api/prisma/schema.prisma` and the `db:*` scripts exist. Point
-  docker-compose at them; do not introduce a second migration entry point.
+- **TAR-42** — landed in parallel with this and owns the migration entry point.
+  `render.yaml`'s pre-deploy hook calls its `pnpm db:migrate:deploy` rather than a
+  second one of ours. What this adds on top is enforcement and a runner:
+  `db:check-migrations` fails a migration with no `down.sql` (CI runs it), and
+  `db:rollback` applies one under an advisory lock **and** deletes its
+  `_prisma_migrations` row in the same transaction — the step TAR-42's README
+  correctly tells you to do by hand, and the one that is easy to skip.
+- **TAR-49** — the readiness probe uses the `pg` driver directly, **not** a Prisma
+  client. TAR-47's schema has no `generator` block and Prisma 7 clients need a
+  driver adapter, which is your decision; building a client to satisfy a health
+  check would have made it for you. When the real client lands, probe through its
+  pool instead: a probe on its own connection can never observe the failure that
+  matters most, the application's pool being exhausted.
 - **TAR-43** — start from "answered" above. Confirm the workspace plan, document
   the window, run the drill.
 - **TAR-45** — verify readiness against a deployed environment, not locally: it

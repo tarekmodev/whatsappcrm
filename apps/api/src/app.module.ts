@@ -4,7 +4,7 @@ import { TenantContextMiddleware } from './common/tenant-context/tenant-context.
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
-import { PrismaModule } from './infra/prisma/prisma.module';
+import { DatabaseModule } from './infra/database/database.module';
 import { RedisModule } from './infra/redis/redis.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { RequestLoggingMiddleware } from './observability/request-logging.middleware';
@@ -14,7 +14,7 @@ import { RequestLoggingMiddleware } from './observability/request-logging.middle
     ConfigModule.forRoot({ isGlobal: true, cache: true, validate: validateEnv }),
     TenantContextModule,
     ObservabilityModule,
-    PrismaModule,
+    DatabaseModule,
     RedisModule,
     HealthModule,
   ],

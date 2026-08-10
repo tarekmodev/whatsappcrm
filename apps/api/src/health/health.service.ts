@@ -2,14 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { HealthCheck, HealthResponse, HealthStatus } from '@whatsappcrm/contracts';
 import type { Env } from '../config/env.schema';
-import { PrismaService } from '../infra/prisma/prisma.service';
+import { DatabaseProbeService } from '../infra/database/database-probe.service';
 import { RedisService } from '../infra/redis/redis.service';
 
 @Injectable()
 export class HealthService {
   constructor(
     private readonly config: ConfigService<Env, true>,
-    private readonly prisma: PrismaService,
+    private readonly database: DatabaseProbeService,
     private readonly redis: RedisService,
   ) {}
 
@@ -31,7 +31,7 @@ export class HealthService {
    * roughly one probe's time even when a dependency is hanging.
    */
   async readiness(): Promise<HealthResponse> {
-    const [database, queue] = await Promise.all([this.prisma.ping(), this.redis.ping()]);
+    const [database, queue] = await Promise.all([this.database.ping(), this.redis.ping()]);
     const checks = { database, queue };
 
     return this.envelope(aggregate(checks), checks);

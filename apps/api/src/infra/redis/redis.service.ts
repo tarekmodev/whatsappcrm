@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { HealthCheck } from '@whatsappcrm/contracts';
 import { Redis } from 'ioredis';
 import type { Logger } from 'pino';
+import { describeFailure } from '../../common/describe-failure';
 import { withTimeout } from '../../common/with-timeout';
 import type { Env } from '../../config/env.schema';
 import { AppLoggerService } from '../../observability/app-logger.service';
@@ -83,7 +84,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
       this.hasReportedDisconnection = true;
       this.log.error(
-        { reason: error.name },
+        { reason: describeFailure(error) },
         'lost the Redis connection; retrying in the background',
       );
     });
@@ -130,13 +131,8 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       await withTimeout(this.client.ping(), this.healthCheckTimeoutMs, 'queue ping');
       return { status: 'ok' };
     } catch (error) {
-      this.log.warn({ reason: describe(error) }, 'queue probe failed');
-      return { status: 'down', detail: describe(error) };
+      this.log.warn({ reason: describeFailure(error) }, 'queue probe failed');
+      return { status: 'down', detail: describeFailure(error) };
     }
   }
-}
-
-/** Probe detail is returned to an unauthenticated caller, so it stays a short label. */
-function describe(error: unknown): string {
-  return error instanceof Error ? error.name : 'unknown error';
 }
