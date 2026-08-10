@@ -6,7 +6,13 @@ import { isMessageStatusAdvance, SendMessageInputSchema } from './messages';
 import { permissionsForRole, ROLE_PERMISSIONS, roleHasPermission, TENANT_ROLES } from './rbac';
 import { canTransitionTenant, TENANT_STATUSES, TENANT_STATUS_EFFECTS } from './tenant';
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
-import { MessageTemplateResponseSchema, WhatsAppBusinessAccountResponseSchema } from './whatsapp';
+import {
+  ConnectedWhatsAppBusinessAccountResponseSchema,
+  ConnectWhatsAppBusinessAccountInputSchema,
+  MessageTemplateListQuerySchema,
+  MessageTemplateResponseSchema,
+  WhatsAppBusinessAccountResponseSchema,
+} from './whatsapp';
 
 describe('error taxonomy', () => {
   it('maps every code to an HTTP status', () => {
@@ -188,6 +194,96 @@ describe('whatsapp business account', () => {
 
   it('keys a template to its WABA, not to the tenant', () => {
     expect(Object.keys(MessageTemplateResponseSchema.shape)).toContain('whatsappBusinessAccountId');
+  });
+});
+
+describe('connecting a whatsapp business account', () => {
+  const valid = {
+    wabaId: '102290129340398',
+    accessToken: 'EAAG-a-real-looking-meta-access-token',
+    phoneNumbers: [{ phoneNumberId: '15550001111', displayPhoneNumber: '+15550001111' }],
+  };
+
+  it('accepts the minimum an operator has to supply', () => {
+    expect(ConnectWhatsAppBusinessAccountInputSchema.parse(valid)).toMatchObject({
+      wabaId: valid.wabaId,
+    });
+  });
+
+  it('requires at least one number, because a WABA without one cannot send or receive', () => {
+    expect(() =>
+      ConnectWhatsAppBusinessAccountInputSchema.parse({ ...valid, phoneNumbers: [] }),
+    ).toThrow();
+  });
+
+  it('rejects the same phone number twice in one request', () => {
+    expect(() =>
+      ConnectWhatsAppBusinessAccountInputSchema.parse({
+        ...valid,
+        phoneNumbers: [...valid.phoneNumbers, ...valid.phoneNumbers],
+      }),
+    ).toThrow();
+  });
+
+  it('rejects an id that is not a Meta Graph id', () => {
+    // Meta's ids exceed Number.MAX_SAFE_INTEGER, so they stay strings — but
+    // they are still digits, and an arbitrary string here becomes an index key.
+    for (const wabaId of ['not-an-id', '10229 0129', '', '1'.repeat(33)]) {
+      expect(
+        () => ConnectWhatsAppBusinessAccountInputSchema.parse({ ...valid, wabaId }),
+        wabaId,
+      ).toThrow();
+    }
+  });
+
+  it('rejects a display number that is not E.164', () => {
+    expect(() =>
+      ConnectWhatsAppBusinessAccountInputSchema.parse({
+        ...valid,
+        phoneNumbers: [{ phoneNumberId: '15550001111', displayPhoneNumber: '555-0001' }],
+      }),
+    ).toThrow();
+  });
+
+  it('strips a caller-supplied tenant id rather than honouring it', () => {
+    // The tenant comes from the path and the platform-admin guard. A body field
+    // that could redirect the connection to another tenant must not survive.
+    const parsed = ConnectWhatsAppBusinessAccountInputSchema.parse({
+      ...valid,
+      tenantId: '50444444-4444-7444-8444-4444444444c1',
+    });
+
+    expect(parsed).not.toHaveProperty('tenantId');
+  });
+
+  it('never publishes a token on the way back out', () => {
+    const parsed = ConnectedWhatsAppBusinessAccountResponseSchema.parse({
+      id: '01890a5d-ac96-774b-bcce-b302099a8057',
+      wabaId: valid.wabaId,
+      name: null,
+      verificationStatus: 'pending',
+      createdAt: '2026-08-10T09:30:24Z',
+      updatedAt: '2026-08-10T09:30:24Z',
+      accessTokenEncrypted: 'v1.leaked',
+      accounts: [],
+    });
+
+    expect(parsed).not.toHaveProperty('accessTokenEncrypted');
+  });
+});
+
+describe('the message template list', () => {
+  it('paginates by cursor with a documented default and cap', () => {
+    expect(MessageTemplateListQuerySchema.parse({})).toMatchObject({ limit: 25 });
+    expect(() => MessageTemplateListQuerySchema.parse({ limit: 1000 })).toThrow();
+  });
+
+  it('offers no way to ask for an unapproved template', () => {
+    // Meta refuses a send on anything but an approved template, so a `status`
+    // parameter would only make a failed send reachable from the picker.
+    const parsed = MessageTemplateListQuerySchema.parse({ status: 'rejected' });
+
+    expect(parsed).not.toHaveProperty('status');
   });
 });
 
