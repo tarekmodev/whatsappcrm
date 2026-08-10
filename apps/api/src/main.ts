@@ -5,7 +5,13 @@ import { AppModule } from './app.module';
 import { configureApp } from './bootstrap';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  // `rawBody` keeps the exact bytes of each request alongside the parsed body.
+  // Meta signs the raw payload, and a body that was parsed and re-serialised
+  // does not reproduce it — so without this the WhatsApp webhook rejects every
+  // genuine delivery, and the failure reads as a wrong app secret rather than as
+  // a missing option (TAR-39, signature check). `apps/api/src/webhooks` is the
+  // only reader; the cost is one retained buffer per request.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   configureApp(app);
 

@@ -11,12 +11,12 @@
  * commit their fixtures, so running them in parallel would have them delete
  * each other's rows.
  *
- * The **root** `test:db` script builds `packages/*` first, the same way `lint`
- * does. Unlike `test` and `typecheck`, this suite does not run through Turbo, so
- * nothing else resolves `^build` for it — and `@whatsappcrm/contracts` is
- * consumed from its `dist`, not its source. Without that build a clean checkout
- * fails every suite here with "Cannot find module '@whatsappcrm/contracts'",
- * which looks like a database problem and is not one.
+ * Run it through Turbo (`pnpm test:db`), never `jest` directly:
+ * `@whatsappcrm/contracts` is consumed from its `dist`, and the `test:db` task
+ * in `turbo.json` is what declares the `^build` that produces it. Invoked
+ * without that, a clean checkout fails every suite here with "Cannot find
+ * module '@whatsappcrm/contracts'" — which looks like a database problem and is
+ * not one.
  */
 /** @type {import('jest').Config} */
 module.exports = {

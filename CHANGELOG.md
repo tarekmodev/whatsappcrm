@@ -1,0 +1,119 @@
+# Changelog
+
+Notable changes to this project. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
+[semantic versioning](https://semver.org/spec/v2.0.0.html).
+
+Nothing has been released yet: the package version is `0.0.0` and every entry below sits
+under **Unreleased**. Entries are grouped as **Added**, **Changed**, **Fixed**, **Removed**
+and **Security**, and each carries the story that delivered it. This file starts here, so
+the first section covers everything on `main` to date rather than only the most recent
+change.
+
+## [Unreleased]
+
+### Added
+
+- **WhatsApp Business Account connection** — `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts`
+  and `.../{wabaId}/template-sync`, behind the same platform admin guard, plus the Meta
+  Cloud API client, the credential resolver and the sender service. (TAR-66)
+- **Template list endpoint** — `GET /api/v1/message-templates`, approved templates only,
+  keyset-paginated, with the `(tenant_id, status, name, language, id)` index that serves
+  it. (TAR-20a)
+- **Ticket auto-linking contract** — `docs/architecture/0003-ticket-auto-linking-contract.md`
+  and `packages/contracts/src/ticket-linking.ts`. (TAR-73)
+- **RBAC permission matrix** — `docs/architecture/0004-rbac-permission-matrix.md`, fixing
+  the agent, supervisor and admin permission sets. (TAR-79)
+- **Tenant provisioning endpoint** — `POST /api/v1/admin/tenants`. Creates the tenant, its
+  settings and its platform subdomain in one transaction. Idempotent on `slug`: `201` when
+  the call provisioned the tenant, `200` when it already existed, with the same body either
+  way. Authenticated by `PLATFORM_ADMIN_TOKEN`; with that variable unset the whole
+  `/api/v1/admin/*` surface refuses every request. (TAR-50)
+- **Tenant deactivation endpoint** — `POST /api/v1/admin/tenants/{slug}/deactivate`. Revokes
+  a tenant's access and retains all of its data. Idempotent, always `200`, `404` on an
+  unknown slug. Writes one `audit_logs` entry (`tenant.deactivated`) in the same transaction
+  as the status change, stamped from the database clock so the two agree. (TAR-51)
+- **Deactivation gate in the database** — `public.assert_tenant_active(text)`, called by
+  every `TenantPrisma` statement on its way to setting the row-level security GUC. A
+  non-`active` tenant never sets the GUC, so the block covers HTTP handlers, queue workers,
+  WebSocket handlers and raw SQL alike, and is in force from the instant deactivation
+  commits. (TAR-51)
+- **`TenantPrisma` and `SystemPrisma`** — two Prisma clients on two database roles, plus the
+  client extension that sets `app.tenant_id` per transaction and the `$tenantTransaction`
+  helper for multi-statement work. A query with no tenant in scope throws before anything is
+  sent. (TAR-49)
+- **Tenant isolation at the data layer** — `FORCE ROW LEVEL SECURITY` and one
+  `tenant_isolation` policy on every tenant-scoped table; the non-`BYPASSRLS` application
+  role; and `pnpm db:verify:rls`, which proves two tenants cannot see each other's rows and
+  is derived from the catalog rather than from a list. (TAR-48)
+- **The initial data model** — 37 Prisma models covering tenancy, identity, the WhatsApp
+  channel, contacts, the inbox, tickets, assignment, SLA, workflows, AI, billing and platform
+  plumbing, with the migration that creates them. (TAR-47)
+- **`whatsapp_business_accounts`** — WhatsApp Business Accounts (WABAs) modelled as a
+  first-class entity, so a tenant may hold more than one. (TAR-52)
+- **Local development harness** — Docker Compose stack for PostgreSQL 17 and Redis 7, the
+  Prisma runner, the application-role scripts and the documented setup steps. (TAR-42)
+- **Continuous integration** — Lint, Type-check, Test and Database jobs on every push to
+  `main` and every pull request; branch protection on the first three. (TAR-40)
+- **Published architecture and API contract** — module boundaries, tenant resolution, the
+  endpoint surface, webhook ingestion, and the billing and usage ports.
+  (TAR-39, amended by TAR-20a)
+- **Documentation** — a data model reference, a platform admin API reference, the tenant
+  isolation contract, and the documentation style guide this file follows. (TAR-89)
+
+### Changed
+
+- **`conversations.last_message_at` is `NOT NULL`, defaulting to the row's insert time.**
+  It leads all three inbox keyset indexes, and PostgreSQL orders NULLs first under `DESC`,
+  so a message-less conversation pinned itself to page one and the resume predicate
+  evaluated to NULL — silently dropping every row after that cursor. (TAR-92)
+- **The role vocabulary is three values, not four.** `user_role.owner` is dropped: no code
+  wrote it and `TenantRoleSchema` would have rejected it at the serializer. Done while
+  `users` and `invites` were empty everywhere, because removing an enum value is a type
+  swap and a table rewrite while adding one back is an online `ALTER TYPE`. The same change
+  adds `users.last_seen_at` and `teams.description`, moves `teams.name` to `citext`, and
+  puts sort keys on the four role-scoped inbox and queue indexes. (TAR-80)
+- **WhatsApp entities are scoped at three levels, not two.** `whatsapp_accounts` is now a
+  phone number belonging to a WABA rather than a row that also stood in for the business.
+  `message_templates` is re-keyed from `UNIQUE (tenant_id, name, language)` to
+  `UNIQUE (tenant_id, whatsapp_business_account_id, name, language)`, so one tenant can hold
+  the same template approved separately under two WABAs. `quality_rating` is added to
+  `whatsapp_accounts`, where Meta rates and throttles. Migration
+  `20260810160000_whatsapp_business_account_entity` refuses to run against a database with
+  any rows in either table, because it drops columns outright; with data present the same
+  change has to be redone as expand → backfill → contract. (TAR-52)
+- **The API takes two database URLs, not one.** `APP_DATABASE_URL` and
+  `SYSTEM_DATABASE_URL`, both required, neither of which may be the migration owner — on a
+  managed instance the owner is usually a superuser, and a superuser skips row-level security
+  entirely. (TAR-49)
+- **`assert_tenant_active` pins its own `SET search_path`** and is called schema-qualified, so
+  the gate evaluates identically on every connection rather than depending on the caller's
+  `search_path`. (TAR-51)
+
+### Fixed
+
+- **A malformed tenant id is refused as `TN001`, not raised as a cast error.** It previously
+  reached the application as SQLSTATE `22P02`, which was reported as a fault rather than as
+  the refusal it is. No isolation consequence — the cast raised before `set_config` either
+  way, so the GUC was unset and the policies matched nothing. (TAR-51)
+
+### Removed
+
+- **`whatsapp_accounts.access_token_encrypted` and `whatsapp_accounts.waba_id`**, both moved
+  to `whatsapp_business_accounts`. Meta issues the access token to the business, so one copy
+  per WABA makes a rotation a single-row update instead of an N-row update whose rows can
+  drift apart. (TAR-52)
+
+### Security
+
+- **The application database role holds neither `SUPERUSER` nor `BYPASSRLS`**, and
+  `app-roles.sql` re-asserts that on every run rather than assuming it. `SystemPrisma`'s
+  cross-tenant access is a per-table `system_unrestricted` policy rather than the cluster-wide
+  `BYPASSRLS` attribute, so it is visible in `pg_policies` and revocable one table at a time.
+  (TAR-48)
+- **The platform admin token is compared in constant time** after both sides are hashed to a
+  fixed length, so neither the token's length nor how far a guess matched is observable. An
+  unset token disables the admin surface rather than opening it. (TAR-50)
+- **Both application roles are created `NOLOGIN` and without a password.** Granting login is
+  an operator step against the environment's secret store; no password, local or otherwise,
+  is committed. (TAR-48)
