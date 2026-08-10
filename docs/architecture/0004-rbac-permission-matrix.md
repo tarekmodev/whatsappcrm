@@ -74,7 +74,7 @@ Four rules that come with it, all of which the shipped code already follows:
    for the request and stale the moment membership changes — see the eviction rule below.
 4. **No role widens tenant scope.** `PermissionGuard` is pipeline slot 5, after
    `AuthGuard` has called `setTenant()`; every query then runs through `TenantPrisma` under
-   RLS. The matrix governs what a principal may do *inside* its tenant and has no
+   RLS. The matrix governs what a principal may do _inside_ its tenant and has no
    cross-tenant row by construction — an `admin` is a tenant admin, and there is no
    permission that reaches another tenant's data. That is the answer to "validated against
    tenant scoping": the two mechanisms are orthogonal and composed, not alternatives, and
@@ -101,7 +101,7 @@ is also the correct user-visible behaviour: the console's navigation is computed
 principal at render time and would otherwise be wrong until refresh.
 
 The `permissions` array on the principal is what makes this safe to reason about: it is
-computed at login, so nothing needs to re-derive it, and killing the session is the *only*
+computed at login, so nothing needs to re-derive it, and killing the session is the _only_
 invalidation path. There is no second cache to reason about.
 
 ## The matrix
@@ -114,26 +114,26 @@ Legend: ✅ granted · — not granted · **Δ** a delta from the table shipped 
 
 ### Conversations and tickets — TAR-22 AC1, AC2
 
-| Permission               | agent | supervisor | admin | Notes                                       |
-| ------------------------ | :---: | :--------: | :---: | ------------------------------------------- |
-| `conversation:read`      |  ✅   |     ✅     |  ✅   | Scoped by the predicate below               |
-| `conversation:read_all`  |  —    |     ✅     |  ✅   | Tenant-wide; the agent/supervisor line      |
-| `conversation:send`      |  ✅   |     ✅     |  ✅   | Only on a visible conversation              |
-| `conversation:note`      |  ✅   |     ✅     |  ✅   | Internal notes                              |
-| `conversation:assign`    |  —    |     ✅     |  ✅   | Includes re-assignment away from oneself    |
-| `ticket:read`            |  ✅   |     ✅     |  ✅   | Same predicate                              |
-| `ticket:read_all`        |  —    |     ✅     |  ✅   |                                             |
-| `ticket:update`          |  ✅   |     ✅     |  ✅   | Status, priority on a visible ticket        |
-| `ticket:close`           |  ✅   |     ✅     |  ✅   |                                             |
-| `ticket:assign`          |  —    |     ✅     |  ✅   |                                             |
+| Permission              | agent | supervisor | admin | Notes                                    |
+| ----------------------- | :---: | :--------: | :---: | ---------------------------------------- |
+| `conversation:read`     |  ✅   |     ✅     |  ✅   | Scoped by the predicate below            |
+| `conversation:read_all` |   —   |     ✅     |  ✅   | Tenant-wide; the agent/supervisor line   |
+| `conversation:send`     |  ✅   |     ✅     |  ✅   | Only on a visible conversation           |
+| `conversation:note`     |  ✅   |     ✅     |  ✅   | Internal notes                           |
+| `conversation:assign`   |   —   |     ✅     |  ✅   | Includes re-assignment away from oneself |
+| `ticket:read`           |  ✅   |     ✅     |  ✅   | Same predicate                           |
+| `ticket:read_all`       |   —   |     ✅     |  ✅   |                                          |
+| `ticket:update`         |  ✅   |     ✅     |  ✅   | Status, priority on a visible ticket     |
+| `ticket:close`          |  ✅   |     ✅     |  ✅   |                                          |
+| `ticket:assign`         |   —   |     ✅     |  ✅   |                                          |
 
 ### Contacts — TAR-33
 
-| Permission        | agent | supervisor | admin | Notes                                     |
-| ----------------- | :---: | :--------: | :---: | ----------------------------------------- |
-| `contact:read`    |  ✅   |     ✅     |  ✅   | Tenant-wide: a contact is not assigned    |
-| `contact:write`   |  ✅   |     ✅     |  ✅   | Agents correct customer details daily     |
-| `contact:delete`  |  —    |     —      |  ✅   | Destructive and GDPR-adjacent             |
+| Permission       | agent | supervisor | admin | Notes                                  |
+| ---------------- | :---: | :--------: | :---: | -------------------------------------- |
+| `contact:read`   |  ✅   |     ✅     |  ✅   | Tenant-wide: a contact is not assigned |
+| `contact:write`  |  ✅   |     ✅     |  ✅   | Agents correct customer details daily  |
+| `contact:delete` |   —   |     —      |  ✅   | Destructive and GDPR-adjacent          |
 
 Contacts are deliberately **not** subject to the visibility predicate. A contact has no
 assignee, and an agent who can read a conversation must be able to read the person on the
@@ -141,30 +141,30 @@ other end of it. Deletion is admin-only because it is a data-subject operation.
 
 ### People and teams — TAR-22 AC3
 
-| Permission        | agent | supervisor | admin  | Notes                                          |
-| ----------------- | :---: | :--------: | :----: | ---------------------------------------------- |
-| `user:read`       |  ✅   |     ✅     |  ✅    | Directory; needed to render assignee names     |
-| `user:invite`     |  —    |     ✅     |  ✅    | Role assignable is bounded — see Delta 1       |
-| `user:update`     |  —    |   **Δ** ✅ |  ✅    | Name, status, team membership — **not** role   |
-| `user:set_role`   |  —    |     —      | **Δ** ✅ | New permission — see Delta 1                 |
-| `user:remove`     |  —    |     —      |  ✅    | Suspension covers the supervisor's need        |
-| `team:read`       |  ✅   |     ✅     |  ✅    |                                                |
-| `team:write`      |  —    |     ✅     |  ✅    | Create, rename, membership                     |
+| Permission      | agent | supervisor |  admin   | Notes                                        |
+| --------------- | :---: | :--------: | :------: | -------------------------------------------- |
+| `user:read`     |  ✅   |     ✅     |    ✅    | Directory; needed to render assignee names   |
+| `user:invite`   |   —   |     ✅     |    ✅    | Role assignable is bounded — see Delta 1     |
+| `user:update`   |   —   |  **Δ** ✅  |    ✅    | Name, status, team membership — **not** role |
+| `user:set_role` |   —   |     —      | **Δ** ✅ | New permission — see Delta 1                 |
+| `user:remove`   |   —   |     —      |    ✅    | Suspension covers the supervisor's need      |
+| `team:read`     |  ✅   |     ✅     |    ✅    |                                              |
+| `team:write`    |   —   |     ✅     |    ✅    | Create, rename, membership                   |
 
 `PATCH /users/me/availability` carries no permission: any authenticated principal sets
 their own availability. That is already how the endpoint surface is written.
 
 ### Routing, SLA and automation
 
-| Permission                | agent | supervisor | admin | Notes                                    |
-| ------------------------- | :---: | :--------: | :---: | ---------------------------------------- |
-| `assignment_rule:read`    |  —    |     ✅     |  ✅   | TAR-22 AC3 "assignment settings"         |
-| `assignment_rule:write`   |  —    |     ✅     |  ✅   | TAR-23/24                                |
-| `sla:read` / `sla:write`  |  —    |     ✅     |  ✅   | TAR-26                                   |
-| `canned_response:read`    |  ✅   |     ✅     |  ✅   | TAR-31                                   |
-| `canned_response:write`   |  —    |     ✅     |  ✅   | Curated, not crowd-sourced               |
-| `workflow:read/write`     |  —    |     —      |  ✅   | TAR-27 — can send messages autonomously  |
-| `ai:read` / `ai:write`    |  —    |     —      |  ✅   | TAR-28 — same reasoning                  |
+| Permission               | agent | supervisor | admin | Notes                                   |
+| ------------------------ | :---: | :--------: | :---: | --------------------------------------- |
+| `assignment_rule:read`   |   —   |     ✅     |  ✅   | TAR-22 AC3 "assignment settings"        |
+| `assignment_rule:write`  |   —   |     ✅     |  ✅   | TAR-23/24                               |
+| `sla:read` / `sla:write` |   —   |     ✅     |  ✅   | TAR-26                                  |
+| `canned_response:read`   |  ✅   |     ✅     |  ✅   | TAR-31                                  |
+| `canned_response:write`  |   —   |     ✅     |  ✅   | Curated, not crowd-sourced              |
+| `workflow:read/write`    |   —   |     —      |  ✅   | TAR-27 — can send messages autonomously |
+| `ai:read` / `ai:write`   |   —   |     —      |  ✅   | TAR-28 — same reasoning                 |
 
 Workflows and the AI chatbot are admin-only because both can act on a customer
 conversation without a human in the loop. A misconfigured workflow is a mass-messaging
@@ -172,20 +172,20 @@ incident, and that is not a supervisor-shift-level decision.
 
 ### Reporting — TAR-22 AC3, TAR-30
 
-| Permission          | agent | supervisor | admin | Notes                              |
-| ------------------- | :---: | :--------: | :---: | ---------------------------------- |
-| `report:read`       |  ✅   |     ✅     |  ✅   | Aggregates over **visible** records |
-| `report:read_all`   |  —    |     ✅     |  ✅   | Tenant-wide                        |
+| Permission        | agent | supervisor | admin | Notes                               |
+| ----------------- | :---: | :--------: | :---: | ----------------------------------- |
+| `report:read`     |  ✅   |     ✅     |  ✅   | Aggregates over **visible** records |
+| `report:read_all` |   —   |     ✅     |  ✅   | Tenant-wide                         |
 
 ### Tenant administration
 
-| Permission          | agent | supervisor | admin | Notes                                  |
-| ------------------- | :---: | :--------: | :---: | -------------------------------------- |
-| `tenant:settings`   |  —    |     —      |  ✅   | TAR-22 AC1: agents see no admin settings |
-| `branding:write`    |  —    |     —      |  ✅   | TAR-29                                 |
-| `channel:manage`    |  —    |     —      |  ✅   | WABA + phone numbers; holds Meta credentials |
-| `billing:read`      |  —    |     —      |  ✅   | TAR-37                                 |
-| `billing:manage`    |  —    |     —      |  ✅   |                                        |
+| Permission        | agent | supervisor | admin | Notes                                        |
+| ----------------- | :---: | :--------: | :---: | -------------------------------------------- |
+| `tenant:settings` |   —   |     —      |  ✅   | TAR-22 AC1: agents see no admin settings     |
+| `branding:write`  |   —   |     —      |  ✅   | TAR-29                                       |
+| `channel:manage`  |   —   |     —      |  ✅   | WABA + phone numbers; holds Meta credentials |
+| `billing:read`    |   —   |     —      |  ✅   | TAR-37                                       |
+| `billing:manage`  |   —   |     —      |  ✅   |                                              |
 
 This block is what satisfies TAR-22 AC1's "not tenant admin settings" — an agent holds none
 of it, and the console computes its navigation from the same permission set, so there is no
@@ -199,13 +199,17 @@ and any future assignable record.
 
 ```ts
 // Pseudocode; TAR-81 lands the real signature in RbacModule.
-function visible(record: { assignedUserId: Id | null; assignedTeamId: Id | null },
-                 principal: SessionPrincipal,
-                 readAll: Permission): boolean {
-  if (principal.permissions.includes(readAll)) return true;         // supervisor, admin
-  if (record.assignedUserId === principal.userId) return true;      // mine
-  return record.assignedTeamId !== null                             // my team's
-      && principal.teamIds.includes(record.assignedTeamId);
+function visible(
+  record: { assignedUserId: Id | null; assignedTeamId: Id | null },
+  principal: SessionPrincipal,
+  readAll: Permission,
+): boolean {
+  if (principal.permissions.includes(readAll)) return true; // supervisor, admin
+  if (record.assignedUserId === principal.userId) return true; // mine
+  return (
+    record.assignedTeamId !== null && // my team's
+    principal.teamIds.includes(record.assignedTeamId)
+  );
 }
 ```
 
@@ -234,7 +238,7 @@ Five consequences, each of which has already caught something:
    the keyset sort key. The predicate is an OR across both, and an `OR` in a `WHERE` beside
    an `ORDER BY … LIMIT` is exactly the shape a planner can answer with the tenant-wide
    index plus a filter instead. **Needs verification in TAR-81** with `EXPLAIN (ANALYZE,
-   BUFFERS)`: if the OR form does not use both indexes, switch to a `UNION ALL` of two
+BUFFERS)`: if the OR form does not use both indexes, switch to a `UNION ALL` of two
    keyset pages merged in the API. No benchmark is claimed here.
 
 ## Delta 1 — split role assignment out of user administration
@@ -267,7 +271,7 @@ const SUPERVISOR_PERMISSIONS = [
 
 Enforcement, in TAR-81:
 
-- `PATCH /users/{id}` requires `user:update`. If the body carries `role`, it *additionally*
+- `PATCH /users/{id}` requires `user:update`. If the body carries `role`, it _additionally_
   requires `user:set_role`; absent it, `forbidden`. Not "silently ignore the field" — a
   dropped privilege change that appears to succeed is worse than a refusal.
 - `POST /users/invites` requires `user:invite`, and the `role` in the body must be one the
@@ -308,11 +312,11 @@ as the write:
 1. **No principal may change their own `role`** — including an admin. `forbidden`. Makes
    every escalation require a second person, and removes the commonest self-lockout.
 2. **No principal may grant a role above their own.** Ordering: `agent < supervisor <
-   admin`. Under Deltas 1–2 this is already implied, but it is stated as an invariant so
+admin`. Under Deltas 1–2 this is already implied, but it is stated as an invariant so
    that adding a fourth role later cannot silently open a path.
 3. **The last active admin cannot be demoted, suspended, or removed.** New error code
    `last_admin_required` → **409**. The check counts `users WHERE role = 'admin' AND status
-   = 'active'` inside the writing transaction, with the row locked
+= 'active'` inside the writing transaction, with the row locked
    (`SELECT … FOR UPDATE`); an unlocked read makes two concurrent demotions able to zero
    out the set. This is a genuine lockout risk, not a theoretical one — a tenant with no
    admin cannot manage billing, branding or its WhatsApp credentials and can only be
@@ -328,15 +332,15 @@ as the write:
 
 Every one of these mutations writes an `audit_logs` row (the table landed in TAR-80):
 
-| Action                     | `target_type` | Metadata (redacted, no PII)      |
-| -------------------------- | ------------- | -------------------------------- |
-| `user.invited`             | `user`        | role, teamIds                    |
-| `user.role_changed`        | `user`        | from, to                         |
-| `user.status_changed`      | `user`        | from, to                         |
-| `user.teams_changed`       | `user`        | added, removed                   |
-| `user.removed`             | `user`        | role at removal                  |
-| `team.created` / `.updated` / `.deleted` | `team` | name, member delta       |
-| `session.revoked`          | `user`        | reason (`role_change`, `logout`) |
+| Action                                   | `target_type` | Metadata (redacted, no PII)      |
+| ---------------------------------------- | ------------- | -------------------------------- |
+| `user.invited`                           | `user`        | role, teamIds                    |
+| `user.role_changed`                      | `user`        | from, to                         |
+| `user.status_changed`                    | `user`        | from, to                         |
+| `user.teams_changed`                     | `user`        | added, removed                   |
+| `user.removed`                           | `user`        | role at removal                  |
+| `team.created` / `.updated` / `.deleted` | `team`        | name, member delta               |
+| `session.revoked`                        | `user`        | reason (`role_change`, `logout`) |
 
 ## Interim role resolution, before TAR-35
 
@@ -372,7 +376,7 @@ production regardless of the flag. Correct as built; no changes asked for.
 - **`permissions` from `permissionsForRole(role)`.** Never a literal array, in the stub or
   anywhere else.
 - **Two kill switches, mirroring the frontend.** `AUTH_STUB_ENABLED`, default false; plus a
-  refusal at *bootstrap* — not per request — when `NODE_ENV === 'production'`. Failing at
+  refusal at _bootstrap_ — not per request — when `NODE_ENV === 'production'`. Failing at
   startup means a misconfigured deploy cannot serve a single request with a stubbed
   principal. Add a CI assertion that the production config cannot enable it.
 - The stub grants nothing. Every request still passes `PermissionGuard`, and unit tests for
@@ -391,15 +395,15 @@ For TAR-83's plan and TAR-84's review, this is the list, and it is short by desi
 
 ## Failure Modes and Operations
 
-| Condition                                             | Behaviour                                                                 | What to watch                                     |
-| ----------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------- |
-| Role changed mid-session                              | Sessions revoked, forced re-login (Decision 2 amendment)                  | Rate of `session.revoked` with reason `role_change` |
-| Stub enabled outside dev                              | Process refuses to boot                                                   | Startup failure; CI config assertion              |
-| Caller requests a scope wider than permitted          | Silently narrowed, notice rendered — never 403                            | —                                                 |
-| Principal cache unavailable                           | Falls back to the `sessions` table; slower, still correct                 | Login latency                                     |
-| New permission added to `PERMISSIONS`                 | Reaches `admin` automatically, since `admin` is the whole set             | Review gate: a new *destructive* permission is admin-granted with no explicit decision — call it out in the PR |
-| Record assigned to an emptied or deleted team         | Invisible to every role without `_all`                                    | Invariant 4 prevents it; alert on records assigned to a team with zero members |
-| Permission added but granted to no role               | Endpoint unreachable except by admin                                      | A contract test asserting every permission is reachable by at least one role   |
+| Condition                                     | Behaviour                                                     | What to watch                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Role changed mid-session                      | Sessions revoked, forced re-login (Decision 2 amendment)      | Rate of `session.revoked` with reason `role_change`                                                            |
+| Stub enabled outside dev                      | Process refuses to boot                                       | Startup failure; CI config assertion                                                                           |
+| Caller requests a scope wider than permitted  | Silently narrowed, notice rendered — never 403                | —                                                                                                              |
+| Principal cache unavailable                   | Falls back to the `sessions` table; slower, still correct     | Login latency                                                                                                  |
+| New permission added to `PERMISSIONS`         | Reaches `admin` automatically, since `admin` is the whole set | Review gate: a new _destructive_ permission is admin-granted with no explicit decision — call it out in the PR |
+| Record assigned to an emptied or deleted team | Invisible to every role without `_all`                        | Invariant 4 prevents it; alert on records assigned to a team with zero members                                 |
+| Permission added but granted to no role       | Endpoint unreachable except by admin                          | A contract test asserting every permission is reachable by at least one role                                   |
 
 ## Security and Access
 
@@ -417,20 +421,20 @@ things worth restating because they are where RBAC bugs actually come from:
 
 ## Open Questions and Risks
 
-| #   | Item                                                                                          | Severity | Resolution                                                                        |
-| --- | --------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------- |
-| 1   | OR-predicate index usage for the agent inbox — whether both partial-scope indexes are used    | Medium   | Measure in TAR-81 with `EXPLAIN (ANALYZE, BUFFERS)`; fall back to `UNION ALL` keyset pages |
-| 2   | Agents cannot pull unclaimed work at v1                                                       | Low      | Deferred. If needed: `conversation:claim` bounded to the caller's teams            |
-| 3   | Whether a supervisor should be able to delete a team that holds conversations                 | Low      | No delete endpoint exists at v1. Invariant 4 governs the day one is added          |
-| 4   | Tenant-configurable roles                                                                     | Low      | Out of scope. Additive: `ROLE_PERMISSIONS` becomes rows; guards do not change      |
-| 5   | Does `contact:read` being tenant-wide leak across teams?                                      | Low      | Accepted: a contact carries no assignment, and an agent handling a conversation needs the person on it. Revisit if a tenant asks for team-partitioned contacts |
+| #   | Item                                                                                       | Severity | Resolution                                                                                                                                                     |
+| --- | ------------------------------------------------------------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | OR-predicate index usage for the agent inbox — whether both partial-scope indexes are used | Medium   | Measure in TAR-81 with `EXPLAIN (ANALYZE, BUFFERS)`; fall back to `UNION ALL` keyset pages                                                                     |
+| 2   | Agents cannot pull unclaimed work at v1                                                    | Low      | Deferred. If needed: `conversation:claim` bounded to the caller's teams                                                                                        |
+| 3   | Whether a supervisor should be able to delete a team that holds conversations              | Low      | No delete endpoint exists at v1. Invariant 4 governs the day one is added                                                                                      |
+| 4   | Tenant-configurable roles                                                                  | Low      | Out of scope. Additive: `ROLE_PERMISSIONS` becomes rows; guards do not change                                                                                  |
+| 5   | Does `contact:read` being tenant-wide leak across teams?                                   | Low      | Accepted: a contact carries no assignment, and an agent handling a conversation needs the person on it. Revisit if a tenant asks for team-partitioned contacts |
 
 ## What each downstream task does with this
 
-| Task       | Action                                                                                                                                          |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **TAR-80** | **No schema change.** Role enum, `teams`, `team_members`, both inbox/queue indexes and `audit_logs` all align. The three deltas are contract-file and guard-logic only. Merge as reviewed. |
-| **TAR-81** | Apply the `rbac.ts` diff (Deltas 1–2) and `last_admin_required` to `error-codes.ts`; implement `PermissionGuard`, the visibility predicate as shared code, the four invariants, audit writes, session revocation on role/status/team change, and `StubPrincipalSource`. |
-| **TAR-82** | Re-check after the `rbac.ts` change: supervisors gain the person-edit control, and the role selector must be gated on `user:set_role`, not on `user:update`. Everything else — the stub, `allowedConversationScopes`, the narrowing notice — is confirmed as built. |
+| Task       | Action                                                                                                                                                                                                                                                                               |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **TAR-80** | **No schema change.** Role enum, `teams`, `team_members`, both inbox/queue indexes and `audit_logs` all align. The three deltas are contract-file and guard-logic only. Merge as reviewed.                                                                                           |
+| **TAR-81** | Apply the `rbac.ts` diff (Deltas 1–2) and `last_admin_required` to `error-codes.ts`; implement `PermissionGuard`, the visibility predicate as shared code, the four invariants, audit writes, session revocation on role/status/team change, and `StubPrincipalSource`.              |
+| **TAR-82** | Re-check after the `rbac.ts` change: supervisors gain the person-edit control, and the role selector must be gated on `user:set_role`, not on `user:update`. Everything else — the stub, `allowedConversationScopes`, the narrowing notice — is confirmed as built.                  |
 | **TAR-83** | Test the matrix cell by cell per role; the three visibility cases (own / team / neither); scope narrowing rather than 403; the four invariants, especially last-admin and self-demotion; cross-tenant `not_found` under all three roles; then the four TAR-35 re-verification items. |
-| **TAR-84** | Confirm no `role === 'admin'` comparison outside `rbac.ts`; both stub kill switches present and bootstrap-failing; `SystemPrisma` unused in this story; the last-admin check inside a locking transaction, not a read-then-write. |
+| **TAR-84** | Confirm no `role === 'admin'` comparison outside `rbac.ts`; both stub kill switches present and bootstrap-failing; `SystemPrisma` unused in this story; the last-admin check inside a locking transaction, not a read-then-write.                                                    |
