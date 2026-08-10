@@ -41,6 +41,18 @@ export const PERMISSIONS = [
   'user:read',
   'user:invite',
   'user:update',
+  /**
+   * Assigning a role is deliberately **not** part of `user:update` (TAR-79,
+   * delta 1). Without the split, a supervisor holding `user:update` could
+   * promote themselves, and one holding `user:invite` could mint an admin —
+   * privilege escalation with no second person involved.
+   *
+   * Kept as a permission rather than an `if (caller.role !== 'admin')` inside
+   * the users service, because a role interpretation outside `ROLE_PERMISSIONS`
+   * is exactly what this file forbids, and because the console then reads it
+   * off `principal.permissions` instead of hardcoding the same rule.
+   */
+  'user:set_role',
   'user:remove',
 
   'team:read',
@@ -104,6 +116,17 @@ const SUPERVISOR_PERMISSIONS = [
   'report:read_all',
   'team:write',
   'user:invite',
+  /**
+   * TAR-22 AC3 asks a supervisor to manage all agents in their tenant, and the
+   * shipped table let them add someone to a team by editing the *team* but not
+   * by editing the *person*, and never suspend a departing contractor.
+   *
+   * Safe only because `user:set_role` is separate: this grants name, status and
+   * team membership, not promotion. `user:remove` stays admin-only — deletion is
+   * irreversible and changes seat billing, while `status: 'suspended'` covers
+   * "cut their access now" and is one click back.
+   */
+  'user:update',
 ] as const satisfies readonly Permission[];
 
 /**
@@ -123,4 +146,28 @@ export function permissionsForRole(role: TenantRole): readonly Permission[] {
 
 export function roleHasPermission(role: TenantRole, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role].includes(permission);
+}
+
+/**
+ * Seniority, for the one rule permissions cannot express: **nobody may grant a
+ * role above their own** (TAR-79, delta 3, invariant 2).
+ *
+ * Under the current table that is already implied — only an admin holds
+ * `user:set_role`, and admin is the top of the order — so this is stated as an
+ * invariant rather than discovered later. Adding a fourth role between
+ * supervisor and admin must not silently open a path, and the ordering is the
+ * thing that stops it.
+ *
+ * It is an ordering, not a second permission model: guards still check
+ * permissions, and this is only ever consulted about the role being *written*.
+ */
+export const ROLE_SENIORITY: Record<TenantRole, number> = {
+  agent: 0,
+  supervisor: 1,
+  admin: 2,
+};
+
+/** True when `role` is no more senior than `ceiling`. */
+export function isRoleWithin(role: TenantRole, ceiling: TenantRole): boolean {
+  return ROLE_SENIORITY[role] <= ROLE_SENIORITY[ceiling];
 }

@@ -3,9 +3,17 @@ import { PROVISIONED_TENANT_STATUSES, ProvisionTenantInputSchema } from './admin
 import { IanaTimezoneSchema, PhoneE164Schema } from './common';
 import { API_ERROR_CODES, API_ERROR_STATUS, httpStatusForErrorCode } from './error-codes';
 import { isMessageStatusAdvance, SendMessageInputSchema } from './messages';
-import { permissionsForRole, ROLE_PERMISSIONS, roleHasPermission, TENANT_ROLES } from './rbac';
+import {
+  isRoleWithin,
+  permissionsForRole,
+  PERMISSIONS,
+  ROLE_PERMISSIONS,
+  roleHasPermission,
+  TENANT_ROLES,
+} from './rbac';
 import { canTransitionTenant, TENANT_STATUSES, TENANT_STATUS_EFFECTS } from './tenant';
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
+import { AvailabilityUpdateInputSchema, USER_STATUSES, UserUpdateInputSchema } from './users';
 import { MessageTemplateResponseSchema, WhatsAppBusinessAccountResponseSchema } from './whatsapp';
 
 describe('error taxonomy', () => {
@@ -41,6 +49,73 @@ describe('role permissions', () => {
     expect(roleHasPermission('agent', 'conversation:read_all')).toBe(false);
     expect(roleHasPermission('agent', 'billing:manage')).toBe(false);
     expect(roleHasPermission('supervisor', 'billing:manage')).toBe(false);
+  });
+
+  // TAR-79, delta 1. The escalation path this closes was live in the shipped
+  // table: a supervisor holding `user:invite` could invite an admin, and one
+  // holding `user:update` could promote themselves.
+  it('keeps role assignment admin-only, separately from user administration', () => {
+    expect(roleHasPermission('supervisor', 'user:update')).toBe(true);
+    expect(roleHasPermission('supervisor', 'user:set_role')).toBe(false);
+    expect(roleHasPermission('agent', 'user:update')).toBe(false);
+    expect(roleHasPermission('admin', 'user:set_role')).toBe(true);
+  });
+
+  // TAR-79, delta 2. Suspension covers "cut their access now"; deletion is
+  // irreversible and changes seat billing, so it stays with admin.
+  it('lets a supervisor suspend but not remove', () => {
+    expect(roleHasPermission('supervisor', 'user:update')).toBe(true);
+    expect(roleHasPermission('supervisor', 'user:remove')).toBe(false);
+    expect(roleHasPermission('admin', 'user:remove')).toBe(true);
+  });
+
+  it('gives an admin every permission, so a new one never needs a second edit', () => {
+    for (const permission of PERMISSIONS) {
+      expect(roleHasPermission('admin', permission), permission).toBe(true);
+    }
+  });
+
+  // The failure mode from TAR-79's operations table: a permission granted to
+  // nobody makes its endpoint unreachable except by admin, silently.
+  it('leaves no permission unreachable by every role', () => {
+    for (const permission of PERMISSIONS) {
+      const holders = TENANT_ROLES.filter((role) => roleHasPermission(role, permission));
+
+      expect(holders.length, permission).toBeGreaterThan(0);
+    }
+  });
+
+  it('orders roles so nobody can grant above their own', () => {
+    expect(isRoleWithin('agent', 'supervisor')).toBe(true);
+    expect(isRoleWithin('supervisor', 'supervisor')).toBe(true);
+    expect(isRoleWithin('admin', 'supervisor')).toBe(false);
+    expect(isRoleWithin('admin', 'admin')).toBe(true);
+  });
+});
+
+describe('user lifecycle statuses', () => {
+  // The drift TAR-80 closed on `user_role` by deleting `owner`, in the other
+  // direction: `removed` exists in the column and had no contract spelling, so
+  // a removed user would have failed response validation and answered 500.
+  it('publishes every status the column can hold', () => {
+    expect(USER_STATUSES).toEqual(['invited', 'active', 'suspended', 'removed']);
+  });
+
+  it('refuses to let a PATCH set the two statuses that are operations', () => {
+    // `invited` belongs to the invite flow, `removed` to admin-only
+    // `DELETE /users/{id}`. Accepting either here would let a supervisor
+    // holding `user:update` remove somebody through the side door.
+    expect(UserUpdateInputSchema.parse({ status: 'suspended' }).status).toBe('suspended');
+    expect(() => UserUpdateInputSchema.parse({ status: 'removed' })).toThrow();
+    expect(() => UserUpdateInputSchema.parse({ status: 'invited' })).toThrow();
+  });
+
+  it('strips a client-supplied role from an availability update', () => {
+    // The one route with no permission attached. A body that could smuggle a
+    // role into it would be the cheapest escalation in the API.
+    const parsed = AvailabilityUpdateInputSchema.parse({ availability: 'away', role: 'admin' });
+
+    expect(parsed).not.toHaveProperty('role');
   });
 });
 

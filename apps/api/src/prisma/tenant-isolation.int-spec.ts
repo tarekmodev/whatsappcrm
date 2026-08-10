@@ -50,7 +50,7 @@ describe('tenant isolation, end to end', () => {
    */
   function asTenant<T>(tenantId: string, work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
-      { requestId: REQUEST_ID, tenantId, userId: null },
+      { requestId: REQUEST_ID, tenantId, userId: null, principal: null },
       async () => await work(),
     );
   }
@@ -58,7 +58,7 @@ describe('tenant isolation, end to end', () => {
   /** Runs `work` inside a context scope that never resolved a tenant. */
   function asUnresolved<T>(work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
-      { requestId: REQUEST_ID, tenantId: null, userId: null },
+      { requestId: REQUEST_ID, tenantId: null, userId: null, principal: null },
       async () => await work(),
     );
   }
