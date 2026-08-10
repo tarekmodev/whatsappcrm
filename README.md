@@ -4,11 +4,13 @@ Multi-tenant, white-label WhatsApp CRM and helpdesk platform, built on the offic
 WhatsApp Business Cloud API.
 
 > **Status: scaffold.** This repository currently contains the project skeleton, the stack
-> decision, the local development harness, the database schema, its tenant isolation and
-> the two Prisma clients that enforce it — no product features. Feature work is tracked as
-> the TAR-18 epic. The database has **tables but no rows**: the data model landed with
-> TAR-47, row-level security with TAR-48, the client split with TAR-49, and seed data
-> arrives with TAR-46. Everything below works today.
+> decision, the local development harness, the database schema, its tenant isolation, the
+> two Prisma clients that enforce it, and the platform-admin routes that provision and
+> deactivate a tenant — no product features. Feature work is tracked as the TAR-18 epic.
+> The database has **tables but no rows**: the data model landed with TAR-47, row-level
+> security with TAR-48, the client split with TAR-49, provisioning and deactivation with
+> TAR-50/51, the WhatsApp Business Account entity with TAR-52, and seed data arrives with
+> TAR-46. Everything below works today.
 
 ## Stack
 
@@ -40,6 +42,11 @@ not yet installed; each arrives with the story that first needs it.
 | `docker-compose.yml`       | Local PostgreSQL and Redis                                   |
 | `docker/postgres/initdb.d` | First-boot SQL for the local Postgres container              |
 | `docs/adr`                 | Architecture decision records                                |
+| `docs/architecture`        | Published contracts other stories build against              |
+| `docs/reference`           | Exhaustive schema, API and configuration reference           |
+| `docs/guides`              | One task or one contract per file                            |
+| `docs/STYLE.md`            | How documentation here is written — read before editing docs |
+| `CHANGELOG.md`             | What changed, and the operator steps each change needs       |
 
 ## Getting started
 
@@ -176,6 +183,11 @@ must not be reused anywhere.
 expresses the entity table in `docs/architecture/0002-architecture-and-api-contract.md`
 (TAR-39) — read that first for _why_ the entities are shaped this way; the schema file
 carries the per-model reasoning next to each model.
+
+**[`docs/reference/data-model.md`](docs/reference/data-model.md) is the table-by-table
+reference** for what actually shipped: every table, its constraints, the enums, and the
+WhatsApp Business Account hierarchy TAR-52 introduced. The six conventions below are the
+short version of it.
 
 Six conventions hold across every model, and a change that breaks one needs a reason:
 
@@ -318,10 +330,15 @@ Three things to know before writing a query against it:
   those three rules do not apply there — RLS still covers everything else.
 
 **Not built here, and deliberately:** the extension does not inject `tenantId` into
-`where`/`data` for the 33 scoped models. RLS already filters them correctly, and a
+`where`/`data` for the 34 scoped models. RLS already filters them correctly, and a
 generic injection has to get nested writes, `connect`, `upsert` and relation filters right
 or it silently drops rows — worse than not having it. Where a plan needs the explicit
 predicate (see the measurement above), pass `tenantId` in the query's own `where`.
+
+**Writing a query against either client?** Read
+[`docs/guides/tenant-scoped-data-access.md`](docs/guides/tenant-scoped-data-access.md) —
+the full contract, what each client refuses and why, and the four edges worth knowing before
+you rely on it.
 
 ### Provisioning a tenant
 
@@ -360,6 +377,9 @@ Things worth knowing before you call it:
 
 The route runs on `SystemPrisma` — the only client that can write `tenants` — and is one
 of the five call sites TAR-39 permits for it.
+
+Full request and response shapes, every error case, and the idempotency rules:
+[`docs/reference/admin-api.md`](docs/reference/admin-api.md).
 
 ### Deactivating a tenant
 
@@ -403,6 +423,12 @@ Things worth knowing before you call it:
 - **A `pending` or `cancelled` tenant is blocked by the same gate.** Only `active` reaches
   data, so a half-provisioned tenant is closed by the mechanism rather than by a second
   rule.
+
+Full request and response shapes, every error case, and what deactivation writes:
+[`docs/reference/admin-api.md`](docs/reference/admin-api.md).
+
+Full request and response shapes and every error case:
+[`docs/reference/admin-api.md`](docs/reference/admin-api.md).
 
 ### Adding a migration
 
