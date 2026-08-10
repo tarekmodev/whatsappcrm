@@ -2,12 +2,15 @@ import { resolve } from 'node:path';
 import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { AuditModule } from './audit/audit.module';
 import { TenantContextMiddleware } from './common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
+import { PeopleModule } from './people/people.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
+import { RbacModule } from './rbac/rbac.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
@@ -38,8 +41,11 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     TenantContextModule,
     PrismaModule,
     QueueModule,
+    AuditModule,
+    RbacModule,
     HealthModule,
     TenancyModule,
+    PeopleModule,
     WhatsAppModule,
     WebhooksModule,
   ],

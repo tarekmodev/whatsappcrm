@@ -67,7 +67,7 @@ describe('tenant deactivation, end to end', () => {
   /** Runs `work` as if a request for `tenantId` had been resolved by the auth guard. */
   function asTenant<T>(tenantId: string, work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
-      { requestId: REQUEST_ID, tenantId, userId: null },
+      { requestId: REQUEST_ID, tenantId, userId: null, principal: null },
       async () => await work(),
     );
   }
