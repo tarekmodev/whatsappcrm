@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { PROVISIONED_TENANT_STATUSES, ProvisionTenantInputSchema } from './admin';
+import {
+  AUTH_POLICY,
+  PasswordChangeInputSchema,
+  PasswordSchema,
+  SESSION_COOKIE_ATTRIBUTES,
+  SESSION_COOKIE_NAME_SECURE,
+  sessionCookieName,
+} from './auth';
 import { IanaTimezoneSchema, PhoneE164Schema } from './common';
 import { API_ERROR_CODES, API_ERROR_STATUS, httpStatusForErrorCode } from './error-codes';
 import { isMessageStatusAdvance, SendMessageInputSchema } from './messages';
 import { permissionsForRole, ROLE_PERMISSIONS, roleHasPermission, TENANT_ROLES } from './rbac';
 import { canTransitionTenant, TENANT_STATUSES, TENANT_STATUS_EFFECTS } from './tenant';
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
+import { ASSIGNABLE_USER_STATUSES, USER_STATUSES, UserUpdateInputSchema } from './users';
 import { MessageTemplateResponseSchema, WhatsAppBusinessAccountResponseSchema } from './whatsapp';
 
 describe('error taxonomy', () => {
@@ -62,6 +71,92 @@ describe('tenant lifecycle', () => {
       inboundAccepted: true,
       outboundAllowed: true,
     });
+  });
+});
+
+describe('auth policy (TAR-53)', () => {
+  it('never lets the sliding idle window outlive the absolute cap', () => {
+    // The whole point of the absolute cap is that no amount of activity extends
+    // a session past it. An idle window at or above it would silently disable it.
+    expect(AUTH_POLICY.sessionIdleMs).toBeLessThan(AUTH_POLICY.sessionAbsoluteMs);
+  });
+
+  it('throttles the expires_at write to far less than the idle window', () => {
+    // Sliding on every request would put a row UPDATE on the hot path of every
+    // API call. The throttle is only sound while it is small next to the window.
+    expect(AUTH_POLICY.sessionSlideThrottleMs).toBeLessThan(AUTH_POLICY.sessionIdleMs / 10);
+  });
+
+  it('keeps a stale cached principal inside the bound TAR-39 stated', () => {
+    expect(AUTH_POLICY.sessionCacheTtlMs).toBeLessThanOrEqual(60_000);
+  });
+
+  it('expires a reset link far sooner than an invite', () => {
+    // Different threat models: the invite recipient may be on holiday, the
+    // person resetting a password is at the keyboard now.
+    expect(AUTH_POLICY.passwordResetTtlMs).toBeLessThan(AUTH_POLICY.inviteTtlMs);
+  });
+
+  it('agrees with the password schema on both bounds', () => {
+    expect(PasswordSchema.safeParse('x'.repeat(AUTH_POLICY.passwordMinLength)).success).toBe(true);
+    expect(PasswordSchema.safeParse('x'.repeat(AUTH_POLICY.passwordMinLength - 1)).success).toBe(
+      false,
+    );
+    expect(PasswordSchema.safeParse('x'.repeat(AUTH_POLICY.passwordMaxLength + 1)).success).toBe(
+      false,
+    );
+  });
+
+  it('lets an IP spray at more accounts than it can lock a single one out with', () => {
+    // The per-IP layer exists to catch spraying at addresses that have no user
+    // row to count on, so it must not trip before the per-account layer does.
+    expect(AUTH_POLICY.ipFailureThreshold).toBeGreaterThan(AUTH_POLICY.loginFailureThreshold);
+  });
+});
+
+describe('session cookie (TAR-53)', () => {
+  it('uses the __Host- prefix wherever it can be set', () => {
+    expect(sessionCookieName(true)).toBe(SESSION_COOKIE_NAME_SECURE);
+    expect(sessionCookieName(true).startsWith('__Host-')).toBe(true);
+  });
+
+  it('falls back to an unprefixed name only when the cookie cannot be Secure', () => {
+    // Safari does not treat plain-HTTP localhost as a secure context, and a
+    // __Host- cookie without Secure is rejected outright by every browser.
+    expect(sessionCookieName(false).startsWith('__Host-')).toBe(false);
+  });
+
+  it('never carries a Domain attribute', () => {
+    // A cookie scoped to the platform's parent domain would be sent to every
+    // tenant subdomain under it — the exact cross-tenant leak white-label
+    // hosting makes possible.
+    expect(SESSION_COOKIE_ATTRIBUTES).not.toHaveProperty('domain');
+    expect(SESSION_COOKIE_ATTRIBUTES.path).toBe('/');
+    expect(SESSION_COOKIE_ATTRIBUTES.httpOnly).toBe(true);
+    expect(SESSION_COOKIE_ATTRIBUTES.sameSite).toBe('lax');
+  });
+});
+
+describe('password change (TAR-53)', () => {
+  it('demands the current password from an already-authenticated caller', () => {
+    // A session cookie proves the browser has a cookie, not that the person at
+    // the keyboard owns the account.
+    expect(() =>
+      PasswordChangeInputSchema.parse({ newPassword: 'correct horse battery' }),
+    ).toThrow();
+  });
+});
+
+describe('user statuses (TAR-53)', () => {
+  it('carries removed, because removing a user is a status change not a delete', () => {
+    expect(USER_STATUSES).toContain('removed');
+  });
+
+  it('does not let an admin PATCH someone back into invited', () => {
+    // That would produce a user who can never sign in and has no live invite.
+    expect(ASSIGNABLE_USER_STATUSES).not.toContain('invited');
+    expect(() => UserUpdateInputSchema.parse({ status: 'invited' })).toThrow();
+    expect(UserUpdateInputSchema.parse({ status: 'suspended' }).status).toBe('suspended');
   });
 });
 

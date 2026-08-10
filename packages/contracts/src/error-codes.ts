@@ -28,6 +28,21 @@ export const API_ERROR_CODES = [
   'tenant_not_found',
   /** Credentials rejected at login. Never distinguishes unknown user from bad password. */
   'invalid_credentials',
+  /**
+   * An invite or password-reset token is unknown, expired, already used, or
+   * revoked (TAR-53). One code for both flows: the frontend branches identically
+   * for all four cases — "this link no longer works, request a new one" — and
+   * the taxonomy is deliberately small.
+   *
+   * `details` carries `{ kind: 'invite' | 'password_reset', reason: 'unknown' |
+   * 'expired' | 'consumed' | 'revoked' }`. Exposing `reason` leaks nothing: the
+   * tokens are 256 bits of uniform entropy, so anyone able to ask already holds
+   * the token.
+   *
+   * Deliberately **not** `not_found`: the accept and reset screens must offer
+   * "request a new link", which has to be distinguishable from a 404 page.
+   */
+  'token_invalid',
 
   // --- Request validity ------------------------------------------------------
   /** Body, query or params failed schema validation. Always carries `details`. */
@@ -83,6 +98,8 @@ export const API_ERROR_STATUS: Record<ApiErrorCode, number> = {
   tenant_mismatch: 401,
   tenant_not_found: 404,
   invalid_credentials: 401,
+  /** 410 rather than 400: the link *was* valid and is now permanently gone. */
+  token_invalid: 410,
 
   validation_failed: 400,
   not_found: 404,
