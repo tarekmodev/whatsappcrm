@@ -17,6 +17,7 @@
     "lint:fix": "turbo run build --filter=./packages/* && eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "db:generate": "pnpm --filter @whatsappcrm/api run generate",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f",
@@ -26,8 +27,10 @@
     "db:reset": "pnpm --filter @whatsappcrm/api exec prisma migrate reset",
     "db:studio": "pnpm --filter @whatsappcrm/api exec prisma studio",
     "db:roles": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/app-roles.sql",
+    "db:roles:login": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -v password=local_dev_only -f /sql/app-roles-login.sql",
     "db:roles:down": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/app-roles-down.sql",
-    "db:verify:rls": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/verify-tenant-isolation.sql"
+    "db:verify:rls": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/verify-tenant-isolation.sql",
+    "test:db": "pnpm --filter @whatsappcrm/api run test:db"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

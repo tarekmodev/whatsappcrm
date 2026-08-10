@@ -1,0 +1,236 @@
+import type { TenantContextService } from '../common/tenant-context/tenant-context.service';
+import type { Prisma, PrismaClient } from '../generated/prisma/client';
+import { MissingTenantContextError, UnscopedModelAccessError } from './prisma.errors';
+
+/**
+ * The GUC the `tenant_isolation` policies read (TAR-48,
+ * `20260810140000_tenant_isolation_rls`). Changing this string here without
+ * changing it in the migration silently disables every policy, so it is named
+ * once and referenced everywhere.
+ */
+export const TENANT_GUC = 'app.tenant_id';
+
+/**
+ * How each model is reachable through `TenantPrisma`.
+ *
+ * Anything absent from this map is `tenant-scoped`: it carries a non-null
+ * `tenant_id`, RLS filters it, and the extension needs to do nothing beyond
+ * setting the GUC. The three entries are the three tables TAR-48 deliberately
+ * left without a policy, which is exactly why they need one here instead.
+ */
+const MODEL_POLICIES = {
+  /**
+   * `tenants` has no RLS policy and never will — provisioning and host→tenant
+   * resolution both read it before any tenant is in scope (TAR-39, data model).
+   * The app role therefore holds an unfiltered `SELECT` on it, which
+   * `prisma/sql/app-roles.sql` records as known residual exposure and flags for
+   * this story. Closed here rather than in the database: reads are narrowed to
+   * the tenant in scope, and writes are refused outright — creating, suspending
+   * or deleting a tenant is `SystemPrisma`'s job, and the grant denies it
+   * anyway (this just turns a bare SQLSTATE 42501 into a message that names the
+   * cause).
+   */
+  Tenant: 'own-row',
+  /** Platform-wide product catalogue. Shared by design, and read-only for a tenant. */
+  Plan: 'shared-read-only',
+  /**
+   * Written before the tenant is known, so it carries a nullable `tenant_id`
+   * and no policy could apply. The app role is granted nothing on it at all;
+   * refusing here means a clear error instead of a permission failure three
+   * frames deeper.
+   */
+  WebhookEvent: 'system-only',
+} as const satisfies Partial<Record<Prisma.ModelName, string>>;
+
+/**
+ * Operations that write. Everything else either reads or is a raw statement,
+ * which is handled separately because it has no model to apply a policy to.
+ */
+const WRITE_OPERATIONS = new Set([
+  'create',
+  'createMany',
+  'createManyAndReturn',
+  'update',
+  'updateMany',
+  'updateManyAndReturn',
+  'upsert',
+  'delete',
+  'deleteMany',
+]);
+
+/** Interactive-transaction options, minus the ones a caller has no business setting. */
+export interface TenantTransactionOptions {
+  maxWait?: number;
+  timeout?: number;
+  isolationLevel?: Prisma.TransactionIsolationLevel;
+}
+
+/**
+ * Wraps an un-extended client so that **every** statement it sends is preceded,
+ * in the same transaction, by the GUC that TAR-48's RLS policies read.
+ *
+ * ```sql
+ * BEGIN;
+ * SELECT set_config('app.tenant_id', $1, true);   -- true = transaction-local
+ * <the actual query>;
+ * COMMIT;
+ * ```
+ *
+ * Three properties make this the mechanism rather than a convenience:
+ *
+ *   * **Transaction-local.** `set_config(…, true)` reverts when the transaction
+ *     ends, so a pooled connection cannot carry one request's tenant into the
+ *     next one. A session-level `set_config(…, false)` anywhere in this codebase
+ *     would be a cross-tenant leak; there is none, and the integration test
+ *     asserts a connection reused across two tenants stays honest.
+ *   * **Fail-closed, twice.** No tenant in scope throws here, before anything is
+ *     sent. If that check were ever bypassed, the policy predicate evaluates to
+ *     NULL and returns zero rows rather than every row.
+ *   * **It covers raw SQL.** `$allOperations` at the top level of `query` sees
+ *     `$queryRaw` and `$executeRaw` too, which is the half an argument-rewriting
+ *     extension cannot reach and the reason RLS is the layer that matters.
+ *
+ * Two things it deliberately does not do. It does not inject `tenantId` into
+ * `where`/`data` for the 33 scoped models — RLS already filters them, and the
+ * policy predicate uses the same `(tenant_id, …)` index a hand-written filter
+ * would. And it does not make batch `$transaction([…])` work: this hook is
+ * `async`, so the promises the extended client returns are ordinary promises
+ * rather than `PrismaPromise`s. Use `$tenantTransaction` for multi-statement
+ * work.
+ */
+export function withTenantScope(base: PrismaClient, tenantContext: TenantContextService) {
+  return base.$extends({
+    name: 'tenant-scope',
+
+    client: {
+      /**
+       * Runs `work` in one interactive transaction with the GUC set once at its
+       * start — the right shape for anything that has to be atomic, and cheaper
+       * than the per-statement path because the transaction is opened once.
+       *
+       * The client handed to `work` is the **un-extended** transaction client,
+       * on purpose: the GUC is already set for the whole transaction, so
+       * re-applying it per statement would nest a transaction inside itself.
+       * The consequence to know about is that the `MODEL_POLICIES` above do not
+       * apply inside — `tx.tenant.findMany()` is not narrowed to the tenant in
+       * scope the way `tenantPrisma.tenant.findMany()` is. RLS still covers
+       * every other model. Read `Tenant` outside the transaction, or filter it
+       * by hand.
+       */
+      // `async` so a missing tenant rejects rather than throwing at the call
+      // expression: the query path rejects, and one of the two behaving
+      // differently is the kind of inconsistency that survives into a `.catch()`
+      // chain that silently never runs.
+      async $tenantTransaction<T>(
+        work: (tx: Prisma.TransactionClient) => Promise<T>,
+        options?: TenantTransactionOptions,
+      ): Promise<T> {
+        const tenantId = tenantContext.tenantId;
+
+        if (tenantId === null) {
+          throw new MissingTenantContextError('$tenantTransaction');
+        }
+
+        return base.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config(${TENANT_GUC}, ${tenantId}, true)`;
+          return work(tx);
+        }, options);
+      },
+    },
+
+    query: {
+      async $allOperations({ model, operation, args, query }) {
+        const tenantId = tenantContext.tenantId;
+
+        if (tenantId === null) {
+          throw new MissingTenantContextError(operation, model);
+        }
+
+        const scopedArgs = applyModelPolicy(model, operation, args, tenantId);
+
+        // One batched transaction, so the GUC and the statement it protects can
+        // never end up on different pooled connections.
+        const [, result] = await base.$transaction([
+          base.$executeRaw`SELECT set_config(${TENANT_GUC}, ${tenantId}, true)`,
+          // `query` returns the PrismaPromise for the operation this hook
+          // intercepted; the cast only widens its result, which is discarded by
+          // the destructuring above and re-typed by Prisma at the call site.
+          query(scopedArgs) as Prisma.PrismaPromise<unknown>,
+        ]);
+
+        return result;
+      },
+    },
+  });
+}
+
+export type TenantPrisma = ReturnType<typeof withTenantScope>;
+
+/**
+ * Applies the policy for `model` and returns the arguments to run with.
+ * Raw statements arrive with no model — nothing to narrow, and RLS is what
+ * protects them.
+ */
+function applyModelPolicy(
+  model: string | undefined,
+  operation: string,
+  args: unknown,
+  tenantId: string,
+): unknown {
+  if (model === undefined) {
+    return args;
+  }
+
+  const policy = MODEL_POLICIES[model as keyof typeof MODEL_POLICIES] as
+    (typeof MODEL_POLICIES)[keyof typeof MODEL_POLICIES] | undefined;
+
+  switch (policy) {
+    case undefined:
+      return args;
+
+    case 'system-only':
+      throw new UnscopedModelAccessError(
+        model,
+        operation,
+        'this table carries no tenant_id and no RLS policy, and the app role is granted ' +
+          'nothing on it — reach it through SystemPrisma',
+      );
+
+    case 'shared-read-only':
+      if (WRITE_OPERATIONS.has(operation)) {
+        throw new UnscopedModelAccessError(
+          model,
+          operation,
+          'this is platform-wide catalogue data shared by every tenant, and a tenant may not write it',
+        );
+      }
+      return args;
+
+    case 'own-row':
+      if (WRITE_OPERATIONS.has(operation)) {
+        throw new UnscopedModelAccessError(
+          model,
+          operation,
+          'tenant records are written by provisioning and lifecycle flows through SystemPrisma',
+        );
+      }
+      return narrowToOwnRow(args, tenantId);
+  }
+}
+
+/**
+ * Adds `AND: [{ id: tenantId }]` to the query's `where`, which every read
+ * operation accepts — including `findUnique`, whose `where` takes extra filters
+ * alongside the unique field. Appending to `AND` rather than setting `id`
+ * directly means a caller's own `id` filter is intersected with this one and
+ * cannot overwrite it: asking for another tenant returns nothing.
+ */
+function narrowToOwnRow(args: unknown, tenantId: string): unknown {
+  const source = (args ?? {}) as { where?: Record<string, unknown> };
+  const where = source.where ?? {};
+  const existing = where.AND;
+  const conjuncts: unknown[] =
+    existing === undefined ? [] : Array.isArray(existing) ? (existing as unknown[]) : [existing];
+
+  return { ...source, where: { ...where, AND: [...conjuncts, { id: tenantId }] } };
+}

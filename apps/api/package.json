@@ -4,18 +4,22 @@
   "private": true,
   "description": "WhatsApp CRM HTTP API (NestJS)",
   "scripts": {
+    "generate": "prisma generate",
     "build": "nest build",
     "dev": "nest start --watch",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "test:db": "jest --config jest.int.config.js --runInBand"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.28",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.1.28",
     "@nestjs/platform-express": "^11.1.28",
+    "@prisma/adapter-pg": "7.9.1",
+    "@prisma/client": "7.9.1",
     "@whatsappcrm/contracts": "workspace:^",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
