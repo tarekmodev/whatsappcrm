@@ -40,7 +40,7 @@ projects:
             # Schema changes land before the code that depends on them, from the
             # same build that produced that code. A failed pre-deploy aborts the
             # deploy, so a broken migration never reaches a running instance.
-            preDeployCommand: pnpm db:migrate:deploy
+            preDeployCommand: pnpm db:migrate:deploy && pnpm --filter @whatsappcrm/api db:provision-roles
             # "exec node", never "pnpm start" — this applies to every service below.
             # Verified: with pnpm in between, SIGTERM kills the process without Nest's
             # shutdown hooks ever running, so in-flight requests are cut, pools are left
@@ -68,6 +68,16 @@ projects:
                   type: keyvalue
                   name: whatsappcrm-kv-dev
                   property: connectionString
+              # The two roles the running API connects as (TAR-48/TAR-49). Not
+              # `fromDatabase`: that property yields the migration *owner*, which on
+              # a managed instance is a superuser and so skips row-level security
+              # entirely — every tenant would see every row. These are built from
+              # the same host as DATABASE_URL but with the app role's own
+              # credentials, which the pre-deploy hook sets from the passwords below.
+              - key: APP_DATABASE_URL
+                sync: false
+              - key: SYSTEM_DATABASE_URL
+                sync: false
               # Needs a scheme, which `fromService` cannot supply, and becomes a
               # custom domain once white-labelling lands.
               - key: WEB_ORIGIN
@@ -84,6 +94,7 @@ projects:
             autoDeployTrigger: commit
             buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/web...
             # Next's real entrypoint, not node_modules/.bin/next — that is a shell
+            # wrapper and node cannot execute it. "exec" for the same reason as the API.
             startCommand: cd apps/web && exec node node_modules/next/dist/bin/next start
             envVars:
               - key: NODE_ENV
@@ -116,6 +127,18 @@ projects:
         envVarGroups:
           - name: whatsappcrm-secrets-dev
             envVars:
+              # Read by the pre-deploy hook, which creates the two application
+              # roles and sets these as their passwords. Generate one per role per
+              # environment (`openssl rand -hex 32`) and use the same value inside
+              # the matching *_DATABASE_URL above — they must agree, and nothing
+              # checks that for you until the API fails to authenticate.
+              #
+              # Not `generateValue: true`, tempting as it is: a generated value is
+              # never shown in a form the operator can copy into the URL.
+              - key: APP_DATABASE_PASSWORD
+                sync: false
+              - key: SYSTEM_DATABASE_PASSWORD
+                sync: false
               - key: SENTRY_DSN
                 sync: false
               # Owned by TAR-35 and TAR-37; declared here so each environment gets
@@ -150,7 +173,7 @@ projects:
             rootDir: .
             autoDeployTrigger: checksPass
             buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/api...
-            preDeployCommand: pnpm db:migrate:deploy
+            preDeployCommand: pnpm db:migrate:deploy && pnpm --filter @whatsappcrm/api db:provision-roles
             startCommand: exec env APP_VERSION=$RENDER_GIT_COMMIT node apps/api/dist/main.js
             healthCheckPath: /api/health/ready
             envVars:
@@ -169,6 +192,15 @@ projects:
                   type: keyvalue
                   name: whatsappcrm-kv-staging
                   property: connectionString
+              # The two roles the running API connects as (TAR-48/TAR-49). Not
+              # `fromDatabase`: that property yields the migration *owner*, which on
+              # a managed instance is a superuser and so skips row-level security
+              # entirely. Built from the same host as DATABASE_URL but with the app
+              # role's own credentials, which the pre-deploy hook sets.
+              - key: APP_DATABASE_URL
+                sync: false
+              - key: SYSTEM_DATABASE_URL
+                sync: false
               - key: WEB_ORIGIN
                 sync: false
               - fromGroup: whatsappcrm-secrets-staging
@@ -183,6 +215,7 @@ projects:
             autoDeployTrigger: checksPass
             buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/web...
             # Next's real entrypoint, not node_modules/.bin/next — that is a shell
+            # wrapper and node cannot execute it. "exec" for the same reason as the API.
             startCommand: cd apps/web && exec node node_modules/next/dist/bin/next start
             envVars:
               - key: NODE_ENV
@@ -209,6 +242,18 @@ projects:
         envVarGroups:
           - name: whatsappcrm-secrets-staging
             envVars:
+              # Read by the pre-deploy hook, which creates the two application
+              # roles and sets these as their passwords. Generate one per role per
+              # environment (`openssl rand -hex 32`) and use the same value inside
+              # the matching *_DATABASE_URL above — they must agree, and nothing
+              # checks that for you until the API fails to authenticate.
+              #
+              # Not `generateValue: true`, tempting as it is: a generated value is
+              # never shown in a form the operator can copy into the URL.
+              - key: APP_DATABASE_PASSWORD
+                sync: false
+              - key: SYSTEM_DATABASE_PASSWORD
+                sync: false
               - key: SENTRY_DSN
                 sync: false
               - key: WHATSAPP_APP_SECRET
@@ -239,7 +284,7 @@ projects:
             autoDeployTrigger: 'off'
             rootDir: .
             buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/api...
-            preDeployCommand: pnpm db:migrate:deploy
+            preDeployCommand: pnpm db:migrate:deploy && pnpm --filter @whatsappcrm/api db:provision-roles
             startCommand: exec env APP_VERSION=$RENDER_GIT_COMMIT node apps/api/dist/main.js
             healthCheckPath: /api/health/ready
             envVars:
@@ -258,6 +303,15 @@ projects:
                   type: keyvalue
                   name: whatsappcrm-kv-prod
                   property: connectionString
+              # The two roles the running API connects as (TAR-48/TAR-49). Not
+              # `fromDatabase`: that property yields the migration *owner*, which on
+              # a managed instance is a superuser and so skips row-level security
+              # entirely. Built from the same host as DATABASE_URL but with the app
+              # role's own credentials, which the pre-deploy hook sets.
+              - key: APP_DATABASE_URL
+                sync: false
+              - key: SYSTEM_DATABASE_URL
+                sync: false
               - key: WEB_ORIGIN
                 sync: false
               - fromGroup: whatsappcrm-secrets-prod
@@ -272,6 +326,7 @@ projects:
             rootDir: .
             buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/web...
             # Next's real entrypoint, not node_modules/.bin/next — that is a shell
+            # wrapper and node cannot execute it. "exec" for the same reason as the API.
             startCommand: cd apps/web && exec node node_modules/next/dist/bin/next start
             envVars:
               - key: NODE_ENV
@@ -298,6 +353,18 @@ projects:
         envVarGroups:
           - name: whatsappcrm-secrets-prod
             envVars:
+              # Read by the pre-deploy hook, which creates the two application
+              # roles and sets these as their passwords. Generate one per role per
+              # environment (`openssl rand -hex 32`) and use the same value inside
+              # the matching *_DATABASE_URL above — they must agree, and nothing
+              # checks that for you until the API fails to authenticate.
+              #
+              # Not `generateValue: true`, tempting as it is: a generated value is
+              # never shown in a form the operator can copy into the URL.
+              - key: APP_DATABASE_PASSWORD
+                sync: false
+              - key: SYSTEM_DATABASE_PASSWORD
+                sync: false
               - key: SENTRY_DSN
                 sync: false
               # Production takes the provider's *live* credentials, entered

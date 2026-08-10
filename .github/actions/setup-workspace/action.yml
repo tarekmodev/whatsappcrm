@@ -19,6 +19,22 @@ runs:
       run: pnpm install --frozen-lockfile
       shell: bash
 
+    # `prisma.config.mjs` and `ConfigModule` both read the repository-root
+    # `.env`, and its committed defaults point at the Compose stack. Seeding it
+    # here rather than per job means every job — including the ones that never
+    # start a database — can generate the Prisma client and validate the API's
+    # environment schema. Nothing in the example file is a secret.
+    - name: Seed the environment from the committed example
+      run: cp .env.example .env
+      shell: bash
+
+    # The generated Prisma client is not committed (see `.gitignore`), so lint,
+    # type-check, build and test all need it on disk before they run. Reads the
+    # schema only; it opens no connection.
+    - name: Generate the Prisma client
+      run: pnpm db:generate
+      shell: bash
+
     # Keyed per job: each job runs a different Turborepo task, so they would
     # otherwise overwrite one another's cache entry on every run.
     - name: Restore Turborepo cache

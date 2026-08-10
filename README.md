@@ -4,10 +4,11 @@ Multi-tenant, white-label WhatsApp CRM and helpdesk platform, built on the offic
 WhatsApp Business Cloud API.
 
 > **Status: scaffold.** This repository currently contains the project skeleton, the stack
-> decision, the local development harness and the database schema — no product features.
-> Feature work is tracked as the TAR-18 epic. The database has **tables but no rows**:
-> the data model landed with TAR-47 and seed data arrives with TAR-46. Everything below
-> works today.
+> decision, the local development harness, the database schema, its tenant isolation and
+> the two Prisma clients that enforce it — no product features. Feature work is tracked as
+> the TAR-18 epic. The database has **tables but no rows**: the data model landed with
+> TAR-47, row-level security with TAR-48, the client split with TAR-49, and seed data
+> arrives with TAR-46. Everything below works today.
 
 ## Stack
 
@@ -18,17 +19,21 @@ Every one of those choices, the alternatives weighed against it, and the failure
 they imply are recorded in **[`docs/adr/0001-stack-decision.md`](docs/adr/0001-stack-decision.md)**.
 Read that before proposing a change to any of them.
 
-Prisma is installed as a **CLI only** — schema and migrations, no generated client and no
-`@prisma/client` dependency. Prisma 7 clients need a driver adapter, which is a decision
-for the story that writes the first query (TAR-49) rather than one to inherit. Socket.IO and BullMQ
-are decided but not yet installed; each arrives with the story that first needs it.
+Prisma runs on the **`pg` driver adapter** (`@prisma/adapter-pg`), which Prisma 7 requires.
+The generated client is **not committed**: `prisma generate` writes it to
+`apps/api/src/generated/prisma`, and `pnpm build`, `pnpm typecheck` and `pnpm test` all
+depend on a `generate` task so it cannot go stale. Run `pnpm db:generate` by hand after
+changing `schema.prisma` if you want it immediately. Socket.IO and BullMQ are decided but
+not yet installed; each arrives with the story that first needs it.
 
 ## Layout
 
 | Path                       | What it is                                                   |
 | -------------------------- | ------------------------------------------------------------ |
 | `apps/api`                 | NestJS HTTP API                                              |
+| `apps/api/src/prisma`      | The `TenantPrisma` / `SystemPrisma` clients and RLS wiring   |
 | `apps/api/prisma`          | Database schema and migrations                               |
+| `apps/api/prisma/sql`      | Operational SQL that is not a migration — roles, RLS check   |
 | `apps/web`                 | Next.js agent console                                        |
 | `packages/contracts`       | Zod schemas and types shared by both apps — the API contract |
 | `packages/tsconfig`        | Shared TypeScript configuration                              |
@@ -48,11 +53,20 @@ pnpm install                 # 1. dependencies
 cp .env.example .env         # 2. config — the defaults match the Docker stack, no edits needed
 pnpm db:up                   # 3. start PostgreSQL and Redis, wait until both are healthy
 pnpm db:migrate:deploy       # 4. apply migrations to the empty database
-pnpm dev                     # 5. run the API and the frontend
+pnpm db:roles                # 5. create the application database roles
+pnpm db:roles:login          # 6. give them the throwaway local password
+pnpm dev                     # 7. run the API and the frontend
 ```
 
 That is the whole setup. Step 3 blocks until both containers report healthy, so step 4
-never races the database.
+never races the database. Step 5 has to come after step 4 — it grants privileges on the
+tables step 4 creates — and is idempotent, so re-running it is always safe.
+
+Step 6 exists because `db:roles` deliberately creates both roles `NOLOGIN` and without a
+password: a password belongs in an environment's secret store, not in a file in this
+repository, and the same file runs in staging. `db:roles:login` is that operator step,
+scripted, with the throwaway value `.env.example` already uses. Skip it and the API boots
+but every query fails to authenticate.
 
 `pnpm dev` runs both apps: the API on <http://localhost:3001/api> and the frontend on
 <http://localhost:3000>.
@@ -65,6 +79,12 @@ curl http://localhost:3001/api/health
 
 pnpm db:migrate:status
 # Database schema is up to date!
+
+pnpm db:verify:rls
+# PASS — tenant isolation is enforced at the data layer
+
+pnpm test:db
+# Tests: 21 passed — the same guarantee through TenantPrisma
 ```
 
 Once the database and Redis are up, readiness reports them:
@@ -100,6 +120,7 @@ Run from the repository root; Turborepo fans each one out across the workspaces.
 | `pnpm build`        | Builds every package                                |
 | `pnpm typecheck`    | Type-checks every package                           |
 | `pnpm test`         | Runs all tests — Jest for the API, Vitest elsewhere |
+| `pnpm test:db`      | Integration tests that need a running database      |
 | `pnpm lint`         | ESLint across the whole repository                  |
 | `pnpm format`       | Applies Prettier                                    |
 | `pnpm format:check` | Fails if anything is unformatted — what CI runs     |
@@ -116,6 +137,16 @@ Run from the repository root; Turborepo fans each one out across the workspaces.
 | `pnpm db:migrate:status` | Reports which migrations are applied and which are pending            |
 | `pnpm db:reset`          | **Destructive.** Drops the local database and replays every migration |
 | `pnpm db:studio`         | Opens Prisma Studio against the local database                        |
+| `pnpm db:generate`       | Regenerates the Prisma client from `schema.prisma`                    |
+| `pnpm db:roles`          | Creates the application roles and their grants — run after migrations |
+| `pnpm db:roles:login`    | Gives those roles the throwaway local password                        |
+| `pnpm db:roles:down`     | Removes those roles                                                   |
+| `pnpm db:verify:rls`     | Proves two tenants cannot see each other's rows                       |
+
+The last four run `psql` inside the Postgres container against
+`apps/api/prisma/sql`, which `docker-compose.yml` mounts at `/sql`. They assume the
+default `whatsappcrm` user and database; if you changed either in `.env`, run `psql`
+directly instead.
 
 `pnpm db:down` leaves your data in place. To throw it away as well —
 `docker compose down -v`, which deletes the volumes and, on the next `pnpm db:up`,
@@ -128,8 +159,9 @@ is set to the text of the message in which you consented. Neither guard affects 
 an interactive prompt; both will stop an agent, which matters for TAR-46's seed script and
 for any automated task that expects to reset the database unattended. The route back to a
 known-good state that passes both guards is
-`docker compose down -v && pnpm db:up && pnpm db:migrate:deploy` — equally destructive, but
-it never invokes `migrate reset`.
+`docker compose down -v && pnpm db:up && pnpm db:migrate:deploy && pnpm db:roles && pnpm db:roles:login`
+— equally destructive, but it never invokes `migrate reset`. The two role steps are not
+optional: `down -v` destroys the volume, and the roles live in the cluster it took with it.
 
 ## Working with the database
 
@@ -174,9 +206,122 @@ Six conventions hold across every model, and a change that breaks one needs a re
 6. **Timestamps are `timestamptz`**, money is integer minor units plus an ISO 4217 code,
    phone numbers are E.164, and emails/slugs/hostnames are `citext`.
 
-Row-level security itself is **not** in place yet: the columns are there, the policies are
-TAR-48. Until then nothing enforces isolation at the data layer, so do not treat a query
-as scoped because the column exists.
+### Tenant isolation
+
+Isolation is enforced by the database, not by application code remembering a `where`
+clause. All 33 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
+
+```sql
+CREATE POLICY tenant_isolation ON conversations
+  USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+```
+
+`app.tenant_id` is a per-transaction setting the Prisma client extension sets before each
+query (TAR-49). Three properties fall out, and all three are what make this worth having:
+
+- **A connection that has not set it sees nothing.** Not "everything" — nothing. Both the
+  never-set case (`current_setting` returns NULL) and the cleared case (it returns the
+  empty string, which is why the `NULLIF` is there) fail closed.
+- **`FORCE` includes the table owner.** Without it, migrations — and anything else
+  connecting as the owner — would be exempt, which is the opposite of what you want.
+- **Writes are checked too.** `WITH CHECK` means a handler that takes a `tenant_id` from a
+  request body cannot write into another tenant; the insert is rejected outright.
+
+Three tables deliberately carry no policy: `tenants` (it _is_ the tenant, and provisioning
+reads it before one is in scope), `plans` (the shared product catalogue) and
+`webhook_events` (written before the tenant is known — TAR-39's documented exception).
+
+Two roles back this up, created by `apps/api/prisma/sql/app-roles.sql`:
+
+| Role                 | Holds                                                | Sees                                           |
+| -------------------- | ---------------------------------------------------- | ---------------------------------------------- |
+| `whatsappcrm_app`    | No `SUPERUSER`, no `BYPASSRLS`. DML on scoped tables | Only the tenant in `app.tenant_id`             |
+| `whatsappcrm_system` | The same, plus a `system_unrestricted` policy        | Everything — the five `SystemPrisma` uses only |
+
+`SUPERUSER` and `BYPASSRLS` skip policy evaluation entirely, so the app role must hold
+neither; `pnpm db:verify:rls` fails if it ever does. Both roles are created `NOLOGIN` —
+granting login means handing out a password, which comes from the environment's secret
+store, never from this repository:
+
+```sql
+ALTER ROLE whatsappcrm_app LOGIN PASSWORD '<value from the secret store>';
+```
+
+**`pnpm db:verify:rls` is the proof, not the documentation.** It creates two tenants,
+reconnects so the connection has genuinely never set the GUC, and asserts that all 33
+tables return zero rows; that each tenant then sees its own rows and none of the other's;
+that a cross-tenant insert is rejected and a cross-tenant update or delete matches
+nothing. It exits non-zero on the first failure and cleans up after itself. CI runs it on
+every pull request. It writes to the database it is pointed at, so point it at a local or
+disposable one.
+
+**RLS carries the guarantee; it does not always carry the plan.** Measured by TAR-48 on
+50k conversations across 20 tenants, the inbox query drops from an index-only scan reading
+50 rows to a bitmap scan of the whole tenant plus a top-N sort. The cause is that
+`enum_eq` is not leakproof, so under RLS a `status = 'open'` qual cannot be pushed into
+the index condition. It does not matter at this size and it will at a large tenant's. Two
+things restore the plan when it does: a partial index, or an explicit `tenantId` in the
+query's own `where`. The client does **not** inject that automatically — see the caveat at
+the end of the next section.
+
+### The two Prisma clients
+
+`apps/api/src/prisma` exports two clients, and which one a class injects is a design
+decision, not a convenience:
+
+| Token           | Connects as          | Sees                                           |
+| --------------- | -------------------- | ---------------------------------------------- |
+| `TENANT_PRISMA` | `whatsappcrm_app`    | Only the tenant in the ambient request context |
+| `SYSTEM_PRISMA` | `whatsappcrm_system` | Every tenant                                   |
+
+```ts
+constructor(@Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma) {}
+```
+
+`SystemPrisma` is a **separate client, not a flag** on the tenant one. A flag is one typo
+away from being set, invisible at the injection site, and impossible to review by search;
+a token appears in the constructor of every class allowed to use it. TAR-39 permits five
+such classes — provisioning, login before a tenant is known, webhook ingest, the sweeper,
+and platform reporting — and a sixth needs a justification in review.
+
+`TenantPrisma` sets the GUC by wrapping every statement in a transaction:
+
+```sql
+BEGIN;
+SELECT set_config('app.tenant_id', $1, true);   -- true = transaction-local
+<the query>;
+COMMIT;
+```
+
+The tenant comes from `TenantContextService`'s `AsyncLocalStorage`, which HTTP requests,
+queue jobs and WebSocket handlers all share. **No tenant in scope throws**, before
+anything is sent — the query never happens, rather than happening and returning nothing.
+That distinction is the whole point: zero rows is indistinguishable from an empty table,
+so a code path that forgot to resolve its tenant would look like a working one.
+
+Three things to know before writing a query against it:
+
+- **It costs three extra round trips.** Measured against the local Compose stack:
+  0.7 ms for a plain query, 2.3–3.4 ms for a scoped one. Prisma 7's driver-adapter client
+  sends `BEGIN`, `set_config`, the query and `COMMIT` as four separate messages, not one
+  batched round trip. For anything issuing several statements, use
+  `prisma.$tenantTransaction(async (tx) => …)`: it opens one transaction, sets the GUC
+  once, and pays that cost a single time instead of per query.
+- **Batch `$transaction([…])` does not work on it.** The extension hook is async, so the
+  client returns ordinary promises rather than the `PrismaPromise`s a batch needs. Use
+  `$tenantTransaction`.
+- **`tenants`, `plans` and `webhook_events` have no RLS policy**, so the client applies
+  one itself: `Tenant` reads are narrowed to the tenant in scope and its writes refused,
+  `Plan` is read-only, and `WebhookEvent` is refused outright. Inside
+  `$tenantTransaction` the client handed to your callback is the un-extended one, so
+  those three rules do not apply there — RLS still covers everything else.
+
+**Not built here, and deliberately:** the extension does not inject `tenantId` into
+`where`/`data` for the 33 scoped models. RLS already filters them correctly, and a
+generic injection has to get nested writes, `connect`, `upsert` and relation filters right
+or it silently drops rows — worse than not having it. Where a plan needs the explicit
+predicate (see the measurement above), pass `tenantId` in the query's own `where`.
 
 ### Adding a migration
 
@@ -190,6 +335,18 @@ That writes `apps/api/prisma/migrations/<timestamp>_add_conversations/migration.
 applies it. **Read the generated SQL before committing it** — Prisma will happily emit a
 statement that rewrites a large table or takes a long lock, and neither is visible from
 the schema diff.
+
+**A migration that adds a tenant-scoped table has two more steps.** Prisma's schema
+language cannot express row-level security, so nothing generates them:
+
+1. Append the `ENABLE` / `FORCE` / `CREATE POLICY tenant_isolation` block to the
+   migration, copying an entry from `20260810140000_tenant_isolation_rls`, and the
+   matching `DROP POLICY` / `DISABLE` to its `down.sql`.
+2. Re-run `pnpm db:roles`, which grants the new table to both roles and gives it its
+   `system_unrestricted` policy.
+
+Forgetting either fails `pnpm db:verify:rls` by name — it reads the catalog rather than a
+list, so a new table with no policy is caught rather than assumed to be fine.
 
 ### Rolling a migration back
 
@@ -266,17 +423,24 @@ requests and discarding buffered error-tracker events on every deploy.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs three jobs — **Lint**, **Type-check** and **Test** — on
-every push to `main` and every pull request targeting it. They are the commands above, so
-a run that is green locally is green in CI. **Lint** covers both `pnpm format:check` and
+`.github/workflows/ci.yml` runs four jobs — **Lint**, **Type-check**, **Test** and
+**Database** — on every push to `main` and every pull request targeting it. They are the
+commands above, so a run that is green locally is green in CI. **Database** starts the
+Compose stack, applies the migrations, creates the roles, and then proves tenant isolation
+twice — `pnpm db:verify:rls` in SQL and `pnpm test:db` through `TenantPrisma`; isolation is
+a property of the database rather than of any one function, so a unit test cannot assert
+it. Every job also seeds `.env` from `.env.example` and runs `pnpm db:generate`, because
+the Prisma client is generated rather than committed. **Lint** covers both
+`pnpm format:check` and
 `pnpm lint`, in that order: Prettier owns formatting and ESLint owns everything else, per
 ADR 0001's decision 12. An unformatted file therefore fails the **Lint** check — run
 `pnpm format` and push again.
 
-`main` is protected, and the three checks are **required** — they gate the merge rather
-than merely reporting on it. The branch must also be up to date with `main` before
-merging, review threads must be resolved, administrators are included, and force pushes
-and branch deletion are blocked.
+`main` is protected, and **Lint**, **Type-check** and **Test** are **required** — they
+gate the merge rather than merely reporting on it. **Database** is not yet in that list;
+adding it is a change to the repository's protection rule, not to the workflow file. The
+branch must also be up to date with `main` before merging, review threads must be
+resolved, administrators are included, and force pushes and branch deletion are blocked.
 
 In practice that means every change lands through a pull request: a direct push to `main`
 is rejected with `GH006: Protected branch update failed`, because the commit being pushed

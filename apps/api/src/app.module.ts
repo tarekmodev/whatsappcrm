@@ -5,13 +5,21 @@ import { TenantContextMiddleware } from './common/tenant-context/tenant-context.
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
-import { DatabaseModule } from './infra/database/database.module';
 import { RedisModule } from './infra/redis/redis.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { RequestLoggingMiddleware } from './observability/request-logging.middleware';
+import { PrismaModule } from './prisma/prisma.module';
 
-/** `<repo>/.env`, from `apps/api/dist` — two levels to `apps/api`, one more to the root. */
-const REPOSITORY_ENV_FILE = resolve(__dirname, '..', '..', '..', '.env');
+/**
+ * One `.env` for the whole repository, at the root — the same file
+ * `prisma.config.mjs` and Docker Compose read. Without this, `ConfigModule`
+ * looks in the process working directory, which is `apps/api` under `pnpm dev`,
+ * the repository root under `pnpm test`, and `/app` in a container. A real
+ * environment always wins: `ConfigModule` never overwrites a variable that is
+ * already set, so a deployed process reads its platform's secrets and this file
+ * is simply absent.
+ */
+const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
 
 @Module({
   imports: [
@@ -19,15 +27,6 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '..', '..', '..', '.env');
       isGlobal: true,
       cache: true,
       validate: validateEnv,
-      // One `.env` for the whole repository, at the root — the same file
-      // `prisma.config.mjs` reads, so the app and the migration CLI can never
-      // disagree about which database "local" means.
-      //
-      // Resolved from `__dirname`, not from the working directory: turbo runs a
-      // package script with its cwd set to that package, so the default lookup
-      // would look in `apps/api` and silently find nothing. Deployed environments
-      // have no `.env` at all and Nest skips a missing file, so this is inert
-      // there — real environment variables always win.
       envFilePath: [REPOSITORY_ENV_FILE],
       // The suite must never read a developer's `.env`. A test whose result
       // depends on whether someone happens to have Postgres running locally is
@@ -36,7 +35,7 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '..', '..', '..', '.env');
     }),
     TenantContextModule,
     ObservabilityModule,
-    DatabaseModule,
+    PrismaModule,
     RedisModule,
     HealthModule,
   ],

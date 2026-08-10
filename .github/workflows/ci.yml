@@ -65,3 +65,41 @@ jobs:
       - uses: ./.github/actions/setup-workspace
       - name: Jest (api) and Vitest (web, contracts)
         run: pnpm test
+
+  # Tenant isolation is a database property, so it cannot be asserted by a unit
+  # test — this job builds a real database from the migrations and proves two
+  # tenants cannot see each other's rows (TAR-39, decision 1, rule 4), first in
+  # SQL and then through the Prisma clients the application actually uses. It
+  # runs the same commands a developer runs locally, against the same Compose
+  # stack, so a green run here means the README's instructions work too.
+  #
+  # Not yet one of `main`'s required checks. Adding it to the protection rule is
+  # a repository-settings change, not a change to this file.
+  database:
+    name: Database
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-workspace
+      - name: Start PostgreSQL and Redis
+        run: pnpm db:up
+      - name: Apply migrations
+        run: pnpm db:migrate:deploy
+      - name: Create application roles
+        run: pnpm db:roles
+      # The roles are created NOLOGIN; this is the operator step that gives them
+      # the throwaway password `.env.example` ships, so the API's two clients can
+      # actually connect. A real environment passes a value from its secret store.
+      - name: Enable login for the application roles
+        run: pnpm db:roles:login
+      - name: Verify tenant isolation
+        run: pnpm db:verify:rls
+      # Proves the same guarantee through the client the application uses, as
+      # `whatsappcrm_app`: fail-closed with no tenant, and one tenant's rows only
+      # with one (TAR-49).
+      - name: Tenant isolation through TenantPrisma
+        run: pnpm test:db
+      - name: Stop containers
+        if: always()
+        run: pnpm db:down

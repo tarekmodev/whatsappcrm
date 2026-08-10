@@ -71,6 +71,44 @@ placeholder and be filled in by the story that first reads it.
 6. Record each environment's API and web hostnames in the project resources so
    TAR-43 and TAR-45 do not have to go looking for them.
 
+### The database roles
+
+The API connects as two non-superuser roles, `whatsappcrm_app` and
+`whatsappcrm_system` (TAR-48/TAR-49) — never as the migration owner, which on a
+managed instance is a superuser and would skip row-level security entirely.
+
+`pnpm db:roles` creates them locally through `docker compose exec`, which reaches
+nothing in a deployed environment. So the pre-deploy hook runs
+`db:provision-roles` after the migrations: it applies the same
+`prisma/sql/app-roles.sql`, then sets each role's password from
+`APP_DATABASE_PASSWORD` / `SYSTEM_DATABASE_PASSWORD`. It is idempotent and runs on
+every deploy, which is also how a newly added table gets its grants.
+
+That leaves four values per environment that have to agree with each other:
+
+1. Generate two passwords: `openssl rand -hex 32`, once per role per environment.
+2. Put them in `APP_DATABASE_PASSWORD` and `SYSTEM_DATABASE_PASSWORD`.
+3. Build `APP_DATABASE_URL` and `SYSTEM_DATABASE_URL` from the Render database's
+   own connection string, swapping the user and password:
+
+   ```
+   # Render gives you, for the owner:
+   postgresql://whatsappcrm:<owner-pw>@<host>/whatsappcrm
+
+   # so use, with the password from step 2:
+   APP_DATABASE_URL=postgresql://whatsappcrm_app:<app-pw>@<host>/whatsappcrm
+   SYSTEM_DATABASE_URL=postgresql://whatsappcrm_system:<system-pw>@<host>/whatsappcrm
+   ```
+
+**Nothing checks that the password and the URL agree** until the API fails to
+authenticate on first boot. If a deploy comes up with readiness reporting the
+database down and `detail` showing an authentication failure, this is why.
+
+> A cleaner shape exists: derive both URLs from `DATABASE_URL` plus the two
+> passwords, so the host can never be mistyped and there is one value per role
+> instead of two. That changes TAR-49's configuration contract, so it is raised
+> with them rather than done here.
+
 ### The six values that matter
 
 Render assigns `https://<service-name>.onrender.com`, and the service names are

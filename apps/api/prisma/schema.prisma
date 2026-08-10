@@ -9,10 +9,9 @@
 // The connection URL lives in `prisma.config.mjs`, not here: Prisma 7 reads the
 // datasource URL from the config file and no longer loads `.env` on its own.
 //
-// There is still no `generator` block, so no client is generated and
-// `@prisma/client` is not a dependency. TAR-49 adds both, together with the
-// driver adapter and the `TenantPrisma` / `SystemPrisma` split — Prisma 7
-// clients need an adapter, which is a choice for whoever writes that code.
+// The `generator` block below is TAR-49's, together with `@prisma/client`, the
+// `@prisma/adapter-pg` driver adapter, and the `TenantPrisma` / `SystemPrisma`
+// split in `src/database`.
 //
 // ---------------------------------------------------------------------------
 // Conventions, applied without exception
@@ -67,6 +66,23 @@
 
 datasource db {
   provider = "postgresql"
+}
+
+// Prisma 7's generator. Notes on each option, because none of them is a default:
+//
+//   provider      `prisma-client` is the Prisma 7 generator. The old
+//                 `prisma-client-js` wrote into `node_modules/.prisma`, which
+//                 pnpm's non-flat store makes unreliable.
+//   output        Required now. Inside `src` so `tsc` and `nest build` compile
+//                 it with everything else; git-ignored, because generated code
+//                 in review noise is worse than one `pnpm db:generate`.
+//   moduleFormat  The API is CommonJS (`packages/tsconfig/nestjs.json`).
+//   runtime       Plain Node, not an edge or Deno build.
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
 }
 
 // ---------------------------------------------------------------------------
