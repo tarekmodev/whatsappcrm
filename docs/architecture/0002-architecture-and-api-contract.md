@@ -1,6 +1,6 @@
 # Architecture and API contract (TAR-39)
 
-Status: proposed · Supersedes nothing · Builds on [ADR 0001 — stack decision](../adr/0001-stack-decision.md)
+Status: proposed · Supersedes nothing · Builds on [ADR 0001 — stack decision](../adr/0001-stack-decision.md) · [Amendments](#amendments): 1
 
 ## Context and Problem
 
@@ -383,7 +383,9 @@ Order is not arbitrary — each stage depends on the last:
 ### Endpoint surface
 
 Stage-1 stories build against exactly this. Later stories add their own, following the
-same conventions.
+same conventions — and when one does, it is ruled on here rather than left to emerge from
+an implementation. See [Amendment 1](#amendment-1--message-templates-tar-20a) for the
+first such addition.
 
 ```
 # Auth and session                                                        TAR-35
@@ -428,6 +430,9 @@ POST   /api/v1/conversations/{id}/messages   → MessageResponse        conversa
 GET    /api/v1/conversations/{id}/notes      → CursorPage<InternalNoteResponse>
 POST   /api/v1/conversations/{id}/notes      → InternalNoteResponse   conversation:note
 POST   /api/v1/media                         → { mediaId }            multipart
+GET    /api/v1/message-templates             → CursorPage<MessageTemplateResponse>
+                                                                      conversation:send
+                                                                      added by amendment 1
 
 # Tickets                                                                 TAR-21/25/32
 GET    /api/v1/tickets                       → CursorPage<TicketResponse>  ticket:read
@@ -731,3 +736,83 @@ needed.
 _Trigger to revisit:_ the first real request for one login across two tenants. The
 migration is additive — keep `users` as the tenant-scoped membership row, add a global
 `identities` table, and join — so this is a change of shape, not a rewrite.
+
+## Amendments
+
+Endpoints added after publication are ruled on here. The point of the rule is that an
+endpoint every later story consumes should be a decision somebody made, not a shape that
+emerged from whichever implementation happened to need it first.
+
+### Amendment 1 — message templates (TAR-20a)
+
+The published surface has no way to list templates, and TAR-72's composer cannot work
+without one: the moment the 24-hour service window closes, a template is the only thing an
+agent can send, and the picker has to be populated from somewhere. TAR-66 proposed the
+endpoint; this amendment rules on its shape.
+
+```
+GET /api/v1/message-templates   → CursorPage<MessageTemplateResponse>   conversation:send
+```
+
+Query — `MessageTemplateListQuerySchema`, extending `CursorPageQuerySchema`:
+
+| Parameter                   | Type               | Notes                                                |
+| --------------------------- | ------------------ | ---------------------------------------------------- |
+| `whatsappAccountId`         | id, optional       | A **phone number**. The server resolves its WABA     |
+| `whatsappBusinessAccountId` | id, optional       | Cross-number administrative read. Excludes the above |
+| `q`                         | string 1–120, opt. | Name prefix                                          |
+
+At most one of the two ids; both together is `validation_failed`.
+
+Ordering is `name ASC, language ASC, id ASC`, served by
+`message_templates (tenant_id, status, name, language, id)`. An agent scans this picker
+looking for `order_update`, not for whatever Meta approved most recently, and a
+name-leading index makes `q` a range scan rather than a filter over an already-fetched
+page. _Rejected:_ `created_at DESC` with an `order` parameter — no consumer has a basis to
+choose, and a parameter nobody should vary is a decision left lying on the floor.
+
+**Approved templates only, and deliberately not a filter.** Meta refuses a send on a
+`pending`, `rejected`, `paused` or `disabled` template, so offering one produces a failed
+send and a confused agent. There is no `status` parameter, because one would make that
+state reachable by accident. Template _administration_, which does need to show the
+rejected ones, is a separate surface under `channel:manage` — never a widening of this
+route.
+
+**`conversation:send`, and no new permission.** `rbac.ts` grows no `template:*`: a new
+permission costs TAR-22 a matrix change and buys no separation, since anyone who may read
+this list may already send from it.
+
+`MessageTemplateResponseSchema` carries three fields derived server-side from Meta's
+component tree, alongside the verbatim `components` passthrough:
+
+| Field            | Type                                                     | Why                                                             |
+| ---------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
+| `bodyText`       | string \| null                                           | The BODY text with `{{n}}` placeholders intact, for the preview |
+| `parameterCount` | int ≥ 0                                                  | Exactly the length `SendTemplateInput.variables` must have      |
+| `headerFormat`   | `text`\|`image`\|`video`\|`document`\|`location` \| null | What the header expects, if anything                            |
+
+`SendTemplateInputSchema.variables` is a _positional_ array. With `components` as the only
+source, every consumer — the composer, the AI chatbot, the workflow builder — walks Meta's
+tree itself to learn how many inputs to render, in an unversioned client-side parser; and
+the send path cannot check arity, so a wrong `variables.length` surfaces as an opaque
+provider error instead of a `validation_failed` before the call. Derived in the response
+mapper rather than stored: pages are capped at 100 rows, so this needs no migration and
+leaves nothing to drift. `components` itself stays unvalidated — its shape is Meta's to
+change, and a schema that guessed at it would reject valid templates the first time Meta
+added a field.
+
+The filter takes a phone number rather than a business account because
+`ConversationResponse` publishes `whatsappAccountId` and nothing maps one to the other.
+The composer holds a number; asking it for a WABA would make it either call unfiltered —
+offering templates unsendable on that number, the exact failure the approved-only rule
+exists to prevent — or block on a lookup that does not exist. _Rejected:_ adding
+`whatsappBusinessAccountId` to `ConversationResponse`, which puts Meta's account hierarchy
+into every inbox row to serve one consumer, and contradicts the principle the send path
+already follows: the server resolves the WABA, the caller does not name it.
+
+_Still open:_ TAR-66 also introduces `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts`
+and its `template-sync` sibling. This document defines no admin surface at all — no path
+convention, no permission, no guard — and whether a tenant may connect its own WABA or
+only the platform operator may is a product call, pending with Tarek on TAR-20. Ruled on
+in a later amendment once that answer lands; until then no story should treat that path
+shape as contract.
