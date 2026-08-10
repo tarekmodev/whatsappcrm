@@ -205,6 +205,14 @@ export type TenantPrisma = ReturnType<typeof withTenantScope>;
  * `set_config`, so a deactivated tenant never sets the GUC that TAR-48's
  * policies read and therefore matches no rows anywhere.
  *
+ * **Schema-qualified deliberately.** Unqualified, it resolves through the
+ * connection's `search_path`, and a connection that does not have `public` on
+ * its path — a role default, or `options=-csearch_path=…` in the URL, neither
+ * of which the Compose stack uses — fails with "function does not exist" on
+ * every tenant statement. Fail-closed, but a full outage rather than a refusal.
+ * `set_config` needs no qualification: it lives in `pg_catalog`, which is
+ * searched first unless it is named explicitly somewhere in the path.
+ *
  * Both values are bound as parameters. Interpolating the tenant id into the SQL
  * would be an injection hole reachable from a session claim; the function name
  * is the only thing here that is part of the statement text, and it is written
@@ -219,7 +227,7 @@ function setTenantScope(
   client: Pick<Prisma.TransactionClient, '$executeRaw'>,
   tenantId: string,
 ): Prisma.PrismaPromise<number> {
-  return client.$executeRaw`SELECT set_config(${TENANT_GUC}, assert_tenant_active(${tenantId}), true)`;
+  return client.$executeRaw`SELECT set_config(${TENANT_GUC}, public.assert_tenant_active(${tenantId}), true)`;
 }
 
 /**

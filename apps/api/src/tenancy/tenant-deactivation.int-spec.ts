@@ -154,6 +154,25 @@ describe('tenant deactivation, end to end', () => {
       ]);
     });
 
+    it('stamps the row and its audit entry from the same clock', async () => {
+      const [tenant, [entry]] = await Promise.all([
+        systemPrisma.tenant.findUniqueOrThrow({
+          where: { id: DEACTIVATED_ID },
+          select: { suspendedAt: true },
+        }),
+        systemPrisma.auditLog.findMany({
+          where: { tenantId: DEACTIVATED_ID, action: TENANT_DEACTIVATED_ACTION },
+          select: { createdAt: true },
+        }),
+      ]);
+
+      // Both come from `now()` in the same transaction, so they are the same
+      // instant rather than close to it. Stamping the row from the API process
+      // instead would make this differ by however far two instances have
+      // drifted, and the audit trail would order the two inconsistently.
+      expect(tenant.suspendedAt).toEqual(entry?.createdAt);
+    });
+
     it('is idempotent, and does not move the stamp on a repeat', async () => {
       const first = await systemPrisma.tenant.findUniqueOrThrow({
         where: { id: DEACTIVATED_ID },
@@ -226,6 +245,22 @@ describe('tenant deactivation, end to end', () => {
       // The gate admits `active` and nothing else, so a half-provisioned tenant
       // is closed by the same mechanism rather than by a second rule.
       await asTenant(PENDING_ID, async () => {
+        await expect(tenantPrisma.contact.findMany()).rejects.toBeInstanceOf(TenantNotActiveError);
+      });
+    });
+
+    it('refuses a tenant id that never existed, telling the caller nothing', async () => {
+      await asTenant('51444444-4444-7444-8444-4444444444ff', async () => {
+        await expect(tenantPrisma.contact.findMany()).rejects.toBeInstanceOf(TenantNotActiveError);
+      });
+    });
+
+    it('refuses an id that is not a uuid as a refusal, not a fault', async () => {
+      // `TenantContextService` takes any string, so a malformed id can reach the
+      // gate once TAR-35 is resolving sessions. Before the shape check it hit
+      // the `::uuid` cast and surfaced as SQLSTATE 22P02 — fail-closed either
+      // way, but reported to the caller as a 500 rather than the 403 it is.
+      await asTenant('not-a-uuid', async () => {
         await expect(tenantPrisma.contact.findMany()).rejects.toBeInstanceOf(TenantNotActiveError);
       });
     });
@@ -324,6 +359,25 @@ describe('tenant deactivation, end to end', () => {
         select: { tenantId: true },
       });
       expect(survivor.tenantId).toBe(NEIGHBOUR_ID);
+    });
+  });
+
+  describe('the gate resolves on any connection', () => {
+    it('is reachable with public missing from the search_path', async () => {
+      // The call site qualifies the function for this reason. Unqualified, it
+      // resolves through the connection's `search_path` — and a role default or
+      // an `options=-csearch_path=…` in the connection string is enough to make
+      // every tenant statement in the product fail with "function does not
+      // exist". The Compose stack's default `"$user", public` hides that, so it
+      // is asserted here against a connection that genuinely lacks it.
+      const [, resolved] = await systemPrisma.$transaction([
+        systemPrisma.$executeRaw`SELECT set_config('search_path', 'pg_catalog', true)`,
+        systemPrisma.$queryRaw<
+          { id: string }[]
+        >`SELECT public.assert_tenant_active(${NEIGHBOUR_ID}) AS id`,
+      ]);
+
+      expect(resolved).toEqual([{ id: NEIGHBOUR_ID }]);
     });
   });
 });
