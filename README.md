@@ -57,20 +57,24 @@ TAR-41 provisions them.
 
 Run from the repository root; Turborepo fans each one out across the workspaces.
 
-| Command          | What it does                                        |
-| ---------------- | --------------------------------------------------- |
-| `pnpm dev`       | Runs the API and the frontend in watch mode         |
-| `pnpm build`     | Builds every package                                |
-| `pnpm typecheck` | Type-checks every package                           |
-| `pnpm test`      | Runs all tests — Jest for the API, Vitest elsewhere |
-| `pnpm lint`      | ESLint across the whole repository                  |
-| `pnpm format`    | Applies Prettier                                    |
+| Command             | What it does                                        |
+| ------------------- | --------------------------------------------------- |
+| `pnpm dev`          | Runs the API and the frontend in watch mode         |
+| `pnpm build`        | Builds every package                                |
+| `pnpm typecheck`    | Type-checks every package                           |
+| `pnpm test`         | Runs all tests — Jest for the API, Vitest elsewhere |
+| `pnpm lint`         | ESLint across the whole repository                  |
+| `pnpm format`       | Applies Prettier                                    |
+| `pnpm format:check` | Fails if anything is unformatted — what CI runs     |
 
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs three jobs — **Lint**, **Type-check** and **Test** — on
-every push to `main` and every pull request targeting it. They are exactly the three
-commands above, so a run that is green locally is green in CI.
+every push to `main` and every pull request targeting it. They are the commands above, so
+a run that is green locally is green in CI. **Lint** covers both `pnpm format:check` and
+`pnpm lint`, in that order: Prettier owns formatting and ESLint owns everything else, per
+ADR 0001's decision 12. An unformatted file therefore fails the **Lint** check — run
+`pnpm format` and push again.
 
 `main` is protected, and the three checks are **required** — they gate the merge rather
 than merely reporting on it. The branch must also be up to date with `main` before
