@@ -1,0 +1,55 @@
+.list {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.list[data-orientation='horizontal'] {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.list[data-orientation='vertical'] {
+  flex-direction: column;
+}
+
+.link {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .link:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}
+
+.link[aria-current='page'] {
+  background: var(--color-accent-subtle);
+  color: var(--color-on-accent-subtle);
+}
+
+/* Current state must not be colour-only: an inline marker carries it too. */
+.link[aria-current='page']::before {
+  content: '';
+  inline-size: var(--space-1);
+  block-size: 1em;
+  margin-inline-end: var(--space-2);
+  background: currentcolor;
+  border-radius: var(--radius-pill);
+}
+
+.list[data-orientation='vertical'] .link {
+  inline-size: 100%;
+}

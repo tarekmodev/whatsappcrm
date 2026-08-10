@@ -1,0 +1,112 @@
+/*
+ * Primitive tokens — raw scales only. No component may reference these
+ * directly; they exist so `semantic.css` has a vocabulary to map roles onto.
+ * Swapping a brand means editing this file and `semantic.css`, nothing else.
+ */
+
+:root {
+  /* --- Palette ------------------------------------------------------------ */
+  --palette-white: #ffffff;
+  --palette-black: #000000;
+
+  --palette-slate-50: #f8fafc;
+  --palette-slate-100: #f1f5f9;
+  --palette-slate-200: #e2e8f0;
+  --palette-slate-300: #cbd5e1;
+  --palette-slate-400: #94a3b8;
+  --palette-slate-500: #64748b;
+  --palette-slate-600: #475569;
+  --palette-slate-700: #334155;
+  --palette-slate-800: #1e293b;
+  --palette-slate-900: #0f172a;
+  --palette-slate-950: #020617;
+
+  /* WhatsApp-adjacent green, kept as a primitive so the brand can be replaced. */
+  --palette-green-100: #d7f2e3;
+  --palette-green-300: #7fd3a8;
+  --palette-green-500: #128c56;
+  --palette-green-600: #0e7346;
+  --palette-green-700: #0a5936;
+
+  --palette-amber-100: #fdf0d5;
+  --palette-amber-500: #a16207;
+  --palette-amber-600: #854d0e;
+
+  --palette-red-100: #fde3e3;
+  --palette-red-500: #b3261e;
+  --palette-red-600: #8f1d17;
+  --palette-red-300: #f0a9a4;
+
+  --palette-blue-100: #dde9fb;
+  --palette-blue-500: #1d4ed8;
+  --palette-blue-300: #a4bff2;
+
+  /* --- Spacing scale (4px base) ------------------------------------------- */
+  --scale-space-0: 0;
+  --scale-space-1: 0.25rem;
+  --scale-space-2: 0.5rem;
+  --scale-space-3: 0.75rem;
+  --scale-space-4: 1rem;
+  --scale-space-5: 1.5rem;
+  --scale-space-6: 2rem;
+  --scale-space-7: 3rem;
+  --scale-space-8: 4rem;
+
+  /* --- Type scale --------------------------------------------------------- */
+  --scale-font-size-xs: 0.75rem;
+  --scale-font-size-sm: 0.875rem;
+  --scale-font-size-md: 1rem;
+  --scale-font-size-lg: 1.125rem;
+  --scale-font-size-xl: clamp(1.25rem, 1.1rem + 0.7vw, 1.5rem);
+  --scale-font-size-2xl: clamp(1.5rem, 1.3rem + 1.1vw, 2rem);
+
+  --scale-line-height-tight: 1.25;
+  --scale-line-height-snug: 1.4;
+  --scale-line-height-normal: 1.6;
+
+  --scale-font-weight-regular: 400;
+  --scale-font-weight-medium: 500;
+  --scale-font-weight-semibold: 600;
+
+  --scale-font-family-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --scale-font-family-mono: ui-monospace, SFMono-Regular, 'Cascadia Mono', monospace;
+
+  /* --- Radii -------------------------------------------------------------- */
+  --scale-radius-sm: 0.25rem;
+  --scale-radius-md: 0.5rem;
+  --scale-radius-lg: 0.75rem;
+  --scale-radius-full: 9999px;
+
+  /* --- Elevation ---------------------------------------------------------- */
+  --scale-shadow-sm: 0 1px 2px rgb(2 6 23 / 8%);
+  --scale-shadow-md: 0 4px 12px rgb(2 6 23 / 10%);
+  --scale-shadow-lg: 0 16px 40px rgb(2 6 23 / 18%);
+
+  /* --- Motion ------------------------------------------------------------- */
+  --scale-duration-instant: 0ms;
+  --scale-duration-fast: 120ms;
+  --scale-duration-medium: 200ms;
+  --scale-duration-slow: 320ms;
+  --scale-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --scale-easing-decelerate: cubic-bezier(0, 0, 0, 1);
+
+  /* --- Layering ----------------------------------------------------------- */
+  --scale-z-base: 0;
+  --scale-z-sticky: 100;
+  --scale-z-nav: 200;
+  --scale-z-scrim: 300;
+  --scale-z-drawer: 400;
+  --scale-z-modal: 500;
+  --scale-z-toast: 600;
+
+  /* --- Sizes -------------------------------------------------------------- */
+  --scale-size-touch-target: 2.75rem; /* 44px — the WCAG 2.2 target minimum. */
+  --scale-size-control-sm: 2rem;
+  --scale-size-control-md: 2.5rem;
+  --scale-size-container-md: 48rem;
+  --scale-size-container-lg: 72rem;
+  --scale-size-container-xl: 90rem;
+  --scale-size-drawer: 20rem;
+  --scale-size-border-hairline: 1px;
+  --scale-size-focus-ring: 2px;
+}

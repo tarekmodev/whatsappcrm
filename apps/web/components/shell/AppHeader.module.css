@@ -1,0 +1,55 @@
+.header {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--z-nav);
+  background: var(--color-surface);
+  border-block-end: var(--border-hairline) solid var(--color-border);
+  padding-block-start: env(safe-area-inset-top);
+}
+
+.inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-block-size: var(--space-8);
+  padding-block: var(--space-2);
+}
+
+.brandGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.brand {
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-strong);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.desktopNav {
+  display: none;
+}
+
+.utilities {
+  /* Duplicated into the drawer on mobile, where it is the drawer that shows them. */
+  display: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+@media (min-width: 48rem) {
+  .desktopNav {
+    display: block;
+    flex: 1 1 auto;
+    min-inline-size: 0;
+  }
+
+  .utilities {
+    display: flex;
+  }
+}

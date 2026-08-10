@@ -1,0 +1,11 @@
+.actions {
+  /* Full-width, stacked buttons in the mobile card layout; inline in the table. */
+  inline-size: 100%;
+}
+
+@media (min-width: 48rem) {
+  .actions {
+    inline-size: auto;
+    flex-wrap: nowrap;
+  }
+}

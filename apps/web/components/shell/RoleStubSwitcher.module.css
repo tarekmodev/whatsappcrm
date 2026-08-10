@@ -1,0 +1,9 @@
+.switcher {
+  /* Wide enough for the longest role label without stretching the header. */
+  min-inline-size: 12rem;
+  padding: var(--space-3);
+  background: var(--color-warning-subtle);
+  border: var(--border-hairline) dashed var(--color-warning);
+  border-radius: var(--radius-md);
+  color: var(--color-on-warning-subtle);
+}

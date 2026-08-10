@@ -1,0 +1,109 @@
+.wrapper {
+  display: contents;
+}
+
+.trigger {
+  gap: var(--space-2);
+}
+
+.triggerIcon {
+  font-size: var(--font-size-body-lg);
+  line-height: 1;
+}
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-scrim);
+  background: var(--color-scrim);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--duration-medium) var(--easing-standard),
+    visibility var(--duration-medium) var(--easing-standard);
+}
+
+.scrim[data-open='true'] {
+  opacity: 1;
+  visibility: visible;
+}
+
+.panel {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-start: 0;
+  z-index: var(--z-drawer);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  inline-size: min(var(--size-drawer), 85vw);
+  /* `dvh` so the panel does not extend under mobile browser chrome. */
+  block-size: 100dvh;
+  padding: var(--space-5);
+  padding-block-start: calc(var(--space-5) + env(safe-area-inset-top));
+  padding-block-end: calc(var(--space-5) + env(safe-area-inset-bottom));
+  background: var(--color-surface);
+  border-inline-end: var(--border-hairline) solid var(--color-border);
+  box-shadow: var(--shadow-modal);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Logical translation, so the drawer slides in from the inline start in RTL too. */
+  translate: -100% 0;
+  transition: translate var(--duration-medium) var(--easing-enter);
+}
+
+[dir='rtl'] .panel {
+  translate: 100% 0;
+}
+
+.panel[data-open='true'],
+[dir='rtl'] .panel[data-open='true'] {
+  translate: 0 0;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.heading {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-block-start: var(--space-3);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}
+
+.subheading {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.extras {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-block-start: auto;
+  padding-block-start: var(--space-4);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}
+
+/* From the layout breakpoint up, the header shows the nav inline and the drawer
+   is removed entirely — not merely hidden, so its links leave the tab order. */
+@media (min-width: 48rem) {
+  .trigger,
+  .scrim,
+  .panel {
+    display: none;
+  }
+}

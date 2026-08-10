@@ -1,0 +1,28 @@
+.spinner {
+  display: inline-flex;
+  align-items: center;
+}
+
+.arc {
+  inline-size: var(--space-4);
+  block-size: var(--space-4);
+  border: var(--focus-ring-width) solid currentcolor;
+  border-block-start-color: transparent;
+  border-radius: var(--radius-pill);
+  animation: spin var(--duration-slow) linear infinite;
+}
+
+@keyframes spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arc {
+    /* A static ring rather than an element frozen mid-rotation. */
+    animation: none;
+    border-block-start-color: currentcolor;
+    opacity: 0.5;
+  }
+}

@@ -1,0 +1,41 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.label {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.label[data-hidden='true'] {
+  position: absolute;
+  width: var(--border-hairline);
+  height: var(--border-hairline);
+  padding: 0;
+  margin: calc(var(--border-hairline) * -1);
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.hint {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-danger);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+/* Meaning is carried by the text and by `aria-invalid`, never by colour alone. */
+.error::before {
+  content: '⚠';
+}

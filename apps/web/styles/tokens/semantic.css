@@ -1,0 +1,181 @@
+/*
+ * Semantic tokens — the only layer components are allowed to read.
+ *
+ * Every value here maps a *role* ("the surface a card sits on") onto a primitive.
+ * Dark mode re-declares the same role names under `[data-theme='dark']`; no
+ * component branches on theme, which is what makes the whole identity swappable.
+ */
+
+:root,
+[data-theme='light'] {
+  /* --- Surfaces and text -------------------------------------------------- */
+  --color-canvas: var(--palette-slate-50);
+  --color-surface: var(--palette-white);
+  --color-surface-raised: var(--palette-white);
+  --color-surface-sunken: var(--palette-slate-100);
+  --color-surface-hover: var(--palette-slate-100);
+  --color-surface-selected: var(--palette-green-100);
+  --color-on-surface: var(--palette-slate-900);
+  --color-on-surface-muted: var(--palette-slate-500);
+  /*
+   * Decoration only — around 2.6:1 against the surface, so it must never carry
+   * text. Anything a user has to read uses `on-surface-muted`, which clears AA in
+   * both themes.
+   */
+  --color-on-surface-subtle: var(--palette-slate-400);
+
+  /* --- Borders and focus -------------------------------------------------- */
+  --color-border: var(--palette-slate-200);
+  --color-border-strong: var(--palette-slate-300);
+  --color-focus-ring: var(--palette-green-600);
+
+  /* --- Accent ------------------------------------------------------------- */
+  --color-accent: var(--palette-green-600);
+  --color-accent-hover: var(--palette-green-700);
+  --color-accent-subtle: var(--palette-green-100);
+  --color-on-accent: var(--palette-white);
+  --color-on-accent-subtle: var(--palette-green-700);
+
+  /* --- Status ------------------------------------------------------------- */
+  --color-success: var(--palette-green-600);
+  --color-success-subtle: var(--palette-green-100);
+  --color-on-success-subtle: var(--palette-green-700);
+  --color-warning: var(--palette-amber-600);
+  --color-warning-subtle: var(--palette-amber-100);
+  --color-on-warning-subtle: var(--palette-amber-600);
+  --color-danger: var(--palette-red-500);
+  --color-danger-hover: var(--palette-red-600);
+  --color-danger-subtle: var(--palette-red-100);
+  --color-on-danger-subtle: var(--palette-red-600);
+  --color-info: var(--palette-blue-500);
+  --color-info-subtle: var(--palette-blue-100);
+  --color-on-info-subtle: var(--palette-blue-500);
+
+  /* --- Overlays and placeholders ----------------------------------------- */
+  --color-scrim: rgb(2 6 23 / 45%);
+  --color-skeleton-base: var(--palette-slate-200);
+  --color-skeleton-highlight: var(--palette-slate-100);
+
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --color-canvas: var(--palette-slate-950);
+  --color-surface: var(--palette-slate-900);
+  --color-surface-raised: var(--palette-slate-800);
+  --color-surface-sunken: var(--palette-slate-950);
+  --color-surface-hover: var(--palette-slate-800);
+  --color-surface-selected: var(--palette-slate-700);
+  --color-on-surface: var(--palette-slate-100);
+  --color-on-surface-muted: var(--palette-slate-400);
+  --color-on-surface-subtle: var(--palette-slate-500);
+
+  --color-border: var(--palette-slate-700);
+  --color-border-strong: var(--palette-slate-600);
+  --color-focus-ring: var(--palette-green-300);
+
+  --color-accent: var(--palette-green-500);
+  --color-accent-hover: var(--palette-green-300);
+  --color-accent-subtle: var(--palette-green-700);
+  --color-on-accent: var(--palette-slate-950);
+  --color-on-accent-subtle: var(--palette-green-100);
+
+  --color-success: var(--palette-green-300);
+  --color-success-subtle: var(--palette-green-700);
+  --color-on-success-subtle: var(--palette-green-100);
+  --color-warning: var(--palette-amber-100);
+  --color-warning-subtle: var(--palette-amber-600);
+  --color-on-warning-subtle: var(--palette-amber-100);
+  --color-danger: var(--palette-red-300);
+  --color-danger-hover: var(--palette-red-100);
+  --color-danger-subtle: var(--palette-red-600);
+  --color-on-danger-subtle: var(--palette-red-100);
+  --color-info: var(--palette-blue-300);
+  --color-info-subtle: var(--palette-blue-500);
+  --color-on-info-subtle: var(--palette-blue-100);
+
+  --color-scrim: rgb(2 6 23 / 70%);
+  --color-skeleton-base: var(--palette-slate-800);
+  --color-skeleton-highlight: var(--palette-slate-700);
+
+  color-scheme: dark;
+}
+
+/*
+ * Role tokens that are theme-independent. Kept here rather than in
+ * `primitives.css` because components read them by role name.
+ */
+:root {
+  --space-0: var(--scale-space-0);
+  --space-1: var(--scale-space-1);
+  --space-2: var(--scale-space-2);
+  --space-3: var(--scale-space-3);
+  --space-4: var(--scale-space-4);
+  --space-5: var(--scale-space-5);
+  --space-6: var(--scale-space-6);
+  --space-7: var(--scale-space-7);
+  --space-8: var(--scale-space-8);
+
+  --font-family-body: var(--scale-font-family-sans);
+  --font-family-mono: var(--scale-font-family-mono);
+  --font-size-caption: var(--scale-font-size-xs);
+  --font-size-body-sm: var(--scale-font-size-sm);
+  --font-size-body: var(--scale-font-size-md);
+  --font-size-body-lg: var(--scale-font-size-lg);
+  --font-size-heading-sm: var(--scale-font-size-lg);
+  --font-size-heading-md: var(--scale-font-size-xl);
+  --font-size-heading-lg: var(--scale-font-size-2xl);
+  --line-height-heading: var(--scale-line-height-tight);
+  --line-height-tight: var(--scale-line-height-snug);
+  --line-height-body: var(--scale-line-height-normal);
+  --font-weight-regular: var(--scale-font-weight-regular);
+  --font-weight-medium: var(--scale-font-weight-medium);
+  --font-weight-strong: var(--scale-font-weight-semibold);
+
+  --radius-sm: var(--scale-radius-sm);
+  --radius-md: var(--scale-radius-md);
+  --radius-lg: var(--scale-radius-lg);
+  --radius-pill: var(--scale-radius-full);
+
+  --shadow-raised: var(--scale-shadow-sm);
+  --shadow-overlay: var(--scale-shadow-md);
+  --shadow-modal: var(--scale-shadow-lg);
+
+  --duration-instant: var(--scale-duration-instant);
+  --duration-fast: var(--scale-duration-fast);
+  --duration-medium: var(--scale-duration-medium);
+  --duration-slow: var(--scale-duration-slow);
+  --easing-standard: var(--scale-easing-standard);
+  --easing-enter: var(--scale-easing-decelerate);
+
+  --z-base: var(--scale-z-base);
+  --z-sticky: var(--scale-z-sticky);
+  --z-nav: var(--scale-z-nav);
+  --z-scrim: var(--scale-z-scrim);
+  --z-drawer: var(--scale-z-drawer);
+  --z-modal: var(--scale-z-modal);
+  --z-toast: var(--scale-z-toast);
+
+  --size-touch-target: var(--scale-size-touch-target);
+  --size-control-sm: var(--scale-size-control-sm);
+  --size-control-md: var(--scale-size-control-md);
+  --size-container-md: var(--scale-size-container-md);
+  --size-container-lg: var(--scale-size-container-lg);
+  --size-container-xl: var(--scale-size-container-xl);
+  --size-drawer: var(--scale-size-drawer);
+  --border-hairline: var(--scale-size-border-hairline);
+  --focus-ring-width: var(--scale-size-focus-ring);
+  --focus-ring-offset: var(--scale-size-focus-ring);
+}
+
+/*
+ * Reduced motion is a token concern, not a component one: every transition in
+ * the app reads these, so honouring the preference happens in one place.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 1ms;
+    --duration-medium: 1ms;
+    --duration-slow: 1ms;
+  }
+}

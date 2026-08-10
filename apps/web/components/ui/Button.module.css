@@ -1,0 +1,91 @@
+.button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  /* WCAG 2.2 target minimum, so no control is too small to tap. */
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-4);
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-tight);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    border-color var(--duration-fast) var(--easing-standard),
+    color var(--duration-fast) var(--easing-standard);
+}
+
+.button[data-size='sm'] {
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-3);
+}
+
+.button[data-block='true'] {
+  inline-size: 100%;
+}
+
+.button[data-variant='primary'] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.button[data-variant='secondary'] {
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+  color: var(--color-on-surface);
+}
+
+.button[data-variant='ghost'] {
+  background: transparent;
+  color: var(--color-on-surface);
+}
+
+.button[data-variant='danger'] {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: var(--color-on-accent);
+}
+
+/* Hover styling only where the device actually hovers; a touch device would
+   otherwise keep the hover colour stuck after a tap. */
+@media (hover: hover) {
+  .button[data-variant='primary']:hover:not([aria-disabled='true']) {
+    background: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
+  }
+
+  .button[data-variant='secondary']:hover:not([aria-disabled='true']),
+  .button[data-variant='ghost']:hover:not([aria-disabled='true']) {
+    background: var(--color-surface-hover);
+  }
+
+  .button[data-variant='danger']:hover:not([aria-disabled='true']) {
+    background: var(--color-danger-hover);
+    border-color: var(--color-danger-hover);
+  }
+}
+
+.button[aria-disabled='true'],
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.label[data-pending='true'] {
+  /* Keeps the button's width while the spinner is shown, so nothing shifts. */
+  visibility: hidden;
+}
+
+.pending {
+  position: absolute;
+  display: inline-flex;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  translate: -50% -50%;
+}
