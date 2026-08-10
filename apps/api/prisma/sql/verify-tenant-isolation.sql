@@ -33,7 +33,7 @@
 --               a `tenant_isolation` policy. Every table the app role can touch
 --               is either protected or on a two-entry read-only allowlist. The
 --               app role holds neither SUPERUSER nor BYPASSRLS.
---   Behaviour   On a connection that has never set the GUC, all 33 protected
+--   Behaviour   On a connection that has never set the GUC, all 34 protected
 --               tables return zero rows. With the GUC set, each tenant sees its
 --               own rows and none of the other's. Writing another tenant's
 --               `tenant_id` is rejected; updating and deleting its rows match
@@ -228,6 +228,7 @@ DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
@@ -235,6 +236,7 @@ DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_b';
 
 DELETE FROM "public"."tenants" WHERE "id" IN (:'tenant_a', :'tenant_b');
@@ -248,8 +250,12 @@ SET LOCAL app.tenant_id = :'tenant_a';
 
 INSERT INTO "public"."users" ("id", "tenant_id", "email", "name", "updated_at")
     VALUES ('11111111-1111-7111-8111-1111111111a1', :'tenant_a', 'agent@tar48-fixture-a.test', 'Fixture A agent', now());
-INSERT INTO "public"."whatsapp_accounts" ("id", "tenant_id", "phone_number_id", "waba_id", "display_phone_number", "updated_at")
-    VALUES ('11111111-1111-7111-8111-1111111111a2', :'tenant_a', 'tar48-fixture-a-phone', 'tar48-fixture-a-waba', '+10000000001', now());
+-- The WABA comes before the number it owns (TAR-52): `whatsapp_accounts` is now
+-- its child, and the composite FK is checked at insert.
+INSERT INTO "public"."whatsapp_business_accounts" ("id", "tenant_id", "waba_id", "updated_at")
+    VALUES ('11111111-1111-7111-8111-1111111111a0', :'tenant_a', 'tar48-fixture-a-waba', now());
+INSERT INTO "public"."whatsapp_accounts" ("id", "tenant_id", "whatsapp_business_account_id", "phone_number_id", "display_phone_number", "updated_at")
+    VALUES ('11111111-1111-7111-8111-1111111111a2', :'tenant_a', '11111111-1111-7111-8111-1111111111a0', 'tar48-fixture-a-phone', '+10000000001', now());
 INSERT INTO "public"."contacts" ("id", "tenant_id", "phone_e164", "display_name", "updated_at")
     VALUES ('11111111-1111-7111-8111-1111111111a3', :'tenant_a', '+10000000011', 'Fixture A contact', now());
 INSERT INTO "public"."conversations" ("id", "tenant_id", "whatsapp_account_id", "contact_id", "updated_at")
@@ -263,8 +269,10 @@ SET LOCAL app.tenant_id = :'tenant_b';
 
 INSERT INTO "public"."users" ("id", "tenant_id", "email", "name", "updated_at")
     VALUES ('22222222-2222-7222-8222-2222222222b1', :'tenant_b', 'agent@tar48-fixture-b.test', 'Fixture B agent', now());
-INSERT INTO "public"."whatsapp_accounts" ("id", "tenant_id", "phone_number_id", "waba_id", "display_phone_number", "updated_at")
-    VALUES ('22222222-2222-7222-8222-2222222222b2', :'tenant_b', 'tar48-fixture-b-phone', 'tar48-fixture-b-waba', '+10000000002', now());
+INSERT INTO "public"."whatsapp_business_accounts" ("id", "tenant_id", "waba_id", "updated_at")
+    VALUES ('22222222-2222-7222-8222-2222222222b0', :'tenant_b', 'tar48-fixture-b-waba', now());
+INSERT INTO "public"."whatsapp_accounts" ("id", "tenant_id", "whatsapp_business_account_id", "phone_number_id", "display_phone_number", "updated_at")
+    VALUES ('22222222-2222-7222-8222-2222222222b2', :'tenant_b', '22222222-2222-7222-8222-2222222222b0', 'tar48-fixture-b-phone', '+10000000002', now());
 INSERT INTO "public"."contacts" ("id", "tenant_id", "phone_e164", "display_name", "updated_at")
     VALUES ('22222222-2222-7222-8222-2222222222b3', :'tenant_b', '+10000000012', 'Fixture B contact', now());
 INSERT INTO "public"."conversations" ("id", "tenant_id", "whatsapp_account_id", "contact_id", "updated_at")
@@ -276,7 +284,7 @@ INSERT INTO "public"."messages" ("id", "tenant_id", "conversation_id", "directio
 
 COMMIT;
 
-\echo 'fixture committed: 2 tenants, 5 rows each'
+\echo 'fixture committed: 2 tenants, 6 rows each'
 
 -- ---------------------------------------------------------------------------
 -- Phase 3 — behaviour, on a connection that has never set the GUC.
@@ -366,7 +374,7 @@ BEGIN
     SELECT count(*) INTO n FROM "public"."messages" WHERE "tenant_id" = tenant_b;
     IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of messages returned % rows', n; END IF;
 
-    RAISE NOTICE 'ok: tenant A sees its own 5 rows and none of tenant B''s';
+    RAISE NOTICE 'ok: tenant A sees its own 6 rows and none of tenant B''s';
 
     -- 3c. Tenant B, symmetrically. Same connection, same role — only the GUC
     -- changed, which is exactly what the client extension will do per request.
@@ -459,6 +467,7 @@ DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
@@ -466,6 +475,7 @@ DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_b';
 
 DELETE FROM "public"."tenants" WHERE "id" IN (:'tenant_a', :'tenant_b');

@@ -6,6 +6,7 @@ import { isMessageStatusAdvance, SendMessageInputSchema } from './messages';
 import { permissionsForRole, ROLE_PERMISSIONS, roleHasPermission, TENANT_ROLES } from './rbac';
 import { canTransitionTenant, TENANT_STATUSES, TENANT_STATUS_EFFECTS } from './tenant';
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
+import { MessageTemplateResponseSchema, WhatsAppBusinessAccountResponseSchema } from './whatsapp';
 
 describe('error taxonomy', () => {
   it('maps every code to an HTTP status', () => {
@@ -156,6 +157,37 @@ describe('the two tenant status vocabularies', () => {
 
     expect(onlyProvisioning).toEqual(['pending']);
     expect(onlyCustomerFacing).toEqual(['trialing', 'past_due', 'deleted']);
+  });
+});
+
+describe('whatsapp business account', () => {
+  const waba = {
+    id: '01890a5d-ac96-774b-bcce-b302099a8057',
+    wabaId: '102290129340398',
+    name: 'Acme Trading',
+    verificationStatus: 'verified',
+    createdAt: '2026-08-10T09:30:24Z',
+    updatedAt: '2026-08-10T09:30:24Z',
+  };
+
+  // The one property this schema exists to guarantee. The encrypted access
+  // token lives on this entity (TAR-52), so a handler that selected the row
+  // wholesale and returned it is exactly the mistake to make — and the response
+  // schema is the last place that can catch it.
+  it('strips an access token that reached the response by accident', () => {
+    const parsed = WhatsAppBusinessAccountResponseSchema.parse({
+      ...waba,
+      accessTokenEncrypted: 'v1:aes-256-gcm:leaked',
+      accessToken: 'EAAG...',
+    });
+
+    expect(parsed).not.toHaveProperty('accessTokenEncrypted');
+    expect(parsed).not.toHaveProperty('accessToken');
+    expect(JSON.stringify(parsed)).not.toContain('EAAG');
+  });
+
+  it('keys a template to its WABA, not to the tenant', () => {
+    expect(Object.keys(MessageTemplateResponseSchema.shape)).toContain('whatsappBusinessAccountId');
   });
 });
 

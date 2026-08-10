@@ -202,7 +202,7 @@ Six conventions hold across every model, and a change that breaks one needs a re
 ### Tenant isolation
 
 Isolation is enforced by the database, not by application code remembering a `where`
-clause. All 33 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
+clause. All 34 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
 
 ```sql
 CREATE POLICY tenant_isolation ON conversations
@@ -242,7 +242,7 @@ ALTER ROLE whatsappcrm_app LOGIN PASSWORD '<value from the secret store>';
 ```
 
 **`pnpm db:verify:rls` is the proof, not the documentation.** It creates two tenants,
-reconnects so the connection has genuinely never set the GUC, and asserts that all 33
+reconnects so the connection has genuinely never set the GUC, and asserts that all 34
 tables return zero rows; that each tenant then sees its own rows and none of the other's;
 that a cross-tenant insert is rejected and a cross-tenant update or delete matches
 nothing. It exits non-zero on the first failure and cleans up after itself. CI runs it on
