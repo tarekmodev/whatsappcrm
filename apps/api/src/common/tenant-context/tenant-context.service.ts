@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Injectable } from '@nestjs/common';
+import type { SessionPrincipal } from '@whatsappcrm/contracts';
 
 export interface TenantContext {
   /** Correlation id shared by the log line, the error tracker and the error envelope. */
@@ -8,6 +9,18 @@ export interface TenantContext {
   tenantId: string | null;
   /** Authenticated user, or `null` for unauthenticated and machine-to-machine calls. */
   userId: string | null;
+  /**
+   * The caller's role, permissions and team memberships, resolved once per
+   * request (TAR-22, TAR-79).
+   *
+   * Optional, and absent means the same thing as `null`: nobody has been
+   * resolved yet. `PrincipalGuard` is what fills it, and it runs at pipeline
+   * slot 3 — so every path that opens a scope earlier (the middleware, a queue
+   * worker, a fixture) legitimately has no caller, and requiring each of them to
+   * write `principal: null` would be ceremony that buys nothing. Readers go
+   * through `principal` / `requirePrincipal()` below, which normalise both.
+   */
+  principal?: SessionPrincipal | null;
 }
 
 /**
@@ -49,6 +62,10 @@ export class TenantContextService {
     return this.storage.getStore()?.userId ?? null;
   }
 
+  get principal(): SessionPrincipal | null {
+    return this.storage.getStore()?.principal ?? null;
+  }
+
   /** Attaches the resolved session to the active scope. */
   setTenant(tenantId: string, userId: string | null = null): void {
     const store = this.storage.getStore();
@@ -59,6 +76,41 @@ export class TenantContextService {
 
     store.tenantId = tenantId;
     store.userId = userId;
+  }
+
+  /**
+   * Publishes the caller, once the principal source has produced one.
+   *
+   * Deliberately re-derives `tenantId` and `userId` from the principal rather
+   * than trusting whatever the host resolution left there: the two must agree,
+   * and the guard that calls this has already refused the request when they do
+   * not (`tenant_mismatch`). Setting both here means there is one authority for
+   * "who is this work for" once a caller is known, instead of two that can
+   * drift.
+   */
+  setPrincipal(principal: SessionPrincipal): void {
+    const store = this.storage.getStore();
+
+    if (!store) {
+      throw new Error('setPrincipal() called outside of a tenant context scope');
+    }
+
+    store.principal = principal;
+    store.tenantId = principal.tenantId;
+    store.userId = principal.userId;
+  }
+
+  /** Use where an absent caller is a bug: every route behind `PrincipalGuard`. */
+  requirePrincipal(): SessionPrincipal {
+    const principal = this.principal;
+
+    if (!principal) {
+      throw new Error(
+        'No principal in scope: requirePrincipal() called on a path that PrincipalGuard did not run on',
+      );
+    }
+
+    return principal;
   }
 
   /**

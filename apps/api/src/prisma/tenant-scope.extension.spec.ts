@@ -37,14 +37,14 @@ describe('withTenantScope', () => {
 
   function asTenant<T>(work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
-      { requestId: 'spec', tenantId: TENANT_ID, userId: null },
+      { requestId: 'spec', tenantId: TENANT_ID, userId: null, principal: null },
       async () => await work(),
     );
   }
 
   function asUnresolved<T>(work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
-      { requestId: 'spec', tenantId: null, userId: null },
+      { requestId: 'spec', tenantId: null, userId: null, principal: null },
       async () => await work(),
     );
   }

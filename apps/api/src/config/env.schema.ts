@@ -8,7 +8,7 @@ import { z } from 'zod';
  * `.env.example` at the repository root is the human-readable mirror of this
  * schema and must be updated in the same commit whenever a key is added here.
  */
-export const envSchema = z.object({
+const envShape = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
 
@@ -64,6 +64,34 @@ export const envSchema = z.object({
   PLATFORM_ADMIN_TOKEN: z.string().min(32).optional(),
 
   // ---------------------------------------------------------------------------
+  // Access control (TAR-22)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * ⚠️ **INTERIM — REMOVE WHEN TAR-35 LANDS.**
+   *
+   * Binds `StubPrincipalSource` instead of the session-backed one, so the
+   * permission matrix and the role-scoped queries can be built and tested before
+   * there is a session to read a role from. It stubs *the source of the
+   * principal*, never the guard: `PermissionGuard` and the visibility predicate
+   * run identically either way.
+   *
+   * Two kill switches, mirroring the console's (`NEXT_PUBLIC_ENABLE_ROLE_STUB`):
+   * off by default, and the refinement at the bottom of this file refuses to
+   * *boot* when it is on under `NODE_ENV=production`. Failing at startup rather
+   * than per request is what stops a misconfigured deploy serving a single
+   * stubbed call.
+   *
+   * Left as the literal string rather than transformed to a boolean:
+   * `ConfigService.get` can answer from `process.env` as well as from the
+   * validated object, so a reader comparing against `true` would sometimes see
+   * the string `'true'` and quietly treat the switch as off — a kill switch
+   * that fails open in one of its two read paths. `AUTH_STUB_ON` is the one
+   * spelling every reader compares against.
+   */
+  AUTH_STUB_ENABLED: z.enum(['true', 'false']).default('false'),
+
+  // ---------------------------------------------------------------------------
   // WhatsApp webhook ingestion (TAR-20)
   //
   // One Meta app serves every tenant, so both secrets below are platform-level
@@ -107,6 +135,7 @@ export const envSchema = z.object({
    * parked, never dropped: a failed row stays queryable and re-runnable.
    */
   WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+
   // ---------------------------------------------------------------------------
   // WhatsApp Cloud API (TAR-20)
   // ---------------------------------------------------------------------------
@@ -166,6 +195,32 @@ export const envSchema = z.object({
    */
   DATABASE_URL: z.string().min(1).optional(),
   REDIS_URL: z.string().min(1).optional(),
+});
+
+/**
+ * The one cross-key rule, and the reason this file exports a refined schema
+ * rather than the plain object: a fabricated principal must never be reachable
+ * in production, whatever `AUTH_STUB_ENABLED` says.
+ *
+ * Enforced here rather than in the guard so the process **refuses to boot**. A
+ * per-request check would let a misconfigured deploy come up healthy, pass its
+ * readiness probe and take traffic, and only refuse the requests that happened
+ * to reach the stubbed path. `validateEnv` runs while `ConfigModule` is
+ * initialising, which is before a single route is mapped.
+ */
+/** The only value that turns the interim role stub on. */
+export const AUTH_STUB_ON = 'true';
+
+export const envSchema = envShape.superRefine((env, ctx) => {
+  if (env.AUTH_STUB_ENABLED === AUTH_STUB_ON && env.NODE_ENV === 'production') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['AUTH_STUB_ENABLED'],
+      message:
+        'must not be enabled when NODE_ENV=production — the interim role stub fabricates a ' +
+        'principal and is for local development and tests only. Wire TAR-35 sessions instead.',
+    });
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;
