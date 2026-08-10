@@ -10,6 +10,13 @@
  * `--runInBand` in the `test:db` script: the suites share one database and
  * commit their fixtures, so running them in parallel would have them delete
  * each other's rows.
+ *
+ * Run it through Turbo (`pnpm test:db`), never `jest` directly:
+ * `@whatsappcrm/contracts` is consumed from its `dist`, and the `test:db` task
+ * in `turbo.json` is what declares the `^build` that produces it. Invoked
+ * without that, a clean checkout fails every suite here with "Cannot find
+ * module '@whatsappcrm/contracts'" — which looks like a database problem and is
+ * not one.
  */
 /** @type {import('jest').Config} */
 module.exports = {
