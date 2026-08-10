@@ -35,6 +35,35 @@ export const envSchema = z.object({
   SYSTEM_DATABASE_URL: z.string().min(1),
 
   // ---------------------------------------------------------------------------
+  // Tenancy (TAR-19)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The zone every tenant's platform subdomain is issued under, so a tenant with
+   * slug `acme` is reachable at `acme.<PLATFORM_DOMAIN>`. Custom domains (TAR-29)
+   * are added alongside it, never instead of it: the platform subdomain is the
+   * host that is guaranteed to work while a customer's DNS is still propagating.
+   */
+  PLATFORM_DOMAIN: z.string().min(1).default('app.localhost'),
+
+  /**
+   * Bearer credential for `/api/v1/admin/*`. Optional here and **absent means
+   * the whole admin surface refuses every request** — an environment that has
+   * not been given a token cannot provision tenants, which is the safe default
+   * for a route that creates them.
+   *
+   * 32 characters is the floor for something compared against by an
+   * unauthenticated caller. Generate with `openssl rand -base64 48`; it is a
+   * secret and belongs in the platform's secret store.
+   *
+   * Placeholder by design: it authenticates *the platform operator*, who is not
+   * a tenant user and therefore outside the session and RBAC model TAR-35 and
+   * TAR-22 build. Replace it with a real platform-admin identity when one
+   * exists — the guard is the only thing that has to change.
+   */
+  PLATFORM_ADMIN_TOKEN: z.string().min(32).optional(),
+
+  // ---------------------------------------------------------------------------
   // Infrastructure. Optional at scaffold time so the API boots with no backing
   // services. TAR-41 provisions these and promotes them to required.
   // ---------------------------------------------------------------------------

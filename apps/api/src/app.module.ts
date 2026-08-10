@@ -6,6 +6,7 @@ import { TenantContextModule } from './common/tenant-context/tenant-context.modu
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { TenancyModule } from './tenancy/tenancy.module';
 
 /**
  * One `.env` for the whole repository, at the root — the same file
@@ -29,6 +30,7 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     TenantContextModule,
     PrismaModule,
     HealthModule,
+    TenancyModule,
   ],
 })
 export class AppModule implements NestModule {
