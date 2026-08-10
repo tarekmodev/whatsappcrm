@@ -127,6 +127,11 @@ Two event buses, chosen by durability:
 Emit-side rule: a handler that must not be lost publishes to BullMQ, inside the same
 transaction as the state change that caused it.
 
+The first application of this rule is worked through in
+[0003 — ticket auto-linking contract](./0003-ticket-auto-linking-contract.md):
+`ConversationsModule` and `TicketsModule` are both L3, so auto-ticket creation crosses that
+boundary as a BullMQ job whose payload lives in `packages/contracts`, not as an import.
+
 ---
 
 ## Technology Choices
@@ -270,39 +275,40 @@ in TAR-19's migration; `apps/api/prisma/schema.prisma` is deliberately empty unt
 
 **Scoped** = carries `tenant_id`, RLS-protected.
 
-| Entity                              | Scoped   | Key fields and constraints                                                                                 | Story     |
-| ----------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- | --------- |
-| `tenants`                           | —        | `slug` unique; `status`; `trial_ends_at`                                                                   | TAR-19    |
-| `tenant_domains`                    | ✓        | `hostname` **globally** unique; `kind`; `verified_at`                                                      | TAR-19/29 |
-| `tenant_branding`                   | ✓        | one row per tenant                                                                                         | TAR-29    |
-| `users`                             | ✓        | `UNIQUE (tenant_id, email)` on `citext`; `role`; `status`; `password_hash`                                 | TAR-35    |
-| `sessions`                          | ✓        | `token_hash` unique; `expires_at`; index `(user_id)` for bulk revoke                                       | TAR-35    |
-| `invites`                           | ✓        | `token_hash` unique; `expires_at`; `accepted_at`                                                           | TAR-35    |
-| `teams`, `team_members`             | ✓        | `UNIQUE (tenant_id, name)`; `(team_id, user_id)`                                                           | TAR-22    |
-| `whatsapp_business_accounts`        | ✓        | `waba_id` globally unique; encrypted access token; verification status                                     | TAR-52    |
-| `whatsapp_accounts`                 | ✓        | One phone number, child of a WABA. `phone_number_id` **globally** unique — the routing key; quality rating | TAR-52    |
-| `message_templates`                 | ✓        | `UNIQUE (tenant_id, whatsapp_business_account_id, name, language)`; approval status — scoped to the WABA   | TAR-52    |
-| `contacts`                          | ✓        | `UNIQUE (tenant_id, phone_e164)`; `custom_fields JSONB`; `opted_out_at`                                    | TAR-33    |
-| `tags`, `contact_tags`              | ✓        | `UNIQUE (tenant_id, name)`                                                                                 | TAR-33    |
-| `custom_field_defs`                 | ✓        | `UNIQUE (tenant_id, key)`                                                                                  | TAR-33    |
-| `conversations`                     | ✓        | `UNIQUE (tenant_id, whatsapp_account_id, contact_id)`; `service_window_expires_at`                         | TAR-20    |
-| `messages`                          | ✓        | `UNIQUE (tenant_id, provider_message_id)`; `sent_at`; `status`                                             | TAR-20    |
-| `message_attachments`               | ✓        | `message_id`; re-hosted `url`                                                                              | TAR-20    |
-| `internal_notes`                    | ✓        | `conversation_id`; `mentioned_user_ids`                                                                    | TAR-20    |
-| `tickets`                           | ✓        | `UNIQUE (tenant_id, number)`; `status`; `priority`; `conversation_id`                                      | TAR-21/25 |
-| `ticket_events`                     | ✓        | append-only; `(tenant_id, ticket_id, created_at)`                                                          | TAR-21/32 |
-| `assignment_rules`                  | ✓        | ordered by `position`; `conditions JSONB`                                                                  | TAR-24    |
-| `assignment_state`                  | ✓        | round-robin cursor per team                                                                                | TAR-23    |
-| `sla_policies`, `sla_timers`        | ✓        | `due_at`; partial index on unresolved timers                                                               | TAR-26    |
-| `workflows`, `workflow_runs`        | ✓        | `definition JSONB`                                                                                         | TAR-27    |
-| `ai_configs`, `knowledge_documents` | ✓        | per-tenant KB                                                                                              | TAR-28    |
-| `canned_responses`                  | ✓        | `UNIQUE (tenant_id, shortcut)`                                                                             | TAR-31    |
-| `plans`                             | —        | `key` unique; `entitlements JSONB` — platform-wide, not per tenant                                         | TAR-37    |
-| `subscriptions`                     | ✓        | one per tenant; opaque `provider_*` ids; `current_period_*`                                                | TAR-37    |
-| `usage_counters`                    | ✓        | `UNIQUE (tenant_id, metric, period_start)`                                                                 | TAR-37    |
-| `webhook_events`                    | nullable | `UNIQUE (provider, provider_event_id)`; `status`; **not** RLS-protected — see below                        | TAR-20    |
-| `idempotency_keys`                  | ✓        | `UNIQUE (tenant_id, key)`; `request_hash`; `response_body`                                                 | TAR-20    |
-| `audit_logs`                        | ✓        | actor, action, target, `(tenant_id, created_at)`                                                           | TAR-22    |
+| Entity                              | Scoped   | Key fields and constraints                                                                                                                            | Story     |
+| ----------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `tenants`                           | —        | `slug` unique; `status`; `trial_ends_at`                                                                                                              | TAR-19    |
+| `tenant_domains`                    | ✓        | `hostname` **globally** unique; `kind`; `verified_at`                                                                                                 | TAR-19/29 |
+| `tenant_branding`                   | ✓        | one row per tenant                                                                                                                                    | TAR-29    |
+| `users`                             | ✓        | `UNIQUE (tenant_id, email)` on `citext`; `role`; `status`; `password_hash`                                                                            | TAR-35    |
+| `sessions`                          | ✓        | `token_hash` unique; `expires_at`; index `(user_id)` for bulk revoke                                                                                  | TAR-35    |
+| `invites`                           | ✓        | `token_hash` unique; `expires_at`; `accepted_at`                                                                                                      | TAR-35    |
+| `teams`, `team_members`             | ✓        | `UNIQUE (tenant_id, name)`; `(team_id, user_id)`                                                                                                      | TAR-22    |
+| `whatsapp_business_accounts`        | ✓        | `waba_id` globally unique; encrypted access token; verification status                                                                                | TAR-52    |
+| `whatsapp_accounts`                 | ✓        | One phone number, child of a WABA. `phone_number_id` **globally** unique — the routing key; quality rating                                            | TAR-52    |
+| `message_templates`                 | ✓        | `UNIQUE (tenant_id, whatsapp_business_account_id, name, language)`; approval status — scoped to the WABA                                              | TAR-52    |
+| `contacts`                          | ✓        | `UNIQUE (tenant_id, phone_e164)`; `custom_fields JSONB`; `opted_out_at`                                                                               | TAR-33    |
+| `tags`, `contact_tags`              | ✓        | `UNIQUE (tenant_id, name)`                                                                                                                            | TAR-33    |
+| `custom_field_defs`                 | ✓        | `UNIQUE (tenant_id, key)`                                                                                                                             | TAR-33    |
+| `conversations`                     | ✓        | `UNIQUE (tenant_id, whatsapp_account_id, contact_id)`; `service_window_expires_at`                                                                    | TAR-20    |
+| `messages`                          | ✓        | `UNIQUE (tenant_id, provider_message_id)`; `sent_at`; `status`                                                                                        | TAR-20    |
+| `message_attachments`               | ✓        | `message_id`; re-hosted `url`                                                                                                                         | TAR-20    |
+| `internal_notes`                    | ✓        | `conversation_id`; `mentioned_user_ids`                                                                                                               | TAR-20    |
+| `tickets`                           | ✓        | `UNIQUE (tenant_id, number)`; `status`; `priority`; `conversation_id`; one active ticket per contact — [0003](./0003-ticket-auto-linking-contract.md) | TAR-21/25 |
+| `ticket_counters`                   | ✓        | one row per tenant; the ticket-number allocator — [0003](./0003-ticket-auto-linking-contract.md)                                                      | TAR-21    |
+| `ticket_events`                     | ✓        | append-only; `(tenant_id, ticket_id, created_at)`                                                                                                     | TAR-21/32 |
+| `assignment_rules`                  | ✓        | ordered by `position`; `conditions JSONB`                                                                                                             | TAR-24    |
+| `assignment_state`                  | ✓        | round-robin cursor per team                                                                                                                           | TAR-23    |
+| `sla_policies`, `sla_timers`        | ✓        | `due_at`; partial index on unresolved timers                                                                                                          | TAR-26    |
+| `workflows`, `workflow_runs`        | ✓        | `definition JSONB`                                                                                                                                    | TAR-27    |
+| `ai_configs`, `knowledge_documents` | ✓        | per-tenant KB                                                                                                                                         | TAR-28    |
+| `canned_responses`                  | ✓        | `UNIQUE (tenant_id, shortcut)`                                                                                                                        | TAR-31    |
+| `plans`                             | —        | `key` unique; `entitlements JSONB` — platform-wide, not per tenant                                                                                    | TAR-37    |
+| `subscriptions`                     | ✓        | one per tenant; opaque `provider_*` ids; `current_period_*`                                                                                           | TAR-37    |
+| `usage_counters`                    | ✓        | `UNIQUE (tenant_id, metric, period_start)`                                                                                                            | TAR-37    |
+| `webhook_events`                    | nullable | `UNIQUE (provider, provider_event_id)`; `status`; **not** RLS-protected — see below                                                                   | TAR-20    |
+| `idempotency_keys`                  | ✓        | `UNIQUE (tenant_id, key)`; `request_hash`; `response_body`                                                                                            | TAR-20    |
+| `audit_logs`                        | ✓        | actor, action, target, `(tenant_id, created_at)`                                                                                                      | TAR-22    |
 
 **`webhook_events` is the deliberate exception.** It is written _before_ the tenant is
 known — that is the whole point of storing first and routing later — so it cannot carry
@@ -312,14 +318,15 @@ tenant-facing code. `tenant_id` is filled in during processing, for forensics.
 
 **Indexes that are load-bearing, and why**
 
-| Index                                                              | Serves                                  |
-| ------------------------------------------------------------------ | --------------------------------------- |
-| `messages (tenant_id, conversation_id, sent_at DESC, id DESC)`     | Thread view + keyset pagination         |
-| `conversations (tenant_id, status, last_message_at DESC, id DESC)` | The inbox list, the hottest query       |
-| `conversations (tenant_id, assigned_user_id, status)`              | An agent's default view                 |
-| `tickets (tenant_id, status, priority, created_at DESC)`           | Ticket queues and supervisor dashboards |
-| `sla_timers (tenant_id, due_at) WHERE state = 'running'`           | Partial index — the timer sweep         |
-| `contacts (tenant_id, phone_e164)` unique                          | Inbound message → contact, per message  |
+| Index                                                                       | Serves                                                                                                                                                                                 |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `messages (tenant_id, conversation_id, sent_at DESC, id DESC)`              | Thread view + keyset pagination                                                                                                                                                        |
+| `conversations (tenant_id, status, last_message_at DESC, id DESC)`          | The inbox list, the hottest query                                                                                                                                                      |
+| `conversations (tenant_id, assigned_user_id, status)`                       | An agent's default view                                                                                                                                                                |
+| `tickets (tenant_id, status, priority, created_at DESC)`                    | Ticket queues and supervisor dashboards                                                                                                                                                |
+| `tickets (tenant_id, contact_id) WHERE status IN ('open','pending')` unique | Partial index — the one-active-ticket-per-contact invariant, and the "has this contact an open ticket?" read on every inbound message ([0003](./0003-ticket-auto-linking-contract.md)) |
+| `sla_timers (tenant_id, due_at) WHERE state = 'running'`                    | Partial index — the timer sweep                                                                                                                                                        |
+| `contacts (tenant_id, phone_e164)` unique                                   | Inbound message → contact, per message                                                                                                                                                 |
 
 Sort keys are `(timestamp DESC, id DESC)` throughout, which is what makes UUIDv7 ids
 worth having: the id is a stable tie-breaker for two rows in the same millisecond.
@@ -616,20 +623,20 @@ steps, in order: read replicas for reporting, then partition `messages` by
 TAR-18 already carries the story breakdown, so this section maps the contract onto those
 stories rather than creating new ones. **No sub-issues are created by this issue.**
 
-| Order | Story                       | Delivers from this contract                                                                    | Unblocks      |
-| ----- | --------------------------- | ---------------------------------------------------------------------------------------------- | ------------- |
-| 1     | **TAR-19**                  | Prisma models, RLS migration, `TenantPrisma`/`SystemPrisma`, host→tenant guard, isolation test | everything    |
-| 1a    | TAR-47 ✅                   | Prisma models and the initial migration — landed on `main`                                     | TAR-48/49     |
-| 1b    | **TAR-48**                  | RLS policies, `FORCE ROW LEVEL SECURITY`, the non-`BYPASSRLS` app role, isolation test         | the guarantee |
-| 1c    | **TAR-49**                  | `TenantPrisma`/`SystemPrisma` split and the client extension that sets the GUC                 | every query   |
-| 1d    | TAR-50/51                   | Tenant provisioning and deactivation flows                                                     | TAR-36        |
-| 2     | TAR-35                      | Sessions, login, invites, `AuthGuard`, `setTenant()`                                           | TAR-20/22     |
-| 2     | TAR-22                      | Roles, teams, `PermissionGuard`                                                                | TAR-23/24     |
-| 3     | TAR-20                      | WhatsApp accounts, ingest + processors, inbox, realtime                                        | TAR-21/28     |
-| 3     | TAR-46                      | Seed data against the entities above                                                           | TAR-45        |
-| 4     | TAR-21/25/26/32             | Tickets, status, SLA, event log                                                                | TAR-30        |
-| 4     | TAR-37                      | `PolarBillingProvider`, plans, entitlements, usage counters                                    | TAR-36        |
-| 5     | TAR-23/24/27/28/29/30/31/33 | Feature modules against fixed boundaries                                                       | —             |
+| Order | Story                       | Delivers from this contract                                                                        | Unblocks      |
+| ----- | --------------------------- | -------------------------------------------------------------------------------------------------- | ------------- |
+| 1     | **TAR-19**                  | Prisma models, RLS migration, `TenantPrisma`/`SystemPrisma`, host→tenant guard, isolation test     | everything    |
+| 1a    | TAR-47 ✅                   | Prisma models and the initial migration — landed on `main`                                         | TAR-48/49     |
+| 1b    | **TAR-48**                  | RLS policies, `FORCE ROW LEVEL SECURITY`, the non-`BYPASSRLS` app role, isolation test             | the guarantee |
+| 1c    | **TAR-49**                  | `TenantPrisma`/`SystemPrisma` split and the client extension that sets the GUC                     | every query   |
+| 1d    | TAR-50/51                   | Tenant provisioning and deactivation flows                                                         | TAR-36        |
+| 2     | TAR-35                      | Sessions, login, invites, `AuthGuard`, `setTenant()`                                               | TAR-20/22     |
+| 2     | TAR-22                      | Roles, teams, `PermissionGuard`                                                                    | TAR-23/24     |
+| 3     | TAR-20                      | WhatsApp accounts, ingest + processors, inbox, realtime                                            | TAR-21/28     |
+| 3     | TAR-46                      | Seed data against the entities above                                                               | TAR-45        |
+| 4     | TAR-21/25/26/32             | Tickets, status, SLA, event log — contract fixed by [0003](./0003-ticket-auto-linking-contract.md) | TAR-30        |
+| 4     | TAR-37                      | `PolarBillingProvider`, plans, entitlements, usage counters                                        | TAR-36        |
+| 5     | TAR-23/24/27/28/29/30/31/33 | Feature modules against fixed boundaries                                                           | —             |
 
 The ordering constraint that matters: **TAR-19 is a hard prerequisite for everything
 else**, because it lands the schema and the scoping mechanism every other story writes
