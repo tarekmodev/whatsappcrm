@@ -6,7 +6,10 @@ import {
 } from '../common/pagination/keyset-cursor';
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
-import { hasUnsupportedButtons } from './message-template-components';
+import {
+  describeTemplateComponents,
+  type MessageTemplateComponentSummary,
+} from './message-template-components';
 
 /** Exactly the columns the response is built from — nothing wider. */
 const TEMPLATE_PROJECTION = {
@@ -36,8 +39,18 @@ export interface ListMessageTemplatesQuery {
   q?: string;
 }
 
+/**
+ * A row with what its component tree says, read once. The controller needs the
+ * summary to build the response and this service needs it to apply the button
+ * exclusion, so it is derived here and carried, rather than parsed twice.
+ */
+export interface ListedTemplate {
+  row: ListedMessageTemplate;
+  summary: MessageTemplateComponentSummary;
+}
+
 export interface MessageTemplatePage {
-  items: ListedMessageTemplate[];
+  items: ListedTemplate[];
   nextCursor: string | null;
 }
 
@@ -137,8 +150,14 @@ export class MessageTemplateQueryService {
       where: {
         status: 'approved',
         ...(whatsappBusinessAccountId === undefined ? {} : { whatsappBusinessAccountId }),
-        ...(query.q === undefined ? {} : { name: { startsWith: query.q } }),
-        ...(cursor === null ? {} : { OR: keysetPredicate(cursor) }),
+        // One `name` filter, not two: the prefix and the cursor's lower bound
+        // both constrain the same column, and a second `name` key would silently
+        // replace the first.
+        name: {
+          ...(query.q === undefined ? {} : { startsWith: query.q }),
+          ...(cursor === null ? {} : { gte: cursor.name }),
+        },
+        ...(cursor === null ? {} : { NOT: alreadyReturned(cursor) }),
       },
       // `(name ASC, language ASC, id ASC)`. An agent scans this picker looking
       // for `order_update`, not for whatever Meta approved most recently. The id
@@ -161,7 +180,9 @@ export class MessageTemplateQueryService {
     const last = window.at(-1);
 
     return {
-      items: window.filter((row) => !hasUnsupportedButtons(row.components)),
+      items: window
+        .map((row) => ({ row, summary: describeTemplateComponents(row.components) }))
+        .filter(({ summary }) => !summary.requiresButtonParameters),
       nextCursor:
         rows.length > query.limit && last !== undefined
           ? encodeKeysetCursor({ sortValues: [last.name, last.language], id: last.id })
@@ -223,14 +244,25 @@ function readCursor(value: string | undefined): TemplateCursor | null {
 }
 
 /**
- * "Strictly after the cursor row in `(name ASC, language ASC, id ASC)` order" —
- * a later name, or the same name with a later language, or both equal with a
- * higher id.
+ * "Strictly after the cursor row in `(name ASC, language ASC, id ASC)` order",
+ * in the shape 0002 rules for a resume predicate: an inclusive bound on the
+ * leading column — `name >= $1`, written where the query is built — minus the
+ * part of that name's tie group this caller has already been given.
+ *
+ * The obvious translation is the nested disjunction
+ * `name > $1 OR (name = $1 AND (language > $2 OR (language = $2 AND id > $3)))`.
+ * It returns the same rows and is the wrong shape: a planner cannot turn a
+ * nested OR into one index start condition, so it scans the range from the
+ * beginning and filters — the `OFFSET` cost profile keyset pagination exists to
+ * avoid. The bound below is a start condition, and the `NOT` discards only the
+ * rows sharing the cursor's name, of which a template list holds a handful.
  */
-function keysetPredicate(cursor: TemplateCursor): Prisma.MessageTemplateWhereInput[] {
-  return [
-    { name: { gt: cursor.name } },
-    { name: cursor.name, language: { gt: cursor.language } },
-    { name: cursor.name, language: cursor.language, id: { gt: cursor.id } },
-  ];
+function alreadyReturned(cursor: TemplateCursor): Prisma.MessageTemplateWhereInput {
+  return {
+    name: cursor.name,
+    OR: [
+      { language: { lt: cursor.language } },
+      { language: cursor.language, id: { lte: cursor.id } },
+    ],
+  };
 }
