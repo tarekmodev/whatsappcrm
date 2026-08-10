@@ -208,6 +208,35 @@ loses work loudly under memory pressure rather than silently, and ADR 0001's
 durability rule — the webhook path persists to PostgreSQL before it enqueues — which
 keeps Redis a latency dependency rather than a durability one.
 
+### Data residency — ADR 0001's open question 1. **Answered: no requirement.**
+
+ADR 0001 raised this twice and proceeded on the recorded assumption that no
+residency requirement exists, flagging that a late reversal would cost a full
+migration to AWS `me-central-1`.
+
+**Tarek confirmed on TAR-41, 2026-08-10, that Frankfurt is acceptable.** The
+assumption is now a decision: every environment stays in Render's `frankfurt`
+region, the closest Render offers to the client's Saudi base, and the deployment
+target in ADR 0001 decision 9 stands unchanged.
+
+This was the one open item that could not be corrected cheaply later, so it is
+recorded here rather than left implicit. The trigger to reopen it is unchanged: a
+contract clause or a statement that WhatsApp conversation content must remain
+in-region. Since conversation content is personal data, anyone adding a
+cross-region replica, backup target, log destination or analytics export should
+treat that as reopening this decision, not as a configuration detail.
+
+### Cost of the blueprint. **Signed off.**
+
+The blueprint provisions **twelve** billable resources — four per environment
+(API service, web service, Key Value instance, Postgres instance). Tarek signed
+off on TAR-41, 2026-08-10.
+
+Every instance type is paid on purpose: free Postgres has no backups and no
+point-in-time recovery, which TAR-43 depends on, and free instances sleep, which
+would make uptime alerting meaningless. Development and staging run the smallest
+paid tiers; only production is sized above them.
+
 ## Consequences for downstream issues
 
 - **TAR-39** — an exception filter and the `ApiError` envelope now exist. Error
@@ -233,9 +262,9 @@ keeps Redis a latency dependency rather than a durability one.
 
 ## Open questions and risks
 
-| #   | Item                                                                                                                            | Severity | Proposed resolution                                       |
-| --- | ------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------- |
-| 1   | Nothing in this repository can create Render or Sentry accounts. Provisioning and external uptime alerting need credentials     | **High** | Raised on TAR-41; blocks TAR-43                           |
-| 2   | Data residency (ADR 0001 open question 1) is still assumed not to apply. Frankfurt is the closest Render region to Saudi Arabia | Medium   | Confirm before production holds real tenant data          |
-| 3   | No background worker service is declared — BullMQ is not installed yet, so there is nothing to run                              | Medium   | The story that adds the queue adds a `worker` service     |
-| 4   | Log volume and retention are Render's defaults. A busy tenant could make the request log the dominant cost                      | Low      | Revisit with real traffic; `LOG_LEVEL` is per environment |
+| #   | Item                                                                                                                        | Severity | Proposed resolution                                       |
+| --- | --------------------------------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------- |
+| 1   | Nothing in this repository can create Render or Sentry accounts. Provisioning and external uptime alerting need credentials | **High** | Raised on TAR-41; blocks TAR-43                           |
+| 2   | ~~Data residency~~ — **resolved**, see below                                                                                | —        | Closed 2026-08-10                                         |
+| 3   | No background worker service is declared — BullMQ is not installed yet, so there is nothing to run                          | Medium   | The story that adds the queue adds a `worker` service     |
+| 4   | Log volume and retention are Render's defaults. A busy tenant could make the request log the dominant cost                  | Low      | Revisit with real traffic; `LOG_LEVEL` is per environment |

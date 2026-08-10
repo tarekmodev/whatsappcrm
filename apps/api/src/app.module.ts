@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TenantContextMiddleware } from './common/tenant-context/tenant-context.middleware';
@@ -9,9 +10,30 @@ import { RedisModule } from './infra/redis/redis.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { RequestLoggingMiddleware } from './observability/request-logging.middleware';
 
+/** `<repo>/.env`, from `apps/api/dist` — two levels to `apps/api`, one more to the root. */
+const REPOSITORY_ENV_FILE = resolve(__dirname, '..', '..', '..', '.env');
+
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, cache: true, validate: validateEnv }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      cache: true,
+      validate: validateEnv,
+      // One `.env` for the whole repository, at the root — the same file
+      // `prisma.config.mjs` reads, so the app and the migration CLI can never
+      // disagree about which database "local" means.
+      //
+      // Resolved from `__dirname`, not from the working directory: turbo runs a
+      // package script with its cwd set to that package, so the default lookup
+      // would look in `apps/api` and silently find nothing. Deployed environments
+      // have no `.env` at all and Nest skips a missing file, so this is inert
+      // there — real environment variables always win.
+      envFilePath: [REPOSITORY_ENV_FILE],
+      // The suite must never read a developer's `.env`. A test whose result
+      // depends on whether someone happens to have Postgres running locally is
+      // not a test, and the readiness specs assert the unconfigured case.
+      ignoreEnvFile: process.env.NODE_ENV === 'test',
+    }),
     TenantContextModule,
     ObservabilityModule,
     DatabaseModule,

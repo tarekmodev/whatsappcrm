@@ -46,4 +46,35 @@ describe('validateEnv', () => {
   it('rejects a deployment environment it does not recognise', () => {
     expect(() => validateEnv({ DEPLOY_ENV: 'prod' })).toThrow(/DEPLOY_ENV/);
   });
+
+  describe('blank values', () => {
+    // `.env.example` documents optional keys as `KEY=`, and the README says to copy
+    // it — so a blank value has to mean "not set", or a fresh clone cannot boot.
+    it('treats a blank optional URL as absent rather than as an invalid one', () => {
+      expect(() => validateEnv({ SENTRY_DSN: '' })).not.toThrow();
+      expect(validateEnv({ SENTRY_DSN: '' }).SENTRY_DSN).toBeUndefined();
+    });
+
+    it('falls back to the default when a value with one is blank', () => {
+      expect(validateEnv({ LOG_LEVEL: '', WEB_ORIGIN: '' }).LOG_LEVEL).toBe('info');
+      expect(validateEnv({ WEB_ORIGIN: '' }).WEB_ORIGIN).toBe('http://localhost:3000');
+    });
+
+    it('accepts the documented example file as-is', () => {
+      // The optional keys exactly as `.env.example` ships them.
+      expect(() =>
+        validateEnv({
+          SENTRY_DSN: '',
+          WHATSAPP_APP_SECRET: '',
+          POLAR_ACCESS_TOKEN: '',
+        }),
+      ).not.toThrow();
+    });
+
+    it('still refuses to boot in production when a required value is blank', () => {
+      expect(() => validateEnv({ ...productionBase, DATABASE_URL: '' })).toThrow(
+        /DATABASE_URL: is required when NODE_ENV=production/,
+      );
+    });
+  });
 });
