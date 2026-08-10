@@ -2,7 +2,11 @@ import type { Server } from 'node:http';
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { ApiErrorSchema, ProvisionedTenantResponseSchema } from '@whatsappcrm/contracts';
+import {
+  ApiErrorSchema,
+  DeactivatedTenantResponseSchema,
+  ProvisionedTenantResponseSchema,
+} from '@whatsappcrm/contracts';
 import request from 'supertest';
 import { configureApp } from '../../bootstrap';
 import { ApiExceptionFilter } from '../../common/errors/api-exception.filter';
@@ -11,6 +15,11 @@ import {
   TenantContextMiddleware,
 } from '../../common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from '../../common/tenant-context/tenant-context.module';
+import { TenantNotFoundError } from '../tenant-deactivation.errors';
+import {
+  TenantDeactivationService,
+  type DeactivateTenantResult,
+} from '../tenant-deactivation.service';
 import { PlatformHostnameTakenError } from '../tenant-provisioning.errors';
 import {
   TenantProvisioningService,
@@ -20,10 +29,9 @@ import { AdminTenantsController } from './admin-tenants.controller';
 import { PlatformAdminGuard } from './platform-admin.guard';
 
 /**
- * The HTTP contract of `POST /api/v1/admin/tenants`: who may call it, what it
- * accepts, and the exact status code that distinguishes a provision from a
- * replay. Provisioning itself is stubbed — its behaviour is covered by the
- * service's own specs.
+ * The HTTP contract of the platform-admin tenant routes: who may call them,
+ * what they accept, and the status codes that carry the outcome. Both services
+ * are stubbed — their behaviour is covered by their own specs.
  */
 
 const TOKEN = 'a-platform-admin-token-of-at-least-32-chars';
@@ -43,13 +51,26 @@ const PROVISIONED: ProvisionTenantResult = {
   },
 };
 
-describe('POST /api/v1/admin/tenants', () => {
+const DEACTIVATED: DeactivateTenantResult = {
+  deactivated: true,
+  tenant: {
+    id: TENANT_ID,
+    slug: 'acme',
+    name: 'Acme Ltd',
+    status: 'suspended',
+    suspendedAt: new Date('2026-08-10T10:00:00.000Z'),
+  },
+};
+
+describe('the platform-admin tenant routes', () => {
   let app: INestApplication;
   let server: Server;
   let provision: jest.Mock;
+  let deactivate: jest.Mock;
 
   beforeAll(async () => {
     provision = jest.fn();
+    deactivate = jest.fn();
 
     const moduleRef = await Test.createTestingModule({
       imports: [TenantContextModule],
@@ -58,6 +79,7 @@ describe('POST /api/v1/admin/tenants', () => {
         PlatformAdminGuard,
         ApiExceptionFilter,
         { provide: TenantProvisioningService, useValue: { provision } },
+        { provide: TenantDeactivationService, useValue: { deactivate } },
         {
           provide: ConfigService,
           // Keyed rather than a blanket return: `configureApp` reads
@@ -86,88 +108,175 @@ describe('POST /api/v1/admin/tenants', () => {
 
   beforeEach(() => {
     provision.mockReset().mockResolvedValue(PROVISIONED);
+    deactivate.mockReset().mockResolvedValue(DEACTIVATED);
   });
 
-  function post(body: object) {
-    return request(server)
-      .post('/api/v1/admin/tenants')
-      .set('authorization', `Bearer ${TOKEN}`)
-      .send(body);
-  }
+  describe('POST /api/v1/admin/tenants', () => {
+    function post(body: object) {
+      return request(server)
+        .post('/api/v1/admin/tenants')
+        .set('authorization', `Bearer ${TOKEN}`)
+        .send(body);
+    }
 
-  it('answers 201 with the published response when it provisions', async () => {
-    const response = await post({ slug: 'acme', name: 'Acme Ltd' }).expect(201);
+    it('answers 201 with the published response when it provisions', async () => {
+      const response = await post({ slug: 'acme', name: 'Acme Ltd' }).expect(201);
 
-    const body = ProvisionedTenantResponseSchema.parse(response.body);
+      const body = ProvisionedTenantResponseSchema.parse(response.body);
 
-    expect(body).toEqual({
-      id: TENANT_ID,
-      slug: 'acme',
-      name: 'Acme Ltd',
-      status: 'active',
-      primaryHostname: 'acme.app.example.com',
-      settings: { timezone: 'UTC', locale: 'en' },
-      createdAt: '2026-08-10T09:00:00.000Z',
+      expect(body).toEqual({
+        id: TENANT_ID,
+        slug: 'acme',
+        name: 'Acme Ltd',
+        status: 'active',
+        primaryHostname: 'acme.app.example.com',
+        settings: { timezone: 'UTC', locale: 'en' },
+        createdAt: '2026-08-10T09:00:00.000Z',
+      });
+    });
+
+    it('answers 200 with the same body when the tenant already existed', async () => {
+      provision.mockResolvedValue({ ...PROVISIONED, created: false });
+
+      const response = await post({ slug: 'acme', name: 'Acme Ltd' }).expect(200);
+
+      // Identical payload: an idempotent operation that reported a different
+      // resource on replay would not be idempotent. The status carries the news.
+      expect(ProvisionedTenantResponseSchema.parse(response.body).id).toBe(TENANT_ID);
+    });
+
+    it('passes only contract fields through, so a client cannot set what it does not own', async () => {
+      await post({
+        slug: 'acme',
+        name: 'Acme Ltd',
+        status: 'active',
+        id: '00000000-0000-7000-8000-000000000000',
+        primaryHostname: 'globex.app.example.com',
+      }).expect(201);
+
+      expect(provision).toHaveBeenCalledWith({ slug: 'acme', name: 'Acme Ltd' });
+    });
+
+    it('refuses an unauthenticated caller before it reaches provisioning', async () => {
+      const response = await request(server)
+        .post('/api/v1/admin/tenants')
+        .send({ slug: 'acme', name: 'Acme Ltd' })
+        .expect(401);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('unauthenticated');
+      expect(provision).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid body with field-level detail', async () => {
+      const response = await post({ slug: '-acme', name: '' }).expect(400);
+
+      const { error } = ApiErrorSchema.parse(response.body);
+
+      expect(error.code).toBe('validation_failed');
+      expect(error.details?.map((detail) => detail.path).sort()).toEqual(['name', 'slug']);
+      expect(provision).not.toHaveBeenCalled();
+    });
+
+    it('reports a hostname claimed by another tenant as a conflict, not a fault', async () => {
+      provision.mockRejectedValue(new PlatformHostnameTakenError('acme.app.example.com'));
+
+      const response = await post({ slug: 'acme', name: 'Acme Ltd' }).expect(409);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('conflict');
+    });
+
+    it('correlates every error with the request id the caller can see', async () => {
+      const response = await request(server)
+        .post('/api/v1/admin/tenants')
+        .set(REQUEST_ID_HEADER, 'req_from_caller')
+        .send({})
+        .expect(401);
+
+      expect(ApiErrorSchema.parse(response.body).error.requestId).toBe('req_from_caller');
     });
   });
 
-  it('answers 200 with the same body when the tenant already existed', async () => {
-    provision.mockResolvedValue({ ...PROVISIONED, created: false });
+  describe('POST /api/v1/admin/tenants/{slug}/deactivate', () => {
+    function deactivateRequest(slug: string, body: object = {}) {
+      return request(server)
+        .post(`/api/v1/admin/tenants/${slug}/deactivate`)
+        .set('authorization', `Bearer ${TOKEN}`)
+        .send(body);
+    }
 
-    const response = await post({ slug: 'acme', name: 'Acme Ltd' }).expect(200);
+    it('answers 200 with the tenant it deactivated', async () => {
+      const response = await deactivateRequest('acme').expect(200);
 
-    // Identical payload: an idempotent operation that reported a different
-    // resource on replay would not be idempotent. The status carries the news.
-    expect(ProvisionedTenantResponseSchema.parse(response.body).id).toBe(TENANT_ID);
-  });
+      expect(DeactivatedTenantResponseSchema.parse(response.body)).toEqual({
+        id: TENANT_ID,
+        slug: 'acme',
+        name: 'Acme Ltd',
+        status: 'suspended',
+        suspendedAt: '2026-08-10T10:00:00.000Z',
+      });
+    });
 
-  it('passes only contract fields through, so a client cannot set what it does not own', async () => {
-    await post({
-      slug: 'acme',
-      name: 'Acme Ltd',
-      status: 'active',
-      id: '00000000-0000-7000-8000-000000000000',
-      primaryHostname: 'globex.app.example.com',
-    }).expect(201);
+    it('answers 200 again when the tenant was already deactivated', async () => {
+      deactivate.mockResolvedValue({ ...DEACTIVATED, deactivated: false });
 
-    expect(provision).toHaveBeenCalledWith({ slug: 'acme', name: 'Acme Ltd' });
-  });
+      const response = await deactivateRequest('acme').expect(200);
 
-  it('refuses an unauthenticated caller before it reaches provisioning', async () => {
-    const response = await request(server)
-      .post('/api/v1/admin/tenants')
-      .send({ slug: 'acme', name: 'Acme Ltd' })
-      .expect(401);
+      // Same code and same body: the operation is idempotent, and reporting a
+      // repeat as an error would make a retried script look like a failure.
+      expect(DeactivatedTenantResponseSchema.parse(response.body).status).toBe('suspended');
+    });
 
-    expect(ApiErrorSchema.parse(response.body).error.code).toBe('unauthenticated');
-    expect(provision).not.toHaveBeenCalled();
-  });
+    it('passes the reason through to the audit trail, and nothing else', async () => {
+      await deactivateRequest('acme', {
+        reason: 'Non-payment',
+        status: 'cancelled',
+        suspendedAt: '2020-01-01T00:00:00.000Z',
+      }).expect(200);
 
-  it('rejects an invalid body with field-level detail', async () => {
-    const response = await post({ slug: '-acme', name: '' }).expect(400);
+      // A caller cannot dictate the status it lands in or backdate the stamp:
+      // unknown keys are stripped by the contract schema before the service
+      // sees them.
+      expect(deactivate).toHaveBeenCalledWith({ slug: 'acme', reason: 'Non-payment' });
+    });
 
-    const { error } = ApiErrorSchema.parse(response.body);
+    it('accepts a call with no body at all', async () => {
+      await deactivateRequest('acme').expect(200);
 
-    expect(error.code).toBe('validation_failed');
-    expect(error.details?.map((detail) => detail.path).sort()).toEqual(['name', 'slug']);
-    expect(provision).not.toHaveBeenCalled();
-  });
+      expect(deactivate).toHaveBeenCalledWith({ slug: 'acme', reason: undefined });
+    });
 
-  it('reports a hostname claimed by another tenant as a conflict, not a fault', async () => {
-    provision.mockRejectedValue(new PlatformHostnameTakenError('acme.app.example.com'));
+    it('rejects a slug that is not a slug, before it reaches the service', async () => {
+      const response = await deactivateRequest('-acme').expect(400);
 
-    const response = await post({ slug: 'acme', name: 'Acme Ltd' }).expect(409);
+      const { error } = ApiErrorSchema.parse(response.body);
 
-    expect(ApiErrorSchema.parse(response.body).error.code).toBe('conflict');
-  });
+      expect(error.code).toBe('validation_failed');
+      expect(error.details?.map((detail) => detail.path)).toEqual(['slug']);
+      expect(deactivate).not.toHaveBeenCalled();
+    });
 
-  it('correlates every error with the request id the caller can see', async () => {
-    const response = await request(server)
-      .post('/api/v1/admin/tenants')
-      .set(REQUEST_ID_HEADER, 'req_from_caller')
-      .send({})
-      .expect(401);
+    it('rejects a reason longer than the contract allows', async () => {
+      await deactivateRequest('acme', { reason: 'x'.repeat(501) }).expect(400);
 
-    expect(ApiErrorSchema.parse(response.body).error.requestId).toBe('req_from_caller');
+      expect(deactivate).not.toHaveBeenCalled();
+    });
+
+    it('reports an unknown tenant as not found, so a mistyped slug is visible', async () => {
+      deactivate.mockRejectedValue(new TenantNotFoundError('globex'));
+
+      const response = await deactivateRequest('globex').expect(404);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('not_found');
+    });
+
+    it('refuses an unauthenticated caller before it reaches the service', async () => {
+      const response = await request(server)
+        .post('/api/v1/admin/tenants/acme/deactivate')
+        .send({})
+        .expect(401);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('unauthenticated');
+      expect(deactivate).not.toHaveBeenCalled();
+    });
   });
 });
