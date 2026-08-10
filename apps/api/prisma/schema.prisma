@@ -146,6 +146,37 @@ enum WhatsappAccountStatus {
   @@map("whatsapp_account_status")
 }
 
+/// Where a WABA stands with Meta (TAR-52). Modelled as the lifecycle — not
+/// verified, submitted, cleared, refused — rather than as a transcription of
+/// Meta's field, because Meta exposes two different vocabularies here (the
+/// business's `verification_status` and the WABA's `account_review_status`) and
+/// TAR-39 records which one the Embedded Signup flow returns as *unverified*.
+/// TAR-20 confirms it against Meta's current documentation and maps onto these
+/// four; a value it needs and does not find is one `ALTER TYPE ... ADD VALUE`,
+/// which is the cheap direction of an enum change.
+enum WhatsappBusinessVerificationStatus {
+  not_verified
+  pending
+  verified
+  rejected
+
+  @@map("whatsapp_business_verification_status")
+}
+
+/// Meta's per-phone-number quality rating. It belongs to the number and not to
+/// the business: Meta rates each number separately and throttles each one
+/// separately, so two numbers under one WABA can and do sit at different
+/// ratings. `unknown` is a value Meta itself returns — distinct from the column
+/// being NULL, which means we have never asked.
+enum WhatsappQualityRating {
+  green
+  yellow
+  red
+  unknown
+
+  @@map("whatsapp_quality_rating")
+}
+
 enum MessageTemplateStatus {
   pending
   approved
@@ -317,40 +348,41 @@ model Tenant {
   createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  domains          TenantDomain[]
-  branding         TenantBranding?
-  settings         TenantSettings?
-  users            User[]
-  sessions         Session[]
-  invites          Invite[]
-  teams            Team[]
-  teamMembers      TeamMember[]
-  whatsappAccounts WhatsappAccount[]
-  messageTemplates MessageTemplate[]
-  contacts         Contact[]
-  tags             Tag[]
-  contactTags      ContactTag[]
-  customFieldDefs  CustomFieldDef[]
-  conversations    Conversation[]
-  messages         Message[]
-  attachments      MessageAttachment[]
-  internalNotes    InternalNote[]
-  tickets          Ticket[]
-  ticketEvents     TicketEvent[]
-  assignmentRules  AssignmentRule[]
-  assignmentStates AssignmentState[]
-  slaPolicies      SlaPolicy[]
-  slaTimers        SlaTimer[]
-  workflows        Workflow[]
-  workflowRuns     WorkflowRun[]
-  aiConfig         AiConfig?
-  knowledgeDocs    KnowledgeDocument[]
-  cannedResponses  CannedResponse[]
-  subscription     Subscription?
-  usageCounters    UsageCounter[]
-  webhookEvents    WebhookEvent[]
-  idempotencyKeys  IdempotencyKey[]
-  auditLogs        AuditLog[]
+  domains                  TenantDomain[]
+  branding                 TenantBranding?
+  settings                 TenantSettings?
+  users                    User[]
+  sessions                 Session[]
+  invites                  Invite[]
+  teams                    Team[]
+  teamMembers              TeamMember[]
+  whatsappBusinessAccounts WhatsappBusinessAccount[]
+  whatsappAccounts         WhatsappAccount[]
+  messageTemplates         MessageTemplate[]
+  contacts                 Contact[]
+  tags                     Tag[]
+  contactTags              ContactTag[]
+  customFieldDefs          CustomFieldDef[]
+  conversations            Conversation[]
+  messages                 Message[]
+  attachments              MessageAttachment[]
+  internalNotes            InternalNote[]
+  tickets                  Ticket[]
+  ticketEvents             TicketEvent[]
+  assignmentRules          AssignmentRule[]
+  assignmentStates         AssignmentState[]
+  slaPolicies              SlaPolicy[]
+  slaTimers                SlaTimer[]
+  workflows                Workflow[]
+  workflowRuns             WorkflowRun[]
+  aiConfig                 AiConfig?
+  knowledgeDocs            KnowledgeDocument[]
+  cannedResponses          CannedResponse[]
+  subscription             Subscription?
+  usageCounters            UsageCounter[]
+  webhookEvents            WebhookEvent[]
+  idempotencyKeys          IdempotencyKey[]
+  auditLogs                AuditLog[]
 
   @@index([status])
   @@map("tenants")
@@ -543,50 +575,105 @@ model TeamMember {
 // WhatsApp channel — TAR-20
 // ---------------------------------------------------------------------------
 
-/// One Meta app serves every tenant, so `phone_number_id` is the webhook
-/// routing key and must be unique **globally** (TAR-39, webhook ingestion).
-model WhatsappAccount {
-  id                   String                @id @default(uuid(7)) @db.Uuid
-  tenantId             String                @map("tenant_id") @db.Uuid
-  phoneNumberId        String                @unique @map("phone_number_id")
-  wabaId               String                @map("waba_id")
-  displayPhoneNumber   String                @map("display_phone_number")
-  verifiedName         String?               @map("verified_name")
-  /// Per-tenant credential, encrypted at rest and decrypted only in the send
-  /// path (TAR-39, security). Never selected into an API response.
-  accessTokenEncrypted String?               @map("access_token_encrypted")
-  status               WhatsappAccountStatus @default(disconnected)
-  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+/// Meta scopes its WhatsApp objects at three levels, not two, and TAR-52 gives
+/// the middle one a table of its own:
+///
+///   Tenant ──< WhatsappBusinessAccount ──< WhatsappAccount   (phone numbers)
+///                                     └──< MessageTemplate
+///
+/// A tenant may hold several WABAs (TAR-39, question 6, answered by Tarek), each
+/// with one or more numbers. The two things that follow from Meta's own scoping,
+/// and that this table exists to express:
+///
+///   * **The access token is issued to the business, not to the number.** One
+///     copy per WABA, so a rotation is a single-row update that cannot leave two
+///     numbers holding different secrets.
+///   * **Template approval is per WABA.** `message_templates` hangs off this
+///     table, which is what lets one tenant hold `order_update`/`en` approved
+///     separately under two WABAs.
+///
+/// Quality rating and messaging limits stay on the phone number, where Meta puts
+/// them — see `WhatsappAccount`.
+model WhatsappBusinessAccount {
+  id                   String                             @id @default(uuid(7)) @db.Uuid
+  tenantId             String                             @map("tenant_id") @db.Uuid
+  /// Meta's own id for the business account. Unique **globally**, on the same
+  /// reasoning as `phone_number_id`: one Meta app serves every tenant, so a
+  /// WABA id arriving on a webhook has to resolve to exactly one row.
+  wabaId               String                             @unique @map("waba_id")
+  /// The business name Meta reports. Display only — two WABAs under one tenant
+  /// are otherwise indistinguishable in an operator's list.
+  name                 String?
+  /// The per-business credential, encrypted at rest and decrypted only in the
+  /// send path (TAR-39, security). Never selected into an API response.
+  accessTokenEncrypted String?                            @map("access_token_encrypted")
+  verificationStatus   WhatsappBusinessVerificationStatus @default(not_verified) @map("verification_status")
+  createdAt            DateTime                           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  templates     MessageTemplate[]
-  conversations Conversation[]
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  accounts  WhatsappAccount[]
+  templates MessageTemplate[]
 
   @@unique([tenantId, id])
   @@index([tenantId])
+  @@map("whatsapp_business_accounts")
+}
+
+/// One phone number, child of a WABA. One Meta app serves every tenant, so
+/// `phone_number_id` is the webhook routing key and must be unique **globally**
+/// (TAR-39, webhook ingestion) — that does not change with several WABAs behind
+/// it, because the routing key names the number rather than the business.
+model WhatsappAccount {
+  id                        String                 @id @default(uuid(7)) @db.Uuid
+  tenantId                  String                 @map("tenant_id") @db.Uuid
+  whatsappBusinessAccountId String                 @map("whatsapp_business_account_id") @db.Uuid
+  phoneNumberId             String                 @unique @map("phone_number_id")
+  displayPhoneNumber        String                 @map("display_phone_number")
+  verifiedName              String?                @map("verified_name")
+  /// Meta's rating for this number. NULL until we have read it; `unknown` when
+  /// Meta says so. Not on the WABA — Meta rates and throttles per number.
+  qualityRating             WhatsappQualityRating? @map("quality_rating")
+  status                    WhatsappAccountStatus  @default(disconnected)
+  createdAt                 DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant                  Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  whatsappBusinessAccount WhatsappBusinessAccount @relation(fields: [tenantId, whatsappBusinessAccountId], references: [tenantId, id], onDelete: Cascade)
+  conversations           Conversation[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, whatsappBusinessAccountId])
   @@map("whatsapp_accounts")
 }
 
+/// A template belongs to the WABA that submitted it for approval, not to the
+/// tenant and not to the number: `UNIQUE (tenant_id, whatsapp_business_account_id,
+/// name, language)`. Keyed on the tenant as well as the WABA even though the
+/// WABA already implies one, because every unique index here has to lead with
+/// `tenant_id` for RLS to use it (TAR-39, decision 1, rule 3).
 model MessageTemplate {
-  id                 String                @id @default(uuid(7)) @db.Uuid
-  tenantId           String                @map("tenant_id") @db.Uuid
-  whatsappAccountId  String                @map("whatsapp_account_id") @db.Uuid
-  name               String
-  language           String
-  category           String?
-  status             MessageTemplateStatus @default(pending)
+  id                        String                @id @default(uuid(7)) @db.Uuid
+  tenantId                  String                @map("tenant_id") @db.Uuid
+  whatsappBusinessAccountId String                @map("whatsapp_business_account_id") @db.Uuid
+  name                      String
+  language                  String
+  category                  String?
+  status                    MessageTemplateStatus @default(pending)
   /// Meta's component tree, stored verbatim — its shape is Meta's to change.
-  components         Json?
-  providerTemplateId String?               @map("provider_template_id")
-  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  components                Json?
+  providerTemplateId        String?               @map("provider_template_id")
+  createdAt                 DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  whatsappAccount WhatsappAccount @relation(fields: [tenantId, whatsappAccountId], references: [tenantId, id], onDelete: Cascade)
+  tenant                  Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  whatsappBusinessAccount WhatsappBusinessAccount @relation(fields: [tenantId, whatsappBusinessAccountId], references: [tenantId, id], onDelete: Cascade)
 
-  @@unique([tenantId, name, language])
-  @@index([tenantId, whatsappAccountId])
+  /// No separate `(tenant_id, whatsapp_business_account_id)` index: this unique
+  /// index leads with exactly those two columns, so "every template in this
+  /// WABA" already has one. A second index on the same prefix would cost write
+  /// throughput and serve no read.
+  @@unique([tenantId, whatsappBusinessAccountId, name, language])
   @@map("message_templates")
 }
 

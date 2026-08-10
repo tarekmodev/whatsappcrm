@@ -270,39 +270,39 @@ in TAR-19's migration; `apps/api/prisma/schema.prisma` is deliberately empty unt
 
 **Scoped** = carries `tenant_id`, RLS-protected.
 
-| Entity                              | Scoped   | Key fields and constraints                                                                 | Story     |
-| ----------------------------------- | -------- | ------------------------------------------------------------------------------------------ | --------- |
-| `tenants`                           | —        | `slug` unique; `status`; `trial_ends_at`                                                   | TAR-19    |
-| `tenant_domains`                    | ✓        | `hostname` **globally** unique; `kind`; `verified_at`                                      | TAR-19/29 |
-| `tenant_branding`                   | ✓        | one row per tenant                                                                         | TAR-29    |
-| `users`                             | ✓        | `UNIQUE (tenant_id, email)` on `citext`; `role`; `status`; `password_hash`                 | TAR-35    |
-| `sessions`                          | ✓        | `token_hash` unique; `expires_at`; index `(user_id)` for bulk revoke                       | TAR-35    |
-| `invites`                           | ✓        | `token_hash` unique; `expires_at`; `accepted_at`                                           | TAR-35    |
-| `teams`, `team_members`             | ✓        | `UNIQUE (tenant_id, name)`; `(team_id, user_id)`                                           | TAR-22    |
-| `whatsapp_accounts`                 | ✓        | One phone number, child of a WABA. `phone_number_id` **globally** unique — the routing key | TAR-20    |
-| `whatsapp_business_accounts`        | ✓        | `waba_id` globally unique; encrypted access token; verification status                     | TAR-20    |
-| `message_templates`                 | ✓        | `UNIQUE (tenant_id, waba_id, name, language)`; approval status — scoped to the WABA        | TAR-20    |
-| `contacts`                          | ✓        | `UNIQUE (tenant_id, phone_e164)`; `custom_fields JSONB`; `opted_out_at`                    | TAR-33    |
-| `tags`, `contact_tags`              | ✓        | `UNIQUE (tenant_id, name)`                                                                 | TAR-33    |
-| `custom_field_defs`                 | ✓        | `UNIQUE (tenant_id, key)`                                                                  | TAR-33    |
-| `conversations`                     | ✓        | `UNIQUE (tenant_id, whatsapp_account_id, contact_id)`; `service_window_expires_at`         | TAR-20    |
-| `messages`                          | ✓        | `UNIQUE (tenant_id, provider_message_id)`; `sent_at`; `status`                             | TAR-20    |
-| `message_attachments`               | ✓        | `message_id`; re-hosted `url`                                                              | TAR-20    |
-| `internal_notes`                    | ✓        | `conversation_id`; `mentioned_user_ids`                                                    | TAR-20    |
-| `tickets`                           | ✓        | `UNIQUE (tenant_id, number)`; `status`; `priority`; `conversation_id`                      | TAR-21/25 |
-| `ticket_events`                     | ✓        | append-only; `(tenant_id, ticket_id, created_at)`                                          | TAR-21/32 |
-| `assignment_rules`                  | ✓        | ordered by `position`; `conditions JSONB`                                                  | TAR-24    |
-| `assignment_state`                  | ✓        | round-robin cursor per team                                                                | TAR-23    |
-| `sla_policies`, `sla_timers`        | ✓        | `due_at`; partial index on unresolved timers                                               | TAR-26    |
-| `workflows`, `workflow_runs`        | ✓        | `definition JSONB`                                                                         | TAR-27    |
-| `ai_configs`, `knowledge_documents` | ✓        | per-tenant KB                                                                              | TAR-28    |
-| `canned_responses`                  | ✓        | `UNIQUE (tenant_id, shortcut)`                                                             | TAR-31    |
-| `plans`                             | —        | `key` unique; `entitlements JSONB` — platform-wide, not per tenant                         | TAR-37    |
-| `subscriptions`                     | ✓        | one per tenant; opaque `provider_*` ids; `current_period_*`                                | TAR-37    |
-| `usage_counters`                    | ✓        | `UNIQUE (tenant_id, metric, period_start)`                                                 | TAR-37    |
-| `webhook_events`                    | nullable | `UNIQUE (provider, provider_event_id)`; `status`; **not** RLS-protected — see below        | TAR-20    |
-| `idempotency_keys`                  | ✓        | `UNIQUE (tenant_id, key)`; `request_hash`; `response_body`                                 | TAR-20    |
-| `audit_logs`                        | ✓        | actor, action, target, `(tenant_id, created_at)`                                           | TAR-22    |
+| Entity                              | Scoped   | Key fields and constraints                                                                                 | Story     |
+| ----------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- | --------- |
+| `tenants`                           | —        | `slug` unique; `status`; `trial_ends_at`                                                                   | TAR-19    |
+| `tenant_domains`                    | ✓        | `hostname` **globally** unique; `kind`; `verified_at`                                                      | TAR-19/29 |
+| `tenant_branding`                   | ✓        | one row per tenant                                                                                         | TAR-29    |
+| `users`                             | ✓        | `UNIQUE (tenant_id, email)` on `citext`; `role`; `status`; `password_hash`                                 | TAR-35    |
+| `sessions`                          | ✓        | `token_hash` unique; `expires_at`; index `(user_id)` for bulk revoke                                       | TAR-35    |
+| `invites`                           | ✓        | `token_hash` unique; `expires_at`; `accepted_at`                                                           | TAR-35    |
+| `teams`, `team_members`             | ✓        | `UNIQUE (tenant_id, name)`; `(team_id, user_id)`                                                           | TAR-22    |
+| `whatsapp_business_accounts`        | ✓        | `waba_id` globally unique; encrypted access token; verification status                                     | TAR-52    |
+| `whatsapp_accounts`                 | ✓        | One phone number, child of a WABA. `phone_number_id` **globally** unique — the routing key; quality rating | TAR-52    |
+| `message_templates`                 | ✓        | `UNIQUE (tenant_id, whatsapp_business_account_id, name, language)`; approval status — scoped to the WABA   | TAR-52    |
+| `contacts`                          | ✓        | `UNIQUE (tenant_id, phone_e164)`; `custom_fields JSONB`; `opted_out_at`                                    | TAR-33    |
+| `tags`, `contact_tags`              | ✓        | `UNIQUE (tenant_id, name)`                                                                                 | TAR-33    |
+| `custom_field_defs`                 | ✓        | `UNIQUE (tenant_id, key)`                                                                                  | TAR-33    |
+| `conversations`                     | ✓        | `UNIQUE (tenant_id, whatsapp_account_id, contact_id)`; `service_window_expires_at`                         | TAR-20    |
+| `messages`                          | ✓        | `UNIQUE (tenant_id, provider_message_id)`; `sent_at`; `status`                                             | TAR-20    |
+| `message_attachments`               | ✓        | `message_id`; re-hosted `url`                                                                              | TAR-20    |
+| `internal_notes`                    | ✓        | `conversation_id`; `mentioned_user_ids`                                                                    | TAR-20    |
+| `tickets`                           | ✓        | `UNIQUE (tenant_id, number)`; `status`; `priority`; `conversation_id`                                      | TAR-21/25 |
+| `ticket_events`                     | ✓        | append-only; `(tenant_id, ticket_id, created_at)`                                                          | TAR-21/32 |
+| `assignment_rules`                  | ✓        | ordered by `position`; `conditions JSONB`                                                                  | TAR-24    |
+| `assignment_state`                  | ✓        | round-robin cursor per team                                                                                | TAR-23    |
+| `sla_policies`, `sla_timers`        | ✓        | `due_at`; partial index on unresolved timers                                                               | TAR-26    |
+| `workflows`, `workflow_runs`        | ✓        | `definition JSONB`                                                                                         | TAR-27    |
+| `ai_configs`, `knowledge_documents` | ✓        | per-tenant KB                                                                                              | TAR-28    |
+| `canned_responses`                  | ✓        | `UNIQUE (tenant_id, shortcut)`                                                                             | TAR-31    |
+| `plans`                             | —        | `key` unique; `entitlements JSONB` — platform-wide, not per tenant                                         | TAR-37    |
+| `subscriptions`                     | ✓        | one per tenant; opaque `provider_*` ids; `current_period_*`                                                | TAR-37    |
+| `usage_counters`                    | ✓        | `UNIQUE (tenant_id, metric, period_start)`                                                                 | TAR-37    |
+| `webhook_events`                    | nullable | `UNIQUE (provider, provider_event_id)`; `status`; **not** RLS-protected — see below                        | TAR-20    |
+| `idempotency_keys`                  | ✓        | `UNIQUE (tenant_id, key)`; `request_hash`; `response_body`                                                 | TAR-20    |
+| `audit_logs`                        | ✓        | actor, action, target, `(tenant_id, created_at)`                                                           | TAR-22    |
 
 **`webhook_events` is the deliberate exception.** It is written _before_ the tenant is
 known — that is the whole point of storing first and routing later — so it cannot carry
@@ -651,7 +651,7 @@ against. See the note on promotion in the publishing comment.
 | 3   | **Tenant-scoped users** assumes nobody works for two client organisations                                                                                                                                                           | Medium   | **Assumed, not answered** — see below. Additive migration path recorded above                                                                                                                  |
 | 4   | **Custom-domain TLS issuance** (TAR-29) is unspecified and depends on Render's capabilities                                                                                                                                         | Medium   | TAR-41 verifies at provisioning; TAR-29 designs against the answer                                                                                                                             |
 | 5   | **Data residency** — inherited, still unanswered. ADR 0001 assumes none required                                                                                                                                                    | High     | Unchanged; TAR-41 provisions dev/staging first                                                                                                                                                 |
-| 6   | **WhatsApp templates** are approved per WABA. Whether tenants share one WABA or each brings their own changes the template model                                                                                                    | Medium   | **Assumed, not answered** — see below. Revisit before TAR-20 builds templates                                                                                                                  |
+| 6   | ~~**WhatsApp templates** are approved per WABA. Whether tenants share one WABA or each brings their own changes the template model~~                                                                                                | Closed   | **Answered by Tarek** — see below. One _or more_ WABAs per tenant; the schema change that follows landed in **TAR-52**                                                                         |
 | 7   | **Data retention** on tenant deletion — TAR-18 says 30 days "pending client policy"                                                                                                                                                 | Low now  | Must be settled before TAR-36 ships deletion                                                                                                                                                   |
 
 ### Questions 3 and 6 — answered by Tarek
@@ -690,7 +690,16 @@ Tenant ──< WhatsAppBusinessAccount (waba_id, access token, verification stat
               └──< MessageTemplate (name, language, approval status)
 ```
 
-TAR-47's landed schema collapses the top two levels into one `whatsapp_accounts` row per
+**Done in TAR-52** — migration `20260810160000_whatsapp_business_account_entity`. What
+follows is the reasoning that produced it, kept because the constraint it justifies is not
+self-evident from the schema. Two notes on what landed against what is written below: the
+foreign key is named `whatsapp_business_account_id` rather than `waba_id`, because
+`waba_id` is Meta's external string and now lives on the parent row; and `quality_rating`
+was added to `whatsapp_accounts`, where Meta puts it. Messaging limits are not modelled
+yet — Meta's tier vocabulary is version-dependent, and TAR-20 adds the column once it has
+confirmed it.
+
+TAR-47's landed schema collapsed the top two levels into one `whatsapp_accounts` row per
 phone number carrying a denormalised `waba_id`. Under a single WABA per tenant that is
 harmless. Under Tarek's answer it produces two concrete defects:
 
@@ -702,10 +711,12 @@ harmless. Under Tarek's answer it produces two concrete defects:
    numbers in one WABA duplicate it, and a rotation has to update N rows that can drift
    apart. It belongs on the WABA.
 
-**This is cheap to fix now and expensive later.** No product data exists, TAR-20 has not
-started, and the migration is not yet depended on. Correcting it after real tenants have
+**This was cheap to fix now and expensive later.** No product data existed, TAR-20 had not
+started, and the migration was not yet depended on. Correcting it after real tenants have
 connected numbers means a data migration across the most security-sensitive credential in
-the system.
+the system — which is why TAR-52's migration carries a guard that aborts if either table
+has a single row, forcing that change down the expand → backfill → contract path instead of
+dropping the encrypted token outright.
 
 _Needs verification at implementation time:_ the exact Embedded Signup flow, permission
 scopes, and whether template listing is exposed per WABA or per number — against Meta's

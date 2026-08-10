@@ -29,6 +29,9 @@ export * from './conversations';
 export * from './messages';
 export * from './tickets';
 
+// --- WhatsApp channel -------------------------------------------------------
+export * from './whatsapp';
+
 // --- Channel ingestion ------------------------------------------------------
 export * from './webhooks';
 
