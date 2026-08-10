@@ -1,6 +1,10 @@
 import { encodeKeysetCursor } from '../common/pagination/keyset-cursor';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
-import { InvalidCursorError, MessageTemplateQueryService } from './message-template-query.service';
+import {
+  InvalidCursorError,
+  MessageTemplateQueryService,
+  UnknownWhatsAppAccountError,
+} from './message-template-query.service';
 
 /**
  * The query the endpoint issues: what it filters on, how it pages, and what it
@@ -10,20 +14,26 @@ import { InvalidCursorError, MessageTemplateQueryService } from './message-templ
  */
 
 const WABA_ROW_ID = '60444444-4444-7444-8444-444444444401';
+const ACCOUNT_ROW_ID = '70444444-4444-7444-8444-444444444401';
 
-function template(id: string, createdAt: string) {
+function template(id: string, name: string, language = 'en_US') {
   return {
     id,
     whatsappBusinessAccountId: WABA_ROW_ID,
-    name: 'order_update',
-    language: 'en_US',
+    name,
+    language,
     category: 'UTILITY',
     status: 'approved' as const,
     components: null,
     providerTemplateId: '1001',
-    createdAt: new Date(createdAt),
-    updatedAt: new Date(createdAt),
+    createdAt: new Date('2026-08-10T09:00:00.000Z'),
+    updatedAt: new Date('2026-08-10T09:00:00.000Z'),
   };
+}
+
+/** The cursor this ordering emits: the `(name, language)` pair, plus the id. */
+function cursorFor(name: string, language: string, id: string) {
+  return encodeKeysetCursor({ sortValue: JSON.stringify([name, language]), id });
 }
 
 /** Only the fields these assertions read. */
@@ -36,12 +46,15 @@ interface FindManyArgs {
 
 describe('MessageTemplateQueryService', () => {
   let findMany: jest.Mock;
+  let findUnique: jest.Mock;
   let service: MessageTemplateQueryService;
 
   beforeEach(() => {
     findMany = jest.fn().mockResolvedValue([]);
+    findUnique = jest.fn().mockResolvedValue({ whatsappBusinessAccountId: WABA_ROW_ID });
     service = new MessageTemplateQueryService({
       messageTemplate: { findMany },
+      whatsappAccount: { findUnique },
     } as unknown as TenantPrisma);
   });
 
@@ -67,19 +80,19 @@ describe('MessageTemplateQueryService', () => {
     expect(args().where).not.toHaveProperty('tenantId');
   });
 
-  it('narrows to one WABA when the composer asks for it', async () => {
-    await service.list({ limit: 25, whatsappBusinessAccountId: WABA_ROW_ID });
-
-    expect(args().where).toMatchObject({ whatsappBusinessAccountId: WABA_ROW_ID });
-  });
-
-  it('sorts on a total order, so a page boundary cannot skip a row', async () => {
+  it('sorts by name, so the picker reads as a list an agent can scan', async () => {
     await service.list({ limit: 25 });
 
-    expect(args().orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+    expect(args().orderBy).toEqual([{ name: 'asc' }, { language: 'asc' }, { id: 'asc' }]);
   });
 
-  it('selects exactly the published columns and nothing wider', async () => {
+  it('matches a name prefix when one is given', async () => {
+    await service.list({ limit: 25, q: 'order' });
+
+    expect(args().where).toMatchObject({ name: { startsWith: 'order' } });
+  });
+
+  it('selects exactly the columns the response is built from and nothing wider', async () => {
     await service.list({ limit: 25 });
 
     expect(Object.keys(args().select).sort()).toEqual([
@@ -96,6 +109,37 @@ describe('MessageTemplateQueryService', () => {
     ]);
   });
 
+  describe('filtering by phone number', () => {
+    it('resolves the number to its WABA rather than asking the caller for one', async () => {
+      await service.list({ limit: 25, whatsappAccountId: ACCOUNT_ROW_ID });
+
+      expect(findUnique).toHaveBeenCalledWith({
+        where: { id: ACCOUNT_ROW_ID },
+        select: { whatsappBusinessAccountId: true },
+      });
+      expect(args().where).toMatchObject({ whatsappBusinessAccountId: WABA_ROW_ID });
+    });
+
+    it('rejects a number the tenant does not hold, rather than listing every template', async () => {
+      // RLS makes another tenant's number indistinguishable from one that does
+      // not exist. Both must fail closed: falling back to an unfiltered list
+      // would offer templates that cannot be sent on the number asked about.
+      findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.list({ limit: 25, whatsappAccountId: ACCOUNT_ROW_ID }),
+      ).rejects.toBeInstanceOf(UnknownWhatsAppAccountError);
+      expect(findMany).not.toHaveBeenCalled();
+    });
+
+    it('still serves the administrative read that names a WABA directly', async () => {
+      await service.list({ limit: 25, whatsappBusinessAccountId: WABA_ROW_ID });
+
+      expect(findUnique).not.toHaveBeenCalled();
+      expect(args().where).toMatchObject({ whatsappBusinessAccountId: WABA_ROW_ID });
+    });
+  });
+
   describe('paging', () => {
     it('asks for one more row than requested, rather than counting the table', async () => {
       await service.list({ limit: 25 });
@@ -105,43 +149,42 @@ describe('MessageTemplateQueryService', () => {
 
     it('returns the page and a cursor when there is more', async () => {
       findMany.mockResolvedValue([
-        template('a', '2026-08-10T09:00:00.000Z'),
-        template('b', '2026-08-10T08:00:00.000Z'),
-        template('c', '2026-08-10T07:00:00.000Z'),
+        template('a', 'appointment_reminder'),
+        template('b', 'order_update'),
+        template('c', 'shipping_update'),
       ]);
 
       const result = await service.list({ limit: 2 });
 
       expect(result.items.map((item) => item.id)).toEqual(['a', 'b']);
-      expect(result.nextCursor).toBe(
-        encodeKeysetCursor({ sortValue: '2026-08-10T08:00:00.000Z', id: 'b' }),
-      );
+      expect(result.nextCursor).toBe(cursorFor('order_update', 'en_US', 'b'));
     });
 
     it('reports the end of the feed as a null cursor', async () => {
-      findMany.mockResolvedValue([template('a', '2026-08-10T09:00:00.000Z')]);
+      findMany.mockResolvedValue([template('a', 'order_update')]);
 
       await expect(service.list({ limit: 25 })).resolves.toMatchObject({ nextCursor: null });
     });
 
-    it('resumes strictly after the cursor row, with the id breaking a tie', async () => {
-      const cursor = encodeKeysetCursor({ sortValue: '2026-08-10T08:00:00.000Z', id: 'b' });
-
-      await service.list({ limit: 25, cursor });
-
-      const createdAt = new Date('2026-08-10T08:00:00.000Z');
+    it('resumes strictly after the cursor row, with language and id breaking a tie', async () => {
+      await service.list({ limit: 25, cursor: cursorFor('order_update', 'en_US', 'b') });
 
       expect(args().where.OR).toEqual([
-        { createdAt: { lt: createdAt } },
-        { createdAt, id: { lt: 'b' } },
+        { name: { gt: 'order_update' } },
+        { name: 'order_update', language: { gt: 'en_US' } },
+        { name: 'order_update', language: 'en_US', id: { gt: 'b' } },
       ]);
     });
 
     it.each([
       ['a cursor that is not decodable', 'not-a-cursor'],
       [
-        'a cursor whose sort value is not a timestamp',
-        encodeKeysetCursor({ sortValue: 'yesterday', id: 'b' }),
+        'a cursor from the superseded created_at ordering',
+        encodeKeysetCursor({ sortValue: '2026-08-10T08:00:00.000Z', id: 'b' }),
+      ],
+      [
+        'a cursor whose sort value is not a name and language pair',
+        encodeKeysetCursor({ sortValue: JSON.stringify(['order_update']), id: 'b' }),
       ],
     ])('rejects %s rather than silently re-reading the first page', async (_case, cursor) => {
       await expect(service.list({ limit: 25, cursor })).rejects.toBeInstanceOf(InvalidCursorError);

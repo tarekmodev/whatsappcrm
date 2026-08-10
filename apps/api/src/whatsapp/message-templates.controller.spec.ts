@@ -10,7 +10,11 @@ import { TenantContextMiddleware } from '../common/tenant-context/tenant-context
 import { TenantContextModule } from '../common/tenant-context/tenant-context.module';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
-import { InvalidCursorError, MessageTemplateQueryService } from './message-template-query.service';
+import {
+  InvalidCursorError,
+  MessageTemplateQueryService,
+  UnknownWhatsAppAccountError,
+} from './message-template-query.service';
 import { MessageTemplatesController } from './message-templates.controller';
 
 /**
@@ -22,6 +26,7 @@ import { MessageTemplatesController } from './message-templates.controller';
  */
 
 const WABA_ROW_ID = '60444444-4444-7444-8444-444444444401';
+const ACCOUNT_ROW_ID = '70444444-4444-7444-8444-444444444401';
 const TENANT_ID = '50444444-4444-7444-8444-4444444444c1';
 const TIMESTAMP = new Date('2026-08-10T09:00:00.000Z');
 
@@ -32,7 +37,10 @@ const TEMPLATE = {
   language: 'en_US',
   category: 'UTILITY',
   status: 'approved' as const,
-  components: [{ type: 'BODY', text: 'Order {{1}}' }],
+  components: [
+    { type: 'HEADER', format: 'IMAGE' },
+    { type: 'BODY', text: 'Order {{1}} ships {{2}}' },
+  ],
   providerTemplateId: '1001',
   createdAt: TIMESTAMP,
   updatedAt: TIMESTAMP,
@@ -114,7 +122,27 @@ describe('GET /api/v1/message-templates', () => {
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
   });
 
-  it('passes the WABA filter through', async () => {
+  it('derives the composer fields from the component tree', async () => {
+    // Without these the composer walks Meta's tree in the browser to learn how
+    // many inputs to render, and the send path cannot check arity.
+    const response = await get();
+
+    expect(MessageTemplatePageSchema.parse(response.body).items[0]).toMatchObject({
+      bodyText: 'Order {{1}} ships {{2}}',
+      parameterCount: 2,
+      headerFormat: 'image',
+    });
+  });
+
+  it('passes the phone-number filter through, which is what the composer holds', async () => {
+    await get(`?whatsappAccountId=${ACCOUNT_ROW_ID}`);
+
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ whatsappAccountId: ACCOUNT_ROW_ID }),
+    );
+  });
+
+  it('passes the WABA filter through for the administrative read', async () => {
     await get(`?whatsappBusinessAccountId=${WABA_ROW_ID}`);
 
     expect(list).toHaveBeenCalledWith(
@@ -122,16 +150,37 @@ describe('GET /api/v1/message-templates', () => {
     );
   });
 
+  it('passes the name prefix through', async () => {
+    await get('?q=order');
+
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ q: 'order' }));
+  });
+
   it.each([
     ['a limit above the cap', '?limit=1000'],
     ['a limit below one', '?limit=0'],
     ['a WABA id that is not a uuid', '?whatsappBusinessAccountId=nope'],
+    ['a phone-number id that is not a uuid', '?whatsappAccountId=nope'],
+    ['an empty name prefix', '?q='],
+    [
+      'both ids at once, which name two different scopes',
+      `?whatsappAccountId=${ACCOUNT_ROW_ID}&whatsappBusinessAccountId=${WABA_ROW_ID}`,
+    ],
   ])('rejects %s', async (_case, query) => {
     const response = await get(query);
 
     expect(response.status).toBe(400);
     expect(ApiErrorSchema.parse(response.body).error.code).toBe('validation_failed');
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it('reports a phone number the tenant does not hold as bad input', async () => {
+    list.mockRejectedValue(new UnknownWhatsAppAccountError());
+
+    const response = await get(`?whatsappAccountId=${ACCOUNT_ROW_ID}`);
+
+    expect(response.status).toBe(400);
+    expect(ApiErrorSchema.parse(response.body).error.details?.[0]?.path).toBe('whatsappAccountId');
   });
 
   it('reports a deactivated tenant as forbidden, not as a server fault', async () => {

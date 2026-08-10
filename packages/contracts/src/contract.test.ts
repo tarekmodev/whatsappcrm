@@ -273,6 +273,9 @@ describe('connecting a whatsapp business account', () => {
 });
 
 describe('the message template list', () => {
+  const WHATSAPP_ACCOUNT_ID = '70444444-4444-7444-8444-444444444401';
+  const WABA_ID = '60444444-4444-7444-8444-444444444401';
+
   it('paginates by cursor with a documented default and cap', () => {
     expect(MessageTemplateListQuerySchema.parse({})).toMatchObject({ limit: 25 });
     expect(() => MessageTemplateListQuerySchema.parse({ limit: 1000 })).toThrow();
@@ -284,6 +287,59 @@ describe('the message template list', () => {
     const parsed = MessageTemplateListQuerySchema.parse({ status: 'rejected' });
 
     expect(parsed).not.toHaveProperty('status');
+  });
+
+  it('filters by the phone number the composer actually holds', () => {
+    // `ConversationResponse` publishes `whatsappAccountId` and nothing maps one
+    // to a WABA, so a WABA-only filter would leave the composer listing
+    // unfiltered — offering templates that cannot be sent on that number.
+    expect(
+      MessageTemplateListQuerySchema.parse({ whatsappAccountId: WHATSAPP_ACCOUNT_ID }),
+    ).toMatchObject({ whatsappAccountId: WHATSAPP_ACCOUNT_ID });
+  });
+
+  it('refuses a number and a business account at once, which name two scopes', () => {
+    expect(() =>
+      MessageTemplateListQuerySchema.parse({
+        whatsappAccountId: WHATSAPP_ACCOUNT_ID,
+        whatsappBusinessAccountId: WABA_ID,
+      }),
+    ).toThrow();
+  });
+});
+
+describe('a listed message template', () => {
+  const template = {
+    id: '80444444-4444-7444-8444-444444444401',
+    whatsappBusinessAccountId: '60444444-4444-7444-8444-444444444401',
+    name: 'order_update',
+    language: 'en_US',
+    category: 'UTILITY',
+    status: 'approved',
+    components: [{ type: 'BODY', text: 'Order {{1}}' }],
+    bodyText: 'Order {{1}}',
+    parameterCount: 1,
+    headerFormat: null,
+    providerTemplateId: '1001',
+    createdAt: '2026-08-10T09:00:00.000Z',
+    updatedAt: '2026-08-10T09:00:00.000Z',
+  };
+
+  it('publishes the arity a send has to match, alongside the raw tree', () => {
+    // `SendTemplateInput.variables` is positional: without this every consumer
+    // parses Meta's component tree itself, and the send path cannot check the
+    // length before calling Meta.
+    expect(MessageTemplateResponseSchema.parse(template)).toMatchObject({
+      bodyText: 'Order {{1}}',
+      parameterCount: 1,
+      headerFormat: null,
+    });
+  });
+
+  it('refuses a header format outside the published set', () => {
+    expect(() =>
+      MessageTemplateResponseSchema.parse({ ...template, headerFormat: 'carousel' }),
+    ).toThrow();
   });
 });
 

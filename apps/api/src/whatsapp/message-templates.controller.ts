@@ -10,9 +10,11 @@ import { ApiException } from '../common/errors/api.exception';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
+import { describeTemplateComponents } from './message-template-components';
 import {
   InvalidCursorError,
   MessageTemplateQueryService,
+  UnknownWhatsAppAccountError,
   type ListedMessageTemplate,
 } from './message-template-query.service';
 
@@ -21,12 +23,15 @@ import {
  *
  * ## Where this endpoint comes from
  *
- * It is not in TAR-39's fixed stage-1 endpoint list. It is added here under the
- * same conventions — `/api/v1`, plural kebab-case noun, cursor pagination,
+ * It is not in TAR-39's fixed stage-1 endpoint list. It is added under the same
+ * conventions — `/api/v1`, plural kebab-case noun, cursor pagination,
  * `{ items, nextCursor }`, a Zod contract in `packages/contracts` — because the
  * composer needs it: the moment the 24-hour service window closes, a template is
  * the only thing an agent can send, and the picker has to be populated from
- * somewhere.
+ * somewhere. The shape is ruled in amendment 1 of
+ * `docs/architecture/0002-architecture-and-api-contract.md`: filter by phone
+ * number, order by name, and publish the three fields derived from Meta's
+ * component tree.
  *
  * ## Authentication and permission — read this before adding a second route
  *
@@ -65,7 +70,9 @@ export class MessageTemplatesController {
       .list({
         limit: query.limit,
         cursor: query.cursor,
+        whatsappAccountId: query.whatsappAccountId,
         whatsappBusinessAccountId: query.whatsappBusinessAccountId,
+        q: query.q,
       })
       .catch((error: unknown) => translateQueryFailure(error));
 
@@ -95,6 +102,12 @@ function translateQueryFailure(error: unknown): never {
     ]);
   }
 
+  if (error instanceof UnknownWhatsAppAccountError) {
+    throw new ApiException('validation_failed', error.message, [
+      { path: 'whatsappAccountId', message: error.message },
+    ]);
+  }
+
   if (error instanceof TenantNotActiveError) {
     // A deactivated tenant with a session still open. A legitimate runtime state
     // an operator created, not a fault — reporting it as 500 would page someone
@@ -111,9 +124,17 @@ function translateQueryFailure(error: unknown): never {
  *
  * `components` is Prisma's `JsonValue`, which includes `null` for a SQL NULL —
  * the contract publishes `unknown | null`, so the two already agree and this is
- * a pass-through rather than a conversion.
+ * a pass-through rather than a conversion. `bodyText`, `parameterCount` and
+ * `headerFormat` are read out of that same tree here (0002, amendment 1): the
+ * composer needs to know how many variable inputs to render without shipping its
+ * own parser for Meta's shape, and the send path needs the arity to check
+ * against before it calls Meta.
  */
 function toResponse(template: ListedMessageTemplate): MessageTemplateResponse {
+  const { bodyText, parameterCount, headerFormat } = describeTemplateComponents(
+    template.components,
+  );
+
   return {
     id: template.id,
     whatsappBusinessAccountId: template.whatsappBusinessAccountId,
@@ -122,6 +143,9 @@ function toResponse(template: ListedMessageTemplate): MessageTemplateResponse {
     category: template.category,
     status: template.status,
     components: template.components,
+    bodyText,
+    parameterCount,
+    headerFormat,
     providerTemplateId: template.providerTemplateId,
     createdAt: template.createdAt.toISOString(),
     updatedAt: template.updatedAt.toISOString(),

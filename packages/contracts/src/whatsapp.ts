@@ -97,6 +97,19 @@ export const MESSAGE_TEMPLATE_STATUSES = [
 export const MessageTemplateStatusSchema = z.enum(MESSAGE_TEMPLATE_STATUSES);
 
 /**
+ * What a template's header expects, if it has one. Meta's own `format` values,
+ * lower-cased to match the conventions of every other enum published here.
+ */
+export const MESSAGE_TEMPLATE_HEADER_FORMATS = [
+  'text',
+  'image',
+  'video',
+  'document',
+  'location',
+] as const;
+export const MessageTemplateHeaderFormatSchema = z.enum(MESSAGE_TEMPLATE_HEADER_FORMATS);
+
+/**
  * A template belongs to the WABA that submitted it, so `name` + `language` is
  * unique only *within* a WABA. One tenant with two WABAs may legitimately hold
  * `order_update`/`en` in both, with different content and different approval
@@ -123,6 +136,22 @@ export const MessageTemplateResponseSchema = z.object({
    * it would start rejecting valid templates the first time Meta added a field.
    */
   components: z.unknown().nullable(),
+  /**
+   * The BODY component's text with `{{n}}` placeholders intact, for the
+   * composer's preview. Null when Meta sent no BODY.
+   *
+   * Derived server-side from `components` (0002, amendment 1). The three derived
+   * fields exist because `SendTemplateInputSchema.variables` is a *positional*
+   * array: with the component tree as the only source, every consumer — the
+   * composer, the chatbot, the workflow builder — would walk Meta's tree itself
+   * in an unversioned client-side parser, and the send path could not check
+   * arity before calling Meta.
+   */
+  bodyText: z.string().nullable(),
+  /** Highest `{{n}}` in BODY — exactly the length `SendTemplateInput.variables` must have. */
+  parameterCount: z.int().nonnegative(),
+  /** What the header expects, if the template has one. */
+  headerFormat: MessageTemplateHeaderFormatSchema.nullable(),
   /** Meta's id for the template, once it has issued one. */
   providerTemplateId: z.string().nullable(),
   createdAt: TimestampSchema,
@@ -261,14 +290,31 @@ export const SyncMessageTemplatesResponseSchema = z.object({
  * *administration*, which does need to show the rejected ones, is a separate
  * surface with its own permission.
  *
- * `whatsappBusinessAccountId` narrows to one WABA, which is what the composer
- * needs: a conversation names a number, the number names exactly one WABA, and
- * only that WABA's templates can be sent on it. Optional, because an
- * administrative list spanning a tenant's WABAs is also legitimate.
+ * **The composer filters by phone number, not by business account.**
+ * `ConversationResponseSchema` publishes `whatsappAccountId` — a number — and
+ * nothing maps one to a WABA, so asking the composer for a WABA would make it
+ * either list unfiltered, offering templates that cannot be sent on that number,
+ * or block on a lookup that does not exist. The server resolves the WABA from
+ * the number, exactly as the send path already does for
+ * `SendTemplateInputSchema`. `whatsappBusinessAccountId` remains for the
+ * cross-number administrative read; at most one of the two (0002, amendment 1).
+ *
+ * Results are ordered `name ASC, language ASC, id ASC`: an agent scans this
+ * picker looking for `order_update`, not for whatever Meta approved most
+ * recently, and a name-leading order is what makes `q` a prefix range rather
+ * than a filter over an already-fetched page.
  */
 export const MessageTemplateListQuerySchema = CursorPageQuerySchema.extend({
+  /** A phone number. The server resolves its WABA — the caller does not hold one. */
+  whatsappAccountId: IdSchema.optional(),
+  /** Cross-number administrative read. Mutually exclusive with the above. */
   whatsappBusinessAccountId: IdSchema.optional(),
-});
+  /** Name prefix. Free once the index leads with `name`. */
+  q: z.string().min(1).max(120).optional(),
+}).refine(
+  (query) => !(query.whatsappAccountId && query.whatsappBusinessAccountId),
+  'Provide at most one of whatsappAccountId or whatsappBusinessAccountId',
+);
 
 /** `{ items, nextCursor }` per TAR-39's list convention — no envelope. */
 export const MessageTemplatePageSchema = z.object({
@@ -284,6 +330,7 @@ export type WhatsAppQualityRating = z.infer<typeof WhatsAppQualityRatingSchema>;
 export type WhatsAppAccountStatus = z.infer<typeof WhatsAppAccountStatusSchema>;
 export type WhatsAppAccountResponse = z.infer<typeof WhatsAppAccountResponseSchema>;
 export type MessageTemplateStatus = z.infer<typeof MessageTemplateStatusSchema>;
+export type MessageTemplateHeaderFormat = z.infer<typeof MessageTemplateHeaderFormatSchema>;
 export type MessageTemplateResponse = z.infer<typeof MessageTemplateResponseSchema>;
 
 export type ConnectWhatsAppPhoneNumberInput = z.infer<typeof ConnectWhatsAppPhoneNumberInputSchema>;

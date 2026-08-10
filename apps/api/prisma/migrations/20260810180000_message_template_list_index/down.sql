@@ -9,6 +9,6 @@
 
 BEGIN;
 
-DROP INDEX IF EXISTS "public"."message_templates_tenant_id_status_created_at_id_idx";
+DROP INDEX IF EXISTS "public"."message_templates_tenant_id_status_name_language_id_idx";
 
 COMMIT;
