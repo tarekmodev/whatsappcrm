@@ -75,6 +75,7 @@ const CUSTOMER = {
   statuses: '966501110005',
   stuck: '966501110006',
   emitted: '966501110007',
+  freshThread: '966501110008',
 } as const;
 
 const ENV: Record<string, unknown> = {
@@ -338,6 +339,44 @@ describe('WhatsApp webhook ingestion, end to end', () => {
       ]);
     });
 
+    /**
+     * A brand-new thread takes its timestamps from the **provider**, written at
+     * creation rather than left to a later update.
+     *
+     * The regression this guards is subtle and was caught against a database
+     * carrying an in-flight schema change that gives `last_message_at`
+     * `DEFAULT CURRENT_TIMESTAMP`: a thread created blank would then be stamped
+     * with row-creation time, which is later than any provider timestamp, so the
+     * forward-only guard could never advance it again. The inbox would sort by
+     * when we happened to write a row instead of when the customer wrote — and
+     * only for the first message in each thread, which is exactly the kind of
+     * wrongness nobody notices until a customer does.
+     */
+    it('stamps a new thread from the provider’s clock, not the database’s', async () => {
+      const sentLongAgo = new Date('2026-08-09T08:00:00.000Z');
+
+      await deliver(
+        inboundPayload({
+          from: CUSTOMER.freshThread,
+          wamid: 'wamid.tar67.fresh-thread',
+          body: 'first ever message in this thread',
+          at: sentLongAgo,
+        }),
+      );
+
+      const conversation = await asTenant(TENANT_A, async () =>
+        tenantPrisma.conversation.findFirstOrThrow({
+          where: { contact: { phoneE164: `+${CUSTOMER.freshThread}` } },
+          select: { lastMessageAt: true, serviceWindowExpiresAt: true },
+        }),
+      );
+
+      expect(conversation.lastMessageAt).toEqual(sentLongAgo);
+      expect(conversation.serviceWindowExpiresAt).toEqual(
+        new Date(sentLongAgo.getTime() + 24 * 60 * 60 * 1_000),
+      );
+    });
+
     it('emits message.created for the realtime gateway to relay', async () => {
       const seen: unknown[] = [];
       emitter.on(MESSAGE_CREATED_EVENT, (event) => seen.push(event));
@@ -510,6 +549,24 @@ describe('WhatsApp webhook ingestion, end to end', () => {
         readAt,
         sentAt: readAt,
       });
+    });
+
+    /**
+     * A thread opened by a delivery receipt is timestamped, but the 24-hour
+     * customer service window stays closed: it is opened by the customer writing
+     * to us, never by us hearing that something we sent arrived. Getting this
+     * backwards would let the send path skip the template requirement.
+     */
+    it('opens no service window for a thread created by a receipt', async () => {
+      const conversation = await asTenant(TENANT_A, async () =>
+        tenantPrisma.conversation.findFirstOrThrow({
+          where: { contact: { phoneE164: `+${CUSTOMER.statuses}` } },
+          select: { lastMessageAt: true, serviceWindowExpiresAt: true },
+        }),
+      );
+
+      expect(conversation.lastMessageAt).toEqual(readAt);
+      expect(conversation.serviceWindowExpiresAt).toBeNull();
     });
 
     /** The acceptance criterion in one assertion: a late `sent` must not un-read it. */

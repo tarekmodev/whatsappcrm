@@ -42,6 +42,18 @@ export interface InboundProfile {
 }
 
 /**
+ * The timestamps a thread is born with.
+ *
+ * `serviceWindowExpiresAt` is null for a thread opened by a delivery receipt:
+ * Meta's 24-hour customer service window is opened by the **customer** writing
+ * to us, never by us hearing that something we sent was delivered.
+ */
+interface ConversationOpening {
+  readonly lastMessageAt: Date;
+  readonly serviceWindowExpiresAt: Date | null;
+}
+
+/**
  * Everything this pipeline writes inside a tenant's own database rows.
  *
  * Runs entirely on `TenantPrisma`, inside the scope the processor opened, so
@@ -101,7 +113,10 @@ export class WhatsAppInboundWriter {
         seenAt: message.timestamp,
       });
 
-      const conversationId = await this.upsertConversation(tx, account, contactId);
+      const conversationId = await this.upsertConversation(tx, account, contactId, {
+        lastMessageAt: message.timestamp,
+        serviceWindowExpiresAt: serviceWindowEnd(message.timestamp),
+      });
 
       // `skipDuplicates` is `ON CONFLICT (tenant_id, provider_message_id) DO
       // NOTHING`: an empty result means this exact message is already recorded,
@@ -274,19 +289,39 @@ export class WhatsAppInboundWriter {
     return contact.id;
   }
 
-  /** One thread per contact per WhatsApp number — the schema's unique constraint. */
+  /**
+   * One thread per contact per WhatsApp number — the schema's unique constraint.
+   *
+   * A thread that is being created carries its opening timestamps immediately,
+   * rather than being created blank and advanced by the guarded update below.
+   * That is not a shortcut, it is what makes this correct independently of the
+   * column's default: `conversations.last_message_at` is nullable today, and a
+   * schema that gives it `DEFAULT CURRENT_TIMESTAMP` would otherwise start every
+   * new thread at *row creation time* — which is later than any provider
+   * timestamp, so the forward-only guard would never match again and the thread
+   * would be permanently stamped with when we happened to write it rather than
+   * when the customer wrote. Setting it here means neither shape can be wrong.
+   *
+   * Updates stay empty on purpose: an existing thread's counters and timestamps
+   * are conditional, and an upsert cannot express "only if this event is newer".
+   */
   private async upsertConversation(
     tx: Prisma.TransactionClient,
     { tenantId, whatsappAccountId }: RoutedWhatsAppAccount,
     contactId: string,
+    opening: ConversationOpening,
   ): Promise<string> {
     const conversation = await tx.conversation.upsert({
       where: {
         tenantId_whatsappAccountId_contactId: { tenantId, whatsappAccountId, contactId },
       },
-      create: { tenantId, whatsappAccountId, contactId },
-      // Counters and timestamps are advanced separately and conditionally; an
-      // upsert cannot express "only if this event is newer".
+      create: {
+        tenantId,
+        whatsappAccountId,
+        contactId,
+        lastMessageAt: opening.lastMessageAt,
+        serviceWindowExpiresAt: opening.serviceWindowExpiresAt,
+      },
       update: {},
       select: { id: true },
     });
@@ -324,10 +359,7 @@ export class WhatsAppInboundWriter {
         id: conversationId,
         OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: sentAt } }],
       },
-      data: {
-        lastMessageAt: sentAt,
-        serviceWindowExpiresAt: new Date(sentAt.getTime() + SERVICE_WINDOW_MS),
-      },
+      data: { lastMessageAt: sentAt, serviceWindowExpiresAt: serviceWindowEnd(sentAt) },
     });
   }
 
@@ -357,7 +389,12 @@ export class WhatsAppInboundWriter {
       displayName: null,
       seenAt: update.timestamp,
     });
-    const conversationId = await this.upsertConversation(tx, account, contactId);
+    const conversationId = await this.upsertConversation(tx, account, contactId, {
+      lastMessageAt: update.timestamp,
+      // A delivery receipt is not the customer writing to us, so it opens no
+      // service window. Only an inbound message does.
+      serviceWindowExpiresAt: null,
+    });
     const failure = toFailureReason(update.errors);
 
     const [stored] = await tx.message.createManyAndReturn({
@@ -432,6 +469,11 @@ export class WhatsAppInboundWriter {
 
     return count > 0;
   }
+}
+
+/** When Meta's 24-hour customer service window closes, measured from `sentAt`. */
+function serviceWindowEnd(sentAt: Date): Date {
+  return new Date(sentAt.getTime() + SERVICE_WINDOW_MS);
 }
 
 /**

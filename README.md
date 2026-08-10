@@ -86,7 +86,7 @@ pnpm db:verify:rls
 # PASS — tenant isolation is enforced at the data layer
 
 pnpm test:db
-# Tests: 68 passed — the same guarantee through TenantPrisma, plus provisioning
+# Tests: 70 passed — the same guarantee through TenantPrisma, plus provisioning
 #                   and the WhatsApp webhook ingestion pipeline
 ```
 
@@ -122,6 +122,20 @@ Run from the repository root; Turborepo fans each one out across the workspaces.
 | `pnpm lint`         | ESLint across the whole repository                  |
 | `pnpm format`       | Applies Prettier                                    |
 | `pnpm format:check` | Fails if anything is unformatted — what CI runs     |
+
+**`test:db` goes through Turborepo like everything else**, and it has to: an
+integration test that imports `@whatsappcrm/contracts` needs that package _built_, and
+`dependsOn: ["^build", "generate"]` is the only thing that guarantees it. Running the
+workspace script directly instead worked only as long as a previous `pnpm build` happened
+to have left `packages/contracts/dist` on disk — which is true on a developer machine and
+false in CI.
+
+Two settings on that task are deliberate. It is **never cached**: its result depends on the
+state of a real database, and replaying a cached pass against a different one would be a
+green tick that means nothing. And it declares `passThroughEnv` for the connection URLs,
+because Turborepo runs tasks with a filtered environment — without that,
+`APP_DATABASE_URL=… pnpm test:db` would silently ignore the override and test the database
+in `.env` instead.
 
 ### Database and queue
 
