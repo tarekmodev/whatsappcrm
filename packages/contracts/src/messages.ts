@@ -132,7 +132,7 @@ export const SendTemplateHeaderSchema = z.discriminatedUnion('format', [
     /** Id returned by `POST /api/v1/media`; the API re-hosts before sending. */
     mediaId: IdSchema,
     /** `document` only; what the recipient sees as the file name. */
-    filename: z.string().min(1).max(255).optional(),
+    fileName: z.string().min(1).max(255).optional(),
   }),
   z.object({
     format: z.literal('location'),

@@ -159,6 +159,15 @@ export const MessageTemplateResponseSchema = z.object({
    * could not say which.
    */
   headerParameterCount: z.int().nonnegative(),
+  /**
+   * Whether any button needs a parameter in the send call — a dynamic URL
+   * suffix, a quick-reply payload. Those templates are out of scope for v1, so
+   * this list drops them and the field is `false` on every row it returns. It is
+   * published rather than kept internal because the administration surface has
+   * to be able to say "approved by Meta, not yet sendable from this product",
+   * and it cannot say that about a template it cannot identify.
+   */
+  requiresButtonParameters: z.boolean(),
   /** Meta's id for the template, once it has issued one. */
   providerTemplateId: z.string().nullable(),
   createdAt: TimestampSchema,

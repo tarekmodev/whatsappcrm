@@ -360,6 +360,7 @@ describe('a listed message template', () => {
     parameterCount: 1,
     headerFormat: null,
     headerParameterCount: 0,
+    requiresButtonParameters: false,
     providerTemplateId: '1001',
     createdAt: '2026-08-10T09:00:00.000Z',
     updatedAt: '2026-08-10T09:00:00.000Z',
