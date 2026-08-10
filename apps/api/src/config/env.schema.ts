@@ -64,6 +64,50 @@ export const envSchema = z.object({
   PLATFORM_ADMIN_TOKEN: z.string().min(32).optional(),
 
   // ---------------------------------------------------------------------------
+  // WhatsApp webhook ingestion (TAR-20)
+  //
+  // One Meta app serves every tenant, so both secrets below are platform-level
+  // rather than per-tenant: tenant routing is `phone_number_id` →
+  // `whatsapp_accounts` (TAR-39, webhook ingestion), not a per-tenant secret.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The Meta app secret. `X-Hub-Signature-256` is HMAC-SHA256 of the **raw**
+   * request body under this key, and that signature is the only thing standing
+   * between an unauthenticated public route and the inbox.
+   *
+   * Optional here and **absent means every inbound webhook is rejected**, on the
+   * same reasoning as `PLATFORM_ADMIN_TOKEN`: an environment that was never
+   * given the secret must fail closed rather than accept unsigned payloads.
+   * Requiring it outright would instead stop the API booting everywhere the
+   * channel is not configured, which trades a local refusal for a global outage.
+   */
+  WHATSAPP_APP_SECRET: z.string().min(1).optional(),
+
+  /**
+   * The token echoed back to Meta during the `GET` verification handshake.
+   * Absent means the handshake always answers 403 — the same fail-closed
+   * default, and it is only ever read once, when the webhook URL is registered.
+   */
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().min(1).optional(),
+
+  /**
+   * How long a stored event may sit in `received` or `processing` before the
+   * sweeper treats it as stuck and re-enqueues it. Well under the five minutes
+   * TAR-39 says should page someone, so recovery is attempted before an alert
+   * fires.
+   */
+  WEBHOOK_STUCK_AFTER_MS: z.coerce.number().int().min(1_000).default(60_000),
+
+  /** How often the sweeper runs. */
+  WEBHOOK_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1_000).default(30_000),
+
+  /**
+   * Processing attempts a stored event gets before it is parked `failed`. It is
+   * parked, never dropped: a failed row stays queryable and re-runnable.
+   */
+  WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  // ---------------------------------------------------------------------------
   // WhatsApp Cloud API (TAR-20)
   // ---------------------------------------------------------------------------
 

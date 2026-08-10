@@ -253,6 +253,14 @@ enum MessageContentType {
   interactive
   template
   system
+  /// Anything Meta sends that is not modelled yet — `reaction`, `order`,
+  /// `button`, and whatever it ships next. Added by TAR-20's ingestion pipeline
+  /// (`20260810180000_message_content_type_unsupported`) to close the drift with
+  /// `MESSAGE_TYPES` in `@whatsappcrm/contracts`, which has always published it.
+  /// Recording the message is the point: the raw payload is on `webhook_events`,
+  /// so a type the product learns to render later can be backfilled, and in the
+  /// meantime the thread shows that *something* arrived rather than a gap.
+  unsupported
 
   @@map("message_content_type")
 }
