@@ -1,3 +1,17 @@
+import { loadRepositoryEnvFile } from './repository-env-file.mjs';
+
+/**
+ * First, before anything below reads `process.env`: the repository-root `.env`
+ * the README tells you to create is two directories above this app, and Next
+ * only auto-loads the ones beside it (TAR-164).
+ *
+ * This runs while Next is loading its configuration, which is before it builds
+ * the client define map — so `NEXT_PUBLIC_*` values from that file are still
+ * inlined into the browser bundle, exactly as if they had come from
+ * `apps/web/.env`.
+ */
+loadRepositoryEnvFile();
+
 /**
  * The `/api/*` rewrite is load-bearing, not a convenience. A white-label tenant
  * (TAR-29) sits on its own domain; if the browser called the API host directly, the

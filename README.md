@@ -823,6 +823,16 @@ the repository-root `.env`. Prisma 7 does not load `.env` on its own and no long
 the database is. A variable already set in the real environment wins over the file, which
 is what makes `DATABASE_URL=… pnpm db:migrate:deploy` work against any target.
 
+**One root `.env` serves both apps, and each one reaches it deliberately.** Next only
+auto-loads `.env` files sitting beside the app it serves, so `apps/web/next.config.mjs`
+loads the root file through `apps/web/repository-env-file.mjs`, the same way
+`apps/api/src/repository-env-file.ts` does for the API. Without it a setup that followed
+step 2 above still left the frontend with no `TRUSTED_PROXY_SECRET`, and every browser call
+through the `/api/*` rewrite answered `tenant_not_found` — a backend-looking failure with a
+frontend cause (TAR-164). The same precedence applies as above: a variable already set in
+the real environment wins, so Render, which sets each service's variables directly, is
+untouched by this.
+
 ## Conventions worth knowing before you write code
 
 - **Tenant scoping goes through `TenantContextService`**
