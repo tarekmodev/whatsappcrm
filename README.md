@@ -111,9 +111,9 @@ pnpm db:verify:rls
 # PASS — tenant isolation is enforced at the data layer
 
 pnpm test:db
-# Tests: 138 passed — the same guarantee through TenantPrisma, plus provisioning,
-#                     the WhatsApp webhook ingestion pipeline and the ticket
-#                     uniqueness constraint
+# Tests: 150 passed — the same guarantee through TenantPrisma, plus provisioning,
+#                     the WhatsApp webhook ingestion pipeline, the ticket
+#                     uniqueness constraint and ticket linking
 ```
 
 Once the database and Redis are up, readiness reports them:
