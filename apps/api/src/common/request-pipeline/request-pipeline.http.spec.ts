@@ -45,6 +45,19 @@ const HOST_A = 'a.app.localhost';
 const HOST_B = 'b.app.localhost';
 const UNKNOWN_HOST = 'nobody.app.localhost';
 
+/**
+ * What every deployed request actually arrives at: Render routes by `Host` at its
+ * edge and tenant domains hang off the *web* service, so the API only ever sees
+ * its own host. It is not a tenant domain, which is the whole problem TAR-148
+ * fixes — and it makes it visible in these tests when a forwarded host was
+ * honoured and when it was not.
+ */
+const API_HOST = 'whatsappcrm-api.onrender.invalid';
+
+/** Stands in for `TRUSTED_PROXY_SECRET`, and for the previous value it rotates from. */
+const EDGE_SECRET = 'e'.repeat(64);
+const PREVIOUS_EDGE_SECRET = 'p'.repeat(64);
+
 function principalIn(tenantId: string): SessionPrincipal {
   return {
     userId: '58111111-1111-7111-8111-1111111111a1',
@@ -92,8 +105,20 @@ const DOMAINS: Record<string, string> = { [HOST_A]: TENANT_A, [HOST_B]: TENANT_B
       provide: PRINCIPAL_SOURCE,
       useValue: { resolve: () => Promise.resolve(resolution) } satisfies PrincipalSource,
     },
+    {
+      provide: ConfigService,
+      useValue: {
+        // `HostTenantGuard` reads both at construction, so the secret is fixed
+        // for the whole suite and it is the *headers* each test varies.
+        get: (key: string) =>
+          ({
+            TRUSTED_PROXY_SECRET: EDGE_SECRET,
+            TRUSTED_PROXY_SECRET_PREVIOUS: PREVIOUS_EDGE_SECRET,
+          })[key],
+      },
+    },
   ],
-  exports: [SYSTEM_PRISMA, PRINCIPAL_SOURCE],
+  exports: [SYSTEM_PRISMA, PRINCIPAL_SOURCE, ConfigService],
 })
 class PipelineFakesModule {}
 
@@ -211,7 +236,6 @@ describe('the globally installed request pipeline', () => {
         PlatformProbeController,
       ],
       providers: [
-        { provide: ConfigService, useValue: { get: () => undefined } },
         // Global here, where every controller under test would otherwise need
         // `@UseFilters`, so a guard's refusal renders the published envelope
         // whichever route it was thrown on. Anything that is not an
@@ -353,6 +377,99 @@ describe('the globally installed request pipeline', () => {
 
       expect(response.status).toBe(404);
       expect(errorCodeOf(response)).toBe('tenant_not_found');
+    });
+  });
+
+  /**
+   * TAR-148. The API never sees a tenant `Host` in a deployed environment, so the
+   * web tier forwards it — and the only thing separating that from letting a
+   * caller name its own tenant is `x-edge-auth`. Every case below arrives at
+   * `API_HOST`, exactly as a real one does, so a pass means the forwarded value
+   * was honoured and a `tenant_not_found` means it was not.
+   */
+  describe('a forwarded host', () => {
+    it('resolves the tenant when the caller presents the shared secret', async () => {
+      const response = await call(API_HOST)
+        .set('x-edge-auth', EDGE_SECRET)
+        .set('x-forwarded-host', HOST_A)
+        .get('/api/v1/probe/guarded');
+
+      // Tenant A, from a request whose own `Host` belongs to no tenant at all.
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ tenantId: TENANT_A });
+    });
+
+    it('is what the session is checked against, not the host the request arrived at', async () => {
+      // The session is tenant A's; the trusted edge says the request is tenant
+      // B's. `PrincipalGuard` refuses it — which it can only do if stage 1
+      // resolved B from the forwarded value.
+      const response = await call(API_HOST)
+        .set('x-edge-auth', EDGE_SECRET)
+        .set('x-forwarded-host', HOST_B)
+        .get('/api/v1/probe/guarded');
+
+      expect(response.status).toBe(401);
+      expect(errorCodeOf(response)).toBe('tenant_mismatch');
+    });
+
+    it('still strips the port and lowercases what it was given', async () => {
+      const response = await call(API_HOST)
+        .set('x-edge-auth', EDGE_SECRET)
+        .set('x-forwarded-host', 'A.App.LocalHost:3000')
+        .get('/api/v1/probe/guarded');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ tenantId: TENANT_A });
+    });
+
+    it('accepts the previous secret too, so rotating it is two ordinary deploys', async () => {
+      const response = await call(API_HOST)
+        .set('x-edge-auth', PREVIOUS_EDGE_SECRET)
+        .set('x-forwarded-host', HOST_A)
+        .get('/api/v1/probe/guarded');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ tenantId: TENANT_A });
+    });
+
+    it.each([
+      ['no x-edge-auth at all', {}],
+      ['a wrong x-edge-auth', { 'x-edge-auth': 'f'.repeat(64) }],
+      ['an empty x-edge-auth', { 'x-edge-auth': '' }],
+    ])('is ignored outright when the caller presents %s', async (_label, headers) => {
+      const response = await call(API_HOST)
+        .set(headers)
+        .set('x-forwarded-host', HOST_A)
+        .get('/api/v1/probe/guarded');
+
+      // Falls back to `Host` — never to the value the caller chose. A tenant that
+      // exists is not reachable this way, so the answer is the same one an
+      // unknown domain gets.
+      expect(response.status).toBe(404);
+      expect(errorCodeOf(response)).toBe('tenant_not_found');
+    });
+
+    it('is refused when it carries more than one value, rather than taking the first', async () => {
+      // Leftmost-wins is how forwarded-header splicing gets in: a caller upstream
+      // of the edge appends its own value and the API reads the wrong half.
+      const response = await call(API_HOST)
+        .set('x-edge-auth', EDGE_SECRET)
+        .set('x-forwarded-host', `${HOST_A}, ${HOST_B}`)
+        .get('/api/v1/probe/guarded');
+
+      expect(response.status).toBe(404);
+      expect(errorCodeOf(response)).toBe('tenant_not_found');
+    });
+
+    it('falls back to Host when a trusted caller names no host', async () => {
+      // A probe that reached the API service directly looks like this. `Host` is
+      // the honest answer, and here it belongs to a real tenant.
+      const response = await call(HOST_A)
+        .set('x-edge-auth', EDGE_SECRET)
+        .get('/api/v1/probe/guarded');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ tenantId: TENANT_A });
     });
   });
 

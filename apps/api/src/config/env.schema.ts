@@ -91,6 +91,47 @@ const envShape = z.object({
   PLATFORM_ADMIN_TOKEN: z.string().min(32).optional(),
 
   // ---------------------------------------------------------------------------
+  // The edge trust boundary (TAR-148)
+  //
+  // Render routes by `Host` at its edge and tenant domains are attached to the
+  // *web* service, so inside the API `request.hostname` is always the API's own
+  // host — on the browser path through the Next.js rewrite as much as on the SSR
+  // path. `HostTenantGuard` therefore reads the host the web tier forwards, but
+  // only from a caller that can prove it *is* the web tier.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The secret the web tier presents as `x-edge-auth`, which is what makes its
+   * `x-forwarded-host` worth reading. Absent means the header pair is ignored
+   * entirely and the tenant is resolved from `Host`, exactly as before — the
+   * fallback is never the value the caller supplied.
+   *
+   * Optional here so a local machine and the test suite keep working with no
+   * secret at all, but the refinement at the bottom of this file refuses to
+   * **boot** under `NODE_ENV=production` without it, matching the
+   * `SESSION_COOKIE_SECURE` / `AUTH_STUB_ENABLED` precedent: a production API
+   * that cannot resolve a tenant serves nothing, and an instance that never
+   * becomes ready is one the platform does not roll into.
+   *
+   * 32 characters is the floor for something compared against by an
+   * unauthenticated caller. Generate with `openssl rand -hex 32`, one per
+   * environment, and give the web service the same value — server-side only,
+   * never behind `NEXT_PUBLIC_`, which would inline it into the browser bundle.
+   */
+  TRUSTED_PROXY_SECRET: z.string().min(32).optional(),
+
+  /**
+   * The previous `TRUSTED_PROXY_SECRET`, accepted alongside the current one.
+   *
+   * Rotation would otherwise need both services to swap values in the same
+   * instant, and a mismatch is a total outage on every tenant route. With this
+   * it is three ordinary deploys: move the old value here and the new one into
+   * `TRUSTED_PROXY_SECRET`, so the API accepts both; move the web tier onto the
+   * new value; then drop this key.
+   */
+  TRUSTED_PROXY_SECRET_PREVIOUS: z.string().min(32).optional(),
+
+  // ---------------------------------------------------------------------------
   // Access control (TAR-22)
   // ---------------------------------------------------------------------------
 
@@ -148,10 +189,14 @@ const envShape = z.object({
    * failed sign-ins would then lock the whole tenant out of logging in for
    * fifteen minutes, which is a denial of service dressed as a control.
    *
-   * Turn it on where the API terminates connections from clients directly, or
-   * once the forwarded-address question `HostTenantGuard` defers has been
-   * decided. Nothing else changes: the durable per-account lockout is
-   * unconditional and is the layer that protects an individual account.
+   * Turn it on where the API terminates connections from clients directly.
+   * TAR-148 has since decided the forwarded-header question for the *host*:
+   * behind `TRUSTED_PROXY_SECRET` the web tier is authenticated, so the client
+   * address can be read from `x-forwarded-for` under the same gate and this flag
+   * can default on. That belongs to TAR-59 and is deliberately not done here —
+   * still without `trust proxy`, for the reason above. Nothing else changes: the
+   * durable per-account lockout is unconditional and is the layer that protects
+   * an individual account.
    */
   LOGIN_IP_THROTTLE_ENABLED: z.stringbool().default(false),
 
@@ -361,6 +406,21 @@ export const envSchema = envShape.superRefine((env, ctx) => {
       message:
         'must not be disabled when NODE_ENV=production — it drops both the Secure flag and the ' +
         '__Host- cookie prefix. It exists only so Safari can set a cookie on plain-HTTP localhost.',
+    });
+  }
+
+  // Without it `HostTenantGuard` reads `Host`, which behind Render's edge is the
+  // API's own host and matches no tenant domain — so every tenant route answers
+  // a uniform `tenant_not_found` that reads exactly like an unknown domain.
+  // Refusing to boot turns that silent, total outage into a failed deploy the
+  // previous instance keeps serving through.
+  if (env.NODE_ENV === 'production' && !env.TRUSTED_PROXY_SECRET) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['TRUSTED_PROXY_SECRET'],
+      message:
+        'is required when NODE_ENV=production — without it the API cannot trust the host the ' +
+        'web tier forwards, and no tenant resolves in a deployed environment.',
     });
   }
 

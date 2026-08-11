@@ -65,6 +65,25 @@ change.
   write costs one Postgres read per request; an un-purgeable entry costs a revocation.
   (TAR-64 review)
 
+- **The API trusts a forwarded host only from a caller holding a shared secret** — Render
+  routes by `Host` at its edge and tenant domains are attached to the _web_ service, so
+  inside the API `request.hostname` is always the API's own host and `HostTenantGuard`
+  resolved no tenant at all in any deployed environment, on the browser path through the
+  Next.js rewrite as much as on the server-rendered one. The web tier now forwards the host
+  it was reached at as `x-forwarded-host`, and `HostTenantGuard` reads it **only** when
+  `x-edge-auth` matches `TRUSTED_PROXY_SECRET` (or `TRUSTED_PROXY_SECRET_PREVIOUS`, so the
+  secret rotates without a synchronised two-service deploy) — the same fail-closed,
+  timing-safe comparison `PlatformAdminGuard` already used, now shared by both. Without a
+  valid secret the header is not read at all and the fallback is `Host`, never the value
+  the caller supplied; a multi-valued `x-forwarded-host` is refused outright rather than
+  resolved to its leftmost element. Express `trust proxy` stays off, deliberately — the
+  gate is explicit code, not a framework-wide flag that would honour the header ungated.
+  The API refuses to **boot** under `NODE_ENV=production` without the secret, because an
+  API that cannot resolve a tenant serves nothing, and it logs at boot whether forwarded-host
+  trust is on (the flag, never the value). Pairs with the web half; both services need the
+  same value, and `render.yaml` now carries it — along with `API_BASE_URL`, which was
+  declared nowhere and left the rewrite destination falling back to `localhost`. (TAR-148)
+
 - **The auth pipeline is global, so a new endpoint is closed before anybody thinks about
   it** — `HostTenantGuard`, `PrincipalGuard` and `PermissionGuard` are registered as
   `APP_GUARD` by a new `RequestPipelineModule` and run on every route in the application.
