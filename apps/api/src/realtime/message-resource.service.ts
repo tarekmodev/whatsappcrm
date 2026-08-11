@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { MessageResponse } from '@whatsappcrm/contracts';
+import type { ConversationAudience, MessageResponse } from '@whatsappcrm/contracts';
 import { ResponseOriginService } from '../common/response-origin.service';
 import { MESSAGE_PROJECTION, toMessageResponse } from '../conversations/message.mapper';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
@@ -49,22 +49,52 @@ export class MessageResourceService {
   ) {}
 
   /**
-   * The message as the API publishes it, or `null` when the row is gone.
+   * The message as the API publishes it and the audience allowed to see it, or
+   * `null` when the row is gone.
    *
    * `null` is not an error the relay should shout about: a message deleted
    * between the commit that emitted the event and this read is a race with a
    * legitimate outcome, and the honest response is to relay nothing.
    *
+   * The conversation's assignment is read in the **same statement** as the
+   * message, and that pairing is deliberate: the audience has to be the one that
+   * applied to the row being published, and two queries would leave a window in
+   * which a thread changes hands between deciding what to send and deciding who
+   * may see it. It costs nothing extra — `messages` is joined to its
+   * conversation on `(tenant_id, conversation_id)`, which is the leading edge of
+   * the index the thread view already uses.
+   *
    * Requires a hostname in scope as well as a tenant — `ResponseOriginService`
    * refuses to invent one — which is what `TenantHostnameService` puts there
    * before this is called.
    */
-  async findForRelay(messageId: string): Promise<MessageResponse | null> {
+  async findForRelay(messageId: string): Promise<RelayableMessage | null> {
     const message = await this.prisma.message.findUnique({
       where: { id: messageId },
-      select: MESSAGE_PROJECTION,
+      select: {
+        ...MESSAGE_PROJECTION,
+        tenantId: true,
+        conversation: { select: { assignedUserId: true, assignedTeamId: true } },
+      },
     });
 
-    return message === null ? null : toMessageResponse(message, this.origin.require());
+    if (message === null) {
+      return null;
+    }
+
+    return {
+      message: toMessageResponse(message, this.origin.require()),
+      audience: {
+        tenantId: message.tenantId,
+        assignedUserId: message.conversation.assignedUserId,
+        assignedTeamId: message.conversation.assignedTeamId,
+      },
+    };
   }
+}
+
+/** A message, and who may currently be shown it. */
+export interface RelayableMessage {
+  readonly message: MessageResponse;
+  readonly audience: ConversationAudience;
 }

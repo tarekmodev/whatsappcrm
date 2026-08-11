@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomUUID } from 'node:crypto';
 import { AUTH_POLICY, permissionsForRole, type SessionPrincipal } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
@@ -138,6 +139,7 @@ describe('the realtime gateway cannot be pointed at another tenant', () => {
     sessions = new SessionService(
       tenantPrisma,
       new SessionCacheService({ run: () => Promise.resolve(null) } as unknown as AuthRedisClient),
+      new EventEmitter2(),
     );
 
     await removeFixture();

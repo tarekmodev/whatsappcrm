@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
 import { AUTH_POLICY, permissionsForRole } from '@whatsappcrm/contracts';
 import { AuditService } from '../audit/audit.service';
@@ -216,7 +217,7 @@ describe('the session lifecycle, end to end', () => {
 
     redis = new AuthRedisClient(config);
     cache = new SessionCacheService(redis);
-    sessions = new SessionService(tenantPrisma, cache);
+    sessions = new SessionService(tenantPrisma, cache, new EventEmitter2());
 
     const audit = new AuditService(tenantContext);
 

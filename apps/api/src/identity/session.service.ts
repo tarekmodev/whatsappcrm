@@ -7,7 +7,9 @@ import {
   type SessionSummary,
   type TenantRole,
 } from '@whatsappcrm/contracts';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { SessionRevocationReason } from '../audit/audit.actions';
+import { SESSIONS_REVOKED_EVENT, type SessionsRevokedEvent } from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { uuidV7 } from '../prisma/uuid-v7';
@@ -109,6 +111,7 @@ export class SessionService {
   constructor(
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly cache: SessionCacheService,
+    private readonly events: EventEmitter2,
   ) {}
 
   /**
@@ -388,6 +391,10 @@ export class SessionService {
     }
 
     await this.cache.forget(principal.tenantId, principal.userId, tokenHash);
+    // This path does not go through `purgeCacheFor` — it kills one device
+    // rather than all of them — so it announces on its own. The subscriber
+    // re-checks every session this user holds and drops only the dead one.
+    this.announceRevocation(principal.tenantId, principal.userId);
   }
 
   /**
@@ -447,6 +454,32 @@ export class SessionService {
    */
   async purgeCacheFor(tenantId: string, userId: string): Promise<void> {
     await this.cache.purgeUser(tenantId, userId, true);
+    this.announceRevocation(tenantId, userId);
+  }
+
+  /**
+   * Tells anything holding a connection for this user to re-check it (TAR-69
+   * review).
+   *
+   * Here, rather than in each of the seven paths that revoke, because this is
+   * the one call all of them already have to make after their transaction
+   * commits — and after is the only correct moment: a socket dropped for a
+   * transaction that then rolled back is a signed-in agent thrown out of their
+   * inbox.
+   *
+   * The HTTP side needs nothing like this; a revoked session is refused on its
+   * next request. A WebSocket has no next request, so without this an agent
+   * suspended by an admin keeps an open socket until the tab closes — which
+   * contradicts `SessionRevocationService`'s own stated goal of ending access at
+   * the commit.
+   *
+   * `emit` is synchronous dispatch and the listener is not awaited, so nothing
+   * here delays the caller's response; and it is deliberately not part of the
+   * `await` above, because a subscriber that threw must not turn a completed
+   * revocation into a failed request.
+   */
+  private announceRevocation(tenantId: string, userId: string): void {
+    this.events.emit(SESSIONS_REVOKED_EVENT, { tenantId, userId } satisfies SessionsRevokedEvent);
   }
 
   /**

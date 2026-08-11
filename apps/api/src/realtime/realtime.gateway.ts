@@ -8,7 +8,14 @@ import {
   type OnGatewayConnection,
   type OnGatewayInit,
 } from '@nestjs/websockets';
-import { IdSchema, conversationRoom, tenantRoom, userRoom } from '@whatsappcrm/contracts';
+import {
+  IdSchema,
+  conversationRoom,
+  teamRoom,
+  tenantReadersRoom,
+  tenantRoom,
+  userRoom,
+} from '@whatsappcrm/contracts';
 import type { Server } from 'socket.io';
 import { z } from 'zod';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
@@ -111,8 +118,20 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       return;
     }
 
+    // One room per branch of `isVisibleOrUnclaimed`, all of them derived from
+    // the resolved principal. A publisher then addresses the branches that match
+    // the conversation's current assignment, so the audience of an event is the
+    // set of principals the REST API would show that thread to — no wider.
     void socket.join(tenantRoom(principal.tenantId));
     void socket.join(userRoom(principal.userId));
+
+    for (const teamId of principal.teamIds) {
+      void socket.join(teamRoom(teamId));
+    }
+
+    if (principal.permissions.includes(CONVERSATION_READ_ALL)) {
+      void socket.join(tenantReadersRoom(principal.tenantId));
+    }
 
     this.logger.log(
       `Socket ${socket.id} joined tenant ${principal.tenantId} as user ${principal.userId} ` +
@@ -196,6 +215,13 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
  * gateway that comes from a client.
  */
 const ConversationSubscriptionSchema = z.object({ conversationId: IdSchema });
+
+/**
+ * The permission that decides whether a socket joins the tenant-wide readers
+ * room. Named here rather than written inline so it greps alongside every other
+ * use of the same string.
+ */
+const CONVERSATION_READ_ALL = 'conversation:read_all';
 
 /**
  * What a subscribe or unsubscribe acknowledges: whether the socket is now in the

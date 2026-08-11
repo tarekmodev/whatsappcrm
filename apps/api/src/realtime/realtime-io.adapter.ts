@@ -121,10 +121,11 @@ interface RedisAdapterConnections {
 }
 
 async function connect(url: string): Promise<RedisAdapterConnections | null> {
-  const publisher = open(url, 'publisher');
-  const subscriber = publisher.duplicate();
-
-  attachErrorLogging(subscriber, 'subscriber');
+  // Constructed independently rather than by `duplicate()`, because the two have
+  // opposite needs and duplicating would silently give the publisher the
+  // subscriber's settings — which is exactly the bug this pair had.
+  const publisher = open(url, 'publisher', PUBLISHER_OPTIONS);
+  const subscriber = open(url, 'subscriber', SUBSCRIBER_OPTIONS);
 
   try {
     await Promise.all([publisher.connect(), subscriber.connect()]);
@@ -142,17 +143,56 @@ async function connect(url: string): Promise<RedisAdapterConnections | null> {
   }
 }
 
-function open(url: string, role: string): Redis {
-  // No `commandTimeout`: the subscriber holds a long-lived subscription, and a
-  // command timeout on a connection whose job is to wait is a disconnect on a
-  // timer. `lazyConnect` so `connect()` above is what decides when the socket
-  // opens, and so a failure surfaces there rather than as an unhandled event.
-  const client = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: null });
+/**
+ * How long a `PUBLISH` may take before the relay is told it failed.
+ *
+ * Every room emit is one of these, on a path that runs per inbound customer
+ * message. `auth-redis.client.ts` uses 500 ms for the same reason and states it
+ * plainly: an unresponsive Redis has to degrade quickly rather than park
+ * commands in ioredis's offline queue. Slightly more generous here because a
+ * missed relay is only a client that refetches, so a slow-but-alive Redis is
+ * worth waiting a moment for.
+ */
+const PUBLISH_TIMEOUT_MS = 1_000;
+
+/**
+ * The publisher issues ordinary commands, so it fails them rather than buffering
+ * them.
+ *
+ * `maxRetriesPerRequest: null` — which this pair previously inherited — makes
+ * ioredis retry a command forever and never flush its offline queue with an
+ * error. `health.service.ts` spells out the consequence for exactly that
+ * setting: commands buffer while Redis is unreachable instead of failing. On
+ * this path that means process memory growing with inbound message volume for
+ * the whole outage, and not one relay failure logged, because `relayMessage`'s
+ * `catch` only ever sees a command that settles. One retry and a timeout make a
+ * Redis outage a visible degradation, which is what the rest of this file argues
+ * for.
+ */
+const PUBLISHER_OPTIONS = {
+  maxRetriesPerRequest: 1,
+  commandTimeout: PUBLISH_TIMEOUT_MS,
+} as const;
+
+/**
+ * The subscriber does the opposite: it holds a long-lived subscription, and a
+ * command timeout on a connection whose whole job is to wait would be a
+ * disconnect on a timer. `null` is right *here* — this is the case BullMQ's
+ * blocking reads are also excepted for.
+ */
+const SUBSCRIBER_OPTIONS = { maxRetriesPerRequest: null } as const;
+
+function open(url: string, role: string, options: RedisRoleOptions): Redis {
+  // `lazyConnect` so `connect()` above is what decides when the socket opens,
+  // and so a failure surfaces there rather than as an unhandled event.
+  const client = new Redis(url, { lazyConnect: true, ...options });
 
   attachErrorLogging(client, role);
 
   return client;
 }
+
+type RedisRoleOptions = typeof PUBLISHER_OPTIONS | typeof SUBSCRIBER_OPTIONS;
 
 /**
  * Without a listener Node treats a connection `error` as unhandled and takes the

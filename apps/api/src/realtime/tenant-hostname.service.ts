@@ -71,6 +71,13 @@ export class TenantHostnameService {
       select: { hostname: true },
       // Primary first; then the platform subdomain, which is issued by us and
       // verified at provisioning, ahead of any custom domain.
+      //
+      // `kind: 'asc'` gives that second tie-break only because `TenantDomainKind`
+      // declares `platform` before `custom` — Postgres orders an enum by
+      // declaration order, not alphabetically. Named because it is load-bearing
+      // and invisible from here: reordering that enum in a future migration
+      // would quietly prefer an unverified-yesterday custom domain over the
+      // platform subdomain. `TenantLinkService` inherits the same dependency.
       orderBy: [{ isPrimary: 'desc' }, { kind: 'asc' }, { createdAt: 'asc' }],
     });
 

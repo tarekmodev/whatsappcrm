@@ -1,13 +1,19 @@
 import {
   ServerEventSchema,
+  conversationAudienceRooms,
   conversationRoom,
+  teamRoom,
+  tenantReadersRoom,
   tenantRoom,
+  userRoom,
+  type ConversationAudience,
   type MessageResponse,
 } from '@whatsappcrm/contracts';
 import type { Server } from 'socket.io';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { MessageCreatedEvent, MessageStatusChangedEvent } from '../events/domain-events';
-import type { MessageResourceService } from './message-resource.service';
+import type { SessionService } from '../identity/session.service';
+import type { MessageResourceService, RelayableMessage } from './message-resource.service';
 import { RealtimeRelayService } from './realtime-relay.service';
 import type { TenantHostnameService } from './tenant-hostname.service';
 
@@ -22,6 +28,8 @@ import type { TenantHostnameService } from './tenant-hostname.service';
  */
 
 const TENANT = '80111111-1111-7111-8111-111111111101';
+const ASSIGNEE = '80111111-1111-7111-8111-1111111111a1';
+const TEAM = '80111111-1111-7111-8111-1111111111b1';
 const CONVERSATION = '80111111-1111-7111-8111-1111111111c1';
 const MESSAGE = '80111111-1111-7111-8111-1111111111d1';
 const CONTACT = '80111111-1111-7111-8111-1111111111b9';
@@ -87,6 +95,7 @@ interface Harness {
 function harnessFor(
   options: {
     message?: MessageResponse | null;
+    audience?: Partial<ConversationAudience>;
     readFails?: boolean;
     attach?: boolean;
     hostname?: boolean;
@@ -97,14 +106,28 @@ function harnessFor(
   const tenantContext = new TenantContextService();
 
   const messages = {
-    findForRelay: (): Promise<MessageResponse | null> => {
+    findForRelay: (): Promise<RelayableMessage | null> => {
       scopes.push(tenantContext.tenantId);
 
       if (options.readFails === true) {
         return Promise.reject(new Error('the database is unreachable'));
       }
 
-      return Promise.resolve(options.message === undefined ? PUBLISHED : options.message);
+      const message = options.message === undefined ? PUBLISHED : options.message;
+
+      return Promise.resolve(
+        message === null
+          ? null
+          : {
+              message,
+              audience: {
+                tenantId: TENANT,
+                assignedUserId: null,
+                assignedTeamId: null,
+                ...options.audience,
+              },
+            },
+      );
     },
   } as unknown as MessageResourceService;
 
@@ -120,7 +143,11 @@ function harnessFor(
     },
   } as unknown as TenantHostnameService;
 
-  const relay = new RealtimeRelayService(messages, hostnames, tenantContext);
+  const sessions = {
+    resolveBySessionId: (): Promise<null> => Promise.resolve(null),
+  } as unknown as SessionService;
+
+  const relay = new RealtimeRelayService(messages, hostnames, sessions, tenantContext);
 
   if (options.attach !== false) {
     relay.attach(fakeServer(emissions));
@@ -130,36 +157,90 @@ function harnessFor(
 }
 
 /**
- * Just enough Socket.IO: `to()` accumulates room names and returns something
- * chainable, and `emit` records what was addressed to them. Socket.IO's own
- * de-duplication of a socket in two of those rooms is its concern, not this
- * file's — what is under test is *which rooms are named*.
+ * Just enough Socket.IO: `to()` records the room list it was handed and `emit`
+ * records what was addressed to it. Socket.IO's own de-duplication of a socket
+ * in two of those rooms is its concern, not this file's — what is under test is
+ * *which rooms are named*, because that set is the authorization boundary.
  */
 function fakeServer(emissions: Emission[]): Server {
-  const build = (rooms: string[]): unknown => ({
-    to: (room: string) => build([...rooms, room]),
-    emit: (event: string, payload: unknown) => {
-      emissions.push({ rooms, event, payload });
-      return true;
-    },
-  });
-
-  return build([]) as Server;
+  return {
+    to: (rooms: string[]) => ({
+      emit: (event: string, payload: unknown) => {
+        emissions.push({ rooms, event, payload });
+        return true;
+      },
+    }),
+  } as unknown as Server;
 }
 
-describe('relaying message.created', () => {
-  it('addresses the tenant and conversation rooms named by the event', async () => {
+describe('the rooms a message is addressed to', () => {
+  /**
+   * One case per branch of `isVisibleOrUnclaimed`. This is the regression net
+   * for the review's blocking finding: the first published fan-out sent every
+   * message to `tenant:{id}`, which handed an agent the body and attachment
+   * URLs of threads the REST API answers `not_found` for.
+   */
+  it('sends an unclaimed thread to every agent in the tenant, and the readers', async () => {
     const { relay, emissions } = harnessFor();
 
     await relay.onMessageCreated(created());
 
-    expect(emissions).toEqual([
-      {
-        rooms: [tenantRoom(TENANT), conversationRoom(CONVERSATION)],
-        event: 'message.created',
-        payload: { event: 'message.created', conversationId: CONVERSATION, message: PUBLISHED },
-      },
-    ]);
+    expect(emissions[0]?.rooms).toEqual([tenantReadersRoom(TENANT), tenantRoom(TENANT)]);
+  });
+
+  it('sends a claimed thread to its assignee and the readers, and nobody else', async () => {
+    const { relay, emissions } = harnessFor({ audience: { assignedUserId: ASSIGNEE } });
+
+    await relay.onMessageCreated(created());
+
+    // The tenant room is absent, which is the whole point: an agent who is not
+    // the assignee, holds no `conversation:read_all` and is in no relevant team
+    // is in none of these rooms.
+    expect(emissions[0]?.rooms).toEqual([tenantReadersRoom(TENANT), userRoom(ASSIGNEE)]);
+    expect(emissions[0]?.rooms).not.toContain(tenantRoom(TENANT));
+  });
+
+  it('sends a team-routed thread to that team and the readers', async () => {
+    const { relay, emissions } = harnessFor({ audience: { assignedTeamId: TEAM } });
+
+    await relay.onMessageCreated(created());
+
+    expect(emissions[0]?.rooms).toEqual([tenantReadersRoom(TENANT), teamRoom(TEAM)]);
+  });
+
+  it('never addresses the conversation room, so a claimed thread loses its old watchers', async () => {
+    // A subscription authorised while the thread was unclaimed must not keep
+    // publishing once somebody else claims it — the audience follows the
+    // assignment, not the other way round.
+    const { relay, emissions } = harnessFor({ audience: { assignedUserId: ASSIGNEE } });
+
+    await relay.onMessageCreated(created());
+
+    expect(emissions[0]?.rooms).not.toContain(conversationRoom(CONVERSATION));
+  });
+
+  it('matches the contract’s own published fan-out rather than restating it', async () => {
+    const audience = { tenantId: TENANT, assignedUserId: null, assignedTeamId: TEAM };
+    const { relay, emissions } = harnessFor({ audience });
+
+    await relay.onMessageCreated(created());
+
+    expect(emissions[0]?.rooms).toEqual(conversationAudienceRooms(audience));
+  });
+});
+
+describe('relaying message.created', () => {
+  it('publishes the whole resource under the event’s own name', async () => {
+    const { relay, emissions } = harnessFor();
+
+    await relay.onMessageCreated(created());
+
+    expect(emissions[0]?.event).toBe('message.created');
+    expect(emissions[0]?.payload).toEqual({
+      event: 'message.created',
+      conversationId: CONVERSATION,
+      message: PUBLISHED,
+    });
   });
 
   it('publishes a payload the contract accepts, carrying the whole resource', async () => {
@@ -223,7 +304,7 @@ describe('relaying a send-status transition', () => {
       await relay.onMessageStatusChanged(statusChanged({ status }));
 
       expect(emissions[0]).toEqual({
-        rooms: [tenantRoom(TENANT), conversationRoom(CONVERSATION)],
+        rooms: [tenantReadersRoom(TENANT), tenantRoom(TENANT)],
         event: 'message.status_changed',
         payload: {
           event: 'message.status_changed',
@@ -238,14 +319,28 @@ describe('relaying a send-status transition', () => {
 
   it('keeps two tenants’ events in their own rooms', async () => {
     const other = '80111111-1111-7111-8111-111111111102';
-    const { relay, emissions } = harnessFor();
+    const mine = harnessFor();
+    const theirs = harnessFor({ audience: { tenantId: other } });
+
+    await mine.relay.onMessageStatusChanged(statusChanged());
+    await theirs.relay.onMessageStatusChanged(statusChanged({ tenantId: other }));
+
+    // Every room name is built from the row's own tenant, so no name can appear
+    // in both sets — which is the property, rather than the particular strings.
+    const roomsOf = (harness: Harness): string[] => harness.emissions[0]?.rooms ?? [];
+
+    expect(roomsOf(mine)).toEqual([tenantReadersRoom(TENANT), tenantRoom(TENANT)]);
+    expect(roomsOf(theirs)).toEqual([tenantReadersRoom(other), tenantRoom(other)]);
+    expect(roomsOf(mine).some((room) => roomsOf(theirs).includes(room))).toBe(false);
+  });
+
+  it('reads each event back inside its own tenant scope', async () => {
+    const other = '80111111-1111-7111-8111-111111111102';
+    const { relay, scopes } = harnessFor();
 
     await relay.onMessageStatusChanged(statusChanged());
     await relay.onMessageStatusChanged(statusChanged({ tenantId: other }));
 
-    expect(emissions.map((emission) => emission.rooms[0])).toEqual([
-      tenantRoom(TENANT),
-      tenantRoom(other),
-    ]);
+    expect(scopes).toEqual([TENANT, other]);
   });
 });

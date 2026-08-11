@@ -5,14 +5,17 @@ import {
   permissionsForRole,
   tenantRoom,
   userRoom,
+  type ConversationAudience,
   type MessageResponse,
   type SessionPrincipal,
+  type TenantRole,
 } from '@whatsappcrm/contracts';
 import { io, type Socket as ClientSocket } from 'socket.io-client';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { MessageCreatedEvent } from '../events/domain-events';
+import { SessionService } from '../identity/session.service';
 import { ConversationAccessService } from './conversation-access.service';
-import { MessageResourceService } from './message-resource.service';
+import { MessageResourceService, type RelayableMessage } from './message-resource.service';
 import { REALTIME_PATH } from './realtime.constants';
 import { RealtimeGateway } from './realtime.gateway';
 import { RealtimeHandshakeService } from './realtime-handshake.service';
@@ -43,14 +46,19 @@ const TENANT_A = '80111111-1111-7111-8111-111111111101';
 const TENANT_B = '80111111-1111-7111-8111-111111111102';
 const USER_A = '80111111-1111-7111-8111-1111111111a1';
 const USER_B = '80111111-1111-7111-8111-1111111111a2';
+const BYSTANDER = '80111111-1111-7111-8111-1111111111a3';
+const SUPERVISOR = '80111111-1111-7111-8111-1111111111a4';
 const CONVERSATION_A = '80111111-1111-7111-8111-1111111111c1';
 const CONVERSATION_B = '80111111-1111-7111-8111-1111111111c2';
 const MESSAGE = '80111111-1111-7111-8111-1111111111d1';
 
-/** Which ticket string stands for which tenant, so a test can hand one out. */
+/** Which ticket string stands for which principal, so a test can hand one out. */
 const TICKETS: Readonly<Record<string, SessionPrincipal>> = {
   'ticket-a': principal(TENANT_A, USER_A),
   'ticket-b': principal(TENANT_B, USER_B),
+  /** A second agent in tenant A, in no team and holding no `conversation:read_all`. */
+  'ticket-bystander': principal(TENANT_A, BYSTANDER),
+  'ticket-supervisor': principal(TENANT_A, SUPERVISOR, 'supervisor'),
 };
 
 /** Conversations a principal may subscribe to, keyed by tenant. */
@@ -75,14 +83,14 @@ const PUBLISHED: MessageResponse = {
   createdAt: '2026-08-11T09:00:01.000Z',
 };
 
-function principal(tenantId: string, userId: string): SessionPrincipal {
+function principal(tenantId: string, userId: string, role: TenantRole = 'agent'): SessionPrincipal {
   return {
     userId,
     tenantId,
     email: `${userId}@acme.invalid`,
     displayName: 'Ada Agent',
-    role: 'agent',
-    permissions: [...permissionsForRole('agent')],
+    role,
+    permissions: [...permissionsForRole(role)],
     teamIds: [],
     sessionId: '80111111-1111-7111-8111-1111111111f1',
     expiresAt: '2036-12-31T23:59:59.000Z',
@@ -120,7 +128,20 @@ describe('the realtime gateway', () => {
   let relay: RealtimeRelayService;
   let gateway: RealtimeGateway;
   let url: string;
+  /** Shared with the stubs below, which read the scope the relay opened. */
+  const tenantContext = new TenantContextService();
   const clients: ClientSocket[] = [];
+
+  /**
+   * Who currently holds the conversation being relayed. Mutable because the
+   * audience is what the fan-out is derived from, so a test changes this rather
+   * than the event.
+   */
+  let audience: ConversationAudience = {
+    tenantId: TENANT_A,
+    assignedUserId: null,
+    assignedTeamId: null,
+  };
 
   beforeAll(async () => {
     const handshake = {
@@ -144,22 +165,35 @@ describe('the realtime gateway', () => {
     };
 
     const messages = {
-      findForRelay: (): Promise<MessageResponse | null> => Promise.resolve(PUBLISHED),
+      findForRelay: (): Promise<RelayableMessage | null> =>
+        Promise.resolve({
+          message: PUBLISHED,
+          // The real service reads the row under the scope the relay opened, so
+          // the audience's tenant is always the event's. Taking it from the
+          // scope here rather than from the fixture keeps the stub honest for
+          // the cross-tenant cases.
+          audience: { ...audience, tenantId: tenantContext.requireTenantId() },
+        }),
     } as unknown as MessageResourceService;
 
     const hostnames = {
       publish: (): Promise<boolean> => Promise.resolve(true),
     } as unknown as TenantHostnameService;
 
+    const sessions = {
+      resolveBySessionId: (): Promise<null> => Promise.resolve(null),
+    } as unknown as SessionService;
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         RealtimeGateway,
         RealtimeRelayService,
-        TenantContextService,
+        { provide: TenantContextService, useValue: tenantContext },
         { provide: RealtimeHandshakeService, useValue: handshake },
         { provide: ConversationAccessService, useValue: conversations },
         { provide: MessageResourceService, useValue: messages },
         { provide: TenantHostnameService, useValue: hostnames },
+        { provide: SessionService, useValue: sessions },
       ],
     }).compile();
 
@@ -175,6 +209,8 @@ describe('the realtime gateway', () => {
   });
 
   afterEach(() => {
+    audience = { tenantId: TENANT_A, assignedUserId: null, assignedTeamId: null };
+
     while (clients.length > 0) {
       const client = clients.pop();
 
@@ -396,6 +432,71 @@ describe('the realtime gateway', () => {
       await relay.onMessageCreated(messageCreated(CONVERSATION_A, TENANT_A));
 
       expect(await seenByB).toBeNull();
+    });
+  });
+
+  /**
+   * The within-tenant direction, which the cross-tenant test above does not
+   * cover and which the review found to be the blocking gap: a fan-out that is
+   * wider than `isVisibleOrUnclaimed` hands an agent the body and attachment
+   * URLs of a conversation `GET /conversations/{id}` answers `not_found` for.
+   */
+  describe('a message on a conversation somebody else holds', () => {
+    it('does not reach an agent who could not read it over HTTP', async () => {
+      audience = { tenantId: TENANT_A, assignedUserId: USER_A, assignedTeamId: null };
+
+      const assignee = connect({ ticket: 'ticket-a' });
+      const bystander = connect({ ticket: 'ticket-bystander' });
+      await Promise.all([connected(assignee), connected(bystander)]);
+
+      const seenByAssignee = nextEvent(assignee, 'message.created', 2_000);
+      const seenByBystander = nextEvent(bystander, 'message.created');
+      await relay.onMessageCreated(messageCreated(CONVERSATION_A, TENANT_A));
+
+      // Same tenant, same socket server, same event: the only difference is
+      // whether the thread is theirs.
+      expect(await seenByAssignee).not.toBeNull();
+      expect(await seenByBystander).toBeNull();
+    });
+
+    it('still reaches a supervisor, who may read every thread in the tenant', async () => {
+      audience = { tenantId: TENANT_A, assignedUserId: USER_A, assignedTeamId: null };
+
+      const supervisor = connect({ ticket: 'ticket-supervisor' });
+      await connected(supervisor);
+
+      const received = nextEvent(supervisor, 'message.created', 2_000);
+      await relay.onMessageCreated(messageCreated(CONVERSATION_A, TENANT_A));
+
+      expect(await received).not.toBeNull();
+    });
+
+    it('reaches every agent while the thread is unclaimed', async () => {
+      // The widening TAR-68's amendment 4 rules, and the reason `tenant:{id}`
+      // still has a job: a customer wrote in and nobody has claimed them.
+      const bystander = connect({ ticket: 'ticket-bystander' });
+      await connected(bystander);
+
+      const received = nextEvent(bystander, 'message.created', 2_000);
+      await relay.onMessageCreated(messageCreated(CONVERSATION_A, TENANT_A));
+
+      expect(await received).not.toBeNull();
+    });
+
+    it('stops reaching a subscriber once somebody else claims it', async () => {
+      // Subscribed while unclaimed, which was legitimate at the time. The
+      // audience follows the assignment rather than the subscription, so there
+      // is no stale membership to clean up.
+      const bystander = connect({ ticket: 'ticket-bystander' });
+      await connected(bystander);
+      await bystander.emitWithAck('conversation.subscribe', { conversationId: CONVERSATION_A });
+
+      audience = { tenantId: TENANT_A, assignedUserId: USER_A, assignedTeamId: null };
+
+      const received = nextEvent(bystander, 'message.created');
+      await relay.onMessageCreated(messageCreated(CONVERSATION_A, TENANT_A));
+
+      expect(await received).toBeNull();
     });
   });
 });

@@ -19,12 +19,22 @@ import { MessageResourceService } from './message-resource.service';
  * nothing instead of throwing into an event handler nobody awaits.
  */
 
+const TENANT = '80111111-1111-7111-8111-111111111101';
 const CONVERSATION = '80111111-1111-7111-8111-1111111111c1';
 const MESSAGE = '80111111-1111-7111-8111-1111111111d1';
+const USER = '80111111-1111-7111-8111-1111111111a1';
 const ORIGIN = 'https://acme.app.localhost';
 
-function row(overrides: Partial<MessageRow> = {}): MessageRow {
+/** The projection's own type, plus the two columns the relay reads beside it. */
+type RelayRow = MessageRow & {
+  tenantId: string;
+  conversation: { assignedUserId: string | null; assignedTeamId: string | null };
+};
+
+function row(overrides: Partial<RelayRow> = {}): RelayRow {
   return {
+    tenantId: TENANT,
+    conversation: { assignedUserId: null, assignedTeamId: null },
     id: MESSAGE,
     conversationId: CONVERSATION,
     direction: 'inbound',
@@ -47,12 +57,12 @@ interface Harness {
   readonly queries: unknown[];
 }
 
-function serviceFor(message: MessageRow | null): Harness {
+function serviceFor(message: RelayRow | null): Harness {
   const queries: unknown[] = [];
 
   const prisma = {
     message: {
-      findUnique: (args: unknown): Promise<MessageRow | null> => {
+      findUnique: (args: unknown): Promise<RelayRow | null> => {
         queries.push(args);
         return Promise.resolve(message);
       },
@@ -78,19 +88,46 @@ describe('reading a message back for a relay', () => {
 
     await messages.findForRelay(MESSAGE);
 
-    // Identity, not a copy of the field list: a column added for the REST
-    // response must reach the socket in the same release, and a socket payload
-    // that quietly lagged a version behind the thread it updates is the bug
-    // sharing the projection exists to prevent.
-    expect(queries).toEqual([{ where: { id: MESSAGE }, select: MESSAGE_PROJECTION }]);
+    // Identity for the published fields, not a copy of the field list: a column
+    // added for the REST response must reach the socket in the same release, and
+    // a socket payload that quietly lagged a version behind the thread it
+    // updates is the bug sharing the projection exists to prevent. The two
+    // columns beside it are the audience, which the response does not carry.
+    expect(queries).toEqual([
+      {
+        where: { id: MESSAGE },
+        select: {
+          ...MESSAGE_PROJECTION,
+          tenantId: true,
+          conversation: { select: { assignedUserId: true, assignedTeamId: true } },
+        },
+      },
+    ]);
   });
 
   it('publishes a payload the contract accepts', async () => {
     const { messages } = serviceFor(row());
 
-    const published = await messages.findForRelay(MESSAGE);
+    const relayable = await messages.findForRelay(MESSAGE);
 
-    expect(MessageResponseSchema.safeParse(published).success).toBe(true);
+    expect(MessageResponseSchema.safeParse(relayable?.message).success).toBe(true);
+  });
+
+  it('reports who currently holds the conversation, from the same statement', async () => {
+    // The audience has to be the one that applied to the row being published:
+    // two queries would leave a window in which the thread changes hands between
+    // deciding what to send and deciding who may see it.
+    const { messages } = serviceFor(
+      row({ conversation: { assignedUserId: USER, assignedTeamId: null } }),
+    );
+
+    const relayable = await messages.findForRelay(MESSAGE);
+
+    expect(relayable?.audience).toEqual({
+      tenantId: TENANT,
+      assignedUserId: USER,
+      assignedTeamId: null,
+    });
   });
 
   it('makes an attachment absolute against the origin in scope', async () => {
@@ -111,9 +148,9 @@ describe('reading a message back for a relay', () => {
       }),
     );
 
-    const published = await messages.findForRelay(MESSAGE);
+    const relayable = await messages.findForRelay(MESSAGE);
 
-    expect(published?.attachments[0]?.url).toBe(
+    expect(relayable?.message.attachments[0]?.url).toBe(
       `${ORIGIN}/api/v1/media/80111111-1111-7111-8111-1111111111e1/content`,
     );
   });

@@ -7,15 +7,60 @@ import { TicketResponseSchema } from './tickets';
 /**
  * The realtime contract — Socket.IO, per TAR-38's ADR.
  *
- * Rooms are the isolation boundary. A socket joins `tenant:{tenantId}` exactly
- * once, at connection time, from the *server's* view of the session — never from
- * a room name the client asked for. Client-supplied room names are the obvious
- * way to leak another tenant's inbox, so `join` only ever accepts a conversation
- * id, which the server then authorises before joining.
+ * Rooms are the isolation boundary. A socket joins its rooms at connection time
+ * from the *server's* view of the session — never from a room name the client
+ * asked for. Client-supplied room names are the obvious way to leak another
+ * tenant's inbox, so `join` only ever accepts a conversation id, which the
+ * server then authorises before joining.
+ *
+ * ## Amendment (TAR-69 review): the tenant room is not the message audience
+ *
+ * As first published, every message event went to `tenant:{tenantId}` — every
+ * socket in the tenant. That is wider than the REST surface for the same
+ * principal: `isVisibleOrUnclaimed` refuses an agent a conversation somebody
+ * else has claimed, and `GET /conversations/{id}` answers `not_found` for it,
+ * while the socket was handing them its body and its attachment URLs. A room
+ * fan-out that does not match the read rule is an authorization bypass, and the
+ * fact that it was the published shape made it a spec defect rather than an
+ * implementation slip.
+ *
+ * The rooms below are therefore the **audience of `isVisibleOrUnclaimed`, one
+ * room per branch of it**:
+ *
+ * ```
+ *   holds conversation:read_all  → tenantReadersRoom(tenantId)
+ *   assigned to me               → userRoom(assignedUserId)
+ *   assigned to a team I am in   → teamRoom(assignedTeamId)
+ *   unclaimed                    → tenantRoom(tenantId)   ← every agent, correctly
+ * ```
+ *
+ * A publisher addresses the branches that match the record's *current*
+ * assignment; Socket.IO de-duplicates a socket that is in more than one. Because
+ * the set is computed per emit rather than joined once, a thread that changes
+ * hands changes audience on the very next event, with no stale membership to
+ * clean up.
+ *
+ * `tenantRoom` keeps its meaning — every socket in the tenant — and keeps a job:
+ * an unclaimed conversation genuinely is visible to everyone (0002, amendment
+ * 4), because a customer wrote in and nobody has claimed it. It is simply no
+ * longer the audience for a message on a thread that *has* been claimed.
  */
 
+/** Every socket in the tenant. The audience for a conversation nobody has claimed. */
 export function tenantRoom(tenantId: string): string {
   return `tenant:${tenantId}`;
+}
+
+/**
+ * The sockets in this tenant whose principal holds `conversation:read_all` —
+ * supervisors and admins, who may read every thread in the tenant.
+ *
+ * Nested under the tenant prefix rather than named `readers:{tenantId}` so that
+ * every room name in this file starts with the scope it is confined to, which is
+ * what makes an accidental cross-tenant room name obvious on sight.
+ */
+export function tenantReadersRoom(tenantId: string): string {
+  return `tenant:${tenantId}:conversation-readers`;
 }
 
 export function conversationRoom(conversationId: string): string {
@@ -24,6 +69,69 @@ export function conversationRoom(conversationId: string): string {
 
 export function userRoom(userId: string): string {
   return `user:${userId}`;
+}
+
+/**
+ * The sockets whose principal is a member of this team, for a thread routed to
+ * the team rather than to a person.
+ *
+ * A team id is globally unique, so this needs no tenant prefix to be unambiguous
+ * — but the socket only ever joins teams named by its own resolved principal,
+ * which is what confines it in practice.
+ */
+export function teamRoom(teamId: string): string {
+  return `team:${teamId}`;
+}
+
+/**
+ * What a conversation's audience is decided from: the tenant it belongs to and
+ * who currently holds it.
+ *
+ * Structural rather than tied to a row type, for the same reason
+ * `AssignableRecord` is on the server side — the two columns are the whole rule.
+ */
+export interface ConversationAudience {
+  readonly tenantId: string;
+  readonly assignedUserId: string | null;
+  readonly assignedTeamId: string | null;
+}
+
+/**
+ * Every room that may see an event about this conversation, and no other.
+ *
+ * This is `isVisibleOrUnclaimed` expressed as rooms, and it is published here so
+ * the server that emits and the client that reasons about what it will receive
+ * read the same rule rather than two descriptions of it. Branch for branch:
+ *
+ *   * `tenantReadersRoom` — always, because `conversation:read_all` sees
+ *     everything in the tenant regardless of who holds the thread;
+ *   * `userRoom` / `teamRoom` — whichever of the two assignments is set;
+ *   * `tenantRoom` — **only** while the thread is unclaimed, which is the one
+ *     case where every agent in the tenant is a legitimate audience.
+ *
+ * Deliberately does not include `conversationRoom`. A socket that subscribed to
+ * a thread was authorised at that moment, and an authorisation from a moment ago
+ * is not one now: a thread claimed since would keep publishing to whoever
+ * happened to be watching it. Deriving the audience from the *current*
+ * assignment on every emit is what makes the room set and the read rule agree by
+ * construction rather than by remembering to clean up.
+ */
+export function conversationAudienceRooms(audience: ConversationAudience): string[] {
+  const rooms = [tenantReadersRoom(audience.tenantId)];
+
+  if (audience.assignedUserId !== null) {
+    rooms.push(userRoom(audience.assignedUserId));
+  }
+
+  if (audience.assignedTeamId !== null) {
+    rooms.push(teamRoom(audience.assignedTeamId));
+  }
+
+  if (audience.assignedUserId === null && audience.assignedTeamId === null) {
+    rooms.push(tenantRoom(audience.tenantId));
+  }
+
+  return rooms;
 }
 
 /**

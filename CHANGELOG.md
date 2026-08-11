@@ -194,16 +194,37 @@ change.
   upgrade carries no host worth believing. `RealtimeIoAdapter` supplies CORS from
   `WEB_ORIGIN` and, where `REDIS_URL` is set, a `@socket.io/redis-adapter` pub/sub pair —
   without it an event emitted on one replica reaches only that replica's sockets, which is
-  a silent failure rather than a slow one, so its absence is warned about at boot.
-  ⚠️ **Known limitation, recorded rather than papered over**: the tenant room is every
-  socket in the tenant, so a tenant-wide fan-out of message content reaches agents who
-  could not read that conversation over HTTP. TAR-39 fixes the room vocabulary and the
-  fan-out, and TAR-20f/20g are built against it, so closing this needs a contract
-  amendment — either scoping the fan-out to `user:{assignedUserId}` plus a team room, or
-  restricting `tenant:{id}` to holders of `conversation:read_all`. Also not relayed:
-  `message.attachment_settled` and `ticket.created`, which are emitted today but have no
-  server event in the fixed contract, so an inbound picture's spinner still stops on a
-  refetch.
+  a silent failure rather than a slow one, so its absence is warned about at boot. The
+  publisher in that pair gets a command timeout and one retry rather than the subscriber's
+  `maxRetriesPerRequest: null`, which the two previously shared through `duplicate()`: an
+  untimed publisher buffers every room emit in ioredis's offline queue for the length of a
+  Redis outage, growing with inbound message volume and logging nothing, because a command
+  that never settles never reaches the relay's `catch`.
+
+- **The realtime fan-out is the visibility rule, not the tenant** (TAR-69 review,
+  [amendment 5](docs/architecture/0002-architecture-and-api-contract.md#amendment-5--the-realtime-fan-out-is-the-visibility-rule-tar-69))
+  — as first published, every message event went to `tenant:{id}`, so an agent received the
+  body, provider id and attachment URLs of conversations `GET /conversations/{id}` answers
+  `not_found` for on the same principal, in the same tenant. The implementation was faithful
+  and the published fan-out was wrong, so the contract is amended rather than locally worked
+  around. The room vocabulary gains `tenant:{id}:conversation-readers` and `team:{id}`, and
+  `conversationAudienceRooms` publishes the audience as one room per branch of
+  `isVisibleOrUnclaimed`: readers always, the assignee or the routed team when there is one,
+  and the tenant-wide room **only** while a thread is unclaimed — which is exactly the case
+  amendment 4 rules every agent may see. The set is derived from the conversation's current
+  assignment on every emit rather than joined once, so a thread changing hands changes
+  audience on the next event with no stale membership to reconcile; `conversation:{id}` is
+  deliberately not in it, since a subscription authorised while a thread was unclaimed must
+  not survive somebody claiming it. Also closed: `session.revoked` → `user:{id}` was
+  published so an open tab logs out, and nothing emitted it — a WebSocket authenticates once
+  and has no next request to be refused on, so an agent an admin suspended kept a live
+  socket until the tab closed, bounded only by the 30-day absolute session cap. Every
+  revocation path now announces through the one after-commit hook they all share, and the
+  gateway re-reads each of that user's sockets rather than trusting the announcement,
+  because a signed-in password change spares one session and a single-device sign-out kills
+  exactly one. ⚠️ Still not relayed: `message.attachment_settled` and `ticket.created`,
+  which are emitted today but have no server event in the contract, so an inbound picture's
+  spinner still stops on a refetch.
 
 - **Console routes enforce the session, and the API is the only thing that decides who you
   are** (TAR-62) — every route below `app/(app)` is now guarded in two halves. `proxy.ts`
