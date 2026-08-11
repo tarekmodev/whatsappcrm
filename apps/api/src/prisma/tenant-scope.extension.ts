@@ -112,7 +112,7 @@ export interface TenantTransactionOptions {
  *     was already being made.
  *
  * Two things it deliberately does not do. It does not inject `tenantId` into
- * `where`/`data` for the 34 scoped models — RLS already filters them, and the
+ * `where`/`data` for the 35 scoped models — RLS already filters them, and the
  * policy predicate uses the same `(tenant_id, …)` index a hand-written filter
  * would. And it does not make batch `$transaction([…])` work: this hook is
  * `async`, so the promises the extended client returns are ordinary promises

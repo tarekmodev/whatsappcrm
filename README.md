@@ -102,8 +102,9 @@ pnpm db:verify:rls
 # PASS — tenant isolation is enforced at the data layer
 
 pnpm test:db
-# Tests: 70 passed — the same guarantee through TenantPrisma, plus provisioning
-#                   and the WhatsApp webhook ingestion pipeline
+# Tests: 138 passed — the same guarantee through TenantPrisma, plus provisioning,
+#                     the WhatsApp webhook ingestion pipeline and the ticket
+#                     uniqueness constraint
 ```
 
 The `checks` object is empty on purpose: the endpoint reports process liveness only and
@@ -225,7 +226,7 @@ what TAR-52 changed about the WhatsApp entities.
 ### Tenant isolation
 
 Isolation is enforced by the database, not by application code remembering a `where`
-clause. All 34 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
+clause. All 35 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
 
 ```sql
 CREATE POLICY tenant_isolation ON conversations
@@ -362,6 +363,16 @@ deliberate. The grant is automatic and the policy is hand-written, so letting th
 arrive first would mean a forgotten step 1 ships a table every tenant can read instead of
 one nobody can (TAR-95). A permission error on the first query is the cheap version of
 that mistake.
+
+**A partial index has no safety net, so write one.** Prisma cannot express
+`CREATE INDEX … WHERE …`, and its Postgres describer skips indexes that carry a predicate
+— so `migrate dev` will neither generate one nor propose to drop one it finds, and it
+never shows up as drift. Convenient, but it means nothing regenerates the index from
+`schema.prisma` and nothing notices if it disappears. Hand-write it in the migration, note
+it in a comment on the model, and add a test that asserts the index definition —
+`tickets_one_active_per_contact` and `src/prisma/ticket-active-uniqueness.int-spec.ts` are
+the worked example. A missing unique index does not fail loudly; it silently starts
+allowing duplicates.
 
 **A migration that adds a function needs `pnpm db:roles` re-run too.** `app-roles.sql`
 names each one, revokes the default `EXECUTE TO PUBLIC` and grants it to the two

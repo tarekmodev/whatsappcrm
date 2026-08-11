@@ -14,7 +14,7 @@ Three pieces, each of which fails closed on its own.
 
 ### 1. Row-level security on every tenant-scoped table
 
-All 34 tenant-scoped tables have `ENABLE`/`FORCE ROW LEVEL SECURITY` and one policy:
+All 35 tenant-scoped tables have `ENABLE`/`FORCE ROW LEVEL SECURITY` and one policy:
 
 ```sql
 CREATE POLICY tenant_isolation ON conversations
@@ -192,7 +192,7 @@ require making the function `SECURITY DEFINER` in the same change.
 
 ### The extension does not inject `tenantId`
 
-Deliberately. RLS already filters the 34 scoped models, and a generic injection has to get
+Deliberately. RLS already filters the 35 scoped models, and a generic injection has to get
 nested writes, `connect`, `upsert` and relation filters right or it silently drops rows —
 worse than not having it.
 
