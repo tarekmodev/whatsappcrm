@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Param,
   Patch,
+  Post,
   Query,
   UseFilters,
   UseGuards,
@@ -95,6 +96,23 @@ export class UsersController {
     @Body(new ZodValidationPipe(UserUpdateInputSchema)) input: UserUpdateInput,
   ): Promise<UserResponse> {
     return this.users.update(params.id, input).catch(translatePeopleFailure);
+  }
+
+  /**
+   * `POST /api/v1/users/{id}/unlock` — clear a brute-force lockout (TAR-59).
+   *
+   * `user:update`, matching the permission that reveals `security` on a
+   * `UserResponse`: whoever may see that somebody is locked out is whoever may
+   * let them back in. 200 rather than 204 because the caller wants the cleared
+   * state back to render, and idempotent, so a double-click is harmless.
+   */
+  @Post(':id/unlock')
+  @RequirePermission('user:update')
+  @HttpCode(HttpStatus.OK)
+  unlock(
+    @Param(new ZodValidationPipe(UserParamsSchema)) params: UserParams,
+  ): Promise<UserResponse> {
+    return this.users.unlock(params.id).catch(translatePeopleFailure);
   }
 
   /** `DELETE /api/v1/users/{id}` — admin only, and refused where it would erase history. */

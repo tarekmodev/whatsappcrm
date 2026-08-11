@@ -2,12 +2,12 @@ import { ApiException } from '../common/errors/api.exception';
 import { translatePeopleFailure } from '../people/people.http';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
 import {
-  AccountLockedError,
   CurrentPasswordIncorrectError,
   InvalidCredentialsError,
   InviteNotFoundError,
   InviteNotPendingError,
   InviteTokenInvalidError,
+  RateLimitedError,
   ResetTokenInvalidError,
   SessionNotFoundError,
 } from './identity.errors';
@@ -19,10 +19,11 @@ import {
  * Several of the mappings are deliberately less informative than they could be,
  * and that is the point:
  *
- *   * A lockout answers `rate_limited` rather than a code of its own. A
- *     distinct code would confirm the address belongs to a real account, which
- *     is exactly what the identical `invalid_credentials` answer above it is
- *     careful never to say.
+ *   * A lockout answers `rate_limited` rather than a code of its own, and so
+ *     does a throttled address — the same code and the same message, so the
+ *     answer cannot be read as "that account exists". A distinct code would
+ *     confirm the address belongs to a real account, which is exactly what the
+ *     identical `invalid_credentials` answer above it is careful never to say.
  *   * A session id that is not the caller's answers `not_found` rather than
  *     `forbidden`, because a 403 confirms the id exists.
  *   * A wrong current password on a signed-in change answers
@@ -58,7 +59,7 @@ export function translateIdentityFailure(error: unknown): never {
     throw new ApiException('invalid_credentials', error.message);
   }
 
-  if (error instanceof AccountLockedError) {
+  if (error instanceof RateLimitedError) {
     throw new ApiException('rate_limited', error.message);
   }
 

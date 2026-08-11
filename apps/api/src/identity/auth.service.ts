@@ -1,17 +1,15 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
-  AUTH_POLICY,
   permissionsForRole,
   type LoginInput,
   type SessionPrincipal,
   type TenantRole,
 } from '@whatsappcrm/contracts';
-import { AUDIT_ACTIONS } from '../audit/audit.actions';
-import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { AccountLockedError, InvalidCredentialsError } from './identity.errors';
+import { LoginThrottleService } from './login-throttle.service';
 import { PasswordService } from './password.service';
 import { SessionService, type IssuedSession } from './session.service';
 
@@ -40,6 +38,12 @@ import { SessionService, type IssuedSession } from './session.service';
  *
  * A locked account answers 429 rather than a code of its own, because a code
  * only a real account can produce confirms the address exists.
+ *
+ * ## Brute-force protection lives next door
+ *
+ * `LoginThrottleService` owns both counters — the durable per-account one and
+ * the per-address window in Redis. This service decides *whether* an attempt
+ * failed; that one decides what a run of failures costs.
  */
 
 /** What the login read needs from `users`, and nothing more. */
@@ -74,7 +78,7 @@ export class AuthService {
     private readonly tenantContext: TenantContextService,
     private readonly passwords: PasswordService,
     private readonly sessions: SessionService,
-    private readonly audit: AuditService,
+    private readonly throttle: LoginThrottleService,
   ) {}
 
   /**
@@ -89,6 +93,11 @@ export class AuthService {
    */
   async login(input: LoginInput, context: LoginContext): Promise<LoginResult> {
     const tenantId = this.tenantContext.requireTenantId();
+
+    // Before the lookup and before the hash: an address that has spent its
+    // allowance costs one Redis round trip, not a query and ~100 ms of argon2id.
+    await this.throttle.assertAddressWithinLimit(tenantId, context.ipAddress);
+
     const candidate = await this.findCandidate(input.email);
 
     if (candidate === null || candidate.password_hash === null || candidate.status !== 'active') {
@@ -96,6 +105,10 @@ export class AuthService {
       // than a wrong password. Logged without the address: a log of attempted
       // addresses is PII and a target in its own right.
       await this.passwords.verifyDummy(input.password);
+      // Counted too, with no user to count against. This is the case the
+      // per-address window exists for — spraying leaked pairs at addresses that
+      // have no row here would otherwise be free.
+      await this.throttle.recordFailure({ tenantId, userId: null, ipAddress: context.ipAddress });
       this.logger.warn(`Login refused for tenant ${tenantId}: no account able to sign in.`);
       throw new InvalidCredentialsError();
     }
@@ -103,11 +116,19 @@ export class AuthService {
     if (candidate.locked) {
       // No password verification at all. Verifying would let an attacker keep
       // testing guesses through a lockout and learn the answer from the timing.
+      //
+      // Not counted either, in either layer: the attempt was refused on a
+      // decision already made, and counting it would let a locked-out user's
+      // own retries burn the allowance their office shares.
       throw new AccountLockedError(candidate.lock_seconds_remaining);
     }
 
     if (!(await this.passwords.verify(candidate.password_hash, input.password))) {
-      await this.recordFailure(candidate.id);
+      await this.throttle.recordFailure({
+        tenantId,
+        userId: candidate.id,
+        ipAddress: context.ipAddress,
+      });
       throw new InvalidCredentialsError();
     }
 
@@ -184,63 +205,6 @@ export class AuthService {
     `;
 
     return row ?? null;
-  }
-
-  /**
-   * Counts one failed attempt, and locks the account on every positive multiple
-   * of the threshold.
-   *
-   * Every multiple, not only the first: an attacker who waits out one window
-   * would otherwise get a fresh allowance of ten guesses for every fifteen
-   * minutes they are willing to spend. The counter is reset only by a
-   * successful login (or by TAR-59's admin unlock).
-   *
-   * The whole decision is one statement, so two concurrent failed attempts
-   * cannot both read "nine" and both write "ten".
-   */
-  private async recordFailure(userId: string): Promise<void> {
-    const lockedNow = await this.prisma.$tenantTransaction(async (tx) => {
-      const [row] = await tx.$queryRaw<{ failed_login_attempts: number; locked: boolean }[]>`
-        UPDATE users
-           SET failed_login_attempts = failed_login_attempts + 1,
-               last_failed_login_at = now(),
-               locked_until = CASE
-                 WHEN (failed_login_attempts + 1) % ${AUTH_POLICY.loginFailureThreshold} = 0
-                 THEN now() + make_interval(
-                        secs => ${AUTH_POLICY.loginLockoutMs / 1_000}::double precision
-                      )
-                 ELSE locked_until
-               END
-         WHERE id = ${userId}::uuid
-        RETURNING failed_login_attempts,
-                  (locked_until IS NOT NULL AND locked_until > now()) AS locked
-      `;
-
-      if (row === undefined || !row.locked) {
-        return false;
-      }
-
-      // One row per lockout, on the transition — see `AUDIT_ACTIONS.authLockout`.
-      // No email address and no attempt count beyond the total, because this
-      // table is exported for compliance review.
-      await this.audit.record(tx, {
-        action: AUDIT_ACTIONS.authLockout,
-        targetType: 'user',
-        targetId: userId,
-        metadata: {
-          failedAttempts: row.failed_login_attempts,
-          lockoutMs: AUTH_POLICY.loginLockoutMs,
-        },
-      });
-
-      return true;
-    });
-
-    if (lockedNow) {
-      this.logger.warn(
-        `Locked user ${userId} after ${AUTH_POLICY.loginFailureThreshold} failed sign-in attempts.`,
-      );
-    }
   }
 
   /** The success path: reset, stamp, upgrade the hash if due, insert the session. */

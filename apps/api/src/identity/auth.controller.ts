@@ -16,7 +16,7 @@ import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
 import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { AuthService } from './auth.service';
-import { AccountLockedError } from './identity.errors';
+import { RateLimitedError } from './identity.errors';
 import { translateIdentityFailure } from './identity.http';
 import { isSecureCookieConfigured, setSessionCookie } from './session-cookie';
 
@@ -76,8 +76,9 @@ export class AuthController {
       .catch((error: unknown) => {
         // `Retry-After` is part of the 429 contract and the filter cannot add
         // it — it renders the envelope and knows nothing about lockout windows.
-        // Set here, on the one path that has the number.
-        if (error instanceof AccountLockedError) {
+        // Set here, on the one path that has the number, for a locked account
+        // and a throttled address alike.
+        if (error instanceof RateLimitedError) {
           response.setHeader('Retry-After', String(error.retryAfterSeconds));
         }
 

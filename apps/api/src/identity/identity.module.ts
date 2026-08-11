@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { AuthController } from './auth.controller';
+import { AuthRedisClient } from './auth-redis.client';
 import { AuthService } from './auth.service';
 import { InviteService } from './invite.service';
 import { InvitesController } from './invites.controller';
@@ -12,6 +13,7 @@ import { TenantLinkService } from './mailer/tenant-link.service';
 import { PasswordChangeService } from './password-change.service';
 import { PasswordController } from './password.controller';
 import { PasswordResetService } from './password-reset.service';
+import { LoginThrottleService } from './login-throttle.service';
 import { PasswordService } from './password.service';
 import { SessionCacheService } from './session-cache.service';
 import { SessionController } from './session.controller';
@@ -45,6 +47,9 @@ import { UserInvitesController } from './user-invites.controller';
  *     — the seam TAR-22 built its guards around.
  *   * `SessionService` is what `SessionRevocationService` calls, which is how a
  *     people change revokes access in the same transaction that makes it.
+ *   * `LoginThrottleService` owns the lockout columns, and `UsersService` calls
+ *     it for `POST /users/{id}/unlock` — so the three columns are written by
+ *     one file rather than by whichever service happens to need them.
  *
  * Neither module lists the other in `imports`, so there is no cycle in the
  * module graph: both are global, and both resolve their tokens from the global
@@ -100,7 +105,9 @@ const mailerProvider: Provider = {
   providers: [
     mailerProvider,
     AuthService,
+    AuthRedisClient,
     InviteService,
+    LoginThrottleService,
     TenantLinkService,
     PasswordService,
     PasswordResetService,
@@ -111,6 +118,6 @@ const mailerProvider: Provider = {
     HostTenantGuard,
     ApiExceptionFilter,
   ],
-  exports: [PasswordService, SessionService, SessionPrincipalSource, MAILER],
+  exports: [LoginThrottleService, PasswordService, SessionService, SessionPrincipalSource, MAILER],
 })
 export class IdentityModule {}

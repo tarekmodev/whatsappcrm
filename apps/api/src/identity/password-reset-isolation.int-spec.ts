@@ -5,6 +5,7 @@ import type { PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import { SessionRevocationService } from '../rbac/session-revocation.service';
+import { AuthRedisClient } from './auth-redis.client';
 import { ResetTokenInvalidError } from './identity.errors';
 import type { MailerPort, OutboundEmail } from './mailer/mailer.port';
 import { PasswordResetService } from './password-reset.service';
@@ -57,6 +58,7 @@ describe('password reset, against real Postgres', () => {
   let tenantBase: PrismaClient;
   let tenantPrisma: TenantPrisma;
   let resets: PasswordResetService;
+  let redis: AuthRedisClient;
   let cache: SessionCacheService;
 
   const mailer: MailerPort = {
@@ -110,7 +112,8 @@ describe('password reset, against real Postgres', () => {
       get: (key: string) => (key === 'REDIS_URL' ? process.env.REDIS_URL : undefined),
     } as unknown as ConfigService;
 
-    cache = new SessionCacheService(config);
+    redis = new AuthRedisClient(config);
+    cache = new SessionCacheService(redis);
 
     resets = new PasswordResetService(
       tenantPrisma,
@@ -156,7 +159,7 @@ describe('password reset, against real Postgres', () => {
 
   afterAll(async () => {
     await removeFixture();
-    await cache.onApplicationShutdown();
+    await redis.onApplicationShutdown();
     await Promise.all([systemPrisma.$disconnect(), tenantBase.$disconnect()]);
   });
 

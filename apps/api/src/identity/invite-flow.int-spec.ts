@@ -11,6 +11,7 @@ import type { PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import { hashAuthToken } from './auth-tokens';
+import { AuthRedisClient } from './auth-redis.client';
 import { InviteTokenInvalidError } from './identity.errors';
 import { InviteService } from './invite.service';
 import { SessionCacheService } from './session-cache.service';
@@ -63,6 +64,7 @@ describe('the invite flow', () => {
   let tenantBase: PrismaClient;
   let tenantPrisma: TenantPrisma;
   let invites: InviteService;
+  let redis: AuthRedisClient;
   let cache: SessionCacheService;
 
   function principalFor(tenantId: string, userId: string, role: TenantRole): SessionPrincipal {
@@ -115,9 +117,10 @@ describe('the invite flow', () => {
     systemPrisma = createPrismaClient('system', requireEnv('SYSTEM_DATABASE_URL'));
     tenantBase = createPrismaClient('tenant', requireEnv('APP_DATABASE_URL'));
     tenantPrisma = withTenantScope(tenantBase, tenantContext);
-    cache = new SessionCacheService({
+    redis = new AuthRedisClient({
       get: (key: string) => (key === 'REDIS_URL' ? process.env.REDIS_URL : undefined),
     } as unknown as ConfigService);
+    cache = new SessionCacheService(redis);
 
     await removeFixture();
 
@@ -173,7 +176,7 @@ describe('the invite flow', () => {
 
   afterAll(async () => {
     await removeFixture();
-    await cache.onApplicationShutdown();
+    await redis.onApplicationShutdown();
     await Promise.all([systemPrisma.$disconnect(), tenantBase.$disconnect()]);
   });
 
