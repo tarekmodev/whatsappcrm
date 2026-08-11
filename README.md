@@ -11,11 +11,11 @@ WhatsApp Business Cloud API.
 > design-token and component foundation plus the agent/team/role management console
 > (TAR-82), which currently reads fixtures rather than the API — see
 > [Interim state](#interim-state-mock-api-and-stubbed-role). Feature work is tracked as the
-> TAR-18 epic. The database has **tables but almost no rows**: the data model landed with
-> TAR-47, row-level security with TAR-48, the client split with TAR-49, provisioning and
-> deactivation with TAR-50 and TAR-51, the WhatsApp Business Account entity with TAR-52,
-> webhook ingestion with TAR-20, and seed data arrives with TAR-46. Everything below works
-> today.
+> TAR-18 epic. The data model landed with TAR-47, row-level security with TAR-48, the
+> client split with TAR-49, provisioning and deactivation with TAR-50 and TAR-51, the
+> WhatsApp Business Account entity with TAR-52, webhook ingestion with TAR-20, and a
+> two-tenant demo dataset with TAR-46 — so a clean clone now reaches a **populated**
+> database in one command. Everything below works today.
 
 ## Stack
 
@@ -45,6 +45,7 @@ not yet installed and arrives with the realtime gateway.
 | `apps/api/src/media`       | Media upload, inbound download and the storage port           |
 | `apps/api/prisma`          | Database schema and migrations                                |
 | `apps/api/prisma/sql`      | Operational SQL that is not a migration — roles, RLS check    |
+| `apps/api/src/seed`        | The demo dataset and the script that writes it                |
 | `apps/web`                 | Next.js agent console — see [Frontend](#frontend)             |
 | `apps/web/styles/tokens`   | The design token layers. A theme swap starts and ends here    |
 | `apps/web/components/ui`   | Domain-free UI primitives (Button, Modal, DataTable, …)       |
@@ -85,7 +86,8 @@ pnpm db:up                   # 3. start PostgreSQL and Redis, wait until both ar
 pnpm db:migrate:deploy       # 4. apply migrations to the empty database
 pnpm db:roles                # 5. create the application database roles
 pnpm db:roles:login          # 6. give them the throwaway local password
-pnpm dev                     # 7. run the API and the frontend
+pnpm db:seed                 # 7. load the demo tenants, agents and conversations
+pnpm dev                     # 8. run the API and the frontend
 ```
 
 That is the whole setup. Step 3 blocks until both containers report healthy, so step 4
@@ -97,6 +99,11 @@ password: a password belongs in an environment's secret store, not in a file in 
 repository, and the same file runs in staging. `db:roles:login` is that operator step,
 scripted, with the throwaway value `.env.example` already uses. Skip it and the API boots
 but every query fails to authenticate.
+
+Step 7 needs steps 5 and 6 for the same reason the API does — it connects as
+`whatsappcrm_app`, not as the migration owner. See
+[Seed data](#seed-data) for what it writes and why it is written that way. Skip it and
+everything still runs, against an empty database.
 
 `pnpm dev` runs both apps: the API on <http://localhost:3001/api> and the frontend on
 <http://localhost:3000>.
@@ -119,6 +126,13 @@ pnpm test:db
 #                     uniqueness constraint, ticket linking and media isolation
 ```
 
+Step 7 prints what it wrote and where to reach it:
+
+```text
+  northwind  http://northwind.app.localhost  5 users, 5 conversations, 13 messages, 2 tickets
+  southwind  http://southwind.app.localhost  2 users, 1 conversation, 2 messages, 0 tickets
+```
+
 Once the database and Redis are up, readiness reports them:
 
 ```bash
@@ -129,10 +143,8 @@ curl http://localhost:3001/api/health/ready
 `/api/health` stays a liveness probe and deliberately measures nothing — a liveness check
 that fails when the database blinks restarts a healthy process.
 
-**The database has tables but no rows — that is the expected state.** Seeding is TAR-46.
-Provision a tenant to get one (see
-[Provisioning and deactivating tenants](#provisioning-and-deactivating-tenants)). To see
-what step 4 built:
+Skipping step 7 leaves a database with tables and no rows, which still runs. To see what
+step 4 built:
 
 ```bash
 docker compose exec postgres psql -U whatsappcrm -d whatsappcrm -c '\dt'
@@ -184,6 +196,7 @@ in `.env` instead.
 | `pnpm db:migrate:deploy` | Applies pending migrations without generating any (deploy path)       |
 | `pnpm db:migrate:status` | Reports which migrations are applied and which are pending            |
 | `pnpm db:reset`          | **Destructive.** Drops the local database and replays every migration |
+| `pnpm db:seed`           | Loads the demo dataset — see [Seed data](#seed-data)                  |
 | `pnpm db:studio`         | Opens Prisma Studio against the local database                        |
 | `pnpm db:generate`       | Regenerates the Prisma client from `schema.prisma`                    |
 | `pnpm db:roles`          | Creates the application roles and their grants — run after migrations |
@@ -214,12 +227,15 @@ re-runs the first-boot SQL in `docker/postgres/initdb.d`.
 it refuses to run and tells you to pass `--force`. And Prisma 7 detects AI coding agents
 and blocks destructive commands outright unless `PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION`
 is set to the text of the message in which you consented. Neither guard affects a human at
-an interactive prompt; both will stop an agent, which matters for TAR-46's seed script and
-for any automated task that expects to reset the database unattended. The route back to a
-known-good state that passes both guards is
-`docker compose down -v && pnpm db:up && pnpm db:migrate:deploy && pnpm db:roles && pnpm db:roles:login`
+an interactive prompt; both will stop an agent, and any automated task that expects to
+reset the database unattended. The route back to a known-good state that passes both
+guards is
+`docker compose down -v && pnpm db:up && pnpm db:migrate:deploy && pnpm db:roles && pnpm db:roles:login && pnpm db:seed`
 — equally destructive, but it never invokes `migrate reset`. The two role steps are not
 optional: `down -v` destroys the volume, and the roles live in the cluster it took with it.
+
+`pnpm db:seed` is separately re-runnable and needs none of the above: it deletes its own
+two tenants and writes them again.
 
 ## Working with the database
 
@@ -359,6 +375,60 @@ a guard.
 **[Platform admin API](docs/reference/admin-api.md)** — parameters, every response and error
 shape, idempotency and retention semantics, and what each call deliberately leaves to
 another story.
+
+### Seed data
+
+```bash
+pnpm db:seed
+```
+
+Two tenants, reachable at `northwind.app.localhost` and `southwind.app.localhost`.
+`northwind` is the one to work in: five agents across the three roles, two teams, two
+WhatsApp numbers under two business accounts, five approved-and-pending templates, four
+contacts, five threads and their messages, two tickets, and a subscription with usage
+counters. `southwind` is small and exists to be **absent** — every list in the console is
+served under row-level security, and a dropped tenant predicate is invisible in a database
+holding one tenant. Its first message reads `SOUTHWIND ONLY —`, so a leak is something you
+notice rather than something you have to query for.
+
+Three things about how it is written are worth knowing before you change it:
+
+- **It connects as `whatsappcrm_app`, not as the migration owner.** Locally the owner is a
+  superuser and a superuser skips RLS entirely, so a seed written that way can happily
+  write rows the application can then never read. Writing through `TenantPrisma` means a
+  seed that finishes is evidence that the app role can read and write this data — and that
+  a missing policy or a `pnpm db:roles` you forgot to re-run fails here rather than
+  showing up later as an empty console. Only `tenants` and `plans` go through
+  `SystemPrisma`, because neither carries a tenant policy.
+- **Tenants come from `TenantProvisioningService`**, the same service behind
+  `POST /api/v1/admin/tenants`. A seeded tenant is indistinguishable from a provisioned
+  one, and there is no second way to create a tenant to keep in step with the first. The
+  tenant id is therefore whatever provisioning assigned; every other id is a literal, and
+  the user, team, contact and conversation ids are the ones
+  `apps/web/lib/api/mock/fixtures.ts` already serves, so turning
+  `NEXT_PUBLIC_USE_MOCK_API` off changes the transport and not the ids.
+- **Timestamps are relative to the run.** Meta's 24-hour service window is a timestamp:
+  fixed dates would leave every thread outside its window on a fresh seed, so the composer
+  would be template-only and nobody could try a plain reply. One thread is left expired
+  anyway, because that state has to be demonstrable too.
+
+Re-running it deletes those two slugs — cascading through every tenant-scoped table — and
+writes them again. It touches nothing else, so a scratch tenant of your own survives.
+`plans` is upserted rather than replaced. It refuses to run under `NODE_ENV=production`
+without `--force`, and prints the host and database it is about to write to before it
+writes anything.
+
+**It carries no credentials.** `users.password_hash` is null on every row — TAR-35 owns
+login — so there is nothing to sign in with yet. Until then, set `AUTH_STUB_ENABLED=true`
+and `NEXT_PUBLIC_ENABLE_ROLE_STUB=true` and the console resolves a real seeded user with
+the role in the switcher, in the tenant the hostname resolves to. The per-WABA WhatsApp
+access token is a placeholder encrypted at rest with the local key: enough for the
+connection to read as connected, and rejected by Meta the moment anything tries to send
+with it, which is the intended behaviour for a local stack.
+
+`apps/api/src/seed/demo-dataset.ts` is the data; `seed.ts` is the mechanism. Editing the
+dataset into a shape the database would reject is caught by `pnpm test` — the seed itself
+only runs when somebody runs it, so its unit test is what stops a bad edit merging green.
 
 ### Adding a migration
 

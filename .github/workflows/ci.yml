@@ -100,6 +100,14 @@ jobs:
       # with one (TAR-49).
       - name: Tenant isolation through TenantPrisma
         run: pnpm test:db
+      # TAR-46's acceptance criterion is that a clean clone reaches a running app
+      # against a *seeded* database, which is a claim about the README rather than
+      # about any one function — so it is checked the same way the rest of this
+      # job is, by running the command the README tells a developer to run. Last,
+      # because the two checks above assert row counts of their own and a
+      # populated database is not what they were written against.
+      - name: Seed the demo dataset
+        run: pnpm db:seed
       - name: Stop containers
         if: always()
         run: pnpm db:down

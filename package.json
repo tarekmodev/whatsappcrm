@@ -25,6 +25,7 @@
     "db:migrate:deploy": "pnpm --filter @whatsappcrm/api exec prisma migrate deploy",
     "db:migrate:status": "pnpm --filter @whatsappcrm/api exec prisma migrate status",
     "db:reset": "pnpm --filter @whatsappcrm/api exec prisma migrate reset",
+    "db:seed": "turbo run db:seed --filter=@whatsappcrm/api",
     "db:studio": "pnpm --filter @whatsappcrm/api exec prisma studio",
     "db:roles": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/app-roles.sql",
     "db:roles:login": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -v password=local_dev_only -f /sql/app-roles-login.sql",
