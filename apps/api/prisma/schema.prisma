@@ -265,6 +265,51 @@ enum MessageContentType {
   @@map("message_content_type")
 }
 
+/// What a stored binary is, in WhatsApp's own vocabulary (TAR-20e).
+///
+/// Not `message_content_type` reused: that enum has to cover `text`,
+/// `location`, `interactive` and `unsupported`, none of which is a file, and a
+/// column typed on it could hold `media_objects.kind = 'text'`. A narrower enum
+/// makes that unrepresentable rather than merely wrong.
+enum MediaKind {
+  image
+  video
+  audio
+  document
+  /// Inbound only. Sending one needs a sticker pack registered with Meta, which
+  /// the product does not model — see `UPLOADABLE_MEDIA_KINDS` in the contract.
+  sticker
+
+  @@map("media_kind")
+}
+
+/// How a stored binary came to exist. Recorded rather than inferred from
+/// whether an attachment happens to reference it: retention, and whether the
+/// bytes may be re-sent, both follow from this.
+enum MediaSource {
+  /// Downloaded from Meta after an inbound message named it.
+  inbound
+  /// Uploaded by an agent through `POST /api/v1/media`, before a send.
+  upload
+
+  @@map("media_source")
+}
+
+/// How far an inbound attachment has got. Downloading runs off the ingest path
+/// — Meta's media endpoint is a second network call and a document may be
+/// 100 MB — so there is a real interval in which a message exists and its
+/// picture does not, and the inbox has to render the difference.
+enum MediaDownloadState {
+  pending
+  stored
+  /// Terminal. Meta refused, the five-minute handle expired, or the payload
+  /// broke a limit. The message stays in the thread: the customer did send
+  /// something, and a gap would say otherwise.
+  failed
+
+  @@map("media_download_state")
+}
+
 enum TicketStatus {
   open
   pending
@@ -386,6 +431,7 @@ model Tenant {
   customFieldDefs          CustomFieldDef[]
   conversations            Conversation[]
   messages                 Message[]
+  mediaObjects             MediaObject[]
   attachments              MessageAttachment[]
   internalNotes            InternalNote[]
   tickets                  Ticket[]
@@ -511,6 +557,7 @@ model User {
   teamMemberships       TeamMember[]
   assignedConversations Conversation[]
   sentMessages          Message[]
+  uploadedMedia         MediaObject[]
   internalNotes         InternalNote[]
   assignedTickets       Ticket[]
   ticketEvents          TicketEvent[]
@@ -924,22 +971,104 @@ model Message {
   @@map("messages")
 }
 
-model MessageAttachment {
-  id              String   @id @default(uuid(7)) @db.Uuid
-  tenantId        String   @map("tenant_id") @db.Uuid
-  messageId       String   @map("message_id") @db.Uuid
-  /// Re-hosted by us: Meta's media URLs expire.
-  url             String
+/// One stored binary (TAR-20e).
+///
+/// ## Why this is not `message_attachments`
+///
+/// `POST /api/v1/media` returns a `mediaId` **before** any message exists — the
+/// composer attaches a file, then sends. An attachment row cannot represent
+/// that: `message_id` is what makes it an attachment. So the binary is its own
+/// entity, and an attachment is the join between a message and one.
+///
+/// It also makes the two lifetimes separable, which they genuinely are. An
+/// upload that is never sent is a stray media object with no attachment, and
+/// sweeping those is a retention job that never has to reason about messages.
+///
+/// ## What is not here
+///
+/// No Meta media id for the *outbound* direction. Meta's upload handle is
+/// scoped to the phone number it was uploaded to and expires on Meta's own
+/// schedule, so caching one would be a per-number, time-limited cache whose
+/// staleness surfaces as a failed send. The bytes are uploaded per send
+/// instead; see `MediaSendResolver`.
+model MediaObject {
+  id       String      @id @default(uuid(7)) @db.Uuid
+  tenantId String      @map("tenant_id") @db.Uuid
+  kind     MediaKind
+  source   MediaSource
+  /// Where the bytes are in the object store, namespaced by tenant. Unique per
+  /// tenant so two rows can never point at one blob and a delete of either
+  /// orphan the other.
+  storageKey      String   @map("storage_key")
   mimeType        String   @map("mime_type")
-  sizeBytes       Int?     @map("size_bytes")
-  filename        String?
+  sizeBytes       Int      @map("size_bytes")
+  /// SHA-256 of the stored bytes, lower-case hex. Written on the way in, so a
+  /// corrupted or truncated object can be proven rather than suspected — and so
+  /// an inbound download can be checked against the digest Meta publishes.
+  checksumSha256  String   @map("checksum_sha256")
+  /// What the recipient sees, and what a download is named. Documents only in
+  /// practice; null when the source supplied none.
+  fileName        String?  @map("file_name")
+  /// Meta's handle for an inbound object. Retrieval only — it is not a handle
+  /// this platform may send with, and it stops resolving after Meta expires it.
   providerMediaId String?  @map("provider_media_id")
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// The agent who uploaded it. Null for inbound and for automation.
+  uploadedByUserId String? @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  message Message @relation(fields: [tenantId, messageId], references: [tenantId, id], onDelete: Cascade)
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedBy  User?               @relation(fields: [tenantId, uploadedByUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  attachments MessageAttachment[]
 
+  @@unique([tenantId, id])
+  @@unique([tenantId, storageKey])
+  /// The retention sweep over uploads nothing ever attached, and the only
+  /// listing this table has.
+  @@index([tenantId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, uploadedByUserId])
+  @@map("media_objects")
+}
+
+model MessageAttachment {
+  id              String             @id @default(uuid(7)) @db.Uuid
+  tenantId        String             @map("tenant_id") @db.Uuid
+  messageId       String             @map("message_id") @db.Uuid
+  /// The stored binary, once there is one. Null while an inbound download is
+  /// `pending`, and permanently null when it `failed` — the row still records
+  /// that the customer sent a file, which is the honest thing for the thread to
+  /// show.
+  mediaObjectId   String?            @map("media_object_id") @db.Uuid
+  /// Re-hosted by us: Meta's media URLs expire.
+  ///
+  /// Stored as a path (`/api/v1/media/{id}/content`), not an absolute URL. The
+  /// same row is served through a tenant's platform subdomain and through its
+  /// custom domain (TAR-29), so the origin is the request's to supply and the
+  /// response mapper is where the two are joined. An absolute URL here would
+  /// name whichever host was configured the day the row was written.
+  url             String?
+  kind            MediaKind
+  downloadState   MediaDownloadState @default(stored) @map("download_state")
+  /// Why a download ended `failed`, for the operator. Never rendered to a
+  /// customer, and never carries a URL or a token.
+  downloadError   String?            @map("download_error")
+  mimeType        String             @map("mime_type")
+  /// Known once the bytes are stored. Meta's inbound payload does not carry it.
+  sizeBytes       Int?               @map("size_bytes")
+  filename        String?
+  providerMediaId String?            @map("provider_media_id")
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  message     Message      @relation(fields: [tenantId, messageId], references: [tenantId, id], onDelete: Cascade)
+  mediaObject MediaObject? @relation(fields: [tenantId, mediaObjectId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  /// One attachment per message per Meta handle. Meta sends exactly one media
+  /// object per inbound message, so this is what makes a replayed webhook a
+  /// no-op instead of a second attachment on the same message.
+  @@unique([tenantId, messageId, providerMediaId])
   @@index([tenantId, messageId])
+  /// The retry sweep: inbound downloads that never completed.
+  @@index([tenantId, downloadState, createdAt])
   @@map("message_attachments")
 }
 

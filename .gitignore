@@ -14,6 +14,11 @@ next-env.d.ts
 # `pnpm db:generate`, which every build, typecheck and test run depends on.
 apps/api/src/generated/
 
+# Local media store (MEDIA_STORAGE_ROOT). Re-hosted WhatsApp media and the
+# temporary files multipart uploads are staged through — customer data, and
+# never something to commit. A deployed environment points this at a volume.
+.media-storage/
+
 # Environment — never commit real values. .env.example is the documented contract.
 .env
 .env.*

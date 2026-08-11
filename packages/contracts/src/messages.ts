@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { IdSchema, TimestampSchema } from './common';
+import { MediaDownloadStateSchema, MediaKindSchema } from './media';
 import { CursorPageQuerySchema } from './pagination';
 
 /**
@@ -59,9 +60,25 @@ export const MessageAttachmentSchema = z.object({
   id: IdSchema,
   /** Meta's media handle. Media is fetched and re-hosted, because the handle expires. */
   providerMediaId: z.string().nullable(),
+  /**
+   * Where the re-hosted bytes are — absolute, built at the response boundary
+   * from the request's own origin rather than stored, so the same row serves a
+   * platform subdomain and a tenant's custom domain (TAR-29) correctly.
+   *
+   * `null` while `downloadState` is `pending` or `failed`: an inbound download
+   * runs off the ingest path, so a message can exist before its picture does.
+   */
   url: z.url().nullable(),
+  /**
+   * What the attachment is. Published alongside `mimeType` because the inbox
+   * picks a renderer from the kind, not from the media type — `image/webp` is a
+   * sticker and `image/png` is a photo, and they do not render the same way.
+   */
+  kind: MediaKindSchema,
+  downloadState: MediaDownloadStateSchema,
   mimeType: z.string(),
   fileName: z.string().nullable(),
+  /** Known once the bytes are stored, which for an inbound attachment is not immediately. */
   sizeBytes: z.int().nonnegative().nullable(),
 });
 

@@ -6,9 +6,10 @@ WhatsApp Business Cloud API.
 > **Status: early.** This repository contains the project skeleton, the stack decision, the
 > local development harness, the database schema, its tenant isolation, the two Prisma
 > clients that enforce it, the platform admin surface that provisions and deactivates
-> tenants, and the first product path end to end — inbound WhatsApp webhooks. On the
-> frontend it contains the design-token and component foundation plus the agent/team/role
-> management console (TAR-82), which currently reads fixtures rather than the API — see
+> tenants, the first product path end to end — inbound WhatsApp webhooks — and the media
+> pipeline that re-hosts what those webhooks carry. On the frontend it contains the
+> design-token and component foundation plus the agent/team/role management console
+> (TAR-82), which currently reads fixtures rather than the API — see
 > [Interim state](#interim-state-mock-api-and-stubbed-role). Feature work is tracked as the
 > TAR-18 epic. The database has **tables but almost no rows**: the data model landed with
 > TAR-47, row-level security with TAR-48, the client split with TAR-49, provisioning and
@@ -41,6 +42,7 @@ not yet installed and arrives with the realtime gateway.
 | `apps/api/src/prisma`      | The `TenantPrisma` / `SystemPrisma` clients and RLS wiring    |
 | `apps/api/src/queue`       | BullMQ registration and tenant context propagation into jobs  |
 | `apps/api/src/webhooks`    | WhatsApp webhook ingest, its worker and the stuck-event sweep |
+| `apps/api/src/media`       | Media upload, inbound download and the storage port           |
 | `apps/api/prisma`          | Database schema and migrations                                |
 | `apps/api/prisma/sql`      | Operational SQL that is not a migration — roles, RLS check    |
 | `apps/web`                 | Next.js agent console — see [Frontend](#frontend)             |
@@ -111,9 +113,9 @@ pnpm db:verify:rls
 # PASS — tenant isolation is enforced at the data layer
 
 pnpm test:db
-# Tests: 150 passed — the same guarantee through TenantPrisma, plus provisioning,
+# Tests: 157 passed — the same guarantee through TenantPrisma, plus provisioning,
 #                     the WhatsApp webhook ingestion pipeline, the ticket
-#                     uniqueness constraint and ticket linking
+#                     uniqueness constraint, ticket linking and media isolation
 ```
 
 Once the database and Redis are up, readiness reports them:
@@ -525,6 +527,51 @@ older than five minutes is the condition worth alerting on.
 Without `REDIS_URL` the API still boots and still accepts and stores deliveries — it logs
 a warning at startup and nothing processes them until a worker exists.
 
+## Media
+
+Both directions go through `MediaModule`, and both store the bytes in one place.
+
+**Inbound.** A media message arrives as a _handle_, not a file, and Meta's URL for it
+expires five minutes after it is issued. The ingest transaction records a
+`message_attachments` row as `pending` — the durable statement that bytes are owed — and
+queues a download on the `media` queue. The worker resolves the handle, streams the object
+into storage, verifies it against the digest Meta published, and flips the row to `stored`
+with a `/api/v1/media/{id}/content` path on it. A permanent refusal parks the row `failed`
+with the reason; the message stays in the thread either way, because the customer did send
+something.
+
+Downloading is a job rather than part of ingest deliberately: it is two more network calls
+and up to 100 MB, and doing it inline would put the whole inbox behind the slowest
+customer's video. The visible consequence is that a message can reach an agent before its
+picture does, which is why `downloadState` is published.
+
+**Outbound.** `POST /api/v1/media` takes a multipart `file`, validates it, stores it, and
+returns `{ mediaId }`. Validation is by the **bytes**, not by the declared media type: a
+signature check resolves what the file actually is, the per-kind ceiling from
+`WHATSAPP_MEDIA_LIMITS` is applied to _that_ kind, and a mismatch or an unsupported type is
+refused with `validation_failed` — oversize with `payload_too_large`. At send time the
+bytes are uploaded to Meta and its handle is used immediately; nothing caches one, because
+a Meta handle is per phone number and expires on Meta's schedule.
+
+```bash
+curl -X POST http://localhost:3001/api/v1/media -F file=@invoice.pdf
+# 201 { "mediaId": "0198f0..." }
+```
+
+**Storage is a port with one adapter, and that is a known gap.** ADR 0001 took no decision
+on object storage and TAR-41 has not provisioned any, so `MediaStorage` ships with a
+filesystem adapter rooted at `MEDIA_STORAGE_ROOT`.
+
+> ⚠️ In a deployed environment that path **must be a durable, shared volume**, given as an
+> absolute path. A container's writable layer is neither: media written there is gone on
+> the next deploy while the rows naming it survive, and a second replica cannot read what
+> the first wrote. It holds customer data, so back it up and control access to it like the
+> database. Locally it defaults to a git-ignored `.media-storage/` at the repository root.
+
+Nothing is ever served from a client-supplied path. A caller names a media **id**; the
+lookup goes through `TenantPrisma`, and the storage key is read off the row that resolved.
+Another tenant's id is `not_found`, never `forbidden` — a 403 would confirm it exists.
+
 ## Environments
 
 Three hosted environments — development, staging and production — each with its own
@@ -612,6 +659,10 @@ environment with no app secret must refuse every delivery rather than accept uns
 ones. Both are platform-level and come from the Meta app dashboard — one Meta app serves
 every tenant, and tenant routing is `phone_number_id` → `whatsapp_accounts`, never a
 per-tenant secret.
+
+`MEDIA_STORAGE_ROOT` is required with a local default, and it is the one variable in this
+file whose default is actively wrong in production: point it at a durable, shared volume
+using an absolute path, for the reasons in [Media](#media) above.
 
 The Prisma CLI reads its own configuration from `apps/api/prisma.config.mjs`, which loads
 the repository-root `.env`. Prisma 7 does not load `.env` on its own and no longer accepts

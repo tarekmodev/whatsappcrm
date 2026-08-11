@@ -1,5 +1,5 @@
 import { PhoneE164Schema, type MessageStatus } from '@whatsappcrm/contracts';
-import { MessageContentType } from '../generated/prisma/enums';
+import { MediaKind, MessageContentType } from '../generated/prisma/enums';
 import type { WhatsAppInboundMessage } from './whatsapp-payload.schema';
 
 /**
@@ -100,6 +100,74 @@ export function toPhoneE164(waId: string): string | null {
   const candidate = waId.startsWith('+') ? waId : `+${waId}`;
 
   return PhoneE164Schema.safeParse(candidate).success ? candidate : null;
+}
+
+/**
+ * Meta's media-carrying message types, mapped onto `MediaKind`.
+ *
+ * Only these five. A `text` or `location` message has no bytes to fetch, and a
+ * type Meta ships tomorrow arrives as `unsupported` with no media sub-object,
+ * so `toInboundMedia` returns `null` for it rather than guessing at a shape.
+ */
+const MEDIA_KINDS_BY_TYPE: Readonly<Record<string, MediaKind>> = {
+  image: MediaKind.image,
+  video: MediaKind.video,
+  audio: MediaKind.audio,
+  document: MediaKind.document,
+  sticker: MediaKind.sticker,
+};
+
+/** What Meta says about one inbound media object, before anything is fetched. */
+export interface InboundMediaDescriptor {
+  readonly kind: MediaKind;
+  /** Meta's handle. The only thing that can retrieve the bytes, and it expires. */
+  readonly providerMediaId: string;
+  readonly mimeType: string;
+  readonly fileName: string | null;
+}
+
+/**
+ * The media a message carries, or `null` when it carries none.
+ *
+ * ## Why `id` is required and everything else is not
+ *
+ * The handle is what a download is made with; without it there is nothing to
+ * fetch and recording an attachment would create a row permanently stuck
+ * `pending`. Meta has always sent one for a media message, so its absence means
+ * a shape this mapper does not understand — and the message itself is still
+ * stored, which is the point of being total here.
+ *
+ * `mime_type` is defaulted rather than required. Meta usually sends it, and the
+ * media endpoint gives the authoritative answer anyway when the download runs;
+ * `application/octet-stream` is the honest placeholder in between, and it is
+ * the right thing to serve if the download never completes.
+ *
+ * A caption is deliberately not here — it is the message body, and
+ * `toMessageBody` already reads it.
+ */
+export function toInboundMedia(message: WhatsAppInboundMessage): InboundMediaDescriptor | null {
+  const kind = MEDIA_KINDS_BY_TYPE[message.type];
+
+  if (kind === undefined) {
+    return null;
+  }
+
+  const media =
+    message.image ?? message.video ?? message.audio ?? message.document ?? message.sticker;
+
+  if (media?.id === undefined || media.id.length === 0) {
+    return null;
+  }
+
+  return {
+    kind,
+    providerMediaId: media.id,
+    mimeType:
+      media.mime_type === undefined || media.mime_type.length === 0
+        ? 'application/octet-stream'
+        : media.mime_type,
+    fileName: media.filename ?? null,
+  };
 }
 
 /** Meta's failure detail, flattened to the two columns `messages` has for it. */

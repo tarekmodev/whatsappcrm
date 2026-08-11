@@ -473,4 +473,214 @@ describe('MetaCloudApiClient', () => {
       ).resolves.toMatchObject({ templates: [] });
     });
   });
+
+  describe('media (TAR-20e)', () => {
+    const MEDIA_ID = 'meta-media-1234';
+    const MEDIA_URL = 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1';
+    const TRANSFER_TIMEOUT_MS = 60_000;
+
+    /** A CDN response: bytes and headers, with no JSON body to parse. */
+    function cdnResponds(status: number, body: ReadableStream<Uint8Array> | null) {
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        headers: { get: () => null },
+        body,
+        json: () => Promise.reject(new Error('the CDN does not answer JSON')),
+      };
+    }
+
+    function bytes(content: string): ReadableStream<Uint8Array> {
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(content));
+          controller.close();
+        },
+      });
+    }
+
+    describe('describeMedia', () => {
+      it('reads the URL and what Meta claims about the bytes', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(200, {
+            url: MEDIA_URL,
+            mime_type: 'image/jpeg',
+            sha256: 'AB12',
+            file_size: 4096,
+          }),
+        );
+
+        await expect(
+          client.describeMedia({ providerMediaId: MEDIA_ID, accessToken: ACCESS_TOKEN }),
+        ).resolves.toEqual({
+          url: MEDIA_URL,
+          mimeType: 'image/jpeg',
+          // Lower-cased, so a comparison against a computed digest can be exact.
+          sha256: 'ab12',
+          sizeBytes: 4096,
+        });
+
+        expect(callArgs()[0]).toBe(`${BASE_URL}/${VERSION}/${MEDIA_ID}`);
+      });
+
+      it('reads a numeric string file size, which older versions send', async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { url: MEDIA_URL, file_size: '4096' }));
+
+        await expect(
+          client.describeMedia({ providerMediaId: MEDIA_ID, accessToken: ACCESS_TOKEN }),
+        ).resolves.toMatchObject({ sizeBytes: 4096, mimeType: null, sha256: null });
+      });
+
+      it('treats a 200 with no URL as transient rather than as an answer', async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { id: MEDIA_ID }));
+
+        await expect(
+          client.describeMedia({ providerMediaId: MEDIA_ID, accessToken: ACCESS_TOKEN }),
+        ).rejects.toThrow(MetaUnavailableError);
+      });
+    });
+
+    describe('downloadMedia', () => {
+      it('fetches the CDN URL with the bearer token and returns the stream', async () => {
+        fetchMock.mockResolvedValue(cdnResponds(200, bytes('a photograph')));
+
+        const body = await client.downloadMedia({
+          url: MEDIA_URL,
+          accessToken: ACCESS_TOKEN,
+          timeoutMs: TRANSFER_TIMEOUT_MS,
+        });
+
+        expect(body).not.toBeNull();
+
+        const [url, init] = callArgs();
+
+        expect(url).toBe(MEDIA_URL);
+        expect((init.headers as Record<string, string>).authorization).toBe(
+          `Bearer ${ACCESS_TOKEN}`,
+        );
+      });
+
+      it('refuses to follow a redirect, which would be a second unvalidated URL', async () => {
+        fetchMock.mockResolvedValue(cdnResponds(200, bytes('x')));
+
+        await client.downloadMedia({
+          url: MEDIA_URL,
+          accessToken: ACCESS_TOKEN,
+          timeoutMs: TRANSFER_TIMEOUT_MS,
+        });
+
+        expect(callArgs()[1].redirect).toBe('error');
+      });
+
+      it.each([
+        ['a host outside Meta', 'https://evil.example.com/whatsapp/media'],
+        ['a look-alike host', 'https://evil-fbcdn.net/media'],
+        ['the cloud metadata endpoint', 'http://169.254.169.254/latest/meta-data/'],
+        ['a plain-text URL', 'http://lookaside.fbsbx.com/media'],
+        ['a file URL', 'file:///etc/passwd'],
+        ['nonsense', 'not-a-url'],
+      ])('refuses %s without making a request', async (_name, url) => {
+        // The URL comes from a third party's response and this request carries a
+        // bearer token: an unvalidated fetch is a credential-forwarding proxy.
+        await expect(
+          client.downloadMedia({ url, accessToken: ACCESS_TOKEN, timeoutMs: TRANSFER_TIMEOUT_MS }),
+        ).rejects.toThrow(MetaRequestRejectedError);
+
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
+
+      it('does not quote the credentialed URL in the failure it logs', async () => {
+        await expect(
+          client.downloadMedia({
+            url: 'https://evil.example.com/x?token=secret',
+            accessToken: ACCESS_TOKEN,
+            timeoutMs: TRANSFER_TIMEOUT_MS,
+          }),
+        ).rejects.not.toThrow(/token=secret/);
+      });
+
+      it('classifies an expired handle as a rejection, not as something to retry', async () => {
+        fetchMock.mockResolvedValue(cdnResponds(404, null));
+
+        await expect(
+          client.downloadMedia({
+            url: MEDIA_URL,
+            accessToken: ACCESS_TOKEN,
+            timeoutMs: TRANSFER_TIMEOUT_MS,
+          }),
+        ).rejects.toThrow(MetaRequestRejectedError);
+      });
+
+      it('classifies a CDN outage as transient', async () => {
+        fetchMock.mockResolvedValue(cdnResponds(503, null));
+
+        await expect(
+          client.downloadMedia({
+            url: MEDIA_URL,
+            accessToken: ACCESS_TOKEN,
+            timeoutMs: TRANSFER_TIMEOUT_MS,
+          }),
+        ).rejects.toThrow(MetaUnavailableError);
+      });
+
+      it('treats a 200 with no body as transient', async () => {
+        fetchMock.mockResolvedValue(cdnResponds(200, null));
+
+        await expect(
+          client.downloadMedia({
+            url: MEDIA_URL,
+            accessToken: ACCESS_TOKEN,
+            timeoutMs: TRANSFER_TIMEOUT_MS,
+          }),
+        ).rejects.toThrow(MetaUnavailableError);
+      });
+    });
+
+    describe('uploadMedia', () => {
+      const file = new Blob([new Uint8Array([1, 2, 3])], { type: 'application/pdf' });
+
+      it("posts a multipart body to the phone number and returns Meta's handle", async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { id: MEDIA_ID }));
+
+        await expect(
+          client.uploadMedia({
+            phoneNumberId: PHONE_NUMBER_ID,
+            accessToken: ACCESS_TOKEN,
+            file,
+            mimeType: 'application/pdf',
+            fileName: 'invoice.pdf',
+            timeoutMs: TRANSFER_TIMEOUT_MS,
+          }),
+        ).resolves.toBe(MEDIA_ID);
+
+        const [url, init] = callArgs();
+
+        expect(url).toBe(`${BASE_URL}/${VERSION}/${PHONE_NUMBER_ID}/media`);
+        expect(init.body).toBeInstanceOf(FormData);
+
+        const form = init.body as FormData;
+
+        expect(form.get('messaging_product')).toBe('whatsapp');
+        expect(form.get('type')).toBe('application/pdf');
+        // `FormData` sets its own content-type with the boundary; naming one by
+        // hand omits the boundary and Meta rejects the body.
+        expect((init.headers as Record<string, string>)['content-type']).toBeUndefined();
+      });
+
+      it('treats a successful response with no id as transient', async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, {}));
+
+        await expect(
+          client.uploadMedia({
+            phoneNumberId: PHONE_NUMBER_ID,
+            accessToken: ACCESS_TOKEN,
+            file,
+            mimeType: 'application/pdf',
+            fileName: 'invoice.pdf',
+            timeoutMs: TRANSFER_TIMEOUT_MS,
+          }),
+        ).rejects.toThrow(MetaUnavailableError);
+      });
+    });
+  });
 });

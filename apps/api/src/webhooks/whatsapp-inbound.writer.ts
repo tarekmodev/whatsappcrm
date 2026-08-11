@@ -1,4 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MESSAGE_STATUSES, isMessageStatusAdvance } from '@whatsappcrm/contracts';
 import {
@@ -8,14 +9,24 @@ import {
   type MessageStatusChangedEvent,
 } from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
-import { MessageContentType, MessageDirection, MessageStatus } from '../generated/prisma/enums';
+import {
+  MediaDownloadState,
+  MessageContentType,
+  MessageDirection,
+  MessageStatus,
+} from '../generated/prisma/enums';
+import { DOWNLOAD_INBOUND_MEDIA_JOB, MEDIA_QUEUE } from '../media/media.constants';
+import { downloadInboundMediaJobId, type DownloadInboundMediaJob } from '../media/media-jobs';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
+import { QueueService } from '../queue/queue.service';
 import {
   toContentType,
   toFailureReason,
+  toInboundMedia,
   toMessageBody,
   toMessageStatus,
   toPhoneE164,
+  type InboundMediaDescriptor,
   type ProviderReportedStatus,
 } from './whatsapp-message.mapper';
 import type {
@@ -78,14 +89,31 @@ interface ConversationOpening {
  *     it needs, rather than being dropped or retried until Meta gives up.
  *
  * Domain events are emitted **after** the transaction commits. Emitting inside
- * would push a message to an agent's screen that a rollback then un-wrote.
+ * would push a message to an agent's screen that a rollback then un-wrote. The
+ * media-download job is queued after the commit for the same reason, and with
+ * the same consequence if the queue is down: the row is durable and says the
+ * bytes are owed, so nothing is lost that a re-queue cannot recover.
  */
 @Injectable()
 export class WhatsAppInboundWriter {
+  private readonly logger = new Logger(WhatsAppInboundWriter.name);
+
+  /**
+   * Read from the same variable `InboundMediaDownloadService` reads, so BullMQ's
+   * retry budget and the budget the handler parks on cannot drift. If the queue
+   * gave up first the attachment would stay `pending` forever; if the handler
+   * parked first the remaining attempts would be no-ops. One value, both places.
+   */
+  private readonly downloadAttempts: number;
+
   constructor(
+    config: ConfigService,
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly events: EventEmitter2,
-  ) {}
+    private readonly queue: QueueService,
+  ) {
+    this.downloadAttempts = config.getOrThrow<number>('MEDIA_DOWNLOAD_MAX_ATTEMPTS');
+  }
 
   /**
    * Records one inbound message, creating the contact and the thread if this is
@@ -105,6 +133,8 @@ export class WhatsAppInboundWriter {
     if (phoneE164 === null) {
       return false;
     }
+
+    const media = toInboundMedia(message);
 
     const created = await this.prisma.$tenantTransaction(async (tx) => {
       const contactId = await this.upsertContact(tx, account.tenantId, {
@@ -146,25 +176,127 @@ export class WhatsAppInboundWriter {
 
       await this.advanceConversation(tx, account.tenantId, conversationId, message.timestamp);
 
+      const attachmentId =
+        media === null ? null : await this.recordAttachment(tx, account.tenantId, stored.id, media);
+
       return {
-        tenantId: account.tenantId,
-        conversationId,
-        contactId,
-        messageId: stored.id,
-        direction: MessageDirection.inbound,
-        status: stored.status,
-        contentType: stored.contentType,
-        body: stored.body,
-        providerMessageId: message.id,
-        sentAt: message.timestamp,
-      } satisfies MessageCreatedEvent;
+        attachmentId,
+        event: {
+          tenantId: account.tenantId,
+          conversationId,
+          contactId,
+          messageId: stored.id,
+          direction: MessageDirection.inbound,
+          status: stored.status,
+          contentType: stored.contentType,
+          body: stored.body,
+          providerMessageId: message.id,
+          sentAt: message.timestamp,
+        } satisfies MessageCreatedEvent,
+      };
     });
 
     if (created !== null) {
-      this.events.emit(MESSAGE_CREATED_EVENT, created);
+      this.events.emit(MESSAGE_CREATED_EVENT, created.event);
+
+      if (created.attachmentId !== null) {
+        await this.queueMediaDownload(account, created.attachmentId);
+      }
     }
 
     return true;
+  }
+
+  /**
+   * Records that this message carries media, and that the bytes are owed.
+   *
+   * Written in the same transaction as the message so the two can never
+   * disagree: a message whose media is only discovered by a job that may not
+   * run is a message the inbox renders as empty text. The row is the durable
+   * statement of intent; the job is only how it gets acted on.
+   *
+   * `url` and `size_bytes` stay null and `download_state` is `pending` — Meta's
+   * inbound payload carries neither, and inventing them would mean publishing a
+   * URL to bytes nobody has fetched.
+   *
+   * `skipDuplicates` on `(tenant_id, message_id, provider_media_id)`: a webhook
+   * replay that somehow got past the message-level guard must not attach the
+   * same media twice. An empty result means it is already recorded, and the
+   * caller queues nothing — the first attempt already did.
+   */
+  private async recordAttachment(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    messageId: string,
+    media: InboundMediaDescriptor,
+  ): Promise<string | null> {
+    const [attachment] = await tx.messageAttachment.createManyAndReturn({
+      data: [
+        {
+          tenantId,
+          messageId,
+          kind: media.kind,
+          downloadState: MediaDownloadState.pending,
+          mimeType: media.mimeType,
+          filename: media.fileName,
+          providerMediaId: media.providerMediaId,
+        },
+      ],
+      skipDuplicates: true,
+      select: { id: true },
+    });
+
+    return attachment?.id ?? null;
+  }
+
+  /**
+   * Hands the download to `MediaModule`'s queue.
+   *
+   * A job rather than a direct call, which is the whole reason this module does
+   * not import that one: fetching the bytes is two more network calls and up to
+   * 100 MB of transfer, and doing it here would run it inside the webhook's own
+   * processing budget, behind Meta's retry timer, with the rest of the batch
+   * waiting.
+   *
+   * Never throws. `enqueue` reports an outcome and logs, per `QueueService`'s
+   * contract — the attachment row is already committed and says `pending`, so a
+   * Redis blip costs a picture that has not arrived yet rather than a webhook
+   * that fails and re-delivers the whole batch. The honest limitation, recorded
+   * rather than glossed: nothing re-queues a `pending` attachment today, and
+   * Meta's handle expires in five minutes, so a queue outage longer than that
+   * loses the media. A sweep over `(tenant_id, download_state, created_at)` —
+   * the index is already there — is the follow-up.
+   */
+  private async queueMediaDownload(
+    account: RoutedWhatsAppAccount,
+    messageAttachmentId: string,
+  ): Promise<void> {
+    const outcome = await this.queue.enqueue<DownloadInboundMediaJob>(
+      MEDIA_QUEUE,
+      DOWNLOAD_INBOUND_MEDIA_JOB,
+      {
+        tenantId: account.tenantId,
+        messageAttachmentId,
+        whatsappAccountId: account.whatsappAccountId,
+      },
+      {
+        jobId: downloadInboundMediaJobId(messageAttachmentId),
+        // Meta's URL is good for five minutes, so the backoff is measured in
+        // seconds rather than minutes: three attempts at 2s, 4s and 8s all fall
+        // inside the window, and a longer schedule would only park the
+        // attachment more slowly.
+        attempts: this.downloadAttempts,
+        backoff: { type: 'exponential', delay: 2_000 },
+        removeOnComplete: true,
+      },
+    );
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      this.logger.warn(
+        `Media for attachment ${messageAttachmentId} was recorded but not queued (${outcome}); ` +
+          'it will stay pending.',
+      );
+    }
   }
 
   /**

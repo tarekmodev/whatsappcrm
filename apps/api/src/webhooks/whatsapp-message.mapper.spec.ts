@@ -3,6 +3,7 @@ import { MessageContentType } from '../generated/prisma/enums';
 import {
   toContentType,
   toFailureReason,
+  toInboundMedia,
   toMessageBody,
   toMessageStatus,
   toPhoneE164,
@@ -134,5 +135,74 @@ describe('toFailureReason', () => {
 
   it('accepts a string code, which Meta also sends', () => {
     expect(toFailureReason([{ code: '470' }]).errorCode).toBe('470');
+  });
+});
+
+describe('toInboundMedia', () => {
+  it.each([
+    ['image', 'image'],
+    ['video', 'video'],
+    ['audio', 'audio'],
+    ['document', 'document'],
+    ['sticker', 'sticker'],
+  ])('reads the handle out of a `%s` message', (metaType, kind) => {
+    const media = toInboundMedia(
+      message({ type: metaType, [metaType]: { id: 'meta-media-1', mime_type: 'image/jpeg' } }),
+    );
+
+    expect(media).toEqual({
+      kind,
+      providerMediaId: 'meta-media-1',
+      mimeType: 'image/jpeg',
+      fileName: null,
+    });
+  });
+
+  it('keeps the file name of a document, which is what the agent sees', () => {
+    const media = toInboundMedia(
+      message({
+        type: 'document',
+        document: { id: 'meta-media-2', mime_type: 'application/pdf', filename: 'invoice.pdf' },
+      }),
+    );
+
+    expect(media).toMatchObject({ fileName: 'invoice.pdf' });
+  });
+
+  it('falls back to a placeholder media type rather than to nothing', () => {
+    // Meta usually sends `mime_type`, and the media endpoint is authoritative
+    // when the download runs; this is what is honest in between.
+    expect(toInboundMedia(message({ type: 'image', image: { id: 'meta-media-3' } }))).toMatchObject(
+      {
+        mimeType: 'application/octet-stream',
+      },
+    );
+  });
+
+  it.each(['text', 'location', 'contacts', 'interactive', 'reaction', 'something_new'])(
+    'finds no media in a `%s` message',
+    (metaType) => {
+      expect(toInboundMedia(message({ type: metaType }))).toBeNull();
+    },
+  );
+
+  it('finds no media when the payload names no handle', () => {
+    // Without a handle nothing can be fetched, and recording an attachment
+    // would create a row stuck `pending` for ever.
+    expect(
+      toInboundMedia(message({ type: 'image', image: { mime_type: 'image/jpeg' } })),
+    ).toBeNull();
+    expect(toInboundMedia(message({ type: 'image', image: { id: '' } }))).toBeNull();
+    expect(toInboundMedia(message({ type: 'image' }))).toBeNull();
+  });
+
+  it('ignores the caption, which is the message body', () => {
+    const payload = message({
+      type: 'image',
+      image: { id: 'meta-media-4', mime_type: 'image/png', caption: 'is this the right one?' },
+    });
+
+    expect(toInboundMedia(payload)).not.toHaveProperty('caption');
+    expect(toMessageBody(payload)).toBe('is this the right one?');
   });
 });
