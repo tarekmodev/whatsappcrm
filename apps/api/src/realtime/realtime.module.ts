@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ResponseOriginService } from '../common/response-origin.service';
 import { ConversationAccessService } from './conversation-access.service';
+import { ConversationResourceService } from './conversation-resource.service';
 import { MessageResourceService } from './message-resource.service';
 import { RealtimeGateway } from './realtime.gateway';
 import { RealtimeHandshakeService } from './realtime-handshake.service';
@@ -43,6 +44,7 @@ import { TenantHostnameService } from './tenant-hostname.service';
     RealtimeHandshakeService,
     RealtimeRelayService,
     ConversationAccessService,
+    ConversationResourceService,
     MessageResourceService,
     TenantHostnameService,
     ResponseOriginService,

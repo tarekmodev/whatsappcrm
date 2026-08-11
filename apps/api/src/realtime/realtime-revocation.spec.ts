@@ -2,6 +2,7 @@ import { permissionsForRole, userRoom, type SessionPrincipal } from '@whatsappcr
 import type { Server } from 'socket.io';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { SessionService } from '../identity/session.service';
+import type { ConversationResourceService } from './conversation-resource.service';
 import type { MessageResourceService } from './message-resource.service';
 import { RealtimeRelayService } from './realtime-relay.service';
 import type { RealtimeSocketData } from './realtime-socket';
@@ -95,6 +96,7 @@ function harnessFor(sockets: FakeSocket[], live: string[] = [LIVE_SESSION]): Har
 
   const relay = new RealtimeRelayService(
     {} as unknown as MessageResourceService,
+    {} as unknown as ConversationResourceService,
     {} as unknown as TenantHostnameService,
     sessions,
     tenantContext,
@@ -179,6 +181,7 @@ describe('a revocation reaching an open socket', () => {
   it('does nothing before a server is attached', async () => {
     const relay = new RealtimeRelayService(
       {} as unknown as MessageResourceService,
+      {} as unknown as ConversationResourceService,
       {} as unknown as TenantHostnameService,
       {} as unknown as SessionService,
       new TenantContextService(),

@@ -1,13 +1,23 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import type {
   ConversationAssignInput,
   ConversationResponse,
   ConversationStatus,
 } from '@whatsappcrm/contracts';
+import { TenantContextService } from '../common/tenant-context/tenant-context.service';
+import {
+  CONVERSATION_ASSIGNED_EVENT,
+  type ConversationAssignedEvent,
+} from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
 import { UserStatus } from '../generated/prisma/enums';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
-import { CONVERSATION_PROJECTION, toConversationResponse } from './conversation.mapper';
+import {
+  CONVERSATION_PROJECTION,
+  toConversationResponse,
+  type ConversationRow,
+} from './conversation.mapper';
 import { ConversationQueryService } from './conversation-query.service';
 import { UnknownTenantMemberError } from './conversations.errors';
 
@@ -35,6 +45,8 @@ export class ConversationCommandService {
   constructor(
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly conversations: ConversationQueryService,
+    private readonly tenantContext: TenantContextService,
+    private readonly events: EventEmitter2,
   ) {}
 
   /**
@@ -66,18 +78,30 @@ export class ConversationCommandService {
    *
    * Releasing both is what puts a conversation back in `scope=unassigned`, where
    * every agent can see it again.
+   *
+   * It is the one command here that changes **who may see the thread**, which is
+   * why it is also the one that announces itself (TAR-198): every other agent's
+   * inbox is showing a row whose owner just changed, and only an event gets that
+   * onto their screen without a refetch.
    */
   async assign(
     conversationId: string,
     input: ConversationAssignInput,
   ): Promise<ConversationResponse> {
-    await this.conversations.require(conversationId);
+    // `require` already loads the row the visibility check needs, which is the
+    // same row that carries the assignment being replaced — so the previous
+    // owner costs no extra query.
+    const before = await this.conversations.require(conversationId);
     await this.assertAssigneesExist(input);
 
-    return this.write(conversationId, {
+    const assigned = await this.write(conversationId, {
       ...(input.userId === undefined ? {} : { assignedUserId: input.userId }),
       ...(input.teamId === undefined ? {} : { assignedTeamId: input.teamId }),
     });
+
+    this.announceHandover(before, assigned);
+
+    return assigned;
   }
 
   /**
@@ -119,6 +143,46 @@ export class ConversationCommandService {
         select: CONVERSATION_PROJECTION,
       }),
     );
+  }
+
+  /**
+   * Tells the realtime relay a thread changed hands, so the colleagues watching
+   * it find out now rather than on their next unrelated event.
+   *
+   * ## After the write, and never in front of the response
+   *
+   * `write` is a single statement, so by the time this runs the new owner is
+   * committed — pushing a hand-over that a rollback then un-wrote is the failure
+   * every other producer of these events avoids the same way. It is fire and
+   * forget on the in-process bus: `emit` is synchronous dispatch and the
+   * subscriber catches its own failures, so a relay that cannot reach Redis costs
+   * a client one refetch rather than failing the claim that already happened.
+   *
+   * ## Silent when nothing moved
+   *
+   * Re-assigning a thread to the agent who already holds it is a no-op, and a
+   * relay for it would be a broadcast of nothing — including to the agent's own
+   * tab, which would then re-render a row that did not change. The comparison is
+   * against the row `require` loaded rather than against the input, because the
+   * input's three cases (absent, `null`, an id) do not say by themselves whether
+   * a column moved.
+   */
+  private announceHandover(before: ConversationRow, after: ConversationResponse): void {
+    if (
+      before.assignedUserId === after.assignedUserId &&
+      before.assignedTeamId === after.assignedTeamId
+    ) {
+      return;
+    }
+
+    const event: ConversationAssignedEvent = {
+      tenantId: this.tenantContext.requireTenantId(),
+      conversationId: after.id,
+      previousAssignedUserId: before.assignedUserId,
+      previousAssignedTeamId: before.assignedTeamId,
+    };
+
+    this.events.emit(CONVERSATION_ASSIGNED_EVENT, event);
   }
 
   /**

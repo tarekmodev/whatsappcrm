@@ -7,12 +7,18 @@ import {
   tenantRoom,
   userRoom,
   type ConversationAudience,
+  type ConversationResponse,
   type MessageResponse,
 } from '@whatsappcrm/contracts';
 import type { Server } from 'socket.io';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
-import type { MessageCreatedEvent, MessageStatusChangedEvent } from '../events/domain-events';
+import type {
+  ConversationAssignedEvent,
+  MessageCreatedEvent,
+  MessageStatusChangedEvent,
+} from '../events/domain-events';
 import type { SessionService } from '../identity/session.service';
+import type { ConversationResourceService } from './conversation-resource.service';
 import type { MessageResourceService, RelayableMessage } from './message-resource.service';
 import { RealtimeRelayService } from './realtime-relay.service';
 import type { TenantHostnameService } from './tenant-hostname.service';
@@ -29,6 +35,8 @@ import type { TenantHostnameService } from './tenant-hostname.service';
 
 const TENANT = '80111111-1111-7111-8111-111111111101';
 const ASSIGNEE = '80111111-1111-7111-8111-1111111111a1';
+/** The agent a thread is handed *to*, for the cases where two owners matter. */
+const SUCCESSOR = '80111111-1111-7111-8111-1111111111a2';
 const TEAM = '80111111-1111-7111-8111-1111111111b1';
 const CONVERSATION = '80111111-1111-7111-8111-1111111111c1';
 const MESSAGE = '80111111-1111-7111-8111-1111111111d1';
@@ -79,6 +87,50 @@ function statusChanged(
   };
 }
 
+/** The thread as `GET /conversations/{id}` publishes it, unclaimed by default. */
+function conversation(overrides: Partial<ConversationResponse> = {}): ConversationResponse {
+  return {
+    id: CONVERSATION,
+    contact: {
+      id: CONTACT,
+      phone: '+966500000001',
+      waProfileName: 'Maria',
+      displayName: 'Maria',
+      email: null,
+      tags: [],
+      customFields: {},
+      lastContactedAt: null,
+      optedOutAt: null,
+      createdAt: '2026-08-11T08:00:00.000Z',
+      updatedAt: '2026-08-11T08:00:00.000Z',
+    },
+    whatsappAccountId: '80111111-1111-7111-8111-1111111111e1',
+    status: 'open',
+    assignedUserId: null,
+    assignedTeamId: null,
+    ticketId: null,
+    unreadCount: 1,
+    serviceWindowExpiresAt: null,
+    botHandling: false,
+    lastMessagePreview: 'is my order on its way?',
+    lastMessageAt: '2026-08-11T09:00:00.000Z',
+    createdAt: '2026-08-11T08:00:00.000Z',
+    updatedAt: '2026-08-11T09:00:02.000Z',
+    ...overrides,
+  };
+}
+
+/** A hand-over from nobody — the claim of an unclaimed thread — by default. */
+function assigned(overrides: Partial<ConversationAssignedEvent> = {}): ConversationAssignedEvent {
+  return {
+    tenantId: TENANT,
+    conversationId: CONVERSATION,
+    previousAssignedUserId: null,
+    previousAssignedTeamId: null,
+    ...overrides,
+  };
+}
+
 interface Emission {
   readonly rooms: string[];
   readonly event: string;
@@ -95,6 +147,7 @@ interface Harness {
 function harnessFor(
   options: {
     message?: MessageResponse | null;
+    conversation?: ConversationResponse | null;
     audience?: Partial<ConversationAudience>;
     readFails?: boolean;
     attach?: boolean;
@@ -131,6 +184,20 @@ function harnessFor(
     },
   } as unknown as MessageResourceService;
 
+  const conversations = {
+    findForRelay: (): Promise<ConversationResponse | null> => {
+      scopes.push(tenantContext.tenantId);
+
+      if (options.readFails === true) {
+        return Promise.reject(new Error('the database is unreachable'));
+      }
+
+      return Promise.resolve(
+        options.conversation === undefined ? conversation() : options.conversation,
+      );
+    },
+  } as unknown as ConversationResourceService;
+
   const hostnames = {
     publish: (): Promise<boolean> => {
       if (options.hostname === false) {
@@ -147,7 +214,13 @@ function harnessFor(
     resolveBySessionId: (): Promise<null> => Promise.resolve(null),
   } as unknown as SessionService;
 
-  const relay = new RealtimeRelayService(messages, hostnames, sessions, tenantContext);
+  const relay = new RealtimeRelayService(
+    messages,
+    conversations,
+    hostnames,
+    sessions,
+    tenantContext,
+  );
 
   if (options.attach !== false) {
     relay.attach(fakeServer(emissions));
@@ -342,5 +415,212 @@ describe('relaying a send-status transition', () => {
     await relay.onMessageStatusChanged(statusChanged({ tenantId: other }));
 
     expect(scopes).toEqual([TENANT, other]);
+  });
+});
+
+/**
+ * The rooms a claim is addressed to (TAR-198).
+ *
+ * This is the one relay that addresses **two** audiences, and the reason is the
+ * acceptance criterion itself: the audience of a conversation is derived from its
+ * assignment, so an agent who was watching an unclaimed thread is in none of the
+ * rooms the claimed thread now addresses. Emitting only to the new audience would
+ * deliver "somebody has this now" to everybody except the people it is news for.
+ *
+ * Each case below is one shape of hand-over, and each asserts both halves: who
+ * hears about it, and — the part that keeps the fan-out honest — who does not.
+ */
+describe('the rooms a conversation hand-over is addressed to', () => {
+  it('reaches every agent who could see the unclaimed thread, and its new owner', async () => {
+    // The claim. `tenant:{id}` is in the set because the thread *was* unclaimed,
+    // which is exactly how the colleague who was looking at it finds out.
+    const { relay, emissions } = harnessFor({
+      conversation: conversation({ assignedUserId: ASSIGNEE }),
+    });
+
+    await relay.onConversationAssigned(assigned());
+
+    expect(emissions[0]?.rooms).toEqual([
+      tenantReadersRoom(TENANT),
+      tenantRoom(TENANT),
+      userRoom(ASSIGNEE),
+    ]);
+  });
+
+  it('reaches both agents of a hand-over, and nobody else in the tenant', async () => {
+    const { relay, emissions } = harnessFor({
+      conversation: conversation({ assignedUserId: SUCCESSOR }),
+    });
+
+    await relay.onConversationAssigned(assigned({ previousAssignedUserId: ASSIGNEE }));
+
+    // No tenant room: a thread moving between two agents is not news the rest of
+    // the tenant is entitled to, and the payload is the whole resource — the
+    // customer, the preview, the unread count.
+    expect(emissions[0]?.rooms).toEqual([
+      tenantReadersRoom(TENANT),
+      userRoom(ASSIGNEE),
+      userRoom(SUCCESSOR),
+    ]);
+    expect(emissions[0]?.rooms).not.toContain(tenantRoom(TENANT));
+  });
+
+  it('puts a released thread back in front of every agent, and tells the agent who let it go', async () => {
+    const { relay, emissions } = harnessFor({ conversation: conversation() });
+
+    await relay.onConversationAssigned(assigned({ previousAssignedUserId: ASSIGNEE }));
+
+    expect(emissions[0]?.rooms).toEqual([
+      tenantReadersRoom(TENANT),
+      userRoom(ASSIGNEE),
+      tenantRoom(TENANT),
+    ]);
+  });
+
+  it('reaches the team a thread is routed to as well as the agent who held it', async () => {
+    const { relay, emissions } = harnessFor({
+      conversation: conversation({ assignedTeamId: TEAM }),
+    });
+
+    await relay.onConversationAssigned(assigned({ previousAssignedUserId: ASSIGNEE }));
+
+    expect(emissions[0]?.rooms).toEqual([
+      tenantReadersRoom(TENANT),
+      userRoom(ASSIGNEE),
+      teamRoom(TEAM),
+    ]);
+  });
+
+  it('is exactly the two audiences the contract publishes, unioned', async () => {
+    const published = conversation({ assignedUserId: SUCCESSOR });
+    const { relay, emissions } = harnessFor({ conversation: published });
+
+    await relay.onConversationAssigned(assigned({ previousAssignedTeamId: TEAM }));
+
+    expect(emissions[0]?.rooms).toEqual([
+      ...new Set([
+        ...conversationAudienceRooms({
+          tenantId: TENANT,
+          assignedUserId: null,
+          assignedTeamId: TEAM,
+        }),
+        ...conversationAudienceRooms({
+          tenantId: TENANT,
+          assignedUserId: SUCCESSOR,
+          assignedTeamId: null,
+        }),
+      ]),
+    ]);
+  });
+
+  it('names the readers room once, not once per audience', async () => {
+    const { relay, emissions } = harnessFor({
+      conversation: conversation({ assignedUserId: SUCCESSOR }),
+    });
+
+    await relay.onConversationAssigned(assigned({ previousAssignedUserId: ASSIGNEE }));
+
+    const rooms = emissions[0]?.rooms ?? [];
+
+    expect(rooms.filter((room) => room === tenantReadersRoom(TENANT))).toHaveLength(1);
+  });
+
+  it('never addresses the conversation room', async () => {
+    // Redundant as well as wrong here: a socket may only join that room if it was
+    // in the audience at the time, so every subscriber is already in the previous
+    // audience this emit addresses.
+    const { relay, emissions } = harnessFor({
+      conversation: conversation({ assignedUserId: ASSIGNEE }),
+    });
+
+    await relay.onConversationAssigned(assigned());
+
+    expect(emissions[0]?.rooms).not.toContain(conversationRoom(CONVERSATION));
+  });
+
+  it('derives the new audience from the row it read back, never from the event', async () => {
+    // The event deliberately carries no new assignment. If the relay ever grew
+    // one, this is the test that would fail: the committed row says the thread is
+    // the successor's, and that is what decides who may see the payload.
+    const { relay, emissions } = harnessFor({
+      conversation: conversation({ assignedUserId: SUCCESSOR }),
+    });
+
+    await relay.onConversationAssigned(assigned({ previousAssignedUserId: ASSIGNEE }));
+
+    expect(emissions[0]?.rooms).toContain(userRoom(SUCCESSOR));
+  });
+
+  it('keeps two tenants’ hand-overs in their own rooms', async () => {
+    const other = '80111111-1111-7111-8111-111111111102';
+    const mine = harnessFor({ conversation: conversation({ assignedUserId: ASSIGNEE }) });
+    const theirs = harnessFor({ conversation: conversation({ assignedUserId: ASSIGNEE }) });
+
+    await mine.relay.onConversationAssigned(assigned());
+    await theirs.relay.onConversationAssigned(assigned({ tenantId: other }));
+
+    const roomsOf = (harness: Harness): string[] => harness.emissions[0]?.rooms ?? [];
+
+    // Every tenant-scoped name is built from the event's own tenant, so the two
+    // sets share only the assignee room — which is a globally unique user id.
+    expect(roomsOf(mine)).toContain(tenantRoom(TENANT));
+    expect(roomsOf(theirs)).toContain(tenantRoom(other));
+    expect(roomsOf(theirs)).not.toContain(tenantRoom(TENANT));
+    expect(roomsOf(mine)).not.toContain(tenantRoom(other));
+  });
+});
+
+describe('relaying a conversation hand-over', () => {
+  it('publishes the whole conversation under the contract’s own event name', async () => {
+    const published = conversation({ assignedUserId: ASSIGNEE });
+    const { relay, emissions } = harnessFor({ conversation: published });
+
+    await relay.onConversationAssigned(assigned());
+
+    expect(emissions[0]?.event).toBe('conversation.updated');
+    expect(emissions[0]?.payload).toEqual({
+      event: 'conversation.updated',
+      conversation: published,
+    });
+    expect(ServerEventSchema.safeParse(emissions[0]?.payload).success).toBe(true);
+  });
+
+  it('reads the conversation back inside the event’s own tenant scope', async () => {
+    const { relay, scopes } = harnessFor();
+
+    await relay.onConversationAssigned(assigned());
+
+    expect(scopes).toEqual([TENANT]);
+  });
+
+  it('relays nothing when the conversation is already gone', async () => {
+    const { relay, emissions } = harnessFor({ conversation: null });
+
+    await relay.onConversationAssigned(assigned());
+
+    expect(emissions).toEqual([]);
+  });
+
+  it('swallows a failed read rather than rejecting into the emitter', async () => {
+    const { relay, emissions } = harnessFor({ readFails: true });
+
+    await expect(relay.onConversationAssigned(assigned())).resolves.toBeUndefined();
+    expect(emissions).toEqual([]);
+  });
+
+  it('does nothing at all before a server is attached', async () => {
+    const { relay } = harnessFor({ attach: false });
+
+    await expect(relay.onConversationAssigned(assigned())).resolves.toBeUndefined();
+  });
+
+  it('needs no hostname, because a conversation carries no absolute URL', async () => {
+    // The asymmetry with the message path, asserted so it cannot regress into a
+    // silent drop: a tenant with no verified domain still gets its hand-overs.
+    const { relay, emissions } = harnessFor({ hostname: false });
+
+    await relay.onConversationAssigned(assigned());
+
+    expect(emissions).toHaveLength(1);
   });
 });

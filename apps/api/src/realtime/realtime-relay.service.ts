@@ -3,6 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import {
   conversationAudienceRooms,
   userRoom,
+  type ConversationResponse,
   type MessageResponse,
   type ServerEvent,
 } from '@whatsappcrm/contracts';
@@ -10,14 +11,17 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'socket.io';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import {
+  CONVERSATION_ASSIGNED_EVENT,
   MESSAGE_CREATED_EVENT,
   MESSAGE_STATUS_CHANGED_EVENT,
   SESSIONS_REVOKED_EVENT,
+  type ConversationAssignedEvent,
   type MessageCreatedEvent,
   type MessageStatusChangedEvent,
   type SessionsRevokedEvent,
 } from '../events/domain-events';
 import { SessionService } from '../identity/session.service';
+import { ConversationResourceService } from './conversation-resource.service';
 import { MessageResourceService } from './message-resource.service';
 import type { RealtimeSocketData } from './realtime-socket';
 import { TenantHostnameService } from './tenant-hostname.service';
@@ -35,6 +39,14 @@ import { TenantHostnameService } from './tenant-hostname.service';
  * this file has two subscribers rather than one per producer, and why a send
  * that Meta refuses reaches the agent's screen on the same path a customer's
  * message does.
+ *
+ * `conversation.assigned` from TAR-68's claim endpoint, published as the
+ * contract's `conversation.updated` (TAR-198). Without it TAR-20's second
+ * acceptance criterion is only half met: the inbox subscribes and would render
+ * the new owner immediately, but nothing told it, so a colleague's claim showed
+ * up on the next unrelated message or on a reconnect-refetch. See
+ * `handoverRooms` below for why this one event is addressed to two audiences
+ * rather than one.
  *
  * `message.attachment_settled` and `ticket.created` are emitted today and
  * deliberately not relayed here: neither has a server event in TAR-39's fixed
@@ -89,6 +101,7 @@ export class RealtimeRelayService {
 
   constructor(
     private readonly messages: MessageResourceService,
+    private readonly conversations: ConversationResourceService,
     private readonly hostnames: TenantHostnameService,
     private readonly sessions: SessionService,
     private readonly tenantContext: TenantContextService,
@@ -124,6 +137,45 @@ export class RealtimeRelayService {
       messageId: event.messageId,
       message,
     }));
+  }
+
+  /**
+   * Puts a claim, a release or a hand-over on the wire, to both sides of it.
+   *
+   * The read is what makes the payload the committed resource rather than the
+   * writer's view of it, and — because the audience is derived from the row it
+   * returns — it is also what makes the *new* half of the fan-out current. A
+   * conversation deleted between the commit and this read relays nothing.
+   */
+  @OnEvent(CONVERSATION_ASSIGNED_EVENT)
+  async onConversationAssigned(event: ConversationAssignedEvent): Promise<void> {
+    const server = this.server;
+
+    if (server === null) {
+      this.logger.warn(
+        `No Socket.IO server attached; dropping an event for conversation ${event.conversationId}.`,
+      );
+      return;
+    }
+
+    try {
+      const conversation = await this.tenantContext.run(
+        { requestId: randomUUID(), tenantId: event.tenantId, userId: null, principal: null },
+        async () => await this.conversations.findForRelay(event.conversationId),
+      );
+
+      if (conversation === null) {
+        return;
+      }
+
+      const payload: ServerEvent = { event: 'conversation.updated', conversation };
+
+      server.to(handoverRooms(event, conversation)).emit(payload.event, payload);
+    } catch (error: unknown) {
+      this.logger.error(
+        `Could not relay conversation ${event.conversationId} to tenant ${event.tenantId}: ${describe(error)}`,
+      );
+    }
   }
 
   /**
@@ -254,6 +306,74 @@ export class RealtimeRelayService {
       this.logger.error(`Could not relay ${messageId} to tenant ${tenantId}: ${describe(error)}`);
     }
   }
+}
+
+/**
+ * The rooms a hand-over is addressed to: the audience the thread **had**, union
+ * the audience it **has**.
+ *
+ * Every other relay addresses one audience, because a message only ever concerns
+ * the people who can see the thread now. A hand-over is the one event whose whole
+ * point is that the answer changed, and addressing only the new audience would
+ * deliver it to everybody except the colleagues it is news for — the agents who
+ * were looking at an unclaimed thread, and the agent who has just lost one. That
+ * is precisely the gap this exists to close, so the previous audience is not an
+ * optimisation here, it is the requirement.
+ *
+ * Each half is `conversationAudienceRooms` — the contract's own published rule,
+ * not a second description of it — so the union is exactly the set of principals
+ * `isVisibleOrUnclaimed` admitted before the write or admits after it, and nobody
+ * else. Worked through:
+ *
+ * ```
+ *   unclaimed → agent A   readers + tenant + user:A   every agent learns it is gone
+ *   agent A   → agent B   readers + user:A + user:B   a third agent never had it
+ *   agent A   → unclaimed readers + user:A + tenant   back in front of everybody
+ * ```
+ *
+ * The middle row is why this is not simply "emit to `tenant:{id}`": a thread
+ * moving between two agents is not news the rest of the tenant is entitled to,
+ * and the payload is the whole resource — the customer, the preview, the unread
+ * count.
+ *
+ * The other half of that trade is stated rather than glossed: the agent who just
+ * lost the thread receives one final copy of it. That is the minimum a client
+ * needs to be *told* it is gone rather than to discover it, it names a principal
+ * who could read the same resource a moment earlier, and the alternative — a
+ * dedicated "you lost this" wire event — is a contract amendment this does not
+ * need. Nothing after this emit reaches them: the next message on the thread is
+ * addressed to the new audience alone.
+ *
+ * `conversationRoom` is absent, as it is everywhere in this file, and here it
+ * would also be redundant: a socket may only join it if it was in the audience at
+ * the time, and room membership follows the principal, so every subscriber is
+ * already in the first half of this union.
+ *
+ * De-duplicated because the two halves overlap in the common case — the readers
+ * room is in both, always. `to()` unions rooms and Socket.IO de-duplicates a
+ * socket across them, so this is about the room list being readable in a log
+ * rather than about anybody receiving two copies.
+ */
+function handoverRooms(
+  event: ConversationAssignedEvent,
+  conversation: ConversationResponse,
+): string[] {
+  return [
+    ...new Set([
+      ...conversationAudienceRooms({
+        tenantId: event.tenantId,
+        assignedUserId: event.previousAssignedUserId,
+        assignedTeamId: event.previousAssignedTeamId,
+      }),
+      // From the row that was read back, never from the event: the assignment
+      // that decides who may see this payload has to be the committed one.
+      ...conversationAudienceRooms({
+        tenantId: event.tenantId,
+        assignedUserId: conversation.assignedUserId,
+        assignedTeamId: conversation.assignedTeamId,
+      }),
+    ]),
+  ];
 }
 
 function describe(error: unknown): string {

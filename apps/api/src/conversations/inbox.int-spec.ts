@@ -7,6 +7,10 @@ import {
 } from '../common/idempotency/idempotency.errors';
 import { ResponseOriginService } from '../common/response-origin.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
+import {
+  CONVERSATION_ASSIGNED_EVENT,
+  type ConversationAssignedEvent,
+} from '../events/domain-events';
 import type { PrismaClient } from '../generated/prisma/client';
 import type { MediaSendResolver } from '../media/media-send.resolver';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
@@ -101,6 +105,8 @@ describe('the shared inbox, end to end', () => {
   let sends: MessageSendService;
   let idempotency: IdempotencyService;
   let enqueued: unknown[];
+  /** Every domain event the commands put on the bus, in order. */
+  let announced: ConversationAssignedEvent[];
 
   function as<T>(principal: SessionPrincipal, work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
@@ -144,8 +150,16 @@ describe('the shared inbox, end to end', () => {
       },
     } as unknown as QueueService;
 
+    announced = [];
+
+    const events = new EventEmitter2();
+
+    events.on(CONVERSATION_ASSIGNED_EVENT, (event: ConversationAssignedEvent) => {
+      announced.push(event);
+    });
+
     conversations = new ConversationQueryService(tenantPrisma, tenantContext);
-    commands = new ConversationCommandService(tenantPrisma, conversations);
+    commands = new ConversationCommandService(tenantPrisma, conversations, tenantContext, events);
     idempotency = new IdempotencyService(tenantPrisma, tenantContext);
     sends = new MessageSendService(
       tenantPrisma,
@@ -426,6 +440,63 @@ describe('the shared inbox, end to end', () => {
       );
 
       expect(page.items.map((item) => item.id)).toContain(CLOSED_THREAD);
+    });
+  });
+
+  /**
+   * The half of TAR-198 only a real row can prove: the previous assignment on the
+   * event is the one that was actually committed, read back under RLS, rather
+   * than something the request said. It is what puts the agents who were watching
+   * an unclaimed thread into the relay's fan-out, so getting it from the row is
+   * the whole correctness of the feature.
+   */
+  describe('announcing a claim', () => {
+    // These tests claim a thread the visibility cases share; releasing it again
+    // is what keeps this file order-independent.
+    afterAll(async () => {
+      await as(
+        principalFor(TENANT_A, AGENT_A, 'supervisor'),
+        async () => await commands.assign(OPEN_THREAD, { userId: null, teamId: null }),
+      );
+    });
+
+    it('carries the assignment the row held before the write, and the tenant in scope', async () => {
+      announced.length = 0;
+
+      await as(
+        principalFor(TENANT_A, AGENT_A, 'supervisor'),
+        async () => await commands.assign(OPEN_THREAD, { userId: AGENT_A }),
+      );
+      await as(
+        principalFor(TENANT_A, AGENT_A, 'supervisor'),
+        async () => await commands.assign(OPEN_THREAD, { userId: OTHER_AGENT_A }),
+      );
+
+      expect(announced).toEqual([
+        {
+          tenantId: TENANT_A,
+          conversationId: OPEN_THREAD,
+          previousAssignedUserId: null,
+          previousAssignedTeamId: null,
+        },
+        {
+          tenantId: TENANT_A,
+          conversationId: OPEN_THREAD,
+          previousAssignedUserId: AGENT_A,
+          previousAssignedTeamId: null,
+        },
+      ]);
+    });
+
+    it('says nothing when the row did not move', async () => {
+      announced.length = 0;
+
+      await as(
+        principalFor(TENANT_A, AGENT_A, 'supervisor'),
+        async () => await commands.assign(OPEN_THREAD, { userId: OTHER_AGENT_A }),
+      );
+
+      expect(announced).toEqual([]);
     });
   });
 
