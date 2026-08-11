@@ -8,9 +8,6 @@ import { configureApp } from '../bootstrap';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { TenantContextMiddleware } from '../common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from '../common/tenant-context/tenant-context.module';
-import { PermissionGuard } from '../rbac/permission.guard';
-import { PrincipalGuard } from '../rbac/principal.guard';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { ResetTokenInvalidError, CurrentPasswordIncorrectError } from './identity.errors';
 import { PasswordChangeService } from './password-change.service';
 import { PasswordController } from './password.controller';
@@ -19,12 +16,19 @@ import { PasswordResetService } from './password-reset.service';
 /**
  * The HTTP contract of TAR-53's three password routes.
  *
- * The guards are stubbed to pass, deliberately: what this file is for is the
- * *shape* of the answers — the unconditional 204 that makes the reset endpoint
- * useless as an enumeration oracle, and the 410 that lets the reset screen offer
- * a new link. Which callers get past the guards is `PermissionGuard`'s and
- * `PrincipalGuard`'s own coverage, and cross-tenant isolation is proved against
- * real Postgres in `password-reset-isolation.int-spec.ts`.
+ * No guard runs, deliberately: since TAR-58 the pipeline is installed by
+ * `RequestPipelineModule`, which this narrow testing module does not import.
+ * What this file is for is the *shape* of the answers — the unconditional 204
+ * that makes the reset endpoint useless as an enumeration oracle, and the 410
+ * that lets the reset screen offer a new link.
+ *
+ * Which callers reach these handlers is settled by the posture each route
+ * declares: `@Public()` on the two reset routes, `@AnyPrincipal()` on the change.
+ * That every route declares one is `route-posture.spec`; that a route-level
+ * `@Public()` opens its own route and not the one beside it — this controller's
+ * exact shape — is `request-pipeline.http.spec`, against the real guards.
+ * Cross-tenant isolation is proved against real Postgres in
+ * `password-reset-isolation.int-spec.ts`.
  */
 
 const VALID_PASSWORD = 'a perfectly long passphrase';
@@ -56,14 +60,7 @@ describe('password routes', () => {
         // without importing the whole `ConfigModule`.
         { provide: ConfigService, useValue: { get: () => undefined } },
       ],
-    })
-      .overrideGuard(HostTenantGuard)
-      .useValue({ canActivate: () => true })
-      .overrideGuard(PrincipalGuard)
-      .useValue({ canActivate: () => true })
-      .overrideGuard(PermissionGuard)
-      .useValue({ canActivate: () => true })
-      .compile();
+    }).compile();
 
     app = moduleRef.createNestApplication();
 

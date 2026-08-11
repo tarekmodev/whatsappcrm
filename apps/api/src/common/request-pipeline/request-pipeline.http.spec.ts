@@ -151,6 +151,32 @@ class PublicProbeController {
   }
 }
 
+/**
+ * One class, two postures — `PasswordController`'s shape, where asking for a
+ * reset link is reachable without a session and changing a password you already
+ * know is not.
+ *
+ * Worth its own probe because the exemption is read with
+ * `getAllAndOverride([handler, class])`: a route-level `@Public()` has to open
+ * its own route and must not open the one declared beside it. A class-level
+ * decorator, which `PublicProbeController` covers, cannot demonstrate either
+ * half.
+ */
+@Controller({ path: 'probe', version: '1' })
+class MixedPostureProbeController {
+  @Get('mixed/public')
+  @Public()
+  publicRoute(): { ok: true } {
+    return { ok: true };
+  }
+
+  @Get('mixed/authenticated')
+  @AnyPrincipal()
+  authenticatedRoute(): { ok: true } {
+    return { ok: true };
+  }
+}
+
 @Controller({ path: 'probe', version: '1' })
 @PlatformRoute()
 class PlatformProbeController {
@@ -181,6 +207,7 @@ describe('the globally installed request pipeline', () => {
         GuardedProbeController,
         UndeclaredProbeController,
         PublicProbeController,
+        MixedPostureProbeController,
         PlatformProbeController,
       ],
       providers: [
@@ -337,6 +364,17 @@ describe('the globally installed request pipeline', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ tenantId: TENANT_A });
+    });
+
+    it('@Public() on one route opens that route and not the one beside it', async () => {
+      resolution = ANONYMOUS;
+
+      const open = await call(HOST_A).get('/api/v1/probe/mixed/public');
+      const closed = await call(HOST_A).get('/api/v1/probe/mixed/authenticated');
+
+      expect(open.status).toBe(200);
+      expect(closed.status).toBe(401);
+      expect(errorCodeOf(closed)).toBe('unauthenticated');
     });
 
     it('@PlatformRoute() serves at an unknown host with no session and no tenant', async () => {
