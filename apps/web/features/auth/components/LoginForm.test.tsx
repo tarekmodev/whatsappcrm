@@ -1,15 +1,16 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AUTH_POLICY, type SessionPrincipal } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { ApiRequestError } from '@/lib/api/error';
 import { ToastProvider } from '@/components/ui/ToastProvider';
+import { fieldByLabel } from '@/lib/testing/field-queries';
 import { LoginForm } from './LoginForm';
 
 /**
- * The sign-in screen's behaviour, exercised through the real request and
- * error-mapping modules with only the transport faked — so what these assert is
- * "this API answer produces this screen", not "this mock was called".
+ * The sign-in screen, exercised through the real request and error-mapping
+ * modules with only the transport faked — so what these assert is "this API
+ * answer produces this screen", not "this mock was called".
  *
  * `fireEvent` rather than `user-event`: the repo does not carry that package.
  */
@@ -19,7 +20,7 @@ const transport = vi.hoisted(() => ({ login: vi.fn() }));
 
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
-vi.mock('@/lib/api/auth', () => ({
+vi.mock('@/lib/api/auth-browser', () => ({
   login: transport.login,
   lookupInvite: vi.fn(),
   acceptInvite: vi.fn(),
@@ -37,7 +38,7 @@ const PRINCIPAL = {
   expiresAt: '2026-08-12T10:00:00.000Z',
 } satisfies SessionPrincipal;
 
-const REDIRECT_TO = '/inbox';
+const REDIRECT_TO = '/settings/people';
 
 function renderForm() {
   return render(
@@ -47,17 +48,8 @@ function renderForm() {
   );
 }
 
-/**
- * `exact: false` because a required field's label carries a trailing asterisk,
- * and `selector` because "Password" is also a substring of the visibility
- * toggle's accessible name.
- */
-function field(label: string): HTMLElement {
-  return screen.getByLabelText(label, { exact: false, selector: 'input' });
-}
-
 function fill(label: string, value: string): void {
-  fireEvent.change(field(label), { target: { value } });
+  fireEvent.change(fieldByLabel(label), { target: { value } });
 }
 
 function submit(): void {
@@ -73,14 +65,14 @@ beforeEach(() => {
 });
 
 describe('LoginForm', () => {
-  it('refuses to submit an empty form and puts focus on the first invalid field', () => {
+  it('refuses to submit an empty form, and says what is missing on each field', () => {
     renderForm();
 
     submit();
 
     expect(transport.login).not.toHaveBeenCalled();
-    expect(screen.getAllByText(content.form.requiredFieldError)).toHaveLength(2);
-    expect(field(content.auth.emailLabel)).toHaveFocus();
+    expect(screen.getByText(content.form.requiredFieldError)).toBeInTheDocument();
+    expect(screen.getByText(content.auth.passwordRequiredError)).toBeInTheDocument();
   });
 
   it('rejects a malformed address before the round trip', () => {
@@ -94,7 +86,7 @@ describe('LoginForm', () => {
     expect(screen.getByText(content.form.invalidEmailError)).toBeInTheDocument();
   });
 
-  it('signs in and sends the user where the page said, without exposing a token', async () => {
+  it('signs in and sends the user where the page said', async () => {
     transport.login.mockResolvedValue(PRINCIPAL);
     renderForm();
 
@@ -128,7 +120,7 @@ describe('LoginForm', () => {
       content.auth.invalidCredentialsError,
     );
     // A failed submit must never make somebody retype their address.
-    expect(field(content.auth.emailLabel)).toHaveValue('amina@northwind.example');
+    expect(fieldByLabel(content.auth.emailLabel)).toHaveValue('amina@northwind.example');
     expect(router.replace).not.toHaveBeenCalled();
   });
 
@@ -161,19 +153,12 @@ describe('LoginForm', () => {
     expect(alert).not.toHaveTextContent('Server-side message');
   });
 
-  it('lets the user read the password back', () => {
+  it('offers the recovery flow, so a forgotten password is not a dead end', () => {
     renderForm();
 
-    const password = field(content.auth.passwordLabel);
-
-    expect(password).toHaveAttribute('type', 'password');
-
-    fireEvent.click(screen.getByRole('button', { name: content.auth.showPasswordAria }));
-
-    expect(password).toHaveAttribute('type', 'text');
-    expect(screen.getByRole('button', { name: content.auth.hidePasswordAria })).toHaveAttribute(
-      'aria-pressed',
-      'true',
+    expect(screen.getByRole('link', { name: content.auth.forgotPasswordLink })).toHaveAttribute(
+      'href',
+      '/forgot-password',
     );
   });
 });

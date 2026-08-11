@@ -37,6 +37,44 @@ change.
 
 ### Added
 
+- **Console routes enforce the session, and the API is the only thing that decides who you
+  are** (TAR-62) — every route below `app/(app)` is now guarded in two halves. `proxy.ts`
+  (Next 16's rename of `middleware.ts`) checks only for a session **cookie**, because it runs
+  on prefetches too and an API call per prefetch would be a self-inflicted load test;
+  `verifySession()` asks `GET /api/v1/auth/session` and is the half that actually decides.
+  Both send the caller to `?next=`-carrying sign-in, narrowed by `parseRedirectPath` so a
+  crafted value cannot bounce a freshly authenticated user off-site. The check lives next to
+  the data rather than in the layout — a layout does not re-render on client navigation and
+  does not control whether the segments below it render — so `lib/api/authenticated.ts` is
+  now the transport for every authenticated call: it verifies the session, forwards the
+  caller's cookie, and turns a lost session into a sign-in. That last part closes a real gap:
+  `lib/api/users.ts`, `teams.ts` and `conversations.ts` were making server-side calls with
+  **no cookie at all**, so every list would have been anonymous to the API the moment the
+  mock transport was switched off. 401 `unauthenticated` and 401 `tenant_mismatch` redirect;
+  403 `forbidden` keeps the explanatory state, because bouncing a signed-in caller to sign
+  in tells them to fix the one thing that is not wrong; a 502 is rethrown, because
+  redirecting on it would sign everybody out whenever the API restarted. Nothing is cached
+  across requests, so a deactivation, a reset or a sign-out lands on the next request rather
+  than whenever a copy expires. Also new: a **Sign out** control in the shell —
+  `signOutAction` revokes server-side first and then clears the browser's cookie, since the
+  API's `Set-Cookie` comes back to the Next process rather than to the person leaving.
+
+- **Password recovery and change screens** — `/forgot-password` requests a link and shows
+  one confirmation whatever came back, so the screen cannot answer the question the
+  endpoint's unconditional 204 refuses to; `/reset-password` reads the token from the URL
+  **fragment**, scrubs it from the address bar, and turns a dead link into "request a new
+  one" rather than an error above a form nobody can use; `/settings/security` changes a
+  known password and says plainly that this device stays signed in while every other one
+  does not. All three are token-driven and copy-driven, so TAR-29's white-label branding
+  applies without touching a component. `app/` gains two route groups — `(app)` carries the
+  console shell, `(auth)` carries the signed-out card frame — because a visitor following a
+  reset link has no session to resolve; every URL is unchanged. New shared pieces:
+  `AuthCard`, `AuthForm`, `AuthOutcomeCard`, `PasswordField`, `FormError` (extracted from
+  `FormDialog`), `TextLink` and `RouteErrorFallback`, all of which TAR-60's login and
+  invite-accept screens reuse as they stand. `/settings/security` is the first navigation
+  entry with no `requiresAny`, meaning every signed-in role, because a password screen
+  gated on a permission is a password some people cannot change. (TAR-61)
+
 - **Brute-force protection an admin can see and clear** (TAR-59) — the lockout TAR-56
   writes is now readable and reversible. `UserResponse` carries a `security` object
   (`lockedUntil`, `failedLoginAttempts`) for callers holding `user:update`, and `null` for

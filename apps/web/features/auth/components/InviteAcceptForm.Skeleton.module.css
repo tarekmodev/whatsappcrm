@@ -1,6 +1,6 @@
 /*
- * Skeleton only — the real form is built from `Field`, which owns its own
- * styling.
+ * Skeleton only — the real form is built from `Field` and `AuthForm`, which own
+ * their styling.
  *
  * A placeholder bar is 0.75em tall, but the label and hint it stands in for each
  * occupy a whole line box. Boxing every placeholder to `1lh` of the type it
@@ -8,7 +8,7 @@
  * card does not jump when the invitation arrives.
  */
 
-.placeholderLine {
+.line {
   display: flex;
   align-items: center;
   block-size: 1lh;
@@ -20,4 +20,11 @@
 
 .hint {
   font-size: var(--font-size-caption);
+}
+
+/* The footer link below the action, which is a touch target rather than a line. */
+.footer {
+  display: flex;
+  justify-content: center;
+  min-block-size: var(--size-touch-target);
 }

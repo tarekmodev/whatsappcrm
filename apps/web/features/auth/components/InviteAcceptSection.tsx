@@ -1,54 +1,68 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
 import type { InvitePreviewResponse } from '@whatsappcrm/contracts';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
+import { TextLink } from '@/components/ui/TextLink';
 import { useContent } from '@/lib/content';
 import { routes } from '@/lib/routes';
-import { loadInvitePreview } from '../auth.requests';
-import { readInviteToken } from '../invite-token';
 import { AuthCard } from './AuthCard';
-import { InviteAcceptForm, InviteAcceptFormSkeleton } from './InviteAcceptForm';
-import { InvitePreview, InvitePreviewSkeleton } from './InvitePreview';
-import styles from './InviteAcceptSection.module.css';
+import { AuthOutcomeCard } from './AuthOutcomeCard';
+import { InviteAcceptForm } from './InviteAcceptForm';
+import { InviteAcceptSkeleton } from './InviteAcceptForm.Skeleton';
+import { InvitePreview } from './InvitePreview';
+import { loadInvitePreview } from '../auth.requests';
+import { useLinkToken } from '../useLinkToken';
 
 /**
- * The invite-acceptance screen, and the one component on it that knows the token
- * exists. Usage: `<InviteAcceptSection />`.
+ * The invite-acceptance screen: the router over what the emailed link turned out
+ * to carry. Usage: `<InviteAcceptSection />`.
  *
- * Client-rendered by necessity, not by preference: the token arrives in the URL
- * *fragment*, which the browser never sends to a server, so no server render can
- * see it (ADR 0005). The fragment is left intact so a refresh mid-typing still
- * works — clearing it is TAR-53's instruction for the reset screen, whose link is
- * the one that lands in a chat window.
+ * Client-rendered by necessity, not by preference — the token is in the URL
+ * fragment, which the browser never sends to a server, so no server render can
+ * see it (ADR 0005). The same hook the reset screen uses reads and scrubs it.
  *
- * Every outcome of the lookup is a state with its own copy and its own way out. A
- * dead link is not an error banner: it needs "ask for a new one", which is a
- * different sentence and a different action from "try again".
+ * Every outcome is a state with its own copy and its own way out. A dead link is
+ * not an error banner: it needs "ask for a new one", which is a different
+ * sentence and a different action from "try again".
  */
+export function InviteAcceptSection() {
+  const content = useContent();
+  const token = useLinkToken();
 
+  if (token.status === 'reading') {
+    return <InviteAcceptSkeleton />;
+  }
+
+  if (token.status === 'missing') {
+    return (
+      <AuthOutcomeCard
+        title={content.auth.inviteUnusableHeading}
+        body={content.auth.inviteIncompleteBody}
+        actions={<TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>}
+      />
+    );
+  }
+
+  // Keyed by the token, so opening a second invitation in the same tab — a
+  // same-document navigation the browser does not remount for — starts over
+  // rather than leaving the first link's outcome on screen.
+  return <InviteAcceptFields key={token.token} token={token.token} />;
+}
+
+/** What the API said about one specific token, and the form for it. */
 type LookupState =
   | { status: 'loading' }
-  | { status: 'missing-token' }
-  | { status: 'ready'; token: string; preview: InvitePreviewResponse }
+  | { status: 'ready'; preview: InvitePreviewResponse }
   | { status: 'dead-link' }
   | { status: 'failed' };
 
-export function InviteAcceptSection() {
+function InviteAcceptFields({ token }: { token: string }) {
   const content = useContent();
   const [state, setState] = useState<LookupState>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    const token = readInviteToken(window.location.hash);
-
-    if (token === null) {
-      setState({ status: 'missing-token' });
-      return;
-    }
-
     let isCurrent = true;
 
     setState({ status: 'loading' });
@@ -61,7 +75,7 @@ export function InviteAcceptSection() {
 
       setState(
         outcome.status === 'ready'
-          ? { status: 'ready', token, preview: outcome.preview }
+          ? { status: 'ready', preview: outcome.preview }
           : { status: outcome.status },
       );
     });
@@ -69,35 +83,27 @@ export function InviteAcceptSection() {
     return () => {
       isCurrent = false;
     };
-  }, [attempt]);
+  }, [token, attempt]);
 
   const retry = useCallback(() => {
     setAttempt((current) => current + 1);
   }, []);
 
   /**
-   * The same state a dead lookup lands in. The invitation can die between the two
-   * requests — the accept re-checks it server-side — and when it does the form is
+   * The state a dead lookup lands in, reached again when the invitation dies
+   * between the two requests — the accept re-checks it server-side. The form is
    * replaced rather than annotated, because there is nothing left to submit.
    */
   const showDeadLink = useCallback(() => {
     setState({ status: 'dead-link' });
   }, []);
 
-  if (state.status === 'missing-token') {
-    return (
-      <InviteProblemCard
-        title={content.auth.inviteMissingTokenHeading}
-        body={content.auth.inviteMissingTokenBody}
-      />
-    );
-  }
-
   if (state.status === 'dead-link') {
     return (
-      <InviteProblemCard
-        title={content.auth.inviteDeadLinkHeading}
+      <AuthOutcomeCard
+        title={content.auth.inviteUnusableHeading}
         body={content.auth.inviteDeadLinkBody}
+        actions={<TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>}
       />
     );
   }
@@ -111,40 +117,13 @@ export function InviteAcceptSection() {
   }
 
   if (state.status === 'loading') {
-    return (
-      <AuthCard title={content.auth.inviteTitle} description={content.auth.inviteDescription}>
-        {/*
-          Shown immediately rather than after an anti-flash delay: this is the
-          screen's first paint, so delaying it would show an empty card instead of
-          a faster one. The delay rule is about swapping content already on screen.
-        */}
-        <LoadingAnnouncement label={content.auth.inviteLoading} />
-        <InvitePreviewSkeleton />
-        <InviteAcceptFormSkeleton />
-      </AuthCard>
-    );
+    return <InviteAcceptSkeleton />;
   }
 
   return (
     <AuthCard title={content.auth.inviteTitle} description={content.auth.inviteDescription}>
       <InvitePreview preview={state.preview} />
-      <InviteAcceptForm token={state.token} preview={state.preview} onDeadLink={showDeadLink} />
-    </AuthCard>
-  );
-}
-
-/**
- * A link that cannot be used, whatever the reason. There is nothing to retry, so
- * the only action offered is the one that still works.
- */
-function InviteProblemCard({ title, body }: { title: string; body: string }) {
-  const content = useContent();
-
-  return (
-    <AuthCard title={title} description={body}>
-      <Link href={routes.login()} className={styles.link}>
-        {content.auth.goToSignIn}
-      </Link>
+      <InviteAcceptForm token={token} preview={state.preview} onDeadLink={showDeadLink} />
     </AuthCard>
   );
 }

@@ -1,0 +1,22 @@
+.detail {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-3);
+}
+
+/* Side by side once there is room; stacked and full width below it, so every
+   action clears the 44px target on a phone. */
+@container (min-width: 22rem) {
+  .actions {
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+}

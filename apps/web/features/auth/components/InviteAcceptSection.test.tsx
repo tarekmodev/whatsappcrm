@@ -8,12 +8,13 @@ import {
 import { content } from '@/content/en';
 import { ApiRequestError } from '@/lib/api/error';
 import { ToastProvider } from '@/components/ui/ToastProvider';
+import { fieldByLabel } from '@/lib/testing/field-queries';
 import { InviteAcceptSection } from './InviteAcceptSection';
 
 /**
- * Every outcome the invite link can have, from the fragment upwards. The token
- * only ever exists in `location.hash`, so these set it the way the emailed link
- * does.
+ * Every outcome the invitation link can have, from the fragment upwards. The
+ * token only ever exists in `location.hash`, so these open the page the way the
+ * emailed link does.
  */
 
 const router = vi.hoisted(() => ({ replace: vi.fn(), refresh: vi.fn() }));
@@ -21,13 +22,14 @@ const transport = vi.hoisted(() => ({ lookupInvite: vi.fn(), acceptInvite: vi.fn
 
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
-vi.mock('@/lib/api/auth', () => ({
+vi.mock('@/lib/api/auth-browser', () => ({
   login: vi.fn(),
   lookupInvite: transport.lookupInvite,
   acceptInvite: transport.acceptInvite,
 }));
 
 const TOKEN = 'a-256-bit-token';
+const NEW_PASSWORD = 'a-perfectly-fine-passphrase';
 
 const PREVIEW = {
   email: 'amina@northwind.example',
@@ -49,6 +51,10 @@ const PRINCIPAL = {
   expiresAt: '2026-08-12T10:00:00.000Z',
 } satisfies SessionPrincipal;
 
+function openLinkWith(fragment: string): void {
+  window.history.replaceState(null, '', `/invite${fragment}`);
+}
+
 function renderSection() {
   return render(
     <ToastProvider>
@@ -57,28 +63,32 @@ function renderSection() {
   );
 }
 
-/**
- * `exact: false` because a required field's label carries a trailing asterisk,
- * and `selector` so a label that is also a substring of a button's accessible
- * name cannot match two things.
- */
-function fill(label: string, value: string): void {
-  fireEvent.change(screen.getByLabelText(label, { exact: false, selector: 'input' }), {
-    target: { value },
+function fillAndSubmit(password = NEW_PASSWORD, confirmation = password): void {
+  fireEvent.change(fieldByLabel(content.auth.inviteDisplayNameLabel), {
+    target: { value: 'Amina Haddad' },
   });
+  fireEvent.change(fieldByLabel(content.auth.invitePasswordLabel), {
+    target: { value: password },
+  });
+  fireEvent.change(fieldByLabel(content.auth.confirmPasswordLabel), {
+    target: { value: confirmation },
+  });
+  fireEvent.click(screen.getByRole('button', { name: content.auth.inviteSubmit }));
 }
 
-function submit(): void {
-  fireEvent.click(screen.getByRole('button', { name: content.auth.inviteSubmit }));
+async function waitForForm(): Promise<void> {
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: content.auth.inviteSubmit })).toBeInTheDocument();
+  });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  window.location.hash = `#token=${TOKEN}`;
+  openLinkWith(`#token=${TOKEN}`);
 });
 
 describe('InviteAcceptSection', () => {
-  it('announces the lookup once and reserves the shape of what is coming', () => {
+  it('announces the wait once and reserves the shape of what is coming', () => {
     // Never settles: the loading state is what is under test.
     transport.lookupInvite.mockReturnValue(new Promise(() => undefined));
     renderSection();
@@ -94,18 +104,42 @@ describe('InviteAcceptSection', () => {
   });
 
   it('explains a link that arrived without its fragment', async () => {
-    window.location.hash = '';
-    renderSection();
+    openLinkWith('');
+
+    // A fresh module registry stands in for a fresh document: `useLinkToken`
+    // remembers the token for the life of the document it arrived in, so this has
+    // to be a new one rather than a remount of the link another test opened.
+    vi.resetModules();
+    const { InviteAcceptSection: FreshDocument } = await import('./InviteAcceptSection');
+
+    render(
+      <ToastProvider>
+        <FreshDocument />
+      </ToastProvider>,
+    );
 
     expect(
-      await screen.findByRole('heading', { name: content.auth.inviteMissingTokenHeading }),
+      await screen.findByRole('heading', { name: content.auth.inviteUnusableHeading }),
     ).toBeInTheDocument();
+    expect(screen.getByText(content.auth.inviteIncompleteBody)).toBeInTheDocument();
     expect(transport.lookupInvite).not.toHaveBeenCalled();
     // Nothing to retry, so the only action offered is the one that still works.
-    expect(screen.getByRole('link', { name: content.auth.goToSignIn })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: content.auth.backToSignIn })).toHaveAttribute(
       'href',
       '/login',
     );
+  });
+
+  it('scrubs the token from the address bar once it has been read', async () => {
+    transport.lookupInvite.mockResolvedValue(PREVIEW);
+    renderSection();
+
+    await waitForForm();
+
+    // A live credential must not survive in the URL for a screenshot or the next
+    // person to glance at the screen.
+    expect(window.location.hash).toBe('');
+    expect(window.location.pathname).toBe('/invite');
   });
 
   it('offers a way forward when the invitation is expired, used or withdrawn', async () => {
@@ -115,9 +149,9 @@ describe('InviteAcceptSection', () => {
     renderSection();
 
     expect(
-      await screen.findByRole('heading', { name: content.auth.inviteDeadLinkHeading }),
+      await screen.findByRole('heading', { name: content.auth.inviteUnusableHeading }),
     ).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: content.auth.goToSignIn })).toBeInTheDocument();
+    expect(screen.getByText(content.auth.inviteDeadLinkBody)).toBeInTheDocument();
   });
 
   it('shows who invited them, to what, and lets them retry a failed lookup', async () => {
@@ -138,12 +172,9 @@ describe('InviteAcceptSection', () => {
   it('enforces the contract’s password floor before sending anything', async () => {
     transport.lookupInvite.mockResolvedValue(PREVIEW);
     renderSection();
+    await waitForForm();
 
-    await screen.findByRole('button', { name: content.auth.inviteSubmit });
-
-    fill(content.auth.inviteDisplayNameLabel, 'Amina Haddad');
-    fill(content.auth.invitePasswordLabel, 'short');
-    submit();
+    fillAndSubmit('short');
 
     expect(transport.acceptInvite).not.toHaveBeenCalled();
     expect(
@@ -151,16 +182,24 @@ describe('InviteAcceptSection', () => {
     ).toBeInTheDocument();
   });
 
+  it('catches a mistyped confirmation, which the contract has no field for', async () => {
+    transport.lookupInvite.mockResolvedValue(PREVIEW);
+    renderSection();
+    await waitForForm();
+
+    fillAndSubmit(NEW_PASSWORD, `${NEW_PASSWORD}-typo`);
+
+    expect(transport.acceptInvite).not.toHaveBeenCalled();
+    expect(screen.getByText(content.auth.passwordMismatchError)).toBeInTheDocument();
+  });
+
   it('creates the account with the token from the fragment and signs the agent in', async () => {
     transport.lookupInvite.mockResolvedValue(PREVIEW);
     transport.acceptInvite.mockResolvedValue(PRINCIPAL);
     renderSection();
+    await waitForForm();
 
-    await screen.findByRole('button', { name: content.auth.inviteSubmit });
-
-    fill(content.auth.inviteDisplayNameLabel, 'Amina Haddad');
-    fill(content.auth.invitePasswordLabel, 'correct horse battery staple');
-    submit();
+    fillAndSubmit();
 
     await waitFor(() => {
       expect(router.replace).toHaveBeenCalledWith('/inbox');
@@ -169,13 +208,13 @@ describe('InviteAcceptSection', () => {
     expect(transport.acceptInvite).toHaveBeenCalledWith({
       token: TOKEN,
       displayName: 'Amina Haddad',
-      password: 'correct horse battery staple',
+      password: NEW_PASSWORD,
     });
     expect(screen.getByText(content.auth.inviteSuccess(PREVIEW.tenantName))).toBeInTheDocument();
   });
 
   /**
-   * The invitation is re-checked when it is accepted, so it can die between the
+   * The API re-checks the invitation when it accepts, so it can die between the
    * lookup and the submit — expired, withdrawn, or used by somebody else in the
    * meantime. That is the same screen state as a dead lookup, not a "try again"
    * above a form that can never succeed.
@@ -186,20 +225,16 @@ describe('InviteAcceptSection', () => {
       new ApiRequestError(410, 'token_invalid', 'Server-side message', null),
     );
     renderSection();
+    await waitForForm();
 
-    await screen.findByRole('button', { name: content.auth.inviteSubmit });
-
-    fill(content.auth.inviteDisplayNameLabel, 'Amina Haddad');
-    fill(content.auth.invitePasswordLabel, 'correct horse battery staple');
-    submit();
+    fillAndSubmit();
 
     expect(
-      await screen.findByRole('heading', { name: content.auth.inviteDeadLinkHeading }),
+      await screen.findByRole('heading', { name: content.auth.inviteUnusableHeading }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: content.auth.inviteSubmit }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: content.auth.goToSignIn })).toBeInTheDocument();
     expect(router.replace).not.toHaveBeenCalled();
   });
 
@@ -209,12 +244,9 @@ describe('InviteAcceptSection', () => {
       new ApiRequestError(409, 'conflict', 'Server-side message', null),
     );
     renderSection();
+    await waitForForm();
 
-    await screen.findByRole('button', { name: content.auth.inviteSubmit });
-
-    fill(content.auth.inviteDisplayNameLabel, 'Amina Haddad');
-    fill(content.auth.invitePasswordLabel, 'correct horse battery staple');
-    submit();
+    fillAndSubmit();
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       content.auth.inviteAccountExistsError,

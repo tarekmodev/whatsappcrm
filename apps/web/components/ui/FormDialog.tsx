@@ -85,7 +85,6 @@ export function FormDialog({
         }}
       >
         <Stack gap="4">
-          {/* Above the actions rather than below the fold, and announced. */}
           <FormError message={formError} requestId={requestId} />
           {children}
         </Stack>

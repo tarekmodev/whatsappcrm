@@ -1,27 +1,20 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  AUTH_POLICY,
-  type InvitePreviewResponse,
-  type SessionPrincipal,
-} from '@whatsappcrm/contracts';
-import { Stack } from '@/components/layout/Stack';
+import { AUTH_POLICY, type InvitePreviewResponse } from '@whatsappcrm/contracts';
 import { Field } from '@/components/ui/Field';
-import { SkeletonBlock, SkeletonLine } from '@/components/ui/Skeleton';
 import { TextInput } from '@/components/ui/TextInput';
+import { TextLink } from '@/components/ui/TextLink';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useActionForm } from '@/lib/hooks/useActionForm';
 import { useContent } from '@/lib/content';
-import { cx } from '@/lib/cx';
 import { routes } from '@/lib/routes';
-import type { ActionResult } from '@/lib/actions/result';
-import { acceptInvitation } from '../auth.requests';
-import { validateDisplayName, validateNewPassword } from '../auth.validation';
 import { AuthForm } from './AuthForm';
 import { PasswordField } from './PasswordField';
-import styles from './InviteAcceptForm.module.css';
+import { acceptInvitation, type AcceptedInvite } from '../auth.requests';
+import { displayNameFieldError } from '../field-errors';
+import { hasErrors, validateNewPassword, type NewPasswordErrors } from '../password-policy';
 
 /**
  * Set a name and a password, get an account and a session. Usage:
@@ -31,6 +24,11 @@ import styles from './InviteAcceptForm.module.css';
  * role, and it could not: the tenant comes from the request host and the role
  * from the invitation the admin wrote. The response sets the session cookie, so
  * accepting signs the new agent straight in.
+ *
+ * `onDeadLink` exists because the API re-checks the invitation when it accepts:
+ * a link that was live at lookup can be expired, withdrawn or already used by the
+ * time this submits, and the answer to that is a different screen rather than a
+ * message above a form that can no longer succeed however it is filled in.
  */
 export function InviteAcceptForm({
   token,
@@ -39,11 +37,6 @@ export function InviteAcceptForm({
 }: {
   token: string;
   preview: InvitePreviewResponse;
-  /**
-   * The invitation died between the lookup and this submit — expired, withdrawn,
-   * or used by somebody else. Raised to the screen rather than shown here,
-   * because no amount of retyping makes this form succeed.
-   */
   onDeadLink: () => void;
 }) {
   const content = useContent();
@@ -51,33 +44,29 @@ export function InviteAcceptForm({
   const { showToast } = useToast();
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
-  const [displayNameError, setDisplayNameError] = useState<string | null>(null);
-  const [passwordError, setPasswordError] = useState<string | null>(null);
-  const displayNameRef = useRef<HTMLInputElement>(null);
-  const passwordRef = useRef<HTMLInputElement>(null);
+  const [confirmation, setConfirmation] = useState('');
+  const [displayNameError, setDisplayNameError] = useState<string | undefined>(undefined);
+  const [passwordErrors, setPasswordErrors] = useState<NewPasswordErrors>({});
 
-  const perform = useCallback(async (): Promise<ActionResult<SessionPrincipal>> => {
-    const outcome = await acceptInvitation({ token, displayName: displayName.trim(), password });
+  const perform = useCallback(async () => {
+    return acceptInvitation({ token, displayName: displayName.trim(), password });
+  }, [displayName, password, token]);
 
-    if (outcome.status === 'dead-link') {
-      onDeadLink();
+  const onSuccess = useCallback(
+    (accepted: AcceptedInvite) => {
+      if (accepted === null) {
+        onDeadLink();
+        return;
+      }
 
-      // The screen swaps this form for the dead-link card, so this line is only
-      // reached as copy if a consumer keeps the form mounted — in which case it
-      // should still say the true thing rather than "try again".
-      return { status: 'error', message: content.auth.inviteDeadLinkBody, requestId: null };
-    }
-
-    return outcome;
-  }, [content, displayName, onDeadLink, password, token]);
-
-  const onSuccess = useCallback(() => {
-    showToast({ tone: 'success', message: content.auth.inviteSuccess(preview.tenantName) });
-    router.replace(routes.inbox());
-    // The account did not exist a moment ago, so nothing rendered for it can be
-    // reused.
-    router.refresh();
-  }, [content, preview.tenantName, router, showToast]);
+      showToast({ tone: 'success', message: content.auth.inviteSuccess(preview.tenantName) });
+      router.replace(routes.inbox());
+      // The account did not exist a moment ago, so nothing rendered for it can be
+      // reused.
+      router.refresh();
+    },
+    [content, onDeadLink, preview.tenantName, router, showToast],
+  );
 
   const { submit, isPending, formError, requestId } = useActionForm({ perform, onSuccess });
 
@@ -87,31 +76,28 @@ export function InviteAcceptForm({
       isPending={isPending}
       formError={formError}
       requestId={requestId}
+      footer={<TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>}
       onSubmit={() => {
-        const nextNameError = validateDisplayName(displayName.trim());
-        const nextPasswordError = validateNewPassword(password);
+        const nextNameError = displayNameFieldError(displayName.trim());
+        const nextPasswordErrors = validateNewPassword(password, confirmation);
 
         setDisplayNameError(nextNameError);
-        setPasswordError(nextPasswordError);
+        setPasswordErrors(nextPasswordErrors);
 
-        if (nextNameError !== null || nextPasswordError !== null) {
-          (nextNameError !== null ? displayNameRef : passwordRef).current?.focus();
-          return;
+        if (nextNameError === undefined && !hasErrors(nextPasswordErrors)) {
+          submit();
         }
-
-        submit();
       }}
     >
       <Field
         label={content.auth.inviteDisplayNameLabel}
         hint={content.auth.inviteDisplayNameHint}
-        error={displayNameError ?? undefined}
+        error={displayNameError}
         isRequired
       >
         {({ controlId, describedBy, isInvalid }) => (
           <TextInput
             id={controlId}
-            ref={displayNameRef}
             aria-describedby={describedBy}
             aria-invalid={isInvalid}
             autoComplete="name"
@@ -119,7 +105,7 @@ export function InviteAcceptForm({
             value={displayName}
             onChange={(event) => {
               setDisplayName(event.target.value);
-              setDisplayNameError(null);
+              setDisplayNameError(undefined);
             }}
           />
         )}
@@ -127,46 +113,26 @@ export function InviteAcceptForm({
 
       <PasswordField
         label={content.auth.invitePasswordLabel}
-        value={password}
+        hint={content.auth.passwordHint(AUTH_POLICY.passwordMinLength)}
         autoComplete="new-password"
-        hint={content.auth.passwordLengthHint(AUTH_POLICY.passwordMinLength)}
-        error={passwordError ?? undefined}
-        inputRef={passwordRef}
+        value={password}
+        error={passwordErrors.password}
         onChange={(value) => {
           setPassword(value);
-          setPasswordError(null);
+          setPasswordErrors({});
+        }}
+      />
+
+      <PasswordField
+        label={content.auth.confirmPasswordLabel}
+        autoComplete="new-password"
+        value={confirmation}
+        error={passwordErrors.confirmation}
+        onChange={(value) => {
+          setConfirmation(value);
+          setPasswordErrors({});
         }}
       />
     </AuthForm>
   );
 }
-
-/**
- * The placeholder for the same form: the same `Stack` gaps, two label/hint/control
- * groups at the same `Field` rhythm, and a submit-height block — so the form
- * arriving under the preview does not push the card taller.
- */
-export function InviteAcceptFormSkeleton() {
-  return (
-    <Stack gap="4">
-      {PLACEHOLDER_FIELDS.map(({ label, hint }) => (
-        <Stack key={label} gap="2">
-          <span className={cx(styles.label, styles.placeholderLine)}>
-            <SkeletonLine width={label} />
-          </span>
-          <span className={cx(styles.hint, styles.placeholderLine)}>
-            <SkeletonLine width={hint} />
-          </span>
-          <SkeletonBlock height="var(--size-touch-target)" />
-        </Stack>
-      ))}
-      <SkeletonBlock height="var(--size-touch-target)" />
-    </Stack>
-  );
-}
-
-/** Label and hint widths, at roughly the length of the copy they stand in for. */
-const PLACEHOLDER_FIELDS = [
-  { label: '5rem', hint: '15rem' },
-  { label: '9rem', hint: '8rem' },
-] as const;

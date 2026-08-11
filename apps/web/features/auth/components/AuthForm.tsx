@@ -4,9 +4,11 @@ import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/Button';
 import { FormError } from '@/components/ui/FormError';
 import { Stack } from '@/components/layout/Stack';
+import styles from './AuthForm.module.css';
 
 /**
- * A real `<form>` with the error region and the submit button wired once. Usage:
+ * A page-level form with its error region, submit button and double-submit guard
+ * wired once. Usage:
  *
  * ```tsx
  * <AuthForm submitLabel={…} isPending={isPending} formError={formError} onSubmit={submit}>
@@ -14,9 +16,12 @@ import { Stack } from '@/components/layout/Stack';
  * </AuthForm>
  * ```
  *
- * The signed-out counterpart to `FormDialog`, which does the same job inside a
- * modal. Both screens under `(auth)/` use it, so neither can forget the pending
- * state, the double-submit guard or the announced error region.
+ * `FormDialog` is the same idea for a modal; this is the one for a form that owns
+ * its screen. All three password screens use it, so none of them can forget the
+ * pending state or leave a failure unannounced.
+ *
+ * The submit button is full width and at least a touch target tall, because on
+ * every screen that uses this it is the only primary action on the page.
  */
 export function AuthForm({
   children,
@@ -25,6 +30,7 @@ export function AuthForm({
   isPending,
   formError,
   requestId,
+  footer,
 }: {
   children: ReactNode;
   submitLabel: string;
@@ -32,13 +38,15 @@ export function AuthForm({
   isPending: boolean;
   formError: string | null;
   requestId?: string | null;
+  /** Secondary navigation below the action, e.g. "Back to sign in". */
+  footer?: ReactNode;
 }) {
   return (
     <form
       noValidate
+      className={styles.form}
       onSubmit={(event) => {
-        // Validation is the contract's; the submit is a browser fetch that has to
-        // read the response's `Set-Cookie`, so the native POST is not what runs.
+        // Validation is the contract's, and the submit is a server action.
         event.preventDefault();
         onSubmit();
       }}
@@ -49,6 +57,7 @@ export function AuthForm({
         <Button type="submit" variant="primary" isBlock isPending={isPending}>
           {submitLabel}
         </Button>
+        {footer === undefined ? null : <div className={styles.footer}>{footer}</div>}
       </Stack>
     </form>
   );

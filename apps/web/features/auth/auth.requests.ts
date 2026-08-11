@@ -5,18 +5,20 @@ import type {
   SessionPrincipal,
 } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
-import { acceptInvite, login, lookupInvite } from '@/lib/api/auth';
+import { acceptInvite, login, lookupInvite } from '@/lib/api/auth-browser';
 import type { ActionResult } from '@/lib/actions/result';
 import { isDeadLinkError, toAuthErrorResult } from './auth.errors';
 
 /**
- * The auth screens' calls, wrapped in the same `ActionResult` union every other
- * form in the app submits through — so `useActionForm` drives them unchanged and
- * a failure keeps the user's input instead of unmounting into an error boundary.
+ * The signed-out screens' calls, wrapped in the same `ActionResult` union every
+ * other form in the console submits through — so `useActionForm` drives them
+ * unchanged and a failure keeps the user's input instead of unmounting into an
+ * error boundary.
  *
- * These are **not** server actions, and that is the point: the session arrives as
- * a `Set-Cookie` on the response, so the request has to be made by the browser
- * that will hold the cookie (see `lib/api/browser.ts`).
+ * The sibling of `auth.actions.ts`, and the reason there are two: these three
+ * cannot be server actions. The session arrives as a `Set-Cookie`, so the request
+ * has to be made by the browser that will hold the cookie — see
+ * `lib/api/auth-browser.ts`.
  */
 
 export async function signIn(input: LoginInput): Promise<ActionResult<SessionPrincipal>> {
@@ -28,20 +30,24 @@ export async function signIn(input: LoginInput): Promise<ActionResult<SessionPri
 }
 
 /**
- * Accepting can fail the same way looking up can. The server re-checks the
- * invitation when it accepts (`InviteService.accept`), so a link that was live at
- * lookup is dead by submit if it expired, was withdrawn, or somebody else used it
- * in the meantime — and a dead link is a screen state, not a message above a form
- * that can no longer succeed however it is filled in.
+ * `null` when the invitation died between the lookup and the submit — the API
+ * re-checks it on accept, so a link that was live a minute ago can be expired,
+ * withdrawn, or already used by somebody else.
+ *
+ * It travels through the **success** channel, exactly as `ResetOutcome` does on
+ * the reset screen, because the right response is to show a different card rather
+ * than to let the user keep pressing submit on a form that can no longer succeed.
  */
-export type InviteAcceptOutcome = ActionResult<SessionPrincipal> | { status: 'dead-link' };
+export type AcceptedInvite = SessionPrincipal | null;
 
-export async function acceptInvitation(input: InviteAcceptInput): Promise<InviteAcceptOutcome> {
+export async function acceptInvitation(
+  input: InviteAcceptInput,
+): Promise<ActionResult<AcceptedInvite>> {
   try {
     return { status: 'success', data: await acceptInvite(input) };
   } catch (error) {
     if (isDeadLinkError(error)) {
-      return { status: 'dead-link' };
+      return { status: 'success', data: null };
     }
 
     return toAuthErrorResult(error, {
@@ -54,9 +60,9 @@ export async function acceptInvitation(input: InviteAcceptInput): Promise<Invite
 }
 
 /**
- * The invite preview. A discriminated union rather than an `ActionResult`,
- * because a dead link is a screen state with its own copy and its own way out,
- * not a message above a form the user should still be looking at.
+ * The invite preview. A union of its own rather than an `ActionResult`, because
+ * two of its three outcomes are screen states with their own copy and their own
+ * way out, not messages above a form the user should still be looking at.
  */
 export type InviteLookupOutcome =
   | { status: 'ready'; preview: InvitePreviewResponse }
@@ -71,6 +77,7 @@ export async function loadInvitePreview(token: string): Promise<InviteLookupOutc
       return { status: 'dead-link' };
     }
 
+    // Never swallowed: a lookup that failed for any other reason is a real fault.
     console.error('Invite lookup failed', error);
 
     return { status: 'failed' };

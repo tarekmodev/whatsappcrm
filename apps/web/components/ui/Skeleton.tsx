@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { cx } from '@/lib/cx';
 import styles from './Skeleton.module.css';
 
@@ -53,6 +54,29 @@ export function SkeletonBlock({ height = 'var(--space-8)', className }: Skeleton
       className={cx(styles.shimmer, styles.block, className)}
       style={{ '--skeleton-height': height } as React.CSSProperties}
     />
+  );
+}
+
+/**
+ * A placeholder shaped by the copy it stands in for. Usage:
+ * `<SkeletonForText>{content.auth.passwordHint(12)}</SkeletonForText>`.
+ *
+ * The other primitives take a width, which means a guess: a hint that wraps to
+ * two lines on a phone and one on a laptop makes a fixed-height placeholder wrong
+ * at one width or the other, and the card jumps by a line when the real content
+ * arrives. This renders the real string invisibly — so it wraps exactly as it
+ * will — and paints the shimmer over the box it occupies.
+ *
+ * Only for copy the skeleton actually knows. Where the text is data that has not
+ * arrived yet, a `SkeletonLine` is the honest answer.
+ */
+export function SkeletonForText({ children }: { children: ReactNode }) {
+  return (
+    <span aria-hidden="true" className={styles.forText}>
+      <span className={cx(styles.shimmer, styles.forTextFill)} />
+      {/* `visibility`, not `display`: it must still take up its space. */}
+      <span className={styles.forTextMeasure}>{children}</span>
+    </span>
   );
 }
 

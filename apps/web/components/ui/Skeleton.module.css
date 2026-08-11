@@ -38,6 +38,23 @@
   gap: var(--space-2);
 }
 
+/* `SkeletonForText`: the real copy, invisible, with the shimmer painted over the
+   box it wraps into. */
+.forText {
+  position: relative;
+  display: block;
+}
+
+.forTextFill {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+}
+
+.forTextMeasure {
+  visibility: hidden;
+}
+
 @keyframes shimmer {
   from {
     background-position: 200% 0;

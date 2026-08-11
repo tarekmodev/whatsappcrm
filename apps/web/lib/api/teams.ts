@@ -7,7 +7,7 @@ import {
   type TeamResponse,
   type TeamUpdateInput,
 } from '@whatsappcrm/contracts';
-import { apiRequest } from '@/lib/api/http';
+import { authenticatedRequest } from '@/lib/api/authenticated';
 import { parseCursorPage } from '@/lib/api/parse';
 
 /**
@@ -25,7 +25,7 @@ const TEAMS_PATH = '/v1/teams';
 const TEAMS_PAGE_SIZE = 100;
 
 export async function listTeams(): Promise<CursorPage<TeamResponse>> {
-  const response = await apiRequest({
+  const response = await authenticatedRequest({
     method: 'GET',
     path: `${TEAMS_PATH}?limit=${String(TEAMS_PAGE_SIZE)}`,
   });
@@ -34,13 +34,13 @@ export async function listTeams(): Promise<CursorPage<TeamResponse>> {
 }
 
 export async function createTeam(input: TeamCreateInput): Promise<TeamResponse> {
-  const response = await apiRequest({ method: 'POST', path: TEAMS_PATH, body: input });
+  const response = await authenticatedRequest({ method: 'POST', path: TEAMS_PATH, body: input });
 
   return TeamResponseSchema.parse(response);
 }
 
 export async function updateTeam(id: string, input: TeamUpdateInput): Promise<TeamResponse> {
-  const response = await apiRequest({
+  const response = await authenticatedRequest({
     method: 'PATCH',
     path: `${TEAMS_PATH}/${encodeURIComponent(id)}`,
     body: input,

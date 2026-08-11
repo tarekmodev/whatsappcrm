@@ -4,21 +4,22 @@ import { useContent } from '@/lib/content';
 import styles from './FormError.module.css';
 
 /**
- * The form-level failure region, rendered above the actions. Usage:
+ * A form's top-level failure message. Usage:
  * `<FormError message={formError} requestId={requestId} />` — renders nothing
- * when `message` is `null`, so a caller never branches.
+ * when `message` is `null`, so a caller needs no conditional of its own.
  *
  * `role="alert"` so the failure is announced without the user having to hunt for
- * it. Extracted from `FormDialog` once the auth screens needed the identical
- * block outside a dialog: the same failure must look and sound the same wherever
- * a form reports it.
+ * it, and it is placed above the actions rather than below the fold. Field-level
+ * errors are separate and stay next to their control.
+ *
+ * Shared by the dialog forms and the page-level auth forms: a failure that looks
+ * different depending on which surface produced it reads as two different bugs.
  */
 export function FormError({
   message,
   requestId,
 }: {
   message: string | null;
-  /** Shown when the API supplied one, so support can find the log line. */
   requestId?: string | null;
 }) {
   const content = useContent();

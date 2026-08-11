@@ -1,0 +1,17 @@
+.form {
+  /*
+   * A form column, not a banner. Without a cap the fields and the primary action
+   * stretch to whatever contains them — fine inside the signed-out card, which is
+   * already this narrow, and wrong inside the full-width Settings card, where a
+   * 1300px-wide password input and an equally wide button read as a page header.
+   */
+  max-inline-size: var(--size-container-sm);
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-3);
+  font-size: var(--font-size-body-sm);
+}

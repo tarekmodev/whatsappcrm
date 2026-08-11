@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { content } from '@/content/en';
 import { parseRedirectPath, routes, searchParamKeys } from '@/lib/routes';
 import { firstSearchParam, type RouteSearchParams } from '@/lib/search-params';
-import { AuthCard } from '@/features/auth/components/AuthCard';
 import { LoginForm } from '@/features/auth/components/LoginForm';
 
 /**
@@ -10,16 +9,17 @@ import { LoginForm } from '@/features/auth/components/LoginForm';
  * form.
  *
  * `?next=` is read here on the server rather than with `useSearchParams` in the
- * form, so the untrusted value is narrowed to an in-app path in one place and the
- * client component never has to think about open redirects.
+ * form, so the untrusted value is narrowed to an in-app path in exactly one place
+ * and the client component never has to think about open redirects. It is written
+ * by the session guard (TAR-62) and by anybody who can send a link, which is the
+ * same thing as far as this page is concerned.
+ *
+ * `robots` comes from the `(auth)` layout and is inherited.
  */
 
 export const metadata: Metadata = {
   title: `${content.auth.signInTitle} · ${content.app.name}`,
   description: content.auth.signInDescription,
-  // A sign-in screen has nothing to index, and an indexed one collects search
-  // traffic aimed at whatever it redirects to.
-  robots: { index: false, follow: false },
 };
 
 export default async function LoginPage({
@@ -33,9 +33,5 @@ export default async function LoginPage({
     routes.inbox(),
   );
 
-  return (
-    <AuthCard title={content.auth.signInTitle} description={content.auth.signInDescription}>
-      <LoginForm redirectTo={redirectTo} />
-    </AuthCard>
-  );
+  return <LoginForm redirectTo={redirectTo} />;
 }

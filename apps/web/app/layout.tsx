@@ -1,18 +1,20 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { content } from '@/content/en';
-import { ToastProvider } from '@/components/ui/ToastProvider';
 import { readTheme } from '@/lib/theme/read-theme';
+import { ToastProvider } from '@/components/ui/ToastProvider';
 import './globals.css';
 
 /**
- * The document. Composition only: it resolves the theme on the server and opens
- * the one toast region the whole app shares.
+ * The document. Everything above the route groups and nothing else: the language
+ * and direction, the resolved theme, and the one notification system.
  *
- * Deliberately session-free. The signed-in shell — header, navigation, principal
- * — belongs to `(app)/layout.tsx`, because `(auth)/` renders for somebody who by
- * definition has no session yet, and a layout that demanded one here would make
- * the login screen unreachable.
+ * It deliberately renders **no chrome and resolves no principal**. Two groups sit
+ * under it and they need different shells — `(app)` is the signed-in console with
+ * its header and navigation, `(auth)` is the signed-out surface where password
+ * recovery lives (TAR-61) and where TAR-60's login screen will. Resolving the
+ * session here would mean a logged-out visitor could not open a reset link
+ * without hitting a 401 first.
  *
  * The theme lands in `data-theme` on `<html>` in the *first* HTML response, which
  * is what makes the swap flash-free — there is no client-side correction after

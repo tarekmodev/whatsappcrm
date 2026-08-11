@@ -1,0 +1,38 @@
+.main {
+  /*
+   * `dvh`, not `vh`: on iOS Safari the browser chrome is inside `vh`, so a
+   * centred card measured against it sits low and the submit button ends up
+   * under the toolbar.
+   */
+  min-block-size: 100dvh;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: var(--space-5);
+  padding-block: var(--space-6);
+  padding-block-end: calc(var(--space-6) + env(safe-area-inset-bottom));
+  padding-inline: clamp(var(--space-4), 4vw, var(--space-6));
+}
+
+.utilities {
+  /* Out of the centred column so it cannot push the card off-centre, and pinned
+     clear of the notch on a landscape phone. */
+  position: absolute;
+  inset-block-start: calc(var(--space-3) + env(safe-area-inset-top));
+  inset-inline-end: calc(var(--space-3) + env(safe-area-inset-right));
+}
+
+.column {
+  inline-size: 100%;
+  max-inline-size: var(--size-container-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.wordmark {
+  text-align: center;
+  font-size: var(--font-size-heading-sm);
+  font-weight: var(--font-weight-strong);
+  color: var(--color-accent);
+}

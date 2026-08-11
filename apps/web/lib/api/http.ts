@@ -11,8 +11,8 @@ import type { ApiRequest } from '@/lib/api/request';
  * The mock branch is a *transport*, not a per-feature fake: resource modules are
  * byte-identical in both modes, so wiring TAR-81's real endpoints is one flag.
  *
- * Browser-side calls go through `lib/api/browser.ts` instead — see the note on
- * `ApiRequestError`.
+ * The three calls that must be made by the browser rather than by this process
+ * go through `lib/api/auth-browser.ts` instead, which explains why.
  */
 
 export { ApiRequestError } from '@/lib/api/error';

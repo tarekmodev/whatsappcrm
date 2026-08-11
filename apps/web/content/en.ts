@@ -30,6 +30,7 @@ export const content = {
     settings: 'Settings',
     people: 'People',
     assignment: 'Assignment',
+    security: 'Security',
   },
 
   theme: {
@@ -125,63 +126,6 @@ export const content = {
     contact: 'Contact',
     status: 'Status',
     assignee: 'Assignee',
-  },
-
-  auth: {
-    signInTitle: 'Sign in',
-    signInDescription: 'Use the email address your workspace invited.',
-    signInSubmit: 'Sign in',
-    signInSuccess: (displayName: string) => `Signed in as ${displayName}`,
-    emailLabel: 'Email address',
-    passwordLabel: 'Password',
-    // The short form is the visible label; the long one is the accessible name.
-    // WCAG 2.5.3 is satisfied because the accessible name contains the visible
-    // text, and a two-character button does not crowd a 320px-wide field.
-    showPassword: 'Show',
-    showPasswordAria: 'Show password',
-    hidePassword: 'Hide',
-    hidePasswordAria: 'Hide password',
-    // A length floor with no character-class theatre, per the contract's
-    // `PasswordSchema`. The number comes from `AUTH_POLICY`, never from here.
-    passwordLengthHint: (minimum: number) => `At least ${minimum} characters.`,
-    passwordTooShortError: (minimum: number) => `Use at least ${minimum} characters.`,
-    passwordTooLongError: (maximum: number) => `Use at most ${maximum} characters.`,
-
-    // The API answers `invalid_credentials` for a wrong password, an unknown
-    // address and a suspended account alike, so this line must not hint at which.
-    invalidCredentialsError: 'That email address and password do not match.',
-    lockedOutError: (minutes: number) =>
-      `Too many failed sign-in attempts. Try again in ${minutes} minutes, or ask an admin to unlock the account.`,
-    workspaceInactiveError: 'This workspace is not active. Contact your administrator.',
-    workspaceNotFoundError: 'This address is not set up for a workspace. Check the link you used.',
-    signInFailedError: 'We could not sign you in. Try again.',
-
-    inviteTitle: 'Accept your invitation',
-    inviteDescription: 'Set a password to finish creating your account.',
-    inviteLoading: 'Loading your invitation',
-    invitedByTo: (inviter: string, workspace: string) =>
-      `${inviter} invited you to join ${workspace}.`,
-    invitedTo: (workspace: string) => `You have been invited to join ${workspace}.`,
-    inviteExpiryLabel: 'Invitation expires',
-    inviteExpires: 'Expires',
-    inviteRoleLabel: 'Role',
-    inviteDisplayNameLabel: 'Your name',
-    inviteDisplayNameHint: 'Teammates see this on the conversations you handle.',
-    inviteDisplayNameTooLongError: 'That name is too long. Use a shorter one.',
-    invitePasswordLabel: 'Choose a password',
-    inviteSubmit: 'Create account',
-    inviteSuccess: (workspace: string) => `Welcome to ${workspace}`,
-    inviteFailedError: 'We could not create your account. Try again.',
-    inviteAccountExistsError:
-      'There is already an account for this address in this workspace. Sign in instead.',
-
-    inviteMissingTokenHeading: 'This link is incomplete',
-    inviteMissingTokenBody:
-      'Open the invitation link from your email again, without editing the address.',
-    inviteDeadLinkHeading: 'This invitation link no longer works',
-    inviteDeadLinkBody:
-      'It may have expired, already been used, or been withdrawn. Ask a workspace admin to send a new one.',
-    goToSignIn: 'Go to sign in',
   },
 
   people: {
@@ -292,6 +236,128 @@ export const content = {
     unassignedEmptyBody: 'Every conversation in this workspace has an owner.',
     unassignedCount: (count: number) =>
       count === 1 ? '1 conversation waiting' : `${count} conversations waiting`,
+  },
+
+  auth: {
+    // --- Shared ------------------------------------------------------------
+    emailLabel: 'Email address',
+    currentPasswordLabel: 'Current password',
+    newPasswordLabel: 'New password',
+    confirmPasswordLabel: 'Confirm new password',
+    /**
+     * Length only, deliberately. The contract follows current NIST guidance and
+     * asks for a floor rather than character classes, so promising rules the API
+     * does not enforce would just cost people a failed submit.
+     */
+    passwordHint: (minLength: number) =>
+      `At least ${minLength} characters. A long phrase beats a short puzzle.`,
+    backToSignIn: 'Back to sign in',
+    forgotPasswordLink: 'Forgot your password?',
+    requestNewLink: 'Request a new link',
+    genericFailure: 'We could not complete that. Try again in a moment.',
+
+    // --- Session ------------------------------------------------------------
+    signOut: 'Sign out',
+
+    // --- Sign in -----------------------------------------------------------
+    signInTitle: 'Sign in',
+    signInDescription: 'Use the email address your workspace invited.',
+    signInSubmit: 'Sign in',
+    signInSuccess: (displayName: string) => `Signed in as ${displayName}`,
+    passwordLabel: 'Password',
+    /**
+     * The API answers `invalid_credentials` for a wrong password, an unknown
+     * address and a suspended account alike, precisely so login cannot be used to
+     * find out which addresses exist. This line must not undo that by hinting.
+     */
+    invalidCredentialsError: 'That email address and password do not match',
+    /** A lockout arrives as `rate_limited`; the wait comes from `AUTH_POLICY`. */
+    lockedOutError: (minutes: number) =>
+      `Too many failed sign-in attempts. Try again in ${minutes} minutes, or ask an admin to unlock the account.`,
+    workspaceInactiveError: 'This workspace is not active. Contact your administrator.',
+    workspaceNotFoundError: 'This address is not set up for a workspace. Check the link you used.',
+    signInFailedError: 'We could not sign you in. Try again.',
+
+    // --- Accept an invitation ----------------------------------------------
+    inviteTitle: 'Accept your invitation',
+    inviteDescription: 'Set a password to finish creating your account.',
+    inviteLoading: 'Opening your invitation',
+    invitedByTo: (inviter: string, workspace: string) =>
+      `${inviter} invited you to join ${workspace}.`,
+    /** The platform-issued bootstrap invite has no inviting user to name. */
+    invitedTo: (workspace: string) => `You have been invited to join ${workspace}.`,
+    inviteExpiryLabel: 'Invitation expires',
+    inviteExpires: 'Expires',
+    inviteRoleLabel: 'Role',
+    inviteDisplayNameLabel: 'Your name',
+    inviteDisplayNameHint: 'Teammates see this on the conversations you handle.',
+    inviteDisplayNameRequiredError: 'Enter your name',
+    inviteDisplayNameTooLongError: 'That name is too long. Use a shorter one.',
+    invitePasswordLabel: 'Choose a password',
+    inviteSubmit: 'Create account',
+    inviteSuccess: (workspace: string) => `Welcome to ${workspace}`,
+    inviteFailedError: 'We could not create your account. Try again.',
+    inviteAccountExistsError:
+      'There is already an account for this address in this workspace. Sign in instead.',
+    inviteUnusableHeading: 'This invitation link cannot be used',
+    inviteIncompleteBody:
+      'The link is missing its token, which usually means it was truncated on the way to you. Open the invitation email again, without editing the address.',
+    inviteDeadLinkBody:
+      'It may have expired, already been used, or been withdrawn. Ask a workspace admin to send you a new one.',
+
+    // --- Forgot password ---------------------------------------------------
+    forgotTitle: 'Reset your password',
+    forgotDescription:
+      'Enter the address you sign in with and we will email you a link to set a new password.',
+    forgotSubmit: 'Email me a reset link',
+    forgotSentHeading: 'Check your email',
+    /**
+     * Says "if an account exists" and never confirms it does. The API answers
+     * identically for a real address, an unknown one and a throttled request, and
+     * this screen must not undo that by wording the two cases differently.
+     */
+    forgotSentBody: (email: string) =>
+      `If an account exists for ${email}, a link to set a new password is on its way.`,
+    forgotSentExpiry: (minutes: number) =>
+      `The link can be used once, and stops working after ${minutes} minutes.`,
+    forgotSentHint: 'Nothing arrived? Check your spam folder, then request another link.',
+    forgotSendAgain: 'Use a different address',
+
+    // --- Reset password ----------------------------------------------------
+    resetTitle: 'Set a new password',
+    resetDescription: 'Choose a new password for your account.',
+    resetSubmit: 'Save new password',
+    resetLoading: 'Opening your reset link',
+    resetDoneHeading: 'Password updated',
+    resetDoneBody: 'Sign in with your new password to pick up where you left off.',
+    /** TAR-35: a completed reset revokes every session the account had. */
+    resetSessionsRevokedNotice:
+      'For your security, this account has been signed out on every device — including any the person who requested this link was not using.',
+    linkUnusableHeading: 'This reset link cannot be used',
+    linkIncompleteBody:
+      'The link is missing its token, which usually means it was truncated on the way to you. Open the most recent reset email again, or request a new link.',
+
+    // --- Change password ---------------------------------------------------
+    securityTitle: 'Security',
+    securitySubtitle: 'Your password, and what happens to your other sessions when it changes.',
+    securityLoading: 'Loading your security settings',
+    changeHeading: 'Change password',
+    changeDescription: 'You stay signed in here. Every other device is signed out.',
+    signedInAs: 'Signed in as',
+    changeSubmit: 'Change password',
+    changeSuccessToast: 'Password changed',
+    changeDoneHeading: 'Password changed',
+    /** TAR-35: a change revokes every session *except* the caller's own. */
+    changeDoneBody:
+      'You are still signed in on this device. Every other session for your account has been signed out and will need the new password.',
+    changeAgain: 'Change it again',
+
+    // --- Validation --------------------------------------------------------
+    passwordRequiredError: 'Enter a password',
+    currentPasswordRequiredError: 'Enter your current password',
+    passwordTooShortError: (minLength: number) => `Use at least ${minLength} characters`,
+    passwordTooLongError: (maxLength: number) => `Use at most ${maxLength} characters`,
+    passwordMismatchError: 'The two passwords do not match',
   },
 
   form: {

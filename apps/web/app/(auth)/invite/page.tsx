@@ -3,17 +3,20 @@ import { content } from '@/content/en';
 import { InviteAcceptSection } from '@/features/auth/components/InviteAcceptSection';
 
 /**
- * Invitation acceptance. Composition only.
+ * Accept an invitation. The target of the link TAR-55 mails out — kept in step
+ * with it through `routes.invite()`.
  *
- * The section owns every state because the token is in the URL fragment, which
- * the server never receives — there is nothing for this file to read.
+ * The token arrives in the URL **fragment**, which the server never sees, so
+ * everything below this file is client-rendered on purpose. That is the cost of
+ * keeping a live credential out of the access logs, and it is paid here rather
+ * than by putting the token in a query string.
+ *
+ * `robots` comes from the `(auth)` layout and is inherited.
  */
 
 export const metadata: Metadata = {
   title: `${content.auth.inviteTitle} · ${content.app.name}`,
   description: content.auth.inviteDescription,
-  // Personal, single-use and short-lived. Nothing here should ever be crawled.
-  robots: { index: false, follow: false },
 };
 
 export default function InvitePage() {

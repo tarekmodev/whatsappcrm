@@ -10,15 +10,38 @@ export const routes = {
   settings: () => '/settings',
   settingsPeople: (query?: PeopleQuery) => withQuery('/settings/people', peopleSearchParams(query)),
   settingsAssignment: () => '/settings/assignment',
-  forbidden: () => '/forbidden',
+  settingsSecurity: () => '/settings/security',
+  /**
+   * Sign in. `redirectTo` is where the user was heading when the guard turned
+   * them away (TAR-62), carried as `?next=` and read back through
+   * `parseRedirectPath` — never followed raw.
+   *
+   * ⚠️ The page behind this lands with **TAR-60**, which owns the login and
+   * invite-accept screens. The password screens link to it — a reset ends by
+   * sending the user to sign in — so the entry exists here first, and TAR-60
+   * fills it in without touching a single caller.
+   */
   login: (query?: LoginQuery) =>
     withQuery('/login', { [searchParamKeys.redirectTo]: query?.redirectTo }),
   /**
-   * The target of the invitation email. The token travels in the URL *fragment*
-   * (`/invite#token=…`), which browsers never send to a server, so it is not part
-   * of this function's output — the mailer appends it (ADR 0005).
+   * The target of the invitation email, also owned by TAR-60. The token travels
+   * in the URL *fragment* (`/invite#token=…`), which browsers never send to a
+   * server, so it is not part of this function's output.
+   *
+   * Listed here because the session guard needs to know the path is reachable
+   * without a session — an invitee has no account yet, and a guard that bounced
+   * them to sign in would make the invitation impossible to accept.
    */
   invite: () => '/invite',
+  forgotPassword: () => '/forgot-password',
+  /**
+   * The target of the link in a password-reset email. The path is fixed by the
+   * API's `RESET_PASSWORD_LINK_PATH` (`apps/api/src/identity/mailer/mailer.port.ts`),
+   * which is what the mailer puts in front of `#token=…`; `routes.test.ts` pins
+   * the spelling so the two cannot drift into a dead link.
+   */
+  resetPassword: () => '/reset-password',
+  forbidden: () => '/forbidden',
 } as const;
 
 /** Query keys are named once so a link and the page that reads it cannot drift. */
