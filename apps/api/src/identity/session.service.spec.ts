@@ -87,7 +87,7 @@ function buildHarness(rowsFor: (sql: string) => unknown[]): Harness {
   const cache = {
     read: jest.fn().mockResolvedValue(null),
     write: jest.fn().mockResolvedValue(undefined),
-    track: jest.fn().mockResolvedValue(undefined),
+    track: jest.fn().mockResolvedValue(true),
     forget: jest.fn().mockResolvedValue(undefined),
     purgeUser: jest.fn().mockResolvedValue(undefined),
   };
@@ -162,6 +162,21 @@ describe('SessionService.resolve', () => {
     expect(harness.cache.track).toHaveBeenCalledWith(TENANT, USER, hashSessionToken(TOKEN));
   });
 
+  it('does not cache a principal the revocation index failed to record', async () => {
+    // `purgeUser` deletes only what `SMEMBERS` names, so an entry cached after
+    // a failed `SADD` is unreachable by every revocation path and would keep
+    // answering for its full TTL — a revoked session outliving its revocation.
+    // A miss costs one indexed read; this costs correctness.
+    const harness = buildHarness((sql) =>
+      sql.includes('FROM sessions s') ? [sessionRow(null)] : [],
+    );
+
+    harness.cache.track.mockResolvedValue(false);
+
+    await expect(harness.sessions.resolve(TOKEN, TENANT)).resolves.toEqual(principalIn(TENANT));
+    expect(harness.cache.write).not.toHaveBeenCalled();
+  });
+
   describe('the sliding window', () => {
     it('does not write when the session was touched inside the throttle', async () => {
       const harness = buildHarness((sql) =>
@@ -217,6 +232,29 @@ describe('SessionService.resolve', () => {
         true,
       );
     });
+  });
+});
+
+describe('SessionService.publish', () => {
+  const issued = { token: TOKEN, tokenHash: 'hash', sessionId: SESSION, expiresAt: EXPIRES_AT };
+
+  it('indexes the freshly issued session before caching it', async () => {
+    const harness = buildHarness(() => []);
+
+    await harness.sessions.publish(issued, principalIn(TENANT));
+
+    expect(harness.cache.track).toHaveBeenCalledWith(TENANT, USER, 'hash');
+    expect(harness.cache.write).toHaveBeenCalledWith('hash', principalIn(TENANT), EXPIRES_AT);
+  });
+
+  it('caches nothing when the index write failed', async () => {
+    const harness = buildHarness(() => []);
+
+    harness.cache.track.mockResolvedValue(false);
+
+    await harness.sessions.publish(issued, principalIn(TENANT));
+
+    expect(harness.cache.write).not.toHaveBeenCalled();
   });
 });
 

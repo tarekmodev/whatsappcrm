@@ -36,8 +36,23 @@ import { SessionService, type IssuedSession } from './session.service';
  * `PasswordService.verifyDummy` buys, and without it the response *timing*
  * re-opens the enumeration the identical bodies were there to close.
  *
- * A locked account answers 429 rather than a code of its own, because a code
- * only a real account can produce confirms the address exists.
+ * A locked account answers 429 rather than a code of its own, so the response
+ * body carries nothing an unknown address does not also produce.
+ *
+ * **The status code still does, and deliberately so.** A lockout is only
+ * reachable for an active account that has a password hash, and with
+ * `LOGIN_IP_THROTTLE_ENABLED` off — the shipped default, see
+ * `LoginThrottleService` — `AccountLockedError` is the *only* producer of a 429
+ * on this route. Eleven wrong passwords therefore separate a real address (401
+ * ten times, then 429) from one with no account (401 every time), whatever the
+ * bodies say. That is the cost of TAR-35's "lockout is observable to a tenant
+ * admin", which cannot be met by a control the attacker cannot also observe.
+ *
+ * The trade is bounded, not accepted blind: it costs an attacker ten failures
+ * per address to learn one bit, and closing it is a deployment decision rather
+ * than a code change — turn `LOGIN_IP_THROTTLE_ENABLED` on wherever
+ * `request.ip` is the client rather than a proxy, and an address window that
+ * knows nothing about accounts produces the same 429 for both.
  *
  * ## Brute-force protection lives next door
  *

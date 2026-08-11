@@ -76,20 +76,33 @@ export class SessionCacheService {
   }
 
   /**
-   * Records `tokenHash` in the user's index, so a later revocation can find it.
+   * Records `tokenHash` in the user's index, so a later revocation can find it,
+   * and reports whether that actually landed.
    *
    * The index outlives the cache entries it names — it is the revocation
    * handle, not a cache — so it carries the session's absolute cap rather than
    * the 60-second TTL. A hash left in it for a session that has since expired
    * costs one wasted `DEL` on the next purge.
+   *
+   * The return value is what makes pairing this with `write` safe. `purgeUser`
+   * evicts only what `SMEMBERS` names, so an entry cached *without* its index
+   * row is unreachable by every revocation path and keeps answering until its
+   * TTL lapses — a revoked session that survives revocation, which is the one
+   * direction of staleness this design does not tolerate. Callers therefore
+   * track first and skip the write on `false`: an un-purgeable entry is worse
+   * than a cache miss, and a miss costs one indexed Postgres read.
    */
-  async track(tenantId: string, userId: string, tokenHash: string): Promise<void> {
-    await this.redis.run('session cache track', async (client) => {
+  async track(tenantId: string, userId: string, tokenHash: string): Promise<boolean> {
+    const tracked = await this.redis.run('session cache track', async (client) => {
       const key = userSessionsKey(tenantId, userId);
 
       await client.sadd(key, tokenHash);
       await client.pexpire(key, AUTH_POLICY.sessionAbsoluteMs);
+
+      return true;
     });
+
+    return tracked === true;
   }
 
   /** Drops one session's cache entry and its place in the user's index. */

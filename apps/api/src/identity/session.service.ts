@@ -164,9 +164,16 @@ export class SessionService {
    * Deliberately after, not inside: a cache entry written for a transaction
    * that then rolled back would be a live credential for a session that does
    * not exist — the one direction of staleness this design does not tolerate.
+   *
+   * Index first, and only cache what the index now names. See `resolve`.
    */
   async publish(issued: IssuedSession, principal: SessionPrincipal): Promise<void> {
-    await this.cache.track(principal.tenantId, principal.userId, issued.tokenHash);
+    const tracked = await this.cache.track(principal.tenantId, principal.userId, issued.tokenHash);
+
+    if (!tracked) {
+      return;
+    }
+
     await this.cache.write(issued.tokenHash, principal, issued.expiresAt);
   }
 
@@ -231,8 +238,16 @@ export class SessionService {
     );
     const principal = toPrincipal(row, expiresAt);
 
-    await this.cache.write(tokenHash, principal, expiresAt);
-    await this.cache.track(principal.tenantId, principal.userId, tokenHash);
+    // Index first, then cache — and cache nothing the index does not name.
+    // `purgeUser` deletes only the hashes `SMEMBERS` returns, so an entry
+    // written after a failed `SADD` is invisible to every revocation path and
+    // keeps answering for its full TTL. Both calls swallow their own failure,
+    // and `commandTimeout` is 500 ms, so a brief Redis stall between them is
+    // realistic rather than theoretical. Skipping the write costs one indexed
+    // Postgres read per request until Redis recovers.
+    if (await this.cache.track(principal.tenantId, principal.userId, tokenHash)) {
+      await this.cache.write(tokenHash, principal, expiresAt);
+    }
 
     return principal;
   }
