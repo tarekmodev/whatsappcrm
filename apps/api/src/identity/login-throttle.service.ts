@@ -13,7 +13,7 @@ import { TooManyAttemptsError } from './identity.errors';
 /**
  * Brute-force protection for the login endpoint (TAR-53, decision 3).
  *
- * ## Two layers, because neither one alone is enough
+ * ## Three layers, because none of them alone is enough
  *
  * **Per account, in Postgres.** `failed_login_attempts`, `last_failed_login_at`
  * and `locked_until` on `users`, written inside the login transaction. Durable
@@ -22,20 +22,30 @@ import { TooManyAttemptsError } from './identity.errors';
  * TAR-35 asks for a lockout that is *observable*, and a counter that vanishes
  * when a cache restarts cannot satisfy that.
  *
- * **Per address, in Redis.** A sliding window keyed by tenant *and* client
- * address. This is the only layer that can throttle an attacker spraying
- * addresses that have **no user row to count on**, which is what credential
- * stuffing actually looks like: ten thousand leaked email/password pairs tried
- * once each, never tripping any per-account threshold.
+ * **Per email address, in Redis.** The same threshold and the same lockout
+ * duration as the account layer, counted against the address that was *typed*
+ * rather than against a row. It exists because the account layer can only count
+ * for an address that has one: with it alone, eleven wrong passwords answer 429
+ * for a real account and 401 for an address with no account, and the difference
+ * is a per-tenant user-enumeration oracle that the identical bodies and the
+ * dummy verify were there to close. Mirroring the numbers is what makes the two
+ * cases indistinguishable — see `assertEmailWithinLimit`.
  *
- * ## Both keys carry the tenant
+ * **Per client address, in Redis.** A sliding window keyed by tenant *and*
+ * client address, at a higher threshold. This is the layer that catches one
+ * attacker spraying *many* addresses — ten thousand leaked email/password pairs
+ * tried once each, never tripping any single-address threshold.
  *
- * `authfail:{tenantId}:{address}` and a per-user row that RLS already confines.
- * Tenant A's attacker therefore cannot lock out, or consume the allowance of,
- * tenant B's agents — TAR-59's fourth acceptance criterion, satisfied by the
- * shape of the key rather than by a check somebody has to remember to write.
+ * ## Every key carries the tenant
  *
- * ## The address layer fails open, deliberately
+ * `authfail:{tenantId}:{address}`, `emailfail:{tenantId}:{emailHash}`,
+ * `emaillock:{tenantId}:{emailHash}`, and a per-user row that RLS already
+ * confines. Tenant A's attacker therefore cannot lock out, or consume the
+ * allowance of, tenant B's agents — TAR-59's fourth acceptance criterion,
+ * satisfied by the shape of the key rather than by a check somebody has to
+ * remember to write.
+ *
+ * ## The Redis layers fail open, deliberately
  *
  * Every Redis path here degrades to a no-op when Redis is unreachable, so a
  * cache blip cannot lock an entire tenant out of signing in. What is left when
@@ -44,19 +54,37 @@ import { TooManyAttemptsError } from './identity.errors';
  * outage into a total authentication outage, and it protects nothing that the
  * account counter does not already protect.
  *
- * ## …and it is off until the address means something
+ * The cost of that choice is stated rather than hidden: while Redis is down the
+ * enumeration oracle the email layer closes is open again, because the only
+ * remaining producer of a 429 on login is a real account's lockout. It is a
+ * degraded mode, it is logged, and it is the same trade every other Redis path
+ * in this module makes.
  *
- * `LOGIN_IP_THROTTLE_ENABLED` gates it, defaulting to off. Express `trust
- * proxy` is deliberately unset — `HostTenantGuard` needs `Host` to be
- * unforgeable — so behind a load balancer `request.ip` is the *proxy*, every
- * agent in a tenant shares one window, and twenty failures would lock the whole
- * tenant out for fifteen minutes. A control that is really a denial of service
- * is worse than no control, and the per-account lockout does not depend on it.
+ * ## …and the client-address layer is off until the address means something
+ *
+ * `LOGIN_IP_THROTTLE_ENABLED` gates **that layer only**, defaulting to off.
+ * Express `trust proxy` is deliberately unset — `HostTenantGuard` needs `Host`
+ * to be unforgeable — so behind a load balancer `request.ip` is the *proxy*,
+ * every agent in a tenant shares one window, and twenty failures would lock the
+ * whole tenant out for fifteen minutes. A control that is really a denial of
+ * service is worse than no control.
+ *
+ * The email layer carries no such flag and needs none: the email comes from the
+ * request body, so it identifies exactly one login attempt's target however
+ * many proxies the request crossed. Nor does it add a denial of service — the
+ * only thing an attacker can lock with it is an address they can already lock
+ * durably through the account layer, at the same threshold.
  */
 
-/** One rejected credential attempt, as both layers need to see it. */
+/** One rejected credential attempt, as all three layers need to see it. */
 export interface FailedLoginAttempt {
   readonly tenantId: string;
+  /**
+   * The address that was typed, whether or not it names an account. Counted for
+   * both cases at the same threshold, which is what stops the lockout answering
+   * "this account exists".
+   */
+  readonly email: string;
   /** `null` when the request carried no usable client address. */
   readonly ipAddress: string | null;
   /** `null` when the address matched no account able to sign in. */
@@ -133,17 +161,79 @@ export class LoginThrottleService {
   }
 
   /**
-   * Counts one rejected attempt in both layers.
+   * Refuses the attempt outright when the *typed address* has spent its
+   * allowance against this tenant, whether or not it names an account.
+   *
+   * This is the layer that keeps the lockout from doubling as an
+   * account-existence oracle. The per-account lockout can only count for an
+   * address that has a row, so on its own it answers the eleventh wrong password
+   * with 429 for a real account and 401 for an address with none — a difference
+   * anyone can measure in eleven requests, and one that survives the identical
+   * bodies and the dummy verify entirely. Counting the typed address at the same
+   * threshold and for the same duration makes both cases answer the same
+   * `rate_limited`, with a `Retry-After` computed the same way.
+   *
+   * Checked **before** the account lookup, so the two cases also cost the same:
+   * a refusal here is one Redis round trip in both, rather than a lookup and an
+   * argon2id verify in one of them.
+   *
+   * Fails open. Redis being unreachable puts the oracle back — see the class
+   * comment — and that is the deliberate trade the whole module makes rather
+   * than an oversight here.
+   */
+  async assertEmailWithinLimit(tenantId: string, email: string): Promise<void> {
+    const lockedForMs = await this.redis.run(
+      'login lockout read',
+      async (client) => await client.pttl(emailLockKey(tenantId, email)),
+    );
+
+    // `null` is an unreachable Redis; a negative reply is "no such key" or "no
+    // TTL". Only a live lock refuses.
+    if (lockedForMs === null || lockedForMs <= 0) {
+      return;
+    }
+
+    this.logger.warn(`Refusing a sign-in attempt against a locked address in tenant ${tenantId}.`);
+
+    throw new TooManyAttemptsError(secondsUntil(Date.now() + lockedForMs, Date.now()));
+  }
+
+  /**
+   * Counts one rejected attempt in every layer that can see it.
    *
    * The account half runs first: it is the durable one, and it is the one whose
-   * failure should surface. The address half is best-effort by construction.
+   * failure should surface. The two Redis halves are best-effort by
+   * construction.
    */
   async recordFailure(attempt: FailedLoginAttempt): Promise<void> {
     if (attempt.userId !== null) {
       await this.recordAccountFailure(attempt.userId);
     }
 
+    await this.recordEmailFailure(attempt.tenantId, attempt.email);
     await this.recordAddressFailure(attempt.tenantId, attempt.ipAddress);
+  }
+
+  /**
+   * Clears the email counter and lock.
+   *
+   * Called from the two places that clear `failed_login_attempts` for the same
+   * reason, and it has to be both: a successful sign-in, because whoever just
+   * proved they hold the password is not the attacker the counter was
+   * accumulating against; and an admin unlock, because "let them back in now"
+   * would otherwise mean "in up to fifteen minutes", refused by a layer no
+   * admin can see. Neither hands an attacker anything the durable reset does
+   * not already — that restores a full allowance of guesses by itself.
+   *
+   * The per-client-address window is deliberately *not* cleared by either. That
+   * one belongs to whoever was guessing rather than to the account they were
+   * guessing at, and clearing it would let an attacker restore their own
+   * allowance by getting an admin to press a button.
+   */
+  async clearEmailFailures(tenantId: string, email: string): Promise<void> {
+    await this.redis.run('login lockout clear', async (client) => {
+      await client.del(emailFailureKey(tenantId, email), emailLockKey(tenantId, email));
+    });
   }
 
   /**
@@ -229,6 +319,51 @@ export class LoginThrottleService {
   }
 
   /**
+   * Counts one failed attempt against the typed address, and locks it on every
+   * positive multiple of the threshold.
+   *
+   * Deliberately the same threshold and the same duration as
+   * `recordAccountFailure`, including the "every multiple" rule, because the
+   * point of the layer is that the two are not tellable apart. Anywhere the
+   * numbers diverge is a distinguisher, so they read from the same two
+   * constants rather than from a pair of their own.
+   *
+   * The counter carries the lockout duration as its TTL rather than living
+   * forever: an address nobody has guessed at for fifteen minutes is not worth
+   * a Redis key, and the durable counter is what remembers the long history for
+   * an address that has an account.
+   */
+  private async recordEmailFailure(tenantId: string, email: string): Promise<void> {
+    const countKey = emailFailureKey(tenantId, email);
+
+    const failures = await this.redis.run('login lockout write', async (client) => {
+      const replies = await client
+        .multi()
+        .incr(countKey)
+        .pexpire(countKey, AUTH_POLICY.loginLockoutMs)
+        .exec();
+
+      return countAt(replies, 0);
+    });
+
+    // `null` is an unreachable Redis and `0` an unreadable reply. Neither is a
+    // count, and neither may be allowed to satisfy the modulo below — which `0`
+    // otherwise would, locking an address on a failure nobody counted.
+    if (failures === null || failures <= 0 || failures % AUTH_POLICY.loginFailureThreshold !== 0) {
+      return;
+    }
+
+    await this.redis.run('login lockout set', async (client) => {
+      await client.set(emailLockKey(tenantId, email), '1', 'PX', AUTH_POLICY.loginLockoutMs);
+    });
+
+    this.logger.warn(
+      `Locked sign-in for an address in tenant ${tenantId} after ` +
+        `${AUTH_POLICY.loginFailureThreshold} failed attempts.`,
+    );
+  }
+
+  /**
    * Adds one entry to this address's window.
    *
    * Only reached for an attempt that got as far as being *rejected on its
@@ -278,6 +413,31 @@ function addressKey(tenantId: string, ipAddress: string): string {
       : ipAddress.toLowerCase();
 
   return `${AUTH_KEY_PREFIX}:authfail:${tenantId}:${label}`;
+}
+
+/**
+ * The two email-scoped keys.
+ *
+ * The address is **always** hashed, never used verbatim the way an IP literal
+ * is. Two reasons, and either alone would be enough: an email address is PII,
+ * and `redis-cli KEYS` is not a place to keep a list of who has an account
+ * here; and it is free text from a request body, so a verbatim key would let a
+ * crafted address inject the `:` separator and reach another key.
+ *
+ * Lower-cased before hashing, because `users.email` is `citext` — `Ada@acme` and
+ * `ada@acme` are one account, and two windows for one account would hand an
+ * attacker twice the allowance for the price of a shift key.
+ */
+function emailFailureKey(tenantId: string, email: string): string {
+  return `${AUTH_KEY_PREFIX}:emailfail:${tenantId}:${emailDigest(email)}`;
+}
+
+function emailLockKey(tenantId: string, email: string): string {
+  return `${AUTH_KEY_PREFIX}:emaillock:${tenantId}:${emailDigest(email)}`;
+}
+
+function emailDigest(email: string): string {
+  return createHash('sha256').update(email.trim().toLowerCase(), 'utf8').digest('hex').slice(0, 32);
 }
 
 /** Never zero: a `Retry-After: 0` invites an immediate retry. */

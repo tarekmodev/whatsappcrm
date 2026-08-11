@@ -10,6 +10,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { SessionRevocationService } from '../rbac/session-revocation.service';
 import { ResetTokenInvalidError, type TokenRejectionReason } from './identity.errors';
+import { LoginThrottleService } from './login-throttle.service';
 import { MAILER, RESET_PASSWORD_LINK_PATH, type MailerPort } from './mailer/mailer.port';
 import { PasswordService } from './password.service';
 import { hashResetToken, issueResetToken } from './reset-token';
@@ -67,6 +68,7 @@ export class PasswordResetService {
     private readonly tenantContext: TenantContextService,
     private readonly audit: AuditService,
     private readonly sessions: SessionRevocationService,
+    private readonly loginThrottle: LoginThrottleService,
   ) {}
 
   /**
@@ -246,6 +248,12 @@ export class PasswordResetService {
     // `sessionCacheTtlMs`. That window is the whole thing a reset exists to
     // close: the person resetting is often not the person holding the others.
     await this.sessions.purgeCacheFor(tenantId, redemption.userId);
+
+    // The Redis half of the lockout clear above. Without it the reset leaves
+    // the address refused for the rest of `loginLockoutMs`, which is the exact
+    // "forgot my password and then locked myself out" dead end the columns are
+    // cleared to avoid.
+    await this.loginThrottle.clearEmailFailures(tenantId, redemption.email);
 
     this.logger.log(`Password reset completed; ${redemption.sessionsRevoked} session(s) revoked.`);
 

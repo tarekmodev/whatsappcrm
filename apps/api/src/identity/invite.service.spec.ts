@@ -14,6 +14,7 @@ import type { TenantPrisma } from '../prisma/prisma.tokens';
 import { hashAuthToken } from './auth-tokens';
 import { InviteNotPendingError, InviteTokenInvalidError } from './identity.errors';
 import { InviteService } from './invite.service';
+import { LoginThrottleService } from './login-throttle.service';
 import { PasswordService } from './password.service';
 import { createSessionToken, hashSessionToken } from './session-token';
 import type { SessionService } from './session.service';
@@ -83,6 +84,8 @@ interface Recorded {
   storedTokenHashes: string[];
   /** Principals published to the session cache, after the accepting transaction committed. */
   published: SessionPrincipal[];
+  /** Addresses whose per-email lockout was cleared as part of the clean start. */
+  clearedEmailLocks: string[];
 }
 
 function livePreview(overrides: Partial<LookupRow> = {}): LookupRow {
@@ -127,6 +130,7 @@ function buildService(state: FakeState): {
     teamMemberships: [],
     storedTokenHashes: [],
     published: [],
+    clearedEmailLocks: [],
   };
 
   const upsertRow = {
@@ -260,6 +264,17 @@ function buildService(state: FakeState): {
     },
   } as unknown as SessionService;
 
+  // The per-email lockout counts every address typed at login, including one
+  // with no account yet, so an accepted invite has to clear it alongside the
+  // columns that give a reactivated account its clean start.
+  const loginThrottle = {
+    clearEmailFailures: (_tenantId: string, email: string) => {
+      recorded.clearedEmailLocks.push(email);
+
+      return Promise.resolve();
+    },
+  } as unknown as LoginThrottleService;
+
   const invites = new InviteService(
     prisma,
     {
@@ -272,6 +287,7 @@ function buildService(state: FakeState): {
     new AuditService(tenantContext),
     new PasswordService(),
     sessions,
+    loginThrottle,
   );
 
   return { invites, recorded, tenantContext };
@@ -423,6 +439,17 @@ describe('accepting an invitation', () => {
     await asVisitor(tenantContext, () => invites.accept(acceptance, origin));
 
     expect(recorded.teamMemberships).toEqual([{ tenantId: TENANT, teamId: TEAM, userId: INVITEE }]);
+  });
+
+  it('clears the per-email lockout, so a guessed-at address can still sign in later', async () => {
+    const { invites, recorded, tenantContext } = buildService(baseState());
+
+    const accepted = await asVisitor(tenantContext, () => invites.accept(acceptance, origin));
+
+    // The lockout counts every address typed at login, including one with no
+    // account yet — so somebody guessing at an invitee's address before they
+    // accept would otherwise lock them out of their own new account.
+    expect(recorded.clearedEmailLocks).toEqual([accepted.principal.email]);
   });
 
   it('issues a session whose token is not in the response body', async () => {

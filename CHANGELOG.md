@@ -14,6 +14,43 @@ change.
 
 ### Security
 
+- **A locked account and an address with no account now answer identically** — the login
+  429 was a per-tenant user-enumeration oracle in the shipped configuration.
+  `LOGIN_IP_THROTTLE_ENABLED` defaults to off, so `AccountLockedError` was the only thing
+  that could produce a 429 on login, and it is reachable only for an `active` account that
+  has a password hash: eleven wrong passwords answered 429 for a real address and 401 for
+  one with no account, which the identical bodies and the dummy verify did nothing about.
+  `LoginThrottleService` gains a third layer keyed by the address that was **typed** —
+  `emailfail:{tenantId}:{sha256(email)}` counting and
+  `emaillock:{tenantId}:{sha256(email)}` locking — reusing `loginFailureThreshold` and
+  `loginLockoutMs` so an unknown address locks on the same attempt, for the same duration,
+  with the same code, body and `Retry-After` as a real one. Checked before the account
+  lookup, so the two cost the same as well. No feature flag: the address comes from the
+  request body rather than from a proxy-derived header, and the only account an attacker
+  can lock with it is one they can already lock durably. Addresses are hashed — an email is
+  PII, and free text from a request body must not reach a Redis key verbatim — and lower-
+  cased first, because `users.email` is `citext` and two windows for one account would
+  double the allowance for the price of a shift key. Both keys are cleared everywhere
+  `failed_login_attempts = 0` is written — a successful sign-in, an admin unlock, a
+  completed password reset, a password change and an accepted invite — since a lockout the
+  admin cleared but a Redis key still enforces is not an unlock, and a reset that still ends
+  at a 429 is not a way back in. It fails open like every other Redis path here, which means
+  the oracle is open again while Redis is unreachable; that is stated in the code, in ADR
+  0005 and here rather than left to be discovered. (TAR-64 review)
+- **A cached session principal is never written before the revocation index names it** —
+  `SessionService.resolve` wrote `sess:{tokenHash}` and then `SADD`ed the hash to the user's
+  index as two independent calls, each swallowing its own failure. `purgeUser` deletes only
+  what `SMEMBERS` returns, so an entry cached while the `SADD` failed was invisible to every
+  revocation path and kept answering for the rest of its 60-second TTL — through a
+  suspension, a logout-everywhere, a password reset or a change. With a 500 ms command
+  timeout and one retry on the auth Redis client, a brief stall between the two calls is a
+  realistic outcome rather than a hypothetical. `SessionCacheService.track` now reports
+  whether the index write landed and issues its two commands in one `MULTI` (an `SADD`
+  whose `PEXPIRE` never ran left the index with no TTL at all), and both writers — login's
+  `publish` and resolution's cache fill — write the principal only when it did. A skipped
+  write costs one Postgres read per request; an un-purgeable entry costs a revocation.
+  (TAR-64 review)
+
 - **The auth pipeline is global, so a new endpoint is closed before anybody thinks about
   it** — `HostTenantGuard`, `PrincipalGuard` and `PermissionGuard` are registered as
   `APP_GUARD` by a new `RequestPipelineModule` and run on every route in the application.

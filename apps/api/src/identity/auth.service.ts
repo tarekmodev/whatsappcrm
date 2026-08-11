@@ -37,13 +37,19 @@ import { SessionService, type IssuedSession } from './session.service';
  * re-opens the enumeration the identical bodies were there to close.
  *
  * A locked account answers 429 rather than a code of its own, because a code
- * only a real account can produce confirms the address exists.
+ * only a real account can produce confirms the address exists. The status alone
+ * is not enough, though: a 429 that *only* a real account can reach is the same
+ * oracle wearing a different hat, which is why the throttle locks the typed
+ * address at the same threshold whether or not it names one. The two cases
+ * differ in nothing a caller can see — not the code, not the body, not the
+ * order of the checks, and not the work done before the answer.
  *
  * ## Brute-force protection lives next door
  *
- * `LoginThrottleService` owns both counters — the durable per-account one and
- * the per-address window in Redis. This service decides *whether* an attempt
- * failed; that one decides what a run of failures costs.
+ * `LoginThrottleService` owns all three counters — the durable per-account one,
+ * the per-email lockout and the per-client-address window in Redis. This
+ * service decides *whether* an attempt failed; that one decides what a run of
+ * failures costs.
  */
 
 /** What the login read needs from `users`, and nothing more. */
@@ -94,9 +100,14 @@ export class AuthService {
   async login(input: LoginInput, context: LoginContext): Promise<LoginResult> {
     const tenantId = this.tenantContext.requireTenantId();
 
-    // Before the lookup and before the hash: an address that has spent its
+    // Both before the lookup and before the hash: an attempt that has spent its
     // allowance costs one Redis round trip, not a query and ~100 ms of argon2id.
+    //
+    // The email check runs for every address, not only the ones with an account
+    // — that is what stops the refusal itself from being the answer to "does
+    // this address exist here".
     await this.throttle.assertAddressWithinLimit(tenantId, context.ipAddress);
+    await this.throttle.assertEmailWithinLimit(tenantId, input.email);
 
     const candidate = await this.findCandidate(input.email);
 
@@ -105,10 +116,16 @@ export class AuthService {
       // than a wrong password. Logged without the address: a log of attempted
       // addresses is PII and a target in its own right.
       await this.passwords.verifyDummy(input.password);
-      // Counted too, with no user to count against. This is the case the
-      // per-address window exists for — spraying leaked pairs at addresses that
-      // have no row here would otherwise be free.
-      await this.throttle.recordFailure({ tenantId, userId: null, ipAddress: context.ipAddress });
+      // Counted too, with no user to count against. This is the case the two
+      // Redis layers exist for — spraying leaked pairs at addresses that have
+      // no row here would otherwise be free, and an address that never locks is
+      // an address an attacker can tell apart from one that does.
+      await this.throttle.recordFailure({
+        tenantId,
+        userId: null,
+        email: input.email,
+        ipAddress: context.ipAddress,
+      });
       this.logger.warn(`Login refused for tenant ${tenantId}: no account able to sign in.`);
       throw new InvalidCredentialsError();
     }
@@ -127,6 +144,7 @@ export class AuthService {
       await this.throttle.recordFailure({
         tenantId,
         userId: candidate.id,
+        email: input.email,
         ipAddress: context.ipAddress,
       });
       throw new InvalidCredentialsError();
@@ -247,6 +265,14 @@ export class AuthService {
     // After the commit: a cached principal for a transaction that rolled back
     // would be a live credential for a session that does not exist.
     await this.sessions.publish(issued, principal);
+
+    // The Redis mirror of `resetLoginState` zeroing the durable counter in the
+    // transaction above. Whoever just proved they hold the password is not the
+    // attacker those failures were accumulating against, and nine left on the
+    // key would lock them out on their next typo. Keyed by the stored address
+    // rather than the typed one — `citext` makes them the same account, and the
+    // key is derived from a lower-cased digest either way.
+    await this.throttle.clearEmailFailures(tenantId, candidate.email);
 
     this.logger.log(`Signed in user ${candidate.id} in tenant ${tenantId}.`);
 
