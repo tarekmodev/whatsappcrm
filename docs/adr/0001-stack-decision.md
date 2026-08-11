@@ -465,7 +465,9 @@ so it is not discovered late.
 - CORS is an explicit allow-list of `WEB_ORIGIN`, with credentials enabled — not `*`.
 - Every response carries `x-request-id`, echoing the caller's if present. That id appears
   in the error envelope, so a user-reported error maps to a log line and an error-tracker
-  event.
+  event. An inbound value is repeated only if it is at most 128 unreserved URL characters;
+  anything else is replaced with a fresh UUID, because the API does not trust the proxy in
+  front of it and an unbounded id would be a caller choosing the platform's log bill.
 
 ## Open questions and risks
 

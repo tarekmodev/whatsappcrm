@@ -4,9 +4,9 @@ import { randomBytes } from 'node:crypto';
  * The id Prisma would have generated, for the writes Prisma cannot express.
  *
  * Every model carries `@default(uuid(7))`, which is a **client-side** default:
- * Postgres 17 has no native `uuidv7()`, so the generated SQL has no column
- * default and anything inserting outside the Prisma client has to supply the id
- * itself (schema conventions, rule 5). `TicketLinker`'s create path is a raw
+ * no Postgres release before 18 has a native `uuidv7()`, so the generated SQL has
+ * no column default and anything inserting outside the Prisma client has to supply
+ * the id itself (schema conventions, rule 5). `TicketLinker`'s create path is a raw
  * `INSERT … ON CONFLICT … DO NOTHING` against a partial index — a statement the
  * client has no way to build — so it is the first production path that needs
  * this.
