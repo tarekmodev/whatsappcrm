@@ -2,10 +2,9 @@ import type { ReactNode } from 'react';
 import { content } from '@/content/en';
 import { verifySession } from '@/lib/session/session';
 import { settingsNavItems } from '@/components/shell/navigation';
-import { NavLinkList } from '@/components/shell/NavLinkList';
 import { PageShell } from '@/components/shell/PageShell';
 import { ForbiddenState } from '@/components/ui/ForbiddenState';
-import styles from './layout.module.css';
+import { Tabs } from '@/components/ui/Tabs';
 
 /**
  * The Settings shell: the sub-navigation, filtered by permission, plus the gate
@@ -30,9 +29,7 @@ export default async function SettingsLayout({ children }: { children: ReactNode
 
   return (
     <PageShell>
-      <nav aria-label={content.nav.settingsLabel} className={styles.subnav}>
-        <NavLinkList items={items} orientation="horizontal" />
-      </nav>
+      <Tabs label={content.nav.settingsLabel} items={items} />
       {children}
     </PageShell>
   );

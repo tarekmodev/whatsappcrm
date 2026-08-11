@@ -6,11 +6,6 @@
   gap: var(--space-2);
 }
 
-.triggerIcon {
-  font-size: var(--font-size-body-lg);
-  line-height: 1;
-}
-
 .scrim {
   position: fixed;
   inset: 0;
@@ -98,7 +93,7 @@
   border-block-start: var(--border-hairline) solid var(--color-border);
 }
 
-/* From the layout breakpoint up, the header shows the nav inline and the drawer
+/* From the layout breakpoint up, the rail carries the navigation and the drawer
    is removed entirely — not merely hidden, so its links leave the tab order. */
 @media (min-width: 48rem) {
   .trigger,

@@ -1,9 +1,9 @@
 'use client';
 
-import Link from 'next/link';
 import { CONVERSATION_STATUSES } from '@whatsappcrm/contracts';
 import { Cluster } from '@/components/layout/Cluster';
 import { Field } from '@/components/ui/Field';
+import { FilterPills } from '@/components/ui/FilterPills';
 import { Select } from '@/components/ui/Select';
 import { useContent } from '@/lib/content';
 import { routes, type ConversationStatusFilter, type InboxScope } from '@/lib/routes';
@@ -48,28 +48,17 @@ export function InboxScopeTabs({
 
   return (
     <Cluster justify="between" align="end" gap="3" className={styles.bar}>
-      {/* A single-scope role gets no tab strip at all rather than one dead tab. */}
-      {availableScopes.length > 1 ? (
-        <nav aria-label={content.inbox.scopeLabel}>
-          <ul className={styles.tabs}>
-            {availableScopes.map((scope) => (
-              <li key={scope}>
-                <Link
-                  href={routes.inbox({
-                    scope,
-                    status: activeStatus,
-                    conversationId: openThread,
-                  })}
-                  className={styles.tab}
-                  aria-current={scope === activeScope ? 'page' : undefined}
-                >
-                  {scopeLabels[scope]}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
-      ) : null}
+      {/* A single-scope role gets no strip at all rather than one dead pill —
+          `FilterPills` drops it, so there is no condition to repeat here. */}
+      <FilterPills
+        label={content.inbox.scopeLabel}
+        items={availableScopes.map((scope) => ({
+          id: scope,
+          label: scopeLabels[scope],
+          href: routes.inbox({ scope, status: activeStatus, conversationId: openThread }),
+          isCurrent: scope === activeScope,
+        }))}
+      />
 
       <div className={styles.status}>
         <Field label={content.inbox.statusLabel} isLabelHidden>

@@ -1,0 +1,30 @@
+.frame {
+  display: grid;
+  /* Mobile first: one column, no rail — the drawer in the top bar is the nav. */
+  grid-template-columns: 1fr;
+  min-block-size: 100dvh;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  /* Without this a wide table inside main stretches the grid column instead of
+     scrolling, and the whole page gains a horizontal scrollbar. */
+  min-inline-size: 0;
+}
+
+.main {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}
+
+@media (min-width: 48rem) {
+  .frame {
+    grid-template-columns: var(--size-rail) 1fr;
+    transition: grid-template-columns var(--duration-medium) var(--easing-standard);
+  }
+
+  .frame[data-rail='collapsed'] {
+    grid-template-columns: var(--size-rail-collapsed) 1fr;
+  }
+}

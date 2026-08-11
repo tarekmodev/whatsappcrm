@@ -1,22 +1,21 @@
-.header {
+.bar {
   position: sticky;
   inset-block-start: 0;
   z-index: var(--z-nav);
-  background: var(--color-surface);
-  border-block-end: var(--border-hairline) solid var(--color-border);
-  padding-block-start: env(safe-area-inset-top);
-}
-
-.inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  min-block-size: var(--space-8);
+  min-block-size: var(--size-bar);
+  padding-inline: clamp(var(--space-4), 4vw, var(--space-6));
   padding-block: var(--space-2);
+  padding-block-start: calc(var(--space-2) + env(safe-area-inset-top));
+  background: var(--color-bar);
+  border-block-end: var(--border-hairline) solid var(--color-bar-border);
 }
 
-.brandGroup {
+.start,
+.end {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -31,10 +30,6 @@
   white-space: nowrap;
 }
 
-.desktopNav {
-  display: none;
-}
-
 .utilities {
   /* Duplicated into the drawer on mobile, where it is the drawer that shows them. */
   display: none;
@@ -43,10 +38,9 @@
 }
 
 @media (min-width: 48rem) {
-  .desktopNav {
-    display: block;
-    flex: 1 1 auto;
-    min-inline-size: 0;
+  .brand {
+    /* The rail carries the wordmark from here up. */
+    display: none;
   }
 
   .utilities {
