@@ -100,6 +100,19 @@ were picked for rather than the other way round:
 | `slate-300` on `navy-900` (rail label)            | 10.1:1 | 4.5   |
 | `slate-400` on `navy-900` (rail muted text)       | 5.86:1 | 4.5   |
 
+A focus indicator is measured against the colour beside it, and its floor is 3:1
+(WCAG 2.2 SC 1.4.11) rather than 4.5:1. The rail is the one region where the global ring
+is not the answer — see below — so its ring is measured against all three of the
+backgrounds it can land on:
+
+| Pair                                                    | Ratio  | Floor |
+| ------------------------------------------------------- | ------ | ----- |
+| `green-300` on `navy-900` (rail ring, light)            | 8.18:1 | 3     |
+| `green-300` on `navy-800` (on a hovered entry, light)   | 6.97:1 | 3     |
+| `green-300` on `navy-700` (on the current entry, light) | 5.03:1 | 3     |
+| `green-300` on `slate-950` (rail ring, dark)            | 11.0:1 | 3     |
+| `green-300` on `slate-700` (on the current entry, dark) | 5.64:1 | 3     |
+
 Re-measure before changing any of them. `--color-on-surface-subtle` is around 2.6:1 and
 is decoration only — never put text on it.
 
@@ -125,6 +138,18 @@ retuning body text must not move the rail.
 
 Dark theme drops the navy for the neutral scale: navy against a near-black canvas reads
 as a colour cast rather than as a distinct region.
+
+Two consequences of the rail staying dark while the theme flips around it:
+
+- **It has its own focus ring**, `--color-focus-ring-on-rail`, applied once in
+  `AppSidebar.module.css`. The global `--color-focus-ring` flips with the theme, so the
+  light-theme ring landed on navy at 2.80:1 and on the current entry at 1.72:1 — below
+  SC 1.4.11's 3:1. This is the only override of the app's one focus style, and a control
+  added to the rail later inherits it without knowing that.
+- **`--color-on-rail-muted` is the ruled answer for secondary text on the rail** — a
+  section heading, a count beside a label. Nothing reads it yet. It is declared and
+  measured so the first control that needs it inherits an answer instead of choosing a
+  grey and hoping.
 
 ## Typography
 

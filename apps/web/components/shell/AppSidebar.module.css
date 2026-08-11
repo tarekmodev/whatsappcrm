@@ -4,6 +4,28 @@
   display: none;
 }
 
+/*
+ * The one place the app's global focus ring is overridden, and the reason is
+ * the rail's whole premise: it is dark in both themes while the ring token
+ * flips with the theme, so the light-theme ring landed on navy below the 3:1
+ * WCAG 2.2 SC 1.4.11 asks of a focus indicator. Outside the media query on
+ * purpose — a focus style must not depend on a viewport width.
+ */
+.rail :focus-visible {
+  outline-color: var(--color-focus-ring-on-rail);
+}
+
+/*
+ * Restated, because the rule above outranks `base.css`'s forced-colours
+ * override on specificity and would otherwise reintroduce our colour where the
+ * system's must win.
+ */
+@media (forced-colors: active) {
+  .rail :focus-visible {
+    outline-color: Highlight;
+  }
+}
+
 @media (min-width: 48rem) {
   .rail {
     display: flex;

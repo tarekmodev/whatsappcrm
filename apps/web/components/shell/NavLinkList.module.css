@@ -1,24 +1,17 @@
 .list {
   display: flex;
+  flex-direction: column;
   gap: var(--space-1);
   padding: 0;
   margin: 0;
   list-style: none;
 }
 
-.list[data-orientation='horizontal'] {
-  flex-direction: row;
-  flex-wrap: wrap;
-}
-
-.list[data-orientation='vertical'] {
-  flex-direction: column;
-}
-
 .link {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  inline-size: 100%;
   min-block-size: var(--size-touch-target);
   padding-inline: var(--space-3);
   border-radius: var(--radius-md);
@@ -55,10 +48,6 @@
   border-radius: var(--radius-pill);
 }
 
-.list[data-orientation='vertical'] .link {
-  inline-size: 100%;
-}
-
 /* --- Rail ----------------------------------------------------------------- */
 /*
  * The rail is a dark region in both themes, so its entries read the `rail` role
@@ -93,6 +82,12 @@
 .list[data-appearance='rail'][data-collapsed='true'] .link {
   justify-content: center;
   padding-inline: var(--space-2);
+  /*
+   * The marker's transparent border survives the shorthand above, so without
+   * this the content box is a marker narrower on the inline start and the icon
+   * centres off by half of it.
+   */
+  padding-inline-start: calc(var(--space-2) - var(--size-marker));
 }
 
 /*

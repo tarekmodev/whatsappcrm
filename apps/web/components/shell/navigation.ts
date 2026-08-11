@@ -5,9 +5,9 @@ import type { IconName } from '@/components/ui/Icon';
 import type { PermissionChecker } from '@/lib/session/permissions';
 
 /**
- * The single navigation data source. Desktop nav, mobile drawer and the settings
- * sub-nav all render from this — duplicating the markup for mobile is what makes
- * the two drift.
+ * The single navigation data source. The rail, the mobile drawer and the
+ * settings tabs all render from this — duplicating the markup for mobile is what
+ * makes the two drift.
  *
  * `requiresAny` is the whole of TAR-22's third acceptance criterion in the UI: an
  * entry is rendered only when the principal holds one of its permissions, so a

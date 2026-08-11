@@ -12,14 +12,14 @@ import styles from './NavLinkList.module.css';
  * Renders a list of nav links with the current one marked. Usage:
  * `<NavLinkList items={items} appearance="rail" isCollapsed={false} />`.
  *
- * Shared by the rail, the mobile drawer and the settings sub-navigation, so the
- * three cannot disagree about which entry is current. `appearance` changes how
- * the entries are painted, never what they are — there is one nav data source
- * and one piece of markup for it.
+ * Shared by the rail and the mobile drawer, so the two cannot disagree about
+ * which entry is current. `appearance` changes how the entries are painted,
+ * never what they are — there is one nav data source and one piece of markup
+ * for it.
+ *
+ * The list is always a column. A row of nav links used to be the desktop
+ * header; the rail replaced it, and a horizontal tab strip is `Tabs`.
  */
-
-export const NAV_ORIENTATIONS = ['horizontal', 'vertical'] as const;
-export type NavOrientation = (typeof NAV_ORIENTATIONS)[number];
 
 export const NAV_APPEARANCES = ['bar', 'rail'] as const;
 /** `bar` sits on a surface; `rail` sits on the dark navigation rail. */
@@ -27,7 +27,6 @@ export type NavAppearance = (typeof NAV_APPEARANCES)[number];
 
 export interface NavLinkListProps {
   items: readonly NavItem[];
-  orientation?: NavOrientation;
   appearance?: NavAppearance;
   /**
    * Rail only: hides the labels and leaves the icons. The text stays in the DOM
@@ -39,7 +38,6 @@ export interface NavLinkListProps {
 
 export function NavLinkList({
   items,
-  orientation = 'horizontal',
   appearance = 'bar',
   isCollapsed = false,
   onNavigate,
@@ -49,7 +47,6 @@ export function NavLinkList({
   return (
     <ul
       className={styles.list}
-      data-orientation={orientation}
       data-appearance={appearance}
       data-collapsed={isCollapsed ? 'true' : undefined}
     >

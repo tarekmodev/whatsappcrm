@@ -64,9 +64,21 @@
   --color-rail-border: var(--palette-navy-800);
   --color-on-rail: var(--palette-slate-300);
   --color-on-rail-strong: var(--palette-white);
+  /* The ruled answer for secondary text on the rail — a section heading, a
+     count beside a label. Nothing needs it yet; it is measured here so the
+     first control that does inherits it rather than picking its own grey. */
   --color-on-rail-muted: var(--palette-slate-400);
   /* The marker beside a current entry, so "current" is never colour alone. */
   --color-rail-marker: var(--palette-green-300);
+  /*
+   * The rail needs its own focus ring. The global one is `--color-focus-ring`,
+   * which flips with the theme — and the rail does not, so in the light theme
+   * the ordinary ring lands on navy at 2.80:1 and on the current entry at
+   * 1.72:1, under the 3:1 that WCAG 2.2 SC 1.4.11 requires of a focus
+   * indicator. This clears it against all three rail backgrounds in both
+   * themes; see 0001's contrast table.
+   */
+  --color-focus-ring-on-rail: var(--palette-green-300);
 
   --color-bar: var(--palette-white);
   --color-bar-border: var(--palette-slate-200);
@@ -127,6 +139,9 @@
   --color-on-rail-strong: var(--palette-slate-100);
   --color-on-rail-muted: var(--palette-slate-400);
   --color-rail-marker: var(--palette-green-300);
+  /* Already clear against the neutral rail; declared for both themes so the
+     role exists wherever the rail does. */
+  --color-focus-ring-on-rail: var(--palette-green-300);
 
   --color-bar: var(--palette-slate-900);
   --color-bar-border: var(--palette-slate-700);

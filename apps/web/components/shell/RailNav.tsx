@@ -14,7 +14,5 @@ import { useRail } from './AppShell';
 export function RailNav({ items }: { items: readonly NavItem[] }) {
   const { isCollapsed } = useRail();
 
-  return (
-    <NavLinkList items={items} orientation="vertical" appearance="rail" isCollapsed={isCollapsed} />
-  );
+  return <NavLinkList items={items} appearance="rail" isCollapsed={isCollapsed} />;
 }
