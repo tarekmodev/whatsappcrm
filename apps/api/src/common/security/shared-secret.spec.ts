@@ -16,6 +16,15 @@ describe('matchesSharedSecret', () => {
     expect(matchesSharedSecret(presented, SECRET)).toBe(false);
   });
 
+  it.each([
+    ['an empty presented secret', ''],
+    ['a non-empty one', 'anything'],
+  ])('refuses %s when no secret is configured, rather than matching it', (_label, presented) => {
+    // A primitive that answers "yes" to two empty strings puts the burden on
+    // every future caller to have read the docstring.
+    expect(matchesSharedSecret(presented, '')).toBe(false);
+  });
+
   it('does not throw on a length mismatch, which would leak the expected length', () => {
     // The reason both sides are hashed first: `timingSafeEqual` throws when the
     // buffers differ in length, and that error is observable.

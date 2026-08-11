@@ -136,9 +136,11 @@ deployed environment means every server-rendered page fails to reach the API.
 without it** (TAR-148). Render routes by `Host` at its edge and tenant domains are
 attached to the web service, so inside the API the `Host` header is always the
 API's own host. The web tier therefore forwards the host it was reached at as
-`x-forwarded-host` and proves it is the web tier with this secret as
-`x-edge-auth`; `HostTenantGuard` reads the forwarded host only behind a matching
-secret, and otherwise falls back to `Host` exactly as it always did.
+`x-edge-host` and proves it is the web tier with this secret as `x-edge-auth`;
+`HostTenantGuard` reads the forwarded host only behind a matching secret, and
+otherwise falls back to `Host` exactly as it always did. Both header names are
+private deliberately — the standard `x-forwarded-host` is never read, because the
+web-to-API hop is public and every proxy on it may rewrite `x-forwarded-*`.
 
 1. `openssl rand -hex 32`, once per environment. Never copied between them.
 2. Put the same value in **two** prompts: `TRUSTED_PROXY_SECRET` in
@@ -148,9 +150,17 @@ secret, and otherwise falls back to `Host` exactly as it always did.
 
 **If the two disagree**, every tenant route in that environment answers `404`
 `tenant_not_found` — uniformly, which reads exactly like an unknown domain rather
-than like a misconfiguration. Two things catch it: one line at API boot
-(`Forwarded-host tenant resolution is enabled|disabled`, the flag and never the
-value), and a smoke request against a real tenant host after the deploy.
+than like a misconfiguration. Three things catch it:
+
+- `tenancy.edge_auth_mismatch` at `warn`, emitted the first time a caller presents
+  an `x-edge-auth` matching neither secret and then at most once a minute. **This
+  is the line to alert on** — a mismatch after a rotation is its most likely
+  cause, and it names no value.
+- One line at API boot: `Forwarded-host tenant resolution is enabled (N
+secret(s) accepted)` or `disabled`. Note that a mismatch still reads `enabled`,
+  so on its own this line confirms the API has a secret, not that it is the right
+  one. `2 secret(s) accepted` means a rotation was never finished.
+- A smoke request against a real tenant host after the deploy.
 
 **To rotate**: generate the new value; on the API set `TRUSTED_PROXY_SECRET` to it
 and `TRUSTED_PROXY_SECRET_PREVIOUS` to the old one and redeploy, so both are

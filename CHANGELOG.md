@@ -70,18 +70,23 @@ change.
   inside the API `request.hostname` is always the API's own host and `HostTenantGuard`
   resolved no tenant at all in any deployed environment, on the browser path through the
   Next.js rewrite as much as on the server-rendered one. The web tier now forwards the host
-  it was reached at as `x-forwarded-host`, and `HostTenantGuard` reads it **only** when
+  it was reached at as `x-edge-host`, and `HostTenantGuard` reads it **only** when
   `x-edge-auth` matches `TRUSTED_PROXY_SECRET` (or `TRUSTED_PROXY_SECRET_PREVIOUS`, so the
   secret rotates without a synchronised two-service deploy) — the same fail-closed,
-  timing-safe comparison `PlatformAdminGuard` already used, now shared by both. Without a
-  valid secret the header is not read at all and the fallback is `Host`, never the value
-  the caller supplied; a multi-valued `x-forwarded-host` is refused outright rather than
+  timing-safe comparison `PlatformAdminGuard` already used, now shared by both. Both header
+  names are private: the standard `x-forwarded-host` is never read, because the web-to-API
+  hop is a public one and every proxy on it is entitled to rewrite `x-forwarded-*`. Without
+  a valid secret the header is not read at all and the fallback is `Host`, never the value
+  the caller supplied; a multi-valued `x-edge-host` is refused outright rather than
   resolved to its leftmost element. Express `trust proxy` stays off, deliberately — the
   gate is explicit code, not a framework-wide flag that would honour the header ungated.
   The API refuses to **boot** under `NODE_ENV=production` without the secret, because an
-  API that cannot resolve a tenant serves nothing, and it logs at boot whether forwarded-host
-  trust is on (the flag, never the value). Pairs with the web half; both services need the
-  same value, and `render.yaml` now carries it — along with `API_BASE_URL`, which was
+  API that cannot resolve a tenant serves nothing; it logs at boot whether forwarded-host
+  trust is on and how many secrets it accepts (so an unfinished rotation is visible), and
+  logs `tenancy.edge_auth_mismatch` at `warn`, once a minute at most, when a caller
+  presents a secret matching neither — the failure a rotation mismatch produces, which is
+  otherwise a silent full-environment outage. Pairs with the web half; both services need
+  the same value, and `render.yaml` now carries it — along with `API_BASE_URL`, which was
   declared nowhere and left the rewrite destination falling back to `localhost`. (TAR-148)
 
 - **The auth pipeline is global, so a new endpoint is closed before anybody thinks about

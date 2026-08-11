@@ -96,15 +96,19 @@ const envShape = z.object({
   // Render routes by `Host` at its edge and tenant domains are attached to the
   // *web* service, so inside the API `request.hostname` is always the API's own
   // host — on the browser path through the Next.js rewrite as much as on the SSR
-  // path. `HostTenantGuard` therefore reads the host the web tier forwards, but
-  // only from a caller that can prove it *is* the web tier.
+  // path. `HostTenantGuard` therefore reads the host the web tier forwards in
+  // `x-edge-host`, but only from a caller that can prove it *is* the web tier.
   // ---------------------------------------------------------------------------
 
   /**
    * The secret the web tier presents as `x-edge-auth`, which is what makes its
-   * `x-forwarded-host` worth reading. Absent means the header pair is ignored
+   * `x-edge-host` worth reading. Absent means the header pair is ignored
    * entirely and the tenant is resolved from `Host`, exactly as before — the
    * fallback is never the value the caller supplied.
+   *
+   * Both headers are private names. The standard `x-forwarded-host` is not read
+   * at all: the hop between the two services is a public one, and a payload
+   * every proxy on it is entitled to rewrite is not a payload.
    *
    * Optional here so a local machine and the test suite keep working with no
    * secret at all, but the refinement at the bottom of this file refuses to

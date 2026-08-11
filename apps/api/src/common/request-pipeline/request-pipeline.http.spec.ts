@@ -391,7 +391,7 @@ describe('the globally installed request pipeline', () => {
     it('resolves the tenant when the caller presents the shared secret', async () => {
       const response = await call(API_HOST)
         .set('x-edge-auth', EDGE_SECRET)
-        .set('x-forwarded-host', HOST_A)
+        .set('x-edge-host', HOST_A)
         .get('/api/v1/probe/guarded');
 
       // Tenant A, from a request whose own `Host` belongs to no tenant at all.
@@ -405,7 +405,7 @@ describe('the globally installed request pipeline', () => {
       // resolved B from the forwarded value.
       const response = await call(API_HOST)
         .set('x-edge-auth', EDGE_SECRET)
-        .set('x-forwarded-host', HOST_B)
+        .set('x-edge-host', HOST_B)
         .get('/api/v1/probe/guarded');
 
       expect(response.status).toBe(401);
@@ -415,17 +415,17 @@ describe('the globally installed request pipeline', () => {
     it('still strips the port and lowercases what it was given', async () => {
       const response = await call(API_HOST)
         .set('x-edge-auth', EDGE_SECRET)
-        .set('x-forwarded-host', 'A.App.LocalHost:3000')
+        .set('x-edge-host', 'A.App.LocalHost:3000')
         .get('/api/v1/probe/guarded');
 
       expect(response.status).toBe(200);
       expect(response.body).toMatchObject({ tenantId: TENANT_A });
     });
 
-    it('accepts the previous secret too, so rotating it is two ordinary deploys', async () => {
+    it('accepts the previous secret too, so rotating it is three ordinary deploys', async () => {
       const response = await call(API_HOST)
         .set('x-edge-auth', PREVIOUS_EDGE_SECRET)
-        .set('x-forwarded-host', HOST_A)
+        .set('x-edge-host', HOST_A)
         .get('/api/v1/probe/guarded');
 
       expect(response.status).toBe(200);
@@ -439,7 +439,7 @@ describe('the globally installed request pipeline', () => {
     ])('is ignored outright when the caller presents %s', async (_label, headers) => {
       const response = await call(API_HOST)
         .set(headers)
-        .set('x-forwarded-host', HOST_A)
+        .set('x-edge-host', HOST_A)
         .get('/api/v1/probe/guarded');
 
       // Falls back to `Host` — never to the value the caller chose. A tenant that
@@ -449,12 +449,61 @@ describe('the globally installed request pipeline', () => {
       expect(errorCodeOf(response)).toBe('tenant_not_found');
     });
 
+    it('says so at warn when the secret matches neither, once per window', async () => {
+      // The likely cause is not an attacker: it is the two services holding
+      // different values after a rotation, and in that state the boot line still
+      // reads `enabled` while every tenant route 404s. `Date.now` is pinned so
+      // the assertion does not depend on which test spent the throttle window.
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const now = jest.spyOn(Date, 'now').mockReturnValue(2_000_000_000_000);
+
+      try {
+        const forged = (): Promise<request.Response> =>
+          call(API_HOST)
+            .set('x-edge-auth', 'f'.repeat(64))
+            .set('x-edge-host', HOST_A)
+            .get('/api/v1/probe/guarded');
+
+        await forged();
+        await forged();
+
+        const refusals = warn.mock.calls
+          .map((call) => String(call[0]))
+          .filter((line) => line.includes('tenancy.edge_auth_mismatch'));
+
+        // Two refusals, one line: the path is reachable unauthenticated, and a
+        // log an anonymous caller can fill is its own availability problem.
+        expect(refusals).toHaveLength(1);
+        // The fact, never the value — neither the presented one nor ours.
+        expect(refusals[0]).not.toContain('f'.repeat(64));
+        expect(refusals[0]).not.toContain(EDGE_SECRET);
+        expect(refusals[0]).not.toContain(PREVIOUS_EDGE_SECRET);
+      } finally {
+        now.mockRestore();
+        warn.mockRestore();
+      }
+    });
+
     it('is refused when it carries more than one value, rather than taking the first', async () => {
       // Leftmost-wins is how forwarded-header splicing gets in: a caller upstream
       // of the edge appends its own value and the API reads the wrong half.
       const response = await call(API_HOST)
         .set('x-edge-auth', EDGE_SECRET)
-        .set('x-forwarded-host', `${HOST_A}, ${HOST_B}`)
+        .set('x-edge-host', `${HOST_A}, ${HOST_B}`)
+        .get('/api/v1/probe/guarded');
+
+      expect(response.status).toBe(404);
+      expect(errorCodeOf(response)).toBe('tenant_not_found');
+    });
+
+    it('is not read from x-forwarded-host, whatever the caller presents', async () => {
+      // The pair is two private names on purpose. `x-forwarded-host` is a
+      // standard header every proxy between the web tier and the API is entitled
+      // to set or overwrite, and the hop between them is a public one — so it is
+      // not read here at all, gated or otherwise.
+      const response = await call(API_HOST)
+        .set('x-edge-auth', EDGE_SECRET)
+        .set('x-forwarded-host', HOST_A)
         .get('/api/v1/probe/guarded');
 
       expect(response.status).toBe(404);

@@ -16,11 +16,17 @@ import { createHash, timingSafeEqual } from 'node:crypto';
  * password hash: these secrets are high-entropy and machine-generated, so there
  * is nothing for a work factor to protect against.
  *
- * The caller is responsible for having a secret at all. An unconfigured secret
- * must fail closed at the call site, never reach this function as an empty
- * string that an empty header would then match.
+ * An unconfigured secret answers `false` whatever was presented, so the
+ * primitive owns its own precondition rather than leaving every future caller to
+ * have read this paragraph. Both current call sites also refuse an unconfigured
+ * secret before getting here, and that stays the clearer place to do it — this
+ * is the backstop, not the check.
  */
 export function matchesSharedSecret(presented: string, expected: string): boolean {
+  if (expected === '') {
+    return false;
+  }
+
   return timingSafeEqual(sha256(presented), sha256(expected));
 }
 

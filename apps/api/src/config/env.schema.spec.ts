@@ -106,7 +106,7 @@ describe('environment validation', () => {
       );
     });
 
-    it('accepts the previous secret alongside the current one, so rotation is two deploys', () => {
+    it('accepts the previous secret alongside the current one, so rotation is three deploys', () => {
       const env = validateEnv({
         ...REQUIRED,
         NODE_ENV: 'production',
