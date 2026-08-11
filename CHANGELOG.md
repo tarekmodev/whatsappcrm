@@ -304,8 +304,12 @@ change.
   console, in every environment. `lib/api/tenant-host.ts` forwards the incoming host as
   `x-forwarded-host`, and it is applied in `apiRequest` rather than per resource module, so
   a new call site cannot forget it — including the unauthenticated ones, since sign-in and
-  password reset are tenant-scoped too. A request that arrives with no host now fails
-  loudly there instead of as an unrecognisable 404 three layers down. `x-forwarded-host`
+  password reset are tenant-scoped too. The pair is merged **after** the caller's own
+  headers rather than before, so a call site cannot replace it: every other header there is
+  a default worth overriding, and this one decides which tenant's data comes back. A
+  request that arrives with no host now fails loudly there instead of as an unrecognisable
+  404 three layers down, and one with no secret configured sends neither header rather than
+  a host with nothing to vouch for it. `x-forwarded-host`
   rather than `Host` because `Host` cannot be set on either path, both verified against the
   versions in this repository: Next's rewrite proxy hardcodes `changeOrigin: true` and
   replaces `Host` with the API origin (putting the browser's own host in `x-forwarded-host`,

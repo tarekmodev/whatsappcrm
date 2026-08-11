@@ -51,9 +51,15 @@ function request(
   return next;
 }
 
-/** How Next surfaces a request header the proxy overrode, as `withRequestPath` shows. */
+/**
+ * How Next carries a request header the proxy overrode. Internal: the runtime
+ * consumes these and they never reach the browser, which is what the leak case
+ * below relies on.
+ */
+const MIDDLEWARE_REQUEST_PREFIX = 'x-middleware-request-';
+
 function overriddenRequestHeader(response: Response, name: string): string | null {
-  return response.headers.get(`x-middleware-request-${name}`);
+  return response.headers.get(`${MIDDLEWARE_REQUEST_PREFIX}${name}`);
 }
 
 /** Only the *presence* of a cookie is checked here, so the value is arbitrary. */
@@ -152,6 +158,38 @@ describe('proxy, on the browser path to the API', () => {
 
     expect(response.status).not.toBe(HTTP_TEMPORARY_REDIRECT);
     expect(response.headers.get('location')).toBeNull();
+  });
+
+  /**
+   * The rewrite's `/api/:path*` matches zero segments, so bare `/api` is proxied
+   * too. A prefix test on `/api/` alone would hand it to the guard, which would
+   * answer the 307 this branch exists to prevent.
+   */
+  it('treats bare /api as the API path the rewrite says it is', () => {
+    const response = proxy(request('/api'));
+
+    expect(response.status).not.toBe(HTTP_TEMPORARY_REDIRECT);
+    expect(overriddenRequestHeader(response, TENANT_HOST_HEADER)).toBe(HOST);
+  });
+
+  /**
+   * The one failure here that would be catastrophic rather than merely broken.
+   *
+   * `NextResponse.next({ request: { headers } })` is the right mechanism and Next
+   * consumes the `x-middleware-request-*` carriers before anything reaches the
+   * browser — but that internal spelling is one string away from a real response
+   * header, and nothing else in the suite would notice if a Next-internals change
+   * moved it. This pins the boundary rather than the plumbing.
+   */
+  it('puts the secret in no header the browser could receive', () => {
+    const response = proxy(request('/api/v1/auth/login'));
+
+    const leaked = [...response.headers.entries()].filter(
+      ([name, value]) => value.includes(SECRET) && !name.startsWith(MIDDLEWARE_REQUEST_PREFIX),
+    );
+
+    expect(leaked).toEqual([]);
+    expect(response.headers.get(EDGE_AUTH_HEADER)).toBeNull();
   });
 
   it('strips a forged pair rather than passing it on when no secret is configured', () => {

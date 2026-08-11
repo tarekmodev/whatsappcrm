@@ -52,18 +52,12 @@ export async function tenantRoutingHeaders(): Promise<Record<string, string>> {
     throw new Error('The incoming request carries no Host, so no tenant can be named to the API.');
   }
 
-  return { [TENANT_HOST_HEADER]: host, ...edgeAuthHeader() };
-}
-
-/**
- * Configured everywhere the API is reached over HTTP. Absent, the API falls back
- * to `Host`, resolves nothing and answers `tenant_not_found` on every tenant
- * route — total and loud rather than a silent cross-tenant read, but still an
- * outage, so a deployed environment refuses to serve rather than discover it one
- * request at a time.
- */
-function edgeAuthHeader(): Record<string, string> {
   if (webEnv.trustedProxySecret === null) {
+    // Configured everywhere the API is reached over HTTP. Absent, the API falls
+    // back to `Host`, resolves nothing and answers `tenant_not_found` on every
+    // tenant route — total and loud rather than a silent cross-tenant read, but
+    // still an outage, so a deployed environment refuses to serve rather than
+    // discover it one request at a time.
     if (webEnv.isProduction) {
       throw new Error(
         'TRUSTED_PROXY_SECRET is not configured, so the API cannot be told which tenant ' +
@@ -71,8 +65,15 @@ function edgeAuthHeader(): Record<string, string> {
       );
     }
 
+    // Neither header, rather than a host with nothing to vouch for it. The API
+    // would refuse a host it cannot attribute anyway, and shipping one anyway
+    // only invites a guard that is tempted to trust it. `proxy.ts` drops the
+    // pair for the same reason on the browser path.
     return {};
   }
 
-  return { [EDGE_AUTH_HEADER]: webEnv.trustedProxySecret };
+  return {
+    [TENANT_HOST_HEADER]: host,
+    [EDGE_AUTH_HEADER]: webEnv.trustedProxySecret,
+  };
 }

@@ -34,10 +34,17 @@ export async function apiRequest(request: ApiRequest): Promise<unknown> {
     // ones: sign-in and password reset are unauthenticated *and* tenant-scoped,
     // so they need it too. Here rather than per resource module, so a new call
     // site cannot forget it — the same reason the cookie has one home.
+    //
+    // Last, so it wins. Every other header is a default a caller may replace;
+    // this pair decides which tenant's data comes back, and a call site that
+    // could set it from anything request-derived is the tenant spoof this
+    // whole mechanism exists to prevent. `proxy.ts` takes the same position on
+    // the browser path. A call that genuinely needs to name another tenant
+    // wants an explicit function, not a header it happens to be able to set.
     headers: {
       'content-type': 'application/json',
-      ...(await tenantRoutingHeaders()),
       ...request.headers,
+      ...(await tenantRoutingHeaders()),
     },
     body: request.body === undefined ? undefined : JSON.stringify(request.body),
   });

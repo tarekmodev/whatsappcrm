@@ -81,13 +81,19 @@ function hasSessionCookie(request: NextRequest): boolean {
 }
 
 /**
- * The path `next.config.mjs` rewrites to the API origin. Matched here as a
- * prefix, so it cannot drift from the rewrite's own `/api/:path*`.
+ * What `next.config.mjs` rewrites to the API origin.
+ *
+ * The rewrite's `/api/:path*` matches **zero** segments too, so bare `/api` is
+ * proxied as well — a prefix test on `/api/` alone would miss it and hand that
+ * one request to the guard, which answers a 307 to `/login`, the exact outcome
+ * the early return exists to prevent. Nothing is mounted there today; the point
+ * is that the two must describe the same set.
  */
-const API_PATH_PREFIX = '/api/';
+const API_PATH = '/api';
+const API_PATH_PREFIX = `${API_PATH}/`;
 
 function isApiPath(pathname: string): boolean {
-  return pathname.startsWith(API_PATH_PREFIX);
+  return pathname === API_PATH || pathname.startsWith(API_PATH_PREFIX);
 }
 
 /**

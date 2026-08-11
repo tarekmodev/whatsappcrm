@@ -48,17 +48,16 @@ describe('tenantRoutingHeaders', () => {
   });
 
   /**
-   * Local development against a stack that has no secret configured: the host
-   * still goes, unproven, and the API refuses it exactly as it would refuse a
-   * forged one. Sending it is not what makes it trusted.
+   * Local development against a stack with no secret configured. Neither header,
+   * rather than a host with nothing to vouch for it: the API would refuse a host
+   * it cannot attribute anyway, and shipping one regardless only invites a guard
+   * that is tempted to trust it. `proxy.ts` drops the pair for the same reason.
    */
-  it('sends the host without the secret outside production', async () => {
+  it('sends neither header outside production when there is no secret', async () => {
     host.value = 'northwind.app.localhost:3000';
     env.trustedProxySecret = null;
 
-    await expect(tenantRoutingHeaders()).resolves.toEqual({
-      [TENANT_HOST_HEADER]: 'northwind.app.localhost:3000',
-    });
+    await expect(tenantRoutingHeaders()).resolves.toEqual({});
   });
 
   /**

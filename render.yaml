@@ -82,6 +82,21 @@ projects:
               # custom domain once white-labelling lands.
               - key: WEB_ORIGIN
                 sync: false
+              # The other half of the pair the web service holds (TAR-64). The two
+              # are declared together, and must be given the same value, because
+              # they only mean anything together: the web tier signs a forwarded
+              # tenant host with this, and `HostTenantGuard` honours the host only
+              # when it matches. Declared here before TAR-148 reads it, so landing
+              # the guard cannot deploy a web tier signing with a secret this
+              # service has no variable to hold — which would fall back to `Host`
+              # and answer `tenant_not_found` on every tenant route, everywhere.
+              # Generate per environment with `openssl rand -hex 32`.
+              #
+              # TAR-148 adds TRUSTED_PROXY_SECRET_PREVIOUS alongside it, accepted
+              # as well as the current value so the secret can be rotated without
+              # a synchronised two-service deploy. Rotate API first, then web.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
               - fromGroup: whatsappcrm-secrets-dev
 
           - type: web
@@ -225,6 +240,10 @@ projects:
                 sync: false
               - key: WEB_ORIGIN
                 sync: false
+              # Same value as this environment's web service — see the development
+              # environment above for why the two are declared together.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
               - fromGroup: whatsappcrm-secrets-staging
 
           - type: web
@@ -343,6 +362,10 @@ projects:
               - key: SYSTEM_DATABASE_URL
                 sync: false
               - key: WEB_ORIGIN
+                sync: false
+              # Same value as this environment's web service — see the development
+              # environment above for why the two are declared together.
+              - key: TRUSTED_PROXY_SECRET
                 sync: false
               - fromGroup: whatsappcrm-secrets-prod
 
