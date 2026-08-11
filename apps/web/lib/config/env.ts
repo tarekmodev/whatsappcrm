@@ -35,6 +35,22 @@ export interface WebEnv {
    * demonstrated. Refused in production — see `lib/session/session.ts`.
    */
   readonly enableRoleStub: boolean;
+  /**
+   * The shared secret that lets the API believe the tenant host this tier
+   * forwards. `HostTenantGuard` resolves the tenant from `x-forwarded-host` only
+   * when the request also presents this value in `x-edge-auth`, and otherwise
+   * falls back to the host the request actually arrived on — so a caller that
+   * forges the header without the secret names no tenant at all (TAR-64).
+   *
+   * `null` when unset, which is the local-development case: with no secret the
+   * API reads `Host` exactly as it does today, and nothing changes.
+   *
+   * ⚠️ Server-only, and deliberately **without** the `NEXT_PUBLIC_` prefix. Next
+   * inlines only that prefix into the browser bundle, so this value is never
+   * compiled into client code; in the browser the read below is `undefined` and
+   * this is `null`. Adding the prefix would hand the secret to every visitor.
+   */
+  readonly trustedProxySecret: string | null;
   readonly isProduction: boolean;
 }
 
@@ -70,6 +86,18 @@ function readRequired(name: string, rawValue: string | undefined, fallback: stri
   return value;
 }
 
+/**
+ * An optional secret. Absent and empty are one answer — `.env.example` documents
+ * a blank value as "not set", and a secret that is the empty string is not a
+ * secret. The name is never echoed with the value for the reason `readFlag`
+ * gives: a thrown message ends up in a log.
+ */
+function readOptionalSecret(rawValue: string | undefined): string | null {
+  const value = (rawValue ?? '').trim();
+
+  return value.length === 0 ? null : value;
+}
+
 function readWebEnv(): WebEnv {
   const isProduction = process.env.NODE_ENV === 'production';
 
@@ -91,6 +119,7 @@ function readWebEnv(): WebEnv {
       process.env.NEXT_PUBLIC_ENABLE_ROLE_STUB,
       false,
     ),
+    trustedProxySecret: readOptionalSecret(process.env.TRUSTED_PROXY_SECRET),
     isProduction,
   };
 }

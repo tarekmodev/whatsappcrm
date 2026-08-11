@@ -2,11 +2,26 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { SESSION_COOKIE_NAME, SESSION_COOKIE_NAME_SECURE } from '@whatsappcrm/contracts';
 import { webEnv } from '@/lib/config/env';
 import { routes } from '@/lib/routes';
+import {
+  EDGE_AUTH_HEADER,
+  FORWARDED_HOST_HEADER,
+  isApiProxyPath,
+  tenantForwardingHeaders,
+} from '@/lib/api/tenant-forwarding';
 import { REQUEST_PATH_HEADER, isPublicPath } from '@/lib/session/session-paths';
 
 /**
- * The route guard's first half: an **optimistic** check that turns a visitor with
- * no session cookie away from a protected route before the page renders at all.
+ * Two jobs, both of which have to happen before a request is routed and neither
+ * of which any other layer can do.
+ *
+ * The first is the browser's path to the API: `/api/*` is rewritten straight to
+ * the API origin by `next.config.mjs`, and `rewrites()` cannot add a request
+ * header — so the headers that name the tenant are added here, or nowhere. See
+ * `lib/api/tenant-forwarding.ts`.
+ *
+ * The second is the route guard's first half: an **optimistic** check that turns
+ * a visitor with no session cookie away from a protected route before the page
+ * renders at all.
  *
  * Two halves, on purpose (Next's own authentication guidance, and TAR-53's
  * session model):
@@ -31,6 +46,15 @@ import { REQUEST_PATH_HEADER, isPublicPath } from '@/lib/session/session-paths';
  */
 export function proxy(request: NextRequest): NextResponse {
   const { pathname, search } = request.nextUrl;
+
+  // The browser's API path, and the only branch that returns before the session
+  // handling below. Two reasons it has to be first: it is not a page, so the
+  // request-path header means nothing to it; and redirecting an XHR to an HTML
+  // sign-in page would turn the API's clean 401 into a parse failure in the
+  // caller — the exclusion the matcher used to express, now expressed here.
+  if (isApiProxyPath(pathname)) {
+    return NextResponse.next({ request: { headers: withTenantForwarding(request.headers) } });
+  }
 
   // Published to the server render on every matched request, protected or not:
   // a page that resolves a session needs to know where the user was going, and
@@ -62,6 +86,37 @@ function hasSessionCookie(request: NextRequest): boolean {
   );
 }
 
+/**
+ * The tenant headers for a browser call, on their way to the rewrite.
+ *
+ * Both are cleared before either is written. A browser can send whatever headers
+ * it likes, and `x-edge-auth` is the one credential that makes `x-forwarded-host`
+ * believable — so a value that arrived from outside must never survive to the
+ * API, whether or not this tier has a secret of its own to replace it with. The
+ * host likewise comes from the connection, never from what the caller claimed.
+ */
+function withTenantForwarding(incoming: Headers): Headers {
+  const headers = new Headers(incoming);
+
+  headers.delete(FORWARDED_HOST_HEADER);
+  headers.delete(EDGE_AUTH_HEADER);
+
+  const host = incoming.get('host');
+
+  if (host === null || host === '') {
+    // Nothing to name the tenant with. Left to the API, which answers
+    // `tenant_not_found` — the same outcome as before this branch existed, and
+    // not one worth failing a request the guard would refuse anyway.
+    return headers;
+  }
+
+  for (const [name, value] of Object.entries(tenantForwardingHeaders(host))) {
+    headers.set(name, value);
+  }
+
+  return headers;
+}
+
 function withRequestPath(incoming: Headers, path: string): Headers {
   const headers = new Headers(incoming);
 
@@ -74,11 +129,16 @@ function withRequestPath(incoming: Headers, path: string): Headers {
 
 export const config = {
   /**
-   * Everything except the API proxy path, Next's own asset routes and any request
-   * for a file. `/api/*` is excluded because `next.config.mjs` rewrites it
-   * straight to the API, which authenticates the request itself and answers 401 —
-   * redirecting an XHR to an HTML sign-in page would turn a clean error into a
-   * parse failure in the caller.
+   * Next reads this statically at build time, so every entry has to be a literal
+   * — `API_PROXY_PATH_PREFIX` cannot be interpolated in, and the two must be
+   * changed together.
+   *
+   *   1. The API proxy path. Matched so the tenant headers can be added to it;
+   *      the redirect branch still never runs for it, so an XHR still never
+   *      receives an HTML sign-in page.
+   *   2. Everything else except Next's own asset routes and any request for a
+   *      file. `api/` stays excluded here so the two entries cannot both match
+   *      one request.
    */
-  matcher: ['/((?!api/|_next/static|_next/image|favicon.ico|.*\\.[^/]+$).*)'],
+  matcher: ['/api/:path*', '/((?!api/|_next/static|_next/image|favicon.ico|.*\\.[^/]+$).*)'],
 };

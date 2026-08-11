@@ -302,6 +302,30 @@ change.
   — whether it may trust one, and on what evidence, is an `apps/api` decision open on
   TAR-64. ADR 0005's sequence diagram, which assumed `Host` was preserved, carries the
   correction.
+- **The forwarded tenant host now carries the credential that makes it believable, on both
+  request paths** (TAR-149) — a forwarded host on its own buys nothing, because a header is
+  something anything that can reach the API may write. Both paths out of the console now
+  send `x-edge-auth` alongside `x-forwarded-host`, set to the server-only
+  `TRUSTED_PROXY_SECRET`; `HostTenantGuard` resolves the tenant from the forwarded host only
+  when the two match, and otherwise reads `Host` exactly as it does today rather than the
+  attacker-chosen value (the decision, its rejected alternatives and the residual risk are
+  recorded on ADR 0005). The pair is built in one place, `lib/api/tenant-forwarding.ts`, so
+  the two paths cannot drift into sending different things. **The browser path was the wider
+  half of the problem**: it goes through the `/api/*` rewrite, `rewrites()` cannot add a
+  request header, and it does not use `apiRequest` at all — so `proxy.ts` now matches
+  `/api/*` and injects the pair, clearing any inbound `x-edge-auth` and `x-forwarded-host`
+  first so a browser cannot supply its own. It returns before the redirect branch, so an XHR
+  still never receives an HTML sign-in page. That the headers survive Next's rewrite to an
+  **external** origin is a claim about Next rather than about this repository, so it is
+  asserted end to end against a real `next build` and `next start` in `proxy.int-test.ts`
+  (`pnpm --filter @whatsappcrm/web test:int`, wired into CI) rather than assumed — verified,
+  along with the fact that the secret is read at run time and not frozen into the build, so
+  rotating it is a restart rather than a redeploy. `TRUSTED_PROXY_SECRET` is declared for
+  the web service in all three environments, deliberately without a `NEXT_PUBLIC_` prefix
+  and deliberately not via `fromGroup`, so the web tier receives neither a browser-visible
+  secret nor the database passwords that group holds. Pairs with the API-side read: both
+  must land, with the same value provisioned on both services, before tenant resolution
+  works.
 - **`API_BASE_URL` is declared for the web service in every environment** (TAR-64) — it was
   missing from all three, and `next.config.mjs` reads it at _build_ time and freezes the
   `/api/*` rewrite destination into `.next/routes-manifest.json`. Every deployed build

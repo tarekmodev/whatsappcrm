@@ -137,7 +137,7 @@ sequenceDiagram
   participant P as Postgres
 
   B->>W: POST /api/v1/auth/login
-  W->>A: same-origin proxy, tenant host in X-Forwarded-Host (see note)
+  W->>A: same-origin proxy, X-Forwarded-Host + X-Edge-Auth (see note)
   A->>P: host → tenant (SystemPrisma), setTenant(tenantId, null)
   A->>P: users.findUnique(tenantId, email)   [TenantPrisma, RLS]
   A->>A: argon2id verify (always, even when no user row)
@@ -169,12 +169,32 @@ sequenceDiagram
 >   server-rendered call cannot set it either.
 >
 > Both paths therefore name the tenant in `x-forwarded-host` — the browser path always did,
-> and `lib/api/tenant-host.ts` makes the server path match. **`HostTenantGuard` still reads
-> `Host` only**, so tenant resolution remains broken until the API is changed; whether it may
-> trust a forwarded host, and on what evidence, is the open decision on TAR-64. Note that
-> preserving `Host` end-to-end is not an option on the current Render topology: the API is a
-> public service whose edge routes by `Host`, so a request carrying a tenant's host would
-> never reach it.
+> and `lib/api/tenant-host.ts` makes the server path match. Note that preserving `Host`
+> end-to-end is not an option on the current Render topology either: the API is a public
+> service whose edge routes by `Host`, so a request carrying a tenant's host would never
+> reach it.
+>
+> **How the API knows to believe it (TAR-64, decided).** A forwarded host is a header, and a
+> header is something anything that can reach the API may write — which is the tenant
+> spoofing `HostTenantGuard`'s own docstring warns about. So the pair, not the host alone, is
+> the contract: `x-forwarded-host` is trusted **only** when `x-edge-auth` matches the API's
+> `TRUSTED_PROXY_SECRET`, compared the same fail-closed, timing-safe way
+> `PlatformAdminGuard` already compares its bearer token. Missing or wrong, the guard falls
+> back to `request.hostname` exactly as before — never to the forwarded value — and a
+> multi-valued `x-forwarded-host` is refused rather than split. Express `trust proxy` stays
+> off: it would honour the forwarded host _ungated_, which is the whole hole.
+>
+> The console sends the pair on both paths (TAR-149): `lib/api/tenant-forwarding.ts` builds
+> it once, `lib/api/http.ts` spreads it onto every server-side call, and `proxy.ts` injects it
+> before the `/api/*` rewrite — clearing any inbound `x-edge-auth` first, so a browser cannot
+> supply its own. `rewrites()` cannot add a request header, which is why the proxy has to.
+> The secret is server-only on the console side and never carries a `NEXT_PUBLIC_` prefix.
+>
+> Residual risk, stated plainly: a leaked secret lets its holder name any **verified** tenant
+> host. On authenticated routes `PrincipalGuard` still answers `tenant_mismatch`, so the
+> secret alone yields no data; on `@Public()` routes — login, password reset, invite lookup —
+> there is no session to cross-check, so a leak does expose those surfaces. That is why the
+> secret is per-environment and rotatable (roll the console first, then the API).
 
 ### Components and responsibilities
 

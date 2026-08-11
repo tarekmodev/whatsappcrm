@@ -111,6 +111,28 @@ projects:
               # `fromService` cannot supply. Server-only — no NEXT_PUBLIC_ prefix.
               - key: API_BASE_URL
                 sync: false
+              # What lets the API believe the tenant host this tier forwards.
+              # Both request paths out of the console send `x-forwarded-host`
+              # alongside `x-edge-auth` set to this value, and HostTenantGuard
+              # resolves the tenant from the forwarded host ONLY when the two
+              # match — otherwise it reads the host the request arrived on, which
+              # at the API is always the API's own (TAR-64, TAR-149).
+              #
+              # Must be the SAME value as TRUSTED_PROXY_SECRET in
+              # whatsappcrm-secrets-dev, which the API reads. Nothing checks that
+              # they agree: a mismatch is a uniform `tenant_not_found` on every
+              # tenant route, which is loud but does not name its own cause.
+              # Generate per environment with `openssl rand -hex 32`.
+              #
+              # Read at RUN time, not frozen into the build the way API_BASE_URL
+              # is — verified against this Next version — so rotating it is a
+              # restart rather than a redeploy. Server-only: the NEXT_PUBLIC_
+              # prefix would inline it into the browser bundle and hand it to
+              # every visitor. Declared on the service rather than pulled in with
+              # `fromGroup`, so the web tier does not also receive the database
+              # passwords and provider tokens that group holds.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
 
           - type: keyvalue
             name: whatsappcrm-kv-dev
@@ -235,6 +257,12 @@ projects:
               # environment above for why omitting it breaks both API paths.
               - key: API_BASE_URL
                 sync: false
+              # Same value as TRUSTED_PROXY_SECRET in whatsappcrm-secrets-staging,
+              # and a value of its own rather than a copy of another environment's
+              # — see the development environment above for what it buys and how a
+              # mismatch presents.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
 
           - type: keyvalue
             name: whatsappcrm-kv-staging
@@ -349,6 +377,12 @@ projects:
               # Read at build time as well as at runtime — see the development
               # environment above for why omitting it breaks both API paths.
               - key: API_BASE_URL
+                sync: false
+              # Same value as TRUSTED_PROXY_SECRET in whatsappcrm-secrets-prod,
+              # generated for production and never copied down from staging — a
+              # leaked secret lets its holder name any verified tenant host on the
+              # unauthenticated routes. See the development environment above.
+              - key: TRUSTED_PROXY_SECRET
                 sync: false
 
           - type: keyvalue

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { headers } from 'next/headers';
+import { tenantForwardingHeaders } from '@/lib/api/tenant-forwarding';
 
 /**
  * Names the tenant on a server-side call to the API.
@@ -29,19 +30,18 @@ import { headers } from 'next/headers';
  * this makes the server path say the same thing in the same header. One header
  * carries the tenant on both, which is what lets the API read it in one place.
  *
- * ⚠️ **This is one half of the fix.** The API still resolves the tenant from
- * `Host` with Express `trust proxy` deliberately unset, so it does not read this
- * yet and both paths still answer `tenant_not_found` once the mock transport is
- * off. Whether — and on what evidence — the API may trust a forwarded host is an
- * `apps/api` decision, because the header is forgeable by anything that can reach
- * the API directly. See TAR-64.
+ * What the header *pair* is, and why a secret rides alongside the host, lives in
+ * `lib/api/tenant-forwarding.ts` — shared with `proxy.ts`, which sends the same
+ * pair on the browser path. This module is only the server-side half: reading the
+ * incoming host, which is the one thing `next/headers` is needed for and the one
+ * thing the proxy gets from somewhere else.
  */
 
-/**
- * Standard, and the name Next's own proxy already uses on the browser path.
- * Named rather than repeated so the two call sites cannot drift apart.
- */
-export const FORWARDED_HOST_HEADER = 'x-forwarded-host';
+export {
+  EDGE_AUTH_HEADER,
+  FORWARDED_HOST_HEADER,
+  tenantForwardingHeaders,
+} from '@/lib/api/tenant-forwarding';
 
 export async function tenantHostHeaders(): Promise<Record<string, string>> {
   const host = (await headers()).get('host');
@@ -53,5 +53,5 @@ export async function tenantHostHeaders(): Promise<Record<string, string>> {
     throw new Error('The incoming request carries no Host, so no tenant can be named to the API.');
   }
 
-  return { [FORWARDED_HOST_HEADER]: host };
+  return tenantForwardingHeaders(host);
 }

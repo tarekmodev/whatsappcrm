@@ -65,6 +65,13 @@ jobs:
       - uses: ./.github/actions/setup-workspace
       - name: Jest (api) and Vitest (web, contracts)
         run: pnpm test
+      # Whether the tenant headers survive Next's rewrite to the API is a claim
+      # about Next, not about any function this repo owns — so it is checked by
+      # building the console the way a deploy does and reading what a probe
+      # standing in for the API actually received (TAR-149). Separate from the
+      # step above because it runs a real `next build` and overwrites `.next`.
+      - name: Tenant headers reach the API on the browser path
+        run: pnpm --filter @whatsappcrm/web test:int
 
   # Tenant isolation is a database property, so it cannot be asserted by a unit
   # test — this job builds a real database from the migrations and proves two
