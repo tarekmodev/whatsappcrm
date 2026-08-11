@@ -7,21 +7,17 @@ import {
   HttpStatus,
   Param,
   Patch,
-  Post,
   Query,
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
 import {
   AvailabilityUpdateInputSchema,
-  InviteCreateInputSchema,
   UserListQuerySchema,
   UserParamsSchema,
   UserUpdateInputSchema,
   type AvailabilityUpdateInput,
   type CursorPage,
-  type InviteCreateInput,
-  type InviteResponse,
   type UserListQuery,
   type UserParams,
   type UserResponse,
@@ -47,6 +43,13 @@ import { UsersService } from './users.service';
  *
  * `PermissionGuard` denies by default, so every route below states its
  * permission — including the one that needs none, which says so out loud.
+ *
+ * Invitations are **not** here. `POST /api/v1/users/invites` and its siblings
+ * live on `UserInvitesController` in `IdentityModule` (TAR-55), because an
+ * invitation is a credential with a lifecycle rather than a person: it is issued,
+ * mailed, redeemed once and can be withdrawn. Keeping it beside sessions and
+ * password hashing is what stops a second, weaker way to mint an account
+ * appearing in this file.
  */
 @Controller({ path: 'users', version: '1' })
 @UseGuards(HostTenantGuard, PrincipalGuard, PermissionGuard)
@@ -61,22 +64,6 @@ export class UsersController {
     @Query(new ZodValidationPipe(UserListQuerySchema)) query: UserListQuery,
   ): Promise<CursorPage<UserResponse>> {
     return this.users.list(query);
-  }
-
-  /**
-   * `POST /api/v1/users/invites` — invite somebody into the tenant.
-   *
-   * `user:invite` gets you here; what `role` you may put in the body is a
-   * second question the service answers, because a supervisor holding this
-   * permission may invite an agent and only an agent.
-   */
-  @Post('invites')
-  @RequirePermission('user:invite')
-  @HttpCode(HttpStatus.CREATED)
-  invite(
-    @Body(new ZodValidationPipe(InviteCreateInputSchema)) input: InviteCreateInput,
-  ): Promise<InviteResponse> {
-    return this.users.invite(input).catch(translatePeopleFailure);
   }
 
   /**

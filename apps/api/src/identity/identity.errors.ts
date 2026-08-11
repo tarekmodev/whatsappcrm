@@ -1,3 +1,5 @@
+import type { InviteListStatus } from '@whatsappcrm/contracts';
+
 /**
  * Typed failures the identity services raise, mapped to error codes by
  * `identity.http.ts`.
@@ -60,17 +62,21 @@ export class SessionNotFoundError extends Error {
 }
 
 /**
- * Why a reset link did not work, in TAR-53's vocabulary for `token_invalid`'s
+ * Why an emailed link did not work, in TAR-53's vocabulary for `token_invalid`'s
  * `details`.
  *
  *   * `unknown`  — no such token. A typo, a truncated link, or a guess.
  *   * `expired`  — past `expires_at`.
  *   * `consumed` — already redeemed. Single-use is the point.
- *   * `revoked`  — the token is live, but its owner can no longer sign in.
+ *   * `revoked`  — the token is live, but its owner can no longer use it.
+ *
+ * One vocabulary for both link kinds, reset and invite. They fail for the same
+ * four reasons and a client that renders "ask for a new one" should not have to
+ * learn a second spelling to do it.
  */
-export const RESET_TOKEN_REJECTIONS = ['unknown', 'expired', 'consumed', 'revoked'] as const;
+export const TOKEN_REJECTION_REASONS = ['unknown', 'expired', 'consumed', 'revoked'] as const;
 
-export type ResetTokenRejection = (typeof RESET_TOKEN_REJECTIONS)[number];
+export type TokenRejectionReason = (typeof TOKEN_REJECTION_REASONS)[number];
 
 /**
  * Telling the holder *why* their link failed leaks nothing. The token is 256
@@ -78,7 +84,7 @@ export type ResetTokenRejection = (typeof RESET_TOKEN_REJECTIONS)[number];
  * — and the reset screen has to offer "request a new link", which it cannot do
  * without knowing this is a dead link rather than a 404 page.
  */
-const REJECTION_MESSAGES: Record<ResetTokenRejection, string> = {
+const REJECTION_MESSAGES: Record<TokenRejectionReason, string> = {
   unknown: 'This password reset link is not valid. Request a new one.',
   expired: 'This password reset link has expired. Request a new one.',
   consumed: 'This password reset link has already been used. Request a new one.',
@@ -86,7 +92,7 @@ const REJECTION_MESSAGES: Record<ResetTokenRejection, string> = {
 };
 
 export class ResetTokenInvalidError extends Error {
-  constructor(readonly reason: ResetTokenRejection) {
+  constructor(readonly reason: TokenRejectionReason) {
     super(REJECTION_MESSAGES[reason]);
     this.name = 'ResetTokenInvalidError';
   }
@@ -104,5 +110,35 @@ export class CurrentPasswordIncorrectError extends Error {
   constructor() {
     super('The current password is incorrect.');
     this.name = 'CurrentPasswordIncorrectError';
+  }
+}
+
+/** An invite token that is unknown, expired, already accepted, or withdrawn. */
+export class InviteTokenInvalidError extends Error {
+  constructor(readonly reason: TokenRejectionReason) {
+    super(`This invitation link is no longer usable (${reason}).`);
+    this.name = 'InviteTokenInvalidError';
+  }
+}
+
+/** No invite with that id in this tenant. Another tenant's is indistinguishable, by design. */
+export class InviteNotFoundError extends Error {
+  constructor(readonly inviteId: string) {
+    super(`No invitation ${inviteId} in this tenant.`);
+    this.name = 'InviteNotFoundError';
+  }
+}
+
+/**
+ * An invite that cannot be resent or withdrawn because it is no longer live.
+ *
+ * Distinct from `InviteNotFoundError`: the admin is looking at a real row, and
+ * the answer they need is "this one was already accepted", not "it does not
+ * exist".
+ */
+export class InviteNotPendingError extends Error {
+  constructor(readonly state: Extract<InviteListStatus, 'accepted' | 'revoked'>) {
+    super(`This invitation has already been ${state} and cannot be changed.`);
+    this.name = 'InviteNotPendingError';
   }
 }

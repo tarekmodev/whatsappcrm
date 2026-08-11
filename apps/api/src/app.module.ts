@@ -60,6 +60,7 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     RbacModule,
     HealthModule,
     TenancyModule,
+    IdentityModule,
     PeopleModule,
     WhatsAppModule,
     TicketsModule,

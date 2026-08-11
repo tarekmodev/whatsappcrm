@@ -43,6 +43,25 @@ change.
   `ConsoleMailer` renders the link to the log outside production, and a deployed
   environment gets `UndeliverableMailer` until TAR-41 wires a provider. New optional
   `APP_LINK_SCHEME` (default `https`) fixes the scheme on emailed links. (TAR-57)
+- **Invitations, and the account they create** — an admin invites an address with a role
+  (`POST /api/v1/users/invites`, `user:invite`), can list, resend and withdraw those
+  invitations, and the invitee redeems the emailed link at `POST /api/v1/invites/accept`
+  after previewing it at `POST /api/v1/invites/lookup`. Acceptance sets a password, turns
+  the reserved `invited` row into an active account **inside the inviting tenant with the
+  role the admin assigned**, joins the teams the invitation parked, and issues the session
+  cookie. Nothing about the tenant or the role comes from the request body. Tokens are 32
+  random bytes, stored only as a SHA-256 digest, valid for seven days, and single-use
+  because redemption is a conditional `UPDATE … RETURNING` rather than a read-then-write —
+  an expired, withdrawn or already-used link answers `token_invalid` (410) naming which.
+  Re-inviting an address is an upsert on the partial unique index, so a lapsed invitation
+  can never make an address un-invitable: `201` when a row was written, `200` when one was
+  refreshed. `DELETE /api/v1/users/{id}` now withdraws any outstanding invitation for that
+  address in the same transaction, so removing somebody who never accepted cannot be undone
+  by whoever still holds their emailed link. Passwords go through the same
+  `PasswordService` login uses, and acceptance issues its session through `SessionService`
+  rather than a second minting path. Mail goes through a `MailerPort` with a console
+  adapter outside production, because no provider has been chosen yet (ADR 0005, open
+  question 2). (TAR-55)
 - **Backup coverage and a restore drill** — `docs/runbooks/backups.md` records what
   Render's continuous backup and point-in-time recovery actually cover per
   environment, how to restore, and the cadence for proving it. `pnpm db:restore-drill`
@@ -146,6 +165,13 @@ change.
   that can say _why_ every session for one person died at 14:03, and a device list that
   stops showing a session that is gone. Revoked and expired rows are not yet swept — see
   the follow-up note in TAR-53's failure-modes table. (TAR-56)
+- **An invitation's teams wait on the invitation.** `POST /api/v1/users/invites` moved from
+  `PeopleModule` to `IdentityModule` and now writes the requested teams to `invite_teams`
+  instead of joining them immediately; acceptance is what turns them into `team_members`.
+  Somebody who never accepts therefore never widens a team's membership — and so never
+  widens what its members can see. The address is still reserved as an `invited` account, so
+  the people list and seat accounting are unchanged. `InviteResponse` gains `teamIds` and
+  `revokedAt`, and `invitedByUserId` becomes nullable to match the column. (TAR-55)
 - **`conversations.last_message_at` is `NOT NULL`, defaulting to the row's insert time.**
   It leads all three inbox keyset indexes, and PostgreSQL orders NULLs first under `DESC`,
   so a message-less conversation pinned itself to page one and the resume predicate

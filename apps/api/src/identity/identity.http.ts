@@ -1,9 +1,13 @@
 import { ApiException } from '../common/errors/api.exception';
+import { translatePeopleFailure } from '../people/people.http';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
 import {
   AccountLockedError,
   CurrentPasswordIncorrectError,
   InvalidCredentialsError,
+  InviteNotFoundError,
+  InviteNotPendingError,
+  InviteTokenInvalidError,
   ResetTokenInvalidError,
   SessionNotFoundError,
 } from './identity.errors';
@@ -25,19 +29,29 @@ import {
  *     `invalid_credentials`, the same code login uses, so a client has one
  *     branch for "the password you typed is wrong" wherever it typed it.
  *
- * The one that says *more* is `token_invalid` (410) for a dead reset link,
- * never `not_found`: the reset screen has to offer "request a new link", which
- * needs to be distinguishable from a 404 page (TAR-53, error codes). It leaks
+ * The one that says *more* is `token_invalid` (410) for a dead reset or invite
+ * link, never `not_found`: those screens have to offer "ask for a new one",
+ * which needs to be distinguishable from a page that never existed. It leaks
  * nothing — the token is 256 bits of uniform entropy, so anybody able to ask
  * already holds it.
+ *
+ * `reason` travels as a detail entry rather than as the `{ kind, reason }`
+ * object TAR-53 and ADR 0005 describe, because TAR-38 fixed `details` as an
+ * array of `{ path, message }`, and widening the envelope for one code is a
+ * change to every error in the product. Flagged to the architect.
  *
  * `TenantNotActiveError` is mapped here too. It reaches this path when a tenant
  * is suspended between `HostTenantGuard`'s read and the login statement — a
  * race rather than a normal flow, but one an unauthenticated caller can
  * observe, and a 500 would report an operator's deliberate action as a fault.
  *
- * Anything unrecognised is rethrown untouched: reporting a database outage as a
- * failed login would hide it.
+ * Anything it does not recognise is handed to `translatePeopleFailure`, because
+ * the invite flow raises people-domain errors verbatim — an address that
+ * already has an account, a role a supervisor may not assign, a team id from
+ * another tenant — and those must answer with the same code here as they do on
+ * `PATCH /users/{id}`. One condition, one status, wherever it is raised. What
+ * that one does not recognise it rethrows, so a database outage is still
+ * reported as a fault rather than as a failed login.
  */
 export function translateIdentityFailure(error: unknown): never {
   if (error instanceof InvalidCredentialsError) {
@@ -52,12 +66,7 @@ export function translateIdentityFailure(error: unknown): never {
     throw new ApiException('not_found', error.message);
   }
 
-  if (error instanceof ResetTokenInvalidError) {
-    // TAR-53 specifies `details: { kind, reason }`. The published envelope
-    // (`ApiErrorDetailSchema`) is an array of `{ path, message }` and nothing
-    // else, so the reason travels as the message on the offending field rather
-    // than as a second shape the frontend would have to parse. Flagged to the
-    // architect; changing the envelope is a contract change, not this story's.
+  if (error instanceof ResetTokenInvalidError || error instanceof InviteTokenInvalidError) {
     throw new ApiException('token_invalid', error.message, [
       { path: 'token', message: error.reason },
     ]);
@@ -67,6 +76,14 @@ export function translateIdentityFailure(error: unknown): never {
     throw new ApiException('invalid_credentials', error.message);
   }
 
+  if (error instanceof InviteNotFoundError) {
+    throw new ApiException('not_found', error.message);
+  }
+
+  if (error instanceof InviteNotPendingError) {
+    throw new ApiException('conflict', error.message);
+  }
+
   if (error instanceof TenantNotActiveError) {
     throw new ApiException(
       'subscription_inactive',
@@ -74,5 +91,5 @@ export function translateIdentityFailure(error: unknown): never {
     );
   }
 
-  throw error;
+  return translatePeopleFailure(error);
 }
