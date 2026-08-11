@@ -23,9 +23,14 @@
  *
  *   - It never touches the source beyond reading. The only writes are to the
  *     target database, which it creates and drops itself.
- *   - It refuses a target that is not obviously scratch. A drill that can be
+ *   - It refuses a target that is not obviously scratch, and refuses one that
+ *     looks like production even under --force-target. A drill that can be
  *     pointed at production by a mistyped argument is a worse risk than the one
  *     it exists to retire. See `assertTargetIsScratch`.
+ *
+ * Run it as the database owner or a BYPASSRLS role. Row counts are the only
+ * check that reads user data, and RLS would otherwise filter them to nothing on
+ * both sides — see `requireUnfilteredReads`.
  *
  * Client binaries: pg_dump/pg_restore/psql must match or exceed the *server*
  * major version, and this box may not have them at all. If they are on PATH
@@ -129,7 +134,8 @@ function usage() {
       '  --client-image IMG   Image for --client docker. Match the server major:',
       '                       postgres:16-alpine for Render, postgres:17-alpine local.',
       '  --no-create-target   Target already exists and is empty; do not drop/create it.',
-      `  --force-target       Allow a target not named *${SCRATCH_SUFFIX}.`,
+      `  --force-target       Allow a target not named *${SCRATCH_SUFFIX}. Never allows`,
+      '                       a target that looks like production.',
       '  --keep               Keep the dump file and the restored database.',
       '',
       'Exits non-zero on any difference between source and restored.',
@@ -407,7 +413,7 @@ async function fingerprint(client) {
  * or disagree with it by accident. This is O(rows) per table and the reason the
  * drill is a drill and not something that runs on every deploy.
  */
-async function rowCounts(client) {
+async function rowCounts(client, label) {
   const { rows: tables } = await client.query(
     `SELECT c.relname
        FROM pg_class c
@@ -418,10 +424,48 @@ async function rowCounts(client) {
 
   const counts = {};
   for (const { relname } of tables) {
-    const { rows } = await client.query(`SELECT count(*)::bigint AS n FROM "public"."${relname}"`);
+    const { rows } = await client
+      .query(`SELECT count(*)::bigint AS n FROM "public"."${relname}"`)
+      .catch((error) => {
+        if (error.code === '42501') {
+          fail(
+            `Row-level security applies to "${relname}" on the ${label} connection, so a\n` +
+              'count taken here would be a count of what this role may see rather than of\n' +
+              'what the database holds — with no app.tenant_id set, that is zero on both\n' +
+              'sides and the drill would agree with itself about nothing.\n\n' +
+              'Re-run as the database owner or a role with BYPASSRLS. On Render that is\n' +
+              'the instance owner from the dashboard, not the application role.',
+          );
+        }
+        throw error;
+      });
     counts[relname] = Number(rows[0].n);
   }
   return counts;
+}
+
+/**
+ * Row counts are the one check here that reads user data rather than the
+ * catalog, which makes them the one check RLS can silently empty: every
+ * tenant-scoped policy matches nothing when `app.tenant_id` is unset, so source
+ * and restored both report zero, agree, and the drill prints DRILL PASSED
+ * having compared nothing. Locally that never shows, because the compose stack
+ * connects as the superuser; on Render, or anywhere else the drill is run as
+ * the application role, it is the default outcome.
+ *
+ * `row_security = off` turns that from a silent pass into a hard error:
+ * Postgres raises 42501 rather than returning a filtered row set for any table
+ * whose policies would apply. A superuser or BYPASSRLS role is unaffected and
+ * sees every row either way — which is what this drill needs.
+ */
+async function requireUnfilteredReads(client) {
+  await client.query('SET row_security = off');
+  const {
+    rows: [{ unfiltered }],
+  } = await client.query(
+    'SELECT rolsuper OR rolbypassrls AS unfiltered FROM pg_roles WHERE rolname = current_user',
+  );
+  return Boolean(unfiltered);
 }
 
 function digest(value) {
@@ -476,6 +520,15 @@ function assertTargetIsScratch({ sourceUrl, targetUrl, forceTarget }) {
 
   const name = databaseName(targetUrl);
 
+  // Above the --force-target escape hatch on purpose. The flag exists to allow a
+  // target the naming convention does not cover (a Render scratch instance comes
+  // with its own name); it is not a way to aim the drill at production, and the
+  // mistyped target the flag makes reachable is exactly the one worth catching.
+  // This guard has no override.
+  if (/prod/i.test(name) || /prod/i.test(target.host)) {
+    fail(`Target "${redact(targetUrl)}" looks like production. Refusing.`);
+  }
+
   if (forceTarget) return;
 
   if (!name.endsWith(SCRATCH_SUFFIX)) {
@@ -484,10 +537,6 @@ function assertTargetIsScratch({ sourceUrl, targetUrl, forceTarget }) {
         'it as a real database. The drill DROPs its target. Rename the target, or pass\n' +
         '--force-target if you are certain.',
     );
-  }
-
-  if (/prod/i.test(name) || /prod/i.test(target.host)) {
-    fail(`Target "${redact(targetUrl)}" looks like production. Refusing.`);
   }
 }
 
@@ -534,6 +583,7 @@ async function main() {
   let sourceFingerprint;
   let sourceCounts;
   let sourceVersion;
+  let bypassesRls;
   try {
     // Shared, not exclusive: this is a read. It exists so two drills against
     // one source do not interleave a dump with the other's target creation.
@@ -541,8 +591,9 @@ async function main() {
     ({
       rows: [{ version: sourceVersion }],
     } = await source.query('SELECT version()'));
+    bypassesRls = await requireUnfilteredReads(source);
     sourceFingerprint = await fingerprint(source);
-    sourceCounts = await rowCounts(source);
+    sourceCounts = await rowCounts(source, 'source');
   } finally {
     await source.end();
   }
@@ -551,6 +602,9 @@ async function main() {
   const serverMajor = Number(sourceVersion.match(/PostgreSQL (\d+)/)?.[1] ?? 0) || null;
   console.log(`  source is ${sourceVersion.split(' ').slice(0, 2).join(' ')}`);
   console.log(`  ${Object.keys(sourceCounts).length} tables, ${sourceRows} rows across them`);
+  console.log(
+    `  counts    unfiltered (${bypassesRls ? 'superuser/BYPASSRLS role' : 'row_security = off'})`,
+  );
 
   if (sourceRows === 0) {
     console.warn(
@@ -620,8 +674,9 @@ async function main() {
   let targetFingerprint;
   let targetCounts;
   try {
+    await requireUnfilteredReads(target);
     targetFingerprint = await fingerprint(target);
-    targetCounts = await rowCounts(target);
+    targetCounts = await rowCounts(target, 'restored');
   } finally {
     await target.end();
   }

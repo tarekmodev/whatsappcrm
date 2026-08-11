@@ -135,7 +135,7 @@ types a dump/restore round trip actually gets wrong.
 
 ### Running it against a Render database
 
-Two things change.
+Three things change.
 
 **Client version.** `pg_dump` refuses to dump a server newer than itself. Render
 runs Postgres 16 and the compose stack runs 17, so dumping Render needs the 16
@@ -153,9 +153,25 @@ compose stack (fine, and the usual choice — a 17 client restores a 16 dump
 without complaint), or provision a scratch Render instance and pass
 `--no-create-target` with a target that is already empty.
 
+**The role.** Connect as the instance owner, not as the application role. Row
+counts are the only check that reads user data, and RLS filters them: with no
+`app.tenant_id` set, every tenant-scoped policy matches nothing, so source and
+restored would both count zero and agree. The drill sets `row_security = off`,
+which makes that a hard 42501 error rather than a silent pass — if you see
+
+```
+Row-level security applies to "tickets" on the source connection...
+```
+
+you are connected as the application role. Reconnect with the owner credentials
+from the Render dashboard. Locally this never comes up: the compose stack
+connects as the superuser.
+
 Never point `--source-url` at production while people are using it: the dump
 holds a transaction open for its duration, and the drill exists to be run on
-staging.
+staging. `--force-target` does not change that — it waives only the
+`*_restore_drill` naming convention. A target whose name or host looks like
+production is refused with or without the flag.
 
 ### Cadence
 
@@ -173,11 +189,12 @@ happen.
 
 ## Drill log
 
-| Date       | Source                                                                      | Target                                   | Result                                                                                                                                                                 |
-| ---------- | --------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-08-11 | Local compose Postgres 17.10, migrated to `20260811130000` + canary fixture | `whatsappcrm_restore_drill`, same server | **Pass.** 40 tables, 23 rows, 12 migrations. Identical on all 11 checks — 367 columns, 139 indexes, 112 constraints, 72 policies, 582 grants. Dump 1.1s, restore 1.7s. |
+| Date       | Source                                                                      | Target                                   | Result                                                                                                                                                                                                                                                                                                                                                 |
+| ---------- | --------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2026-08-11 | Local compose Postgres 17.10, migrated to `20260811130000` + canary fixture | `whatsappcrm_restore_drill`, same server | **Pass.** 40 tables, 23 rows, 12 migrations. Identical on all 11 checks — 367 columns, 139 indexes, 112 constraints, 72 policies, 582 grants. Dump 1.1s, restore 1.7s.                                                                                                                                                                                 |
+| 2026-08-11 | Same, rebased onto `main` at TAR-20e + canary fixture                       | `whatsappcrm_restore_drill`, same server | **Pass.** 42 tables, 24 rows, 13 migrations. Identical on all 11 checks — 384 columns, 149 indexes, 119 constraints, 76 policies, 612 grants. Dump 1.1s, restore 1.6s. Re-run to confirm the row-count check is no longer RLS-filtered: repeated as a role subject to RLS, the drill now refuses to report a verdict rather than passing on zero rows. |
 
-The first entry is a local drill, not a Render one: the Render account does not
+The first entries are local drills, not Render ones: the Render account does not
 exist yet (blocked on credentials, raised on TAR-41), so there is no staging
 instance to dump. It verifies the dump/restore path, the comparison and the
 tooling; it does not verify Render's backup product. The monthly staging drill
