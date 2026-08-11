@@ -345,6 +345,14 @@ change.
 
 ### Security
 
+- **A password reset or change now ends the sessions it revokes immediately, not up to a
+  minute later.** Both flows revoked the session rows correctly but skipped the
+  after-commit `purgeCacheFor` that `SessionRevocationService` documents as mandatory, so
+  a request in flight during the transaction could repopulate the Redis principal cache
+  from the not-yet-revoked row — leaving a revoked session answering for the remainder of
+  its 60-second TTL. That window is the whole point of both flows: the person resetting is
+  often not the person holding the other devices. Every other revocation path (role,
+  status, teams, removal, logout) already made the call. (TAR-55, TAR-57)
 - **A table no migration has granted is unreachable by `whatsappcrm_app`.** `app-roles.sql`
   no longer leaves `ALTER DEFAULT PRIVILEGES … ON TABLES` pointing at the app role, so a
   migration that adds a tenant-scoped table and forgets its `tenant_isolation` block ships a

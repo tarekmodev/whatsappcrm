@@ -417,6 +417,43 @@ and none should start.** If one must, `$queryRaw` with a true row comparison is 
 sanctioned escape, on the same footing decision 1 already grants reporting: raw SQL is
 safe here because isolation is enforced by the database, not by the query that forgot it.
 
+**Every keyset sort column is `NOT NULL`**, and that is a rule about the schema, not a
+detail of the predicate. Three-valued logic makes both sides return `NULL` for a `NULL`
+row — `lastMessageAt <= $1` is `NULL`, which is not true — so the row is filtered out of
+every page after the first. It appears on page one, where there is no cursor and therefore
+no predicate, and never again. That is the same silent-truncation class as comparing only
+the leading column: no error, a row that simply stops appearing.
+
+The losing-one-row case is the mild one. Because `NULL` sorts first under `DESC`, the
+`NULL` rows are page one, so as soon as a page boundary falls inside that block — at any
+`limit`, including 1 — the cursor carries `NULL` as its sort value, the predicate is
+`NULL` against every candidate row, and the next page comes back empty. The list does not
+lose a row; it **ends there**, with everything past the `NULL` block unreachable and the
+client correctly believing it has read to the end.
+
+The cursor format cannot express the value in the first place, which is the same
+constraint arriving from the other direction: `KeysetCursor.sortValues` is `string[]`, and
+`decodeKeysetCursor` rejects any `k` that is not an array of strings. A `NULL` sort value
+either fails to decode — `validation_failed` for a cursor the server itself issued — or
+gets serialised to the string `"null"` and compared as text, which is worse for being
+plausible. `NOT NULL` is what keeps the wire format honest, not only the query.
+
+`conversations.last_message_at` was the one column in the schema that broke this rule, and
+it is the inbox's own sort key. It is `NOT NULL` now, defaulted to the row's creation
+time: a conversation with no messages sorts by when it was created, which is where an
+operator would look for it anyway. `ConversationResponse.lastMessageAt` is non-nullable
+with it — `lastMessagePreview` keeps its own nullability, being no part of any sort. The
+reasoning is recorded because the constraint is not self-evident from the column: left
+nullable, one message-less conversation would have sat pinned above every active thread on
+page one of the inbox, and truncated the inbox at itself for everyone paging past it.
+
+If a column genuinely cannot be `NOT NULL`, it cannot be a keyset sort column either —
+sort on a `NOT NULL` surrogate instead. `NULLS LAST` with a two-mode predicate, one for
+the non-null region and one for the `NULL` block with the cursor encoding which mode it is
+resuming in, does work, and needs the index declared `NULLS LAST` to match. That is a
+standing cost in every list implementation, and it is not worth paying for a column that
+could have been `NOT NULL`.
+
 Whichever form, verify with `EXPLAIN` that the plan shows an index scan with the predicate
 as an index condition rather than a filter, and no sort node. No plan is asserted here.
 
