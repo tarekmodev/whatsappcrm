@@ -14,6 +14,8 @@ import { PasswordController } from './password.controller';
 import { PasswordResetService } from './password-reset.service';
 import { LoginThrottleService } from './login-throttle.service';
 import { PasswordService } from './password.service';
+import { RealtimeTicketService } from './realtime-ticket.service';
+import { RealtimeTicketStore } from './realtime-ticket.store';
 import { SessionCacheService } from './session-cache.service';
 import { SessionController } from './session.controller';
 import { SessionPrincipalSource } from './session-principal.source';
@@ -50,6 +52,9 @@ import { UserInvitesController } from './user-invites.controller';
  *   * `LoginThrottleService` owns the lockout columns, and `UsersService` calls
  *     it for `POST /users/{id}/unlock` — so the three columns are written by
  *     one file rather than by whichever service happens to need them.
+ *   * `RealtimeTicketService` is what TAR-69's Socket.IO gateway calls to spend
+ *     a handshake ticket, so the single-use rule lives beside the code that
+ *     issued it rather than being restated in the gateway.
  *
  * Neither module lists the other in `imports`, so there is no cycle in the
  * module graph: both are global, and both resolve their tokens from the global
@@ -114,12 +119,21 @@ const mailerProvider: Provider = {
     PasswordService,
     PasswordResetService,
     PasswordChangeService,
+    RealtimeTicketService,
+    RealtimeTicketStore,
     SessionService,
     SessionCacheService,
     SessionPrincipalSource,
     SessionReplayProbe,
     ApiExceptionFilter,
   ],
-  exports: [LoginThrottleService, PasswordService, SessionService, SessionPrincipalSource, MAILER],
+  exports: [
+    LoginThrottleService,
+    PasswordService,
+    RealtimeTicketService,
+    SessionService,
+    SessionPrincipalSource,
+    MAILER,
+  ],
 })
 export class IdentityModule {}

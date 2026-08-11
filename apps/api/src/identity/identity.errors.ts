@@ -105,6 +105,26 @@ export class SessionNotFoundError extends Error {
 }
 
 /**
+ * A realtime ticket could not be stored, so none was issued (TAR-180).
+ *
+ * The store is Redis and it has no fallback — unlike the session cache, there is
+ * no second place a handshake could look — so this is a dependency being
+ * unavailable rather than anything about the caller, and it answers
+ * `upstream_unavailable` (502).
+ *
+ * The message says "try again" because that is genuinely the right action: the
+ * caller holds a valid session, nothing about it is wrong, and the realtime tier
+ * is the only thing degraded. The rest of the product keeps working, which is
+ * why this is not an error the console should sign anybody out over.
+ */
+export class RealtimeTicketUnavailableError extends Error {
+  constructor() {
+    super('Realtime is temporarily unavailable. Try again in a moment.');
+    this.name = 'RealtimeTicketUnavailableError';
+  }
+}
+
+/**
  * Why an emailed link did not work, in TAR-53's vocabulary for `token_invalid`'s
  * `details`.
  *

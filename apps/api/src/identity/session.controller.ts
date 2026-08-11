@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -15,6 +16,7 @@ import {
   LogoutInputSchema,
   SessionParamsSchema,
   type LogoutInput,
+  type RealtimeTicketResponse,
   type SessionListResponse,
   type SessionParams,
   type SessionResponse,
@@ -26,6 +28,7 @@ import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
 import { AnyPrincipal } from '../rbac/require-permission.decorator';
 import { AuthService } from './auth.service';
 import { translateIdentityFailure } from './identity.http';
+import { RealtimeTicketService } from './realtime-ticket.service';
 import { clearSessionCookie, isSecureCookieConfigured } from './session-cookie';
 import { SessionService } from './session.service';
 
@@ -58,6 +61,7 @@ export class SessionController {
   constructor(
     private readonly auth: AuthService,
     private readonly sessions: SessionService,
+    private readonly realtimeTickets: RealtimeTicketService,
     private readonly tenantContext: TenantContextService,
     config: ConfigService,
   ) {
@@ -137,6 +141,39 @@ export class SessionController {
   ): Promise<void> {
     await this.sessions
       .revokeOwn(this.tenantContext.requirePrincipal(), params.id)
+      .catch(translateIdentityFailure);
+  }
+
+  /**
+   * `POST /api/v1/auth/realtime-ticket` — the credential the WebSocket
+   * handshake presents, because the session cookie cannot make that trip
+   * (TAR-180, ADR 0002 decision 3).
+   *
+   * It belongs on this controller and not on `AuthController`: the caller must
+   * already be signed in, and what they get back is scoped to nobody but
+   * themselves — the same reason every other route here is `@AnyPrincipal()`.
+   * There is no request body and no parameter of any kind, so there is nothing
+   * for a caller to aim at another tenant.
+   *
+   * **`POST`, and 200 rather than 201.** ADR 0002 and ADR 0005 both publish it
+   * as a `POST`, and it earns that verb honestly — every call mints and stores a
+   * new single-use credential, which is not something a `GET` may do and not
+   * something an intermediary may replay. 200 because no addressable resource is
+   * created: what comes back is a bearer token with a sixty-second life, and
+   * there is no URL that would serve it a second time. Login answers 200 for the
+   * same reason.
+   *
+   * `Cache-Control: private, no-store` on the response, matching the media
+   * redirect: the body is a live credential, and a proxy or a browser cache
+   * holding it would outlive the single use that is supposed to bound it.
+   */
+  @Post('realtime-ticket')
+  @AnyPrincipal()
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'private, no-store')
+  issueRealtimeTicket(): Promise<RealtimeTicketResponse> {
+    return this.realtimeTickets
+      .issue(this.tenantContext.requirePrincipal())
       .catch(translateIdentityFailure);
   }
 }

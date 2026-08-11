@@ -5,6 +5,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import {
   ApiErrorSchema,
+  RealtimeTicketResponseSchema,
   SESSION_COOKIE_NAME,
   SessionListResponseSchema,
   SessionResponseSchema,
@@ -27,11 +28,12 @@ import {
   InvalidCredentialsError,
   SessionNotFoundError,
 } from './identity.errors';
+import { RealtimeTicketService } from './realtime-ticket.service';
 import { SessionController } from './session.controller';
 import { SessionService } from './session.service';
 
 /**
- * The HTTP contract of the five auth routes.
+ * The HTTP contract of the six auth routes.
  *
  * The assertions that matter most are about the `Set-Cookie` header and about
  * what the *body* does not contain: the session token leaves in one header and
@@ -72,6 +74,7 @@ describe('auth routes', () => {
   let logout: jest.Mock;
   let listOwn: jest.Mock;
   let revokeOwn: jest.Mock;
+  let issueTicket: jest.Mock;
   let signedIn: boolean;
 
   beforeAll(async () => {
@@ -79,6 +82,7 @@ describe('auth routes', () => {
     logout = jest.fn();
     listOwn = jest.fn();
     revokeOwn = jest.fn();
+    issueTicket = jest.fn();
 
     const moduleRef = await Test.createTestingModule({
       imports: [TenantContextModule],
@@ -87,6 +91,7 @@ describe('auth routes', () => {
         ApiExceptionFilter,
         { provide: AuthService, useValue: { login, logout } },
         { provide: SessionService, useValue: { listOwn, revokeOwn } },
+        { provide: RealtimeTicketService, useValue: { issue: issueTicket, consume: jest.fn() } },
         // `SESSION_COOKIE_SECURE=false`, so the assertions below read the
         // development spelling. `configureApp` also reads `WEB_ORIGIN`.
         {
@@ -139,6 +144,11 @@ describe('auth routes', () => {
     logout.mockReset().mockResolvedValue(undefined);
     listOwn.mockReset().mockResolvedValue([]);
     revokeOwn.mockReset().mockResolvedValue(undefined);
+    issueTicket.mockReset().mockResolvedValue({
+      ticket: 'a-single-use-handshake-ticket',
+      expiresAt: '2026-08-12T09:01:00.000Z',
+      realtimeUrl: 'https://realtime.example.invalid',
+    });
   });
 
   describe('POST /api/v1/auth/login', () => {
@@ -213,6 +223,7 @@ describe('auth routes', () => {
       ['POST', '/api/v1/auth/logout'],
       ['GET', '/api/v1/auth/sessions'],
       ['DELETE', `/api/v1/auth/sessions/${SESSION}`],
+      ['POST', '/api/v1/auth/realtime-ticket'],
     ])('refuses %s %s with no session, without reaching a service', async (method, path) => {
       signedIn = false;
 
@@ -223,6 +234,9 @@ describe('auth routes', () => {
       expect(ApiErrorSchema.parse(response.body).error.code).toBe('unauthenticated');
       expect(logout).not.toHaveBeenCalled();
       expect(listOwn).not.toHaveBeenCalled();
+      // A ticket minted for an anonymous caller would be a socket in whichever
+      // tenant the guard never got to check.
+      expect(issueTicket).not.toHaveBeenCalled();
     });
 
     it('GET /auth/session answers the caller, which is also the refresh', async () => {
@@ -294,6 +308,18 @@ describe('auth routes', () => {
 
       expect(response.status).toBe(400);
       expect(revokeOwn).not.toHaveBeenCalled();
+    });
+
+    it('POST /auth/realtime-ticket answers a ticket for the session’s own principal', async () => {
+      const response = await request(server).post('/api/v1/auth/realtime-ticket');
+
+      expect(response.status).toBe(200);
+      expect(RealtimeTicketResponseSchema.parse(response.body).ticket).toBe(
+        'a-single-use-handshake-ticket',
+      );
+      // The principal `PrincipalGuard` resolved, never anything from the
+      // request: the route takes no body, no query and no parameter.
+      expect(issueTicket).toHaveBeenCalledWith(PRINCIPAL);
     });
   });
 });

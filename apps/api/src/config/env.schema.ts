@@ -21,6 +21,17 @@ export const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] a
 export const DEPLOY_ENVS = ['local', 'development', 'staging', 'production'] as const;
 
 /**
+ * Where the Socket.IO server sits on a developer's machine — the API's own
+ * origin, since the gateway runs in this process.
+ *
+ * Exported because `RealtimeTicketService` needs the same fallback:
+ * `ConfigService.get` can answer from `process.env` as well as from the
+ * validated object, so a reader cannot assume the schema default was applied.
+ * One constant, rather than the same literal in two files drifting apart.
+ */
+export const DEFAULT_REALTIME_URL = 'http://localhost:3001';
+
+/**
  * A configured Meta id — the app id, the Embedded Signup configuration id.
  *
  * Digits, held as a string: Meta's ids exceed `Number.MAX_SAFE_INTEGER`, so a
@@ -254,6 +265,28 @@ const envShape = z.object({
    * an individual account.
    */
   LOGIN_IP_THROTTLE_ENABLED: z.stringbool().default(false),
+
+  // ---------------------------------------------------------------------------
+  // Realtime (TAR-20 / TAR-69)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Absolute origin of the Socket.IO server, published verbatim on
+   * `RealtimeTicketResponse.realtimeUrl`.
+   *
+   * Configured rather than derived, and it is the one URL in the product the
+   * browser is told to open **directly** instead of through the Next.js rewrite:
+   * ADR 0002 decision 3 sends every HTTP call through the proxy so the session
+   * cookie stays first-party, and takes the WebSocket off that path because it
+   * cannot be proxied as reliably. Nothing else can supply this — a tenant's own
+   * white-label host is not where the realtime tier lives, and the request
+   * `Host` is the API's own name behind Render's edge.
+   *
+   * It reaches a browser, so it is not a secret and carries no credential. The
+   * local default matches `PORT`, on the `WEB_ORIGIN` precedent: a developer who
+   * copies `.env.example` verbatim gets a working one.
+   */
+  REALTIME_URL: z.url().default(DEFAULT_REALTIME_URL),
 
   // ---------------------------------------------------------------------------
   // WhatsApp webhook ingestion (TAR-20)
