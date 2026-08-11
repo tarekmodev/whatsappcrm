@@ -49,22 +49,23 @@ is a scope decision, not an implementation detail.
 > Requires a Render workspace on a **paid plan** and repository access. This is
 > the step that needs an account: everything above it is in the repository.
 
-**You do not need every credential to start.** Only six values actually matter for
-the first sync, and all six are predictable — see below. Everything else can be a
-placeholder and be filled in by the story that first reads it.
+**You do not need every credential to start.** Only the URLs and one generated
+secret actually matter for the first sync, and every URL is predictable — see
+below. Everything else can be a placeholder and be filled in by the story that
+first reads it.
 
 1. Render Dashboard → **New** → **Blueprint**, pick `tarekmodev/whatsappcrm`,
    branch `main`. Render reads `render.yaml`.
 2. Render prompts once per `sync: false` variable, **per environment**. Fill the
-   six URLs from the table below; put `placeholder` in the rest. Values are stored
-   in Render and nowhere else.
+   URLs from the table below and the forwarded-host secret under it; put
+   `placeholder` in the rest. Values are stored in Render and nowhere else.
 3. Apply. Render creates the databases, the Key Value instances, the services and
    the environment groups, then runs the first build and `prisma migrate deploy`.
 4. **Check the assigned hostnames.** Render appends a suffix if a service name is
    already taken globally. If any differ from the predicted URLs, correct
-   `WEB_ORIGIN` and `NEXT_PUBLIC_API_BASE_URL` for that environment and redeploy —
-   a wrong `WEB_ORIGIN` shows up as CORS failures in the browser, not as a failed
-   deploy.
+   `WEB_ORIGIN`, `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL` for that
+   environment and redeploy — a wrong `WEB_ORIGIN` shows up as CORS failures in
+   the browser, not as a failed deploy.
 5. Confirm each environment answers on its readiness endpoint:
    `curl -i https://<api-host>/api/health/ready` → `200`, with
    `checks.database.status` and `checks.queue.status` both `ok`.
@@ -109,20 +110,66 @@ database down and `detail` showing an authentication failure, this is why.
 > instead of two. That changes TAR-49's configuration contract, so it is raised
 > with them rather than done here.
 
-### The six values that matter
+### The URLs that matter
 
 Render assigns `https://<service-name>.onrender.com`, and the service names are
 fixed in `render.yaml` — so these are known before anything exists:
 
-| Environment | `WEB_ORIGIN`                                   | `NEXT_PUBLIC_API_BASE_URL`                         |
-| ----------- | ---------------------------------------------- | -------------------------------------------------- |
-| development | `https://whatsappcrm-web-dev.onrender.com`     | `https://whatsappcrm-api-dev.onrender.com/api`     |
-| staging     | `https://whatsappcrm-web-staging.onrender.com` | `https://whatsappcrm-api-staging.onrender.com/api` |
-| production  | `https://whatsappcrm-web-prod.onrender.com`    | `https://whatsappcrm-api-prod.onrender.com/api`    |
+| Environment | `WEB_ORIGIN` (API service)                     | `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL` (web service) |
+| ----------- | ---------------------------------------------- | ----------------------------------------------------------- |
+| development | `https://whatsappcrm-web-dev.onrender.com`     | `https://whatsappcrm-api-dev.onrender.com/api`              |
+| staging     | `https://whatsappcrm-web-staging.onrender.com` | `https://whatsappcrm-api-staging.onrender.com/api`          |
+| production  | `https://whatsappcrm-web-prod.onrender.com`    | `https://whatsappcrm-api-prod.onrender.com/api`             |
 
 They are prompted rather than wired automatically because Render's `fromService`
-supplies a hostname with no scheme, and both of these need one. They become custom
+supplies a hostname with no scheme, and all of these need one. They become custom
 domains once white-labelling lands.
+
+`API_BASE_URL` is the server-side one: the destination of the `/api/*` rewrite in
+`next.config.mjs` and the origin server components call. It has no default worth
+having — without it both fall back to `http://localhost:3001/api`, which in a
+deployed environment means every server-rendered page fails to reach the API.
+
+### The forwarded-host secret
+
+`TRUSTED_PROXY_SECRET` is generated, not looked up, and **the API refuses to boot
+without it** (TAR-148). Render routes by `Host` at its edge and tenant domains are
+attached to the web service, so inside the API the `Host` header is always the
+API's own host. The web tier therefore forwards the host it was reached at as
+`x-edge-host` and proves it is the web tier with this secret as `x-edge-auth`;
+`HostTenantGuard` reads the forwarded host only behind a matching secret, and
+otherwise falls back to `Host` exactly as it always did. Both header names are
+private deliberately — the standard `x-forwarded-host` is never read, because the
+web-to-API hop is public and every proxy on it may rewrite `x-forwarded-*`.
+
+1. `openssl rand -hex 32`, once per environment. Never copied between them.
+2. Put the same value in **two** prompts: `TRUSTED_PROXY_SECRET` on
+   `whatsappcrm-api-<env>` and `TRUSTED_PROXY_SECRET` on `whatsappcrm-web-<env>`.
+   The blueprint declares the key on both services rather than in the shared
+   secrets group, because linking that group to the web service would also hand
+   it the database passwords and every provider credential. Nothing checks that
+   the two values agree.
+3. Leave `TRUSTED_PROXY_SECRET_PREVIOUS` — the API service only — empty except
+   during a rotation.
+
+**If the two disagree**, every tenant route in that environment answers `404`
+`tenant_not_found` — uniformly, which reads exactly like an unknown domain rather
+than like a misconfiguration. Three things catch it:
+
+- `tenancy.edge_auth_mismatch` at `warn`, emitted the first time a caller presents
+  an `x-edge-auth` matching neither secret and then at most once a minute. **This
+  is the line to alert on** — a mismatch after a rotation is its most likely
+  cause, and it names no value.
+- One line at API boot, reporting `enabled (N secret(s) accepted)` or `disabled`.
+  A mismatch still reads `enabled`, so on its own this line confirms the API has
+  a secret, not that it is the right one. `2 secret(s) accepted` means a rotation
+  was never finished.
+- A smoke request against a real tenant host after the deploy.
+
+**To rotate**: generate the new value; on the API set `TRUSTED_PROXY_SECRET` to it
+and `TRUSTED_PROXY_SECRET_PREVIOUS` to the old one and redeploy, so both are
+accepted; then move the web service onto the new value; then clear
+`TRUSTED_PROXY_SECRET_PREVIOUS`. No rebuild at any step.
 
 ### Everything else can wait
 

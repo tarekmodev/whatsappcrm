@@ -10,6 +10,9 @@ const PRODUCTION = {
   ...DATABASE_ROLES,
   NODE_ENV: 'production',
   REDIS_URL: 'redis://host:6379',
+  // Mandatory in production since TAR-148: without it the API cannot trust the
+  // host the web tier forwards, and resolves no tenant at all.
+  TRUSTED_PROXY_SECRET: 'x'.repeat(64),
 };
 
 /** A copy of `base` with one key removed — the case each test is actually about. */

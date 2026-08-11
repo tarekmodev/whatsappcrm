@@ -12,10 +12,11 @@ import { AUTH_STUB_ON } from './env.schema';
 const REQUIRED = {
   APP_DATABASE_URL: 'postgresql://app@localhost:5432/db',
   SYSTEM_DATABASE_URL: 'postgresql://system@localhost:5432/db',
-  // Only mandatory under NODE_ENV=production (TAR-41), but every case here needs
-  // to satisfy that rule for the production assertions below to reach the one
-  // they are actually about.
+  // Only mandatory under NODE_ENV=production (TAR-41, TAR-148), but every case
+  // here needs to satisfy those rules for the production assertions below to
+  // reach the one they are actually about.
   REDIS_URL: 'redis://localhost:6379',
+  TRUSTED_PROXY_SECRET: 'a'.repeat(64),
 };
 
 describe('environment validation', () => {
@@ -72,6 +73,47 @@ describe('environment validation', () => {
       expect(() =>
         validateEnv({ ...REQUIRED, NODE_ENV: 'production', SESSION_COOKIE_SECURE: 'false' }),
       ).toThrow(/SESSION_COOKIE_SECURE/);
+    });
+  });
+
+  describe('the edge trust boundary (TAR-148)', () => {
+    // Blank rather than absent, which `validateEnv` strips to the same thing —
+    // and is what copying `.env.example` verbatim actually produces.
+    const WITHOUT_SECRET = { ...REQUIRED, TRUSTED_PROXY_SECRET: '' };
+
+    it('is optional outside production, where the guard reads Host as it always has', () => {
+      expect(validateEnv({ ...WITHOUT_SECRET }).TRUSTED_PROXY_SECRET).toBeUndefined();
+    });
+
+    it('refuses to boot in production without it', () => {
+      // Behind Render's edge `Host` is the API's own host, so an API with no
+      // secret resolves no tenant at all — a total outage that answers a uniform
+      // `tenant_not_found` and reads as an unknown domain. Better a failed deploy.
+      expect(() => validateEnv({ ...WITHOUT_SECRET, NODE_ENV: 'production' })).toThrow(
+        /TRUSTED_PROXY_SECRET/,
+      );
+    });
+
+    it('boots in production with it set', () => {
+      expect(validateEnv({ ...REQUIRED, NODE_ENV: 'production' }).TRUSTED_PROXY_SECRET).toBe(
+        REQUIRED.TRUSTED_PROXY_SECRET,
+      );
+    });
+
+    it('rejects a secret short enough to be guessed', () => {
+      expect(() => validateEnv({ ...REQUIRED, TRUSTED_PROXY_SECRET: 'too-short' })).toThrow(
+        /TRUSTED_PROXY_SECRET/,
+      );
+    });
+
+    it('accepts the previous secret alongside the current one, so rotation is three deploys', () => {
+      const env = validateEnv({
+        ...REQUIRED,
+        NODE_ENV: 'production',
+        TRUSTED_PROXY_SECRET_PREVIOUS: 'b'.repeat(64),
+      });
+
+      expect(env.TRUSTED_PROXY_SECRET_PREVIOUS).toBe('b'.repeat(64));
     });
   });
 });

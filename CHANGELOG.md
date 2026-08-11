@@ -65,6 +65,31 @@ change.
   write costs one Postgres read per request; an un-purgeable entry costs a revocation.
   (TAR-64 review)
 
+- **The API trusts a forwarded host only from a caller holding a shared secret** — Render
+  routes by `Host` at its edge and tenant domains are attached to the _web_ service, so
+  inside the API `request.hostname` is always the API's own host and `HostTenantGuard`
+  resolved no tenant at all in any deployed environment, on the browser path through the
+  Next.js rewrite as much as on the server-rendered one. The web tier now forwards the host
+  it was reached at as `x-edge-host`, and `HostTenantGuard` reads it **only** when
+  `x-edge-auth` matches `TRUSTED_PROXY_SECRET` (or `TRUSTED_PROXY_SECRET_PREVIOUS`, so the
+  secret rotates without a synchronised two-service deploy) — the same fail-closed,
+  timing-safe comparison `PlatformAdminGuard` already used, now shared by both. Both header
+  names are private: the standard `x-forwarded-host` is never read, because the web-to-API
+  hop is a public one and every proxy on it is entitled to rewrite `x-forwarded-*`. Without
+  a valid secret the header is not read at all and the fallback is `Host`, never the value
+  the caller supplied; a multi-valued `x-edge-host` is refused outright rather than
+  resolved to its leftmost element. Express `trust proxy` stays off, deliberately — the
+  gate is explicit code, not a framework-wide flag that would honour the header ungated.
+  The API refuses to **boot** under `NODE_ENV=production` without the secret, because an
+  API that cannot resolve a tenant serves nothing; it logs at boot whether forwarded-host
+  trust is on and how many secrets it accepts (so an unfinished rotation is visible), and
+  logs `tenancy.edge_auth_mismatch` at `warn`, once a minute at most, when a caller
+  presents a secret matching neither — the failure a rotation mismatch produces, which is
+  otherwise a silent full-environment outage. This is the half that reads what TAR-64's web
+  tier already sends, so tenant resolution works end to end for the first time; both
+  services must hold the same `TRUSTED_PROXY_SECRET`, and `render.yaml` gains
+  `TRUSTED_PROXY_SECRET_PREVIOUS` on each API service for the rotation. (TAR-148)
+
 - **The auth pipeline is global, so a new endpoint is closed before anybody thinks about
   it** — `HostTenantGuard`, `PrincipalGuard` and `PermissionGuard` are registered as
   `APP_GUARD` by a new `RequestPipelineModule` and run on every route in the application.

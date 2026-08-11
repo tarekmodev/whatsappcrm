@@ -92,10 +92,18 @@ projects:
               # and answer `tenant_not_found` on every tenant route, everywhere.
               # Generate per environment with `openssl rand -hex 32`.
               #
-              # TAR-148 adds TRUSTED_PROXY_SECRET_PREVIOUS alongside it, accepted
-              # as well as the current value so the secret can be rotated without
-              # a synchronised two-service deploy. Rotate API first, then web.
+              # TRUSTED_PROXY_SECRET_PREVIOUS is accepted as well as the current
+              # value, so the secret can be rotated without a synchronised
+              # two-service deploy. Leave it empty except during a rotation: put
+              # the old value in it and the new one above, redeploy the API so it
+              # accepts both, move the web service onto the new value, then clear
+              # it. The API's boot line reports how many secrets it accepts, so a
+              # rotation that stopped at step two is visible (TAR-148).
+              #
+              # Only the API takes it — the web service ever presents one value.
               - key: TRUSTED_PROXY_SECRET
+                sync: false
+              - key: TRUSTED_PROXY_SECRET_PREVIOUS
                 sync: false
               - fromGroup: whatsappcrm-secrets-dev
 
@@ -241,8 +249,11 @@ projects:
               - key: WEB_ORIGIN
                 sync: false
               # Same value as this environment's web service — see the development
-              # environment above for why the two are declared together.
+              # environment above for why the two are declared together, and for
+              # how PREVIOUS is used during a rotation.
               - key: TRUSTED_PROXY_SECRET
+                sync: false
+              - key: TRUSTED_PROXY_SECRET_PREVIOUS
                 sync: false
               - fromGroup: whatsappcrm-secrets-staging
 
@@ -364,8 +375,11 @@ projects:
               - key: WEB_ORIGIN
                 sync: false
               # Same value as this environment's web service — see the development
-              # environment above for why the two are declared together.
+              # environment above for why the two are declared together, and for
+              # how PREVIOUS is used during a rotation.
               - key: TRUSTED_PROXY_SECRET
+                sync: false
+              - key: TRUSTED_PROXY_SECRET_PREVIOUS
                 sync: false
               - fromGroup: whatsappcrm-secrets-prod
 
