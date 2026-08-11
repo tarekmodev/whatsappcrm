@@ -102,6 +102,24 @@ projects:
               # NEXT_PUBLIC_* is inlined into the browser bundle. Never a secret.
               - key: NEXT_PUBLIC_API_BASE_URL
                 sync: false
+              # Where the *server* side of Next reaches the API: the `rewrites()`
+              # proxy destination in next.config.mjs and every SSR call. Absent,
+              # both fall back to `http://localhost:3001/api`, which in a container
+              # is nothing at all — which is why no deployed environment has ever
+              # reached the real API over HTTP.
+              - key: API_BASE_URL
+                sync: false
+              # Presented as `x-edge-auth` alongside `x-forwarded-host` so
+              # HostTenantGuard will believe the host the browser actually asked
+              # for (ADR 0003, TAR-64). Must equal TRUSTED_PROXY_SECRET on the API
+              # service in this environment; the API answers tenant_not_found on
+              # every tenant route until it does.
+              #
+              # Server-only, and deliberately not NEXT_PUBLIC_: that prefix would
+              # inline a bearer token into the browser bundle and hand it to every
+              # visitor.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
 
           - type: keyvalue
             name: whatsappcrm-kv-dev
@@ -156,6 +174,28 @@ projects:
               - key: POLAR_ACCESS_TOKEN
                 sync: false
               - key: POLAR_WEBHOOK_SECRET
+                sync: false
+              # The web tier presents this as `x-edge-auth` so HostTenantGuard will
+              # trust its `x-forwarded-host` (ADR 0003, TAR-64). Render routes by
+              # Host at its edge and tenant domains are attached to the *web*
+              # service, so without it the API resolves its own hostname and every
+              # tenant route answers tenant_not_found. The API refuses to boot
+              # without it under NODE_ENV=production, which every environment here
+              # sets.
+              #
+              # `openssl rand -hex 32`, one per environment, and the same value goes
+              # in TRUSTED_PROXY_SECRET on the matching web service. Not in this
+              # group for the web tier to inherit: this group also holds database
+              # passwords and provider credentials the console has no business
+              # holding, so the web side declares its own copy.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
+              # Set to the outgoing value for the length of a rotation, so the two
+              # services can be rolled one at a time — web onto the new secret
+              # first, then the API, then clear this. Without it the rotation is a
+              # synchronised restart, and the gap between the two is a total tenant
+              # routing outage.
+              - key: TRUSTED_PROXY_SECRET_PREVIOUS
                 sync: false
 
       # -----------------------------------------------------------------------
@@ -222,6 +262,12 @@ projects:
                 value: production
               - key: NEXT_PUBLIC_API_BASE_URL
                 sync: false
+              # See the development web service for what these two are and why
+              # neither carries a NEXT_PUBLIC_ prefix.
+              - key: API_BASE_URL
+                sync: false
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
 
           - type: keyvalue
             name: whatsappcrm-kv-staging
@@ -267,6 +313,12 @@ projects:
               - key: POLAR_ACCESS_TOKEN
                 sync: false
               - key: POLAR_WEBHOOK_SECRET
+                sync: false
+              # See the development group for what these two are and how a
+              # rotation uses the second one.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
+              - key: TRUSTED_PROXY_SECRET_PREVIOUS
                 sync: false
 
       # -----------------------------------------------------------------------
@@ -333,6 +385,12 @@ projects:
                 value: production
               - key: NEXT_PUBLIC_API_BASE_URL
                 sync: false
+              # See the development web service for what these two are and why
+              # neither carries a NEXT_PUBLIC_ prefix.
+              - key: API_BASE_URL
+                sync: false
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
 
           - type: keyvalue
             name: whatsappcrm-kv-prod
@@ -380,4 +438,10 @@ projects:
               - key: POLAR_ACCESS_TOKEN
                 sync: false
               - key: POLAR_WEBHOOK_SECRET
+                sync: false
+              # See the development group for what these two are and how a
+              # rotation uses the second one.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
+              - key: TRUSTED_PROXY_SECRET_PREVIOUS
                 sync: false

@@ -168,6 +168,7 @@ describe('AllExceptionsFilter in production', () => {
     // connected to in this test.
     process.env.DATABASE_URL = 'postgresql://unused/unused';
     process.env.REDIS_URL = 'redis://unused';
+    process.env.TRUSTED_PROXY_SECRET = 'unused-in-this-test';
 
     const moduleRef = await Test.createTestingModule({ imports: [buildBoomModule()] })
       .overrideProvider(ErrorTrackingService)
@@ -184,6 +185,7 @@ describe('AllExceptionsFilter in production', () => {
     process.env.NODE_ENV = 'test';
     delete process.env.DATABASE_URL;
     delete process.env.REDIS_URL;
+    delete process.env.TRUSTED_PROXY_SECRET;
   });
 
   it('never returns an internal message to the caller', async () => {

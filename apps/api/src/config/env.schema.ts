@@ -119,6 +119,43 @@ const envShape = z.object({
   AUTH_STUB_ENABLED: z.enum(['true', 'false']).default('false'),
 
   // ---------------------------------------------------------------------------
+  // Tenant routing (TAR-19 / TAR-64, ADR 0003)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The secret the web tier presents as `x-edge-auth` to have its
+   * `x-forwarded-host` believed by `HostTenantGuard`.
+   *
+   * It exists because the host this process sees is never the one the browser
+   * typed: Render routes by `Host` at its edge and tenant domains are attached
+   * to the *web* service, and the browser path adds a rewrite to an absolute
+   * `API_BASE_URL` on top. Without a trusted forwarded host the guard resolves
+   * the API's own hostname, matches no `tenant_domains` row, and every tenant
+   * route answers `tenant_not_found`.
+   *
+   * Optional here and **absent means the guard reads `Host` exactly as it did
+   * before** — which is correct for local development and docker-compose, where
+   * the browser talks to `*.app.localhost` directly. It is the refinement below
+   * that makes it non-optional where it matters.
+   *
+   * Generate one per environment (`openssl rand -hex 32`). It is a bearer: any
+   * holder can name any *verified* tenant hostname, so it never reaches a
+   * browser bundle, never gets a `NEXT_PUBLIC_` prefix, and is rotated with the
+   * key below rather than by a synchronised deploy.
+   */
+  TRUSTED_PROXY_SECRET: z.string().min(1).optional(),
+
+  /**
+   * The value being rotated *out*, accepted alongside the current one.
+   *
+   * Rotation is: set this to the old secret, roll the web tier onto the new one,
+   * roll the API, then drop this. Without it the two services would have to
+   * restart in the same instant, and the gap between them is a total tenant
+   * routing outage rather than a degraded one.
+   */
+  TRUSTED_PROXY_SECRET_PREVIOUS: z.string().min(1).optional(),
+
+  // ---------------------------------------------------------------------------
   // Sessions (TAR-35 / TAR-56)
   // ---------------------------------------------------------------------------
 
@@ -148,10 +185,14 @@ const envShape = z.object({
    * failed sign-ins would then lock the whole tenant out of logging in for
    * fifteen minutes, which is a denial of service dressed as a control.
    *
-   * Turn it on where the API terminates connections from clients directly, or
-   * once the forwarded-address question `HostTenantGuard` defers has been
-   * decided. Nothing else changes: the durable per-account lockout is
-   * unconditional and is the layer that protects an individual account.
+   * Turn it on where the API terminates connections from clients directly. The
+   * forwarded-address question this used to defer to `HostTenantGuard` is now
+   * answered — `TRUSTED_PROXY_SECRET` above is the gate — so behind Render the
+   * client address can be read from `x-forwarded-for` under that same gate and
+   * this flag can default on. That belongs to TAR-59 and is deliberately not
+   * done here; still without `trust proxy`, for the reason above. Nothing else
+   * changes meanwhile: the durable per-account lockout is unconditional and is
+   * the layer that protects an individual account.
    */
   LOGIN_IP_THROTTLE_ENABLED: z.stringbool().default(false),
 
@@ -361,6 +402,22 @@ export const envSchema = envShape.superRefine((env, ctx) => {
       message:
         'must not be disabled when NODE_ENV=production — it drops both the Secure flag and the ' +
         '__Host- cookie prefix. It exists only so Safari can set a cookie on plain-HTTP localhost.',
+    });
+  }
+
+  // Every deployed environment sits behind Render's edge, where `Host` names the
+  // API service rather than a tenant. Without the secret the guard has nothing
+  // to resolve a tenant from and *every* tenant route answers `tenant_not_found`
+  // — an API that cannot route to a tenant serves nothing, so refusing to boot
+  // is strictly better than booting healthy and 404ing every request.
+  if (env.NODE_ENV === 'production' && !env.TRUSTED_PROXY_SECRET) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['TRUSTED_PROXY_SECRET'],
+      message:
+        'is required when NODE_ENV=production — without it HostTenantGuard resolves the API’s ' +
+        'own hostname, which matches no tenant domain, and every tenant route answers ' +
+        'tenant_not_found. Generate one per environment and give the web tier the same value.',
     });
   }
 

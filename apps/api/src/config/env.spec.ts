@@ -10,6 +10,10 @@ const PRODUCTION = {
   ...DATABASE_ROLES,
   NODE_ENV: 'production',
   REDIS_URL: 'redis://host:6379',
+  // Every deployed environment is behind Render's edge, where `Host` names the
+  // API service rather than a tenant, so the guard has nothing to resolve from
+  // without this (TAR-64, ADR 0003).
+  TRUSTED_PROXY_SECRET: 'a5f3c1d9e7b2486a0c4f8e1d3b7a9204',
 };
 
 /** A copy of `base` with one key removed — the case each test is actually about. */

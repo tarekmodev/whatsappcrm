@@ -45,6 +45,19 @@ const HOST_A = 'a.app.localhost';
 const HOST_B = 'b.app.localhost';
 const UNKNOWN_HOST = 'nobody.app.localhost';
 
+/**
+ * What the deployed edge looks like from inside the API: every request arrives
+ * with the API service's own hostname, because Render routed it there by that
+ * name and the browser path was rewritten to an absolute `API_BASE_URL` on the
+ * way. It resolves no tenant, which is the whole reason the forwarded host
+ * exists.
+ */
+const API_SERVICE_HOST = 'whatsappcrm-api-dev.onrender.com';
+
+/** The current secret and the one being rotated out, as both services hold them. */
+const EDGE_SECRET = 'a5f3c1d9e7b2486a0c4f8e1d3b7a920456c8e1f3a7d92b46083c5e7f1a9d2b468';
+const PREVIOUS_EDGE_SECRET = 'ffe2d1c0b9a8776655443322110099887766554433221100aabbccddeeff0011';
+
 function principalIn(tenantId: string): SessionPrincipal {
   return {
     userId: '58111111-1111-7111-8111-1111111111a1',
@@ -92,8 +105,22 @@ const DOMAINS: Record<string, string> = { [HOST_A]: TENANT_A, [HOST_B]: TENANT_B
       provide: PRINCIPAL_SOURCE,
       useValue: { resolve: () => Promise.resolve(resolution) } satisfies PrincipalSource,
     },
+    // Here rather than at the testing module's root, because that is where the
+    // application gets it from: `ConfigModule.forRoot({ isGlobal: true })`.
+    // `RequestPipelineModule` imports nothing, exactly as it does in the app, so
+    // a root-level provider is not something `HostTenantGuard` can resolve.
+    {
+      provide: ConfigService,
+      useValue: {
+        get: (key: string) =>
+          ({
+            TRUSTED_PROXY_SECRET: EDGE_SECRET,
+            TRUSTED_PROXY_SECRET_PREVIOUS: PREVIOUS_EDGE_SECRET,
+          })[key],
+      },
+    },
   ],
-  exports: [SYSTEM_PRISMA, PRINCIPAL_SOURCE],
+  exports: [SYSTEM_PRISMA, PRINCIPAL_SOURCE, ConfigService],
 })
 class PipelineFakesModule {}
 
@@ -211,7 +238,6 @@ describe('the globally installed request pipeline', () => {
         PlatformProbeController,
       ],
       providers: [
-        { provide: ConfigService, useValue: { get: () => undefined } },
         // Global here, where every controller under test would otherwise need
         // `@UseFilters`, so a guard's refusal renders the published envelope
         // whichever route it was thrown on. Anything that is not an
@@ -353,6 +379,100 @@ describe('the globally installed request pipeline', () => {
 
       expect(response.status).toBe(404);
       expect(errorCodeOf(response)).toBe('tenant_not_found');
+    });
+  });
+
+  /**
+   * The forwarded-host trust boundary (ADR 0003, TAR-64).
+   *
+   * `HostTenantGuard`'s own docstring calls a tenant taken from a header "a
+   * tenant id an attacker can choose", and that is still true — which is why
+   * these cases are about what happens when the secret is *absent or wrong*
+   * rather than only about the happy path. The gate has to be the difference
+   * between a header we wrote and a header anyone can send, and it has to fail
+   * towards `Host` rather than towards the header.
+   */
+  describe('the forwarded host is trusted only under the edge secret', () => {
+    /** A request as it actually arrives in production: at the API's own host. */
+    const fromEdge = () => request.agent(server).set('Host', API_SERVICE_HOST);
+
+    it('resolves the tenant the web tier names, when it proves it is the web tier', async () => {
+      const response = await fromEdge()
+        .set('x-edge-auth', EDGE_SECRET)
+        .set('x-forwarded-host', HOST_A)
+        .get('/api/v1/probe/guarded');
+
+      // The case the whole mechanism exists for: `Host` here is the API service,
+      // which matches no tenant domain at all.
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ tenantId: TENANT_A });
+    });
+
+    it('accepts the previous secret too, so the two services can roll one at a time', async () => {
+      const response = await fromEdge()
+        .set('x-edge-auth', PREVIOUS_EDGE_SECRET)
+        .set('x-forwarded-host', HOST_A)
+        .get('/api/v1/probe/guarded');
+
+      expect(response.status).toBe(200);
+    });
+
+    it('ignores a forwarded host presented without the secret', async () => {
+      const response = await fromEdge()
+        .set('x-forwarded-host', HOST_A)
+        .get('/api/v1/probe/guarded');
+
+      // The spoof this gate exists to refuse. Falling back to `Host` — the API's
+      // own name — is what makes it a refusal rather than a tenant of the
+      // caller's choosing.
+      expect(response.status).toBe(404);
+      expect(errorCodeOf(response)).toBe('tenant_not_found');
+    });
+
+    it('ignores a forwarded host presented with the wrong secret', async () => {
+      const response = await fromEdge()
+        .set('x-edge-auth', `${EDGE_SECRET.slice(0, -1)}0`)
+        .set('x-forwarded-host', HOST_A)
+        .get('/api/v1/probe/guarded');
+
+      expect(response.status).toBe(404);
+      expect(errorCodeOf(response)).toBe('tenant_not_found');
+    });
+
+    it('refuses a multi-valued forwarded host rather than taking an element of it', async () => {
+      const response = await fromEdge()
+        .set('x-edge-auth', EDGE_SECRET)
+        .set('x-forwarded-host', `${HOST_A}, ${HOST_B}`)
+        .get('/api/v1/probe/guarded');
+
+      // Leftmost-wins is how forwarded-header splicing gets in: an attacker
+      // appends a value the edge never wrote, and a parser that takes an element
+      // takes theirs. Two claimed hosts is one too many, whichever order.
+      expect(response.status).toBe(404);
+      expect(errorCodeOf(response)).toBe('tenant_not_found');
+    });
+
+    it('does not let a forged forwarded host reach a tenant the session cannot', async () => {
+      resolution = resolved(principalIn(TENANT_A));
+
+      const response = await fromEdge()
+        .set('x-forwarded-host', HOST_B)
+        .get('/api/v1/probe/guarded');
+
+      // Belt and braces, stated as a test because it is the containment that
+      // makes the residual risk of a leaked secret survivable: even if the host
+      // had been believed, `PrincipalGuard` cross-checks the session's tenant.
+      expect(response.status).toBe(404);
+      expect(errorCodeOf(response)).toBe('tenant_not_found');
+    });
+
+    it('still resolves from Host when nothing is forwarded at all', async () => {
+      // Local development and docker-compose, where the browser reaches the API
+      // directly and there is no edge in between. Unchanged by any of this.
+      const response = await call(HOST_A).get('/api/v1/probe/guarded');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ tenantId: TENANT_A });
     });
   });
 

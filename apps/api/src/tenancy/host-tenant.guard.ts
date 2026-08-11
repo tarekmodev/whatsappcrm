@@ -1,4 +1,12 @@
-import { Inject, Injectable, type CanActivate, type ExecutionContext } from '@nestjs/common';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type CanActivate,
+  type ExecutionContext,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { ApiException } from '../common/errors/api.exception';
@@ -20,6 +28,44 @@ import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
  * any principal whose own tenant disagrees with this one, so a stolen session
  * replayed at another tenant's domain fails on the mismatch rather than being
  * served.
+ *
+ * ## The forwarded-host trust boundary
+ *
+ * "The host, never the caller" is still the rule, but in every deployed
+ * environment the host this process sees is **not** the one the browser typed.
+ * Render routes at its edge by `Host`, and a request only reaches the API
+ * service if its `Host` names a domain attached to *that* service — tenant
+ * domains (TAR-29) are attached to the web service. The browser path adds a
+ * second hop: `next.config.mjs` rewrites `/api/*` to an absolute `API_BASE_URL`,
+ * which sets `Host` to the API's own host. So `request.hostname` is the API host
+ * on both paths, and resolves no tenant at all.
+ *
+ * The decision (ADR 0003, TAR-64) is to trust `x-forwarded-host` **only** when
+ * the request also presents `x-edge-auth` matching a secret the API and the web
+ * tier both hold. That is the same primitive `PlatformAdminGuard` uses — a
+ * fail-closed, timing-safe shared bearer, hashed then compared with
+ * `timingSafeEqual` — rather than a new trust mechanism.
+ *
+ * Three properties make it safe to read a header here at all:
+ *
+ *   * **Gated, and never a fallback.** No secret, a wrong secret, or an
+ *     unusable forwarded value all fall back to `request.hostname` or to
+ *     nothing — never to the attacker-chosen value. A misconfiguration answers
+ *     `tenant_not_found` on every tenant route, which is loud and total.
+ *   * **Explicit code, not `trust proxy`.** Express's `trust proxy` would make
+ *     `req.hostname` honour `X-Forwarded-Host` *ungated*, which is precisely the
+ *     spoof this guard exists to prevent. It stays off, permanently.
+ *   * **The verified-domain requirement is unchanged.** Even holding the secret,
+ *     a caller can only name a hostname that is already a verified
+ *     `tenant_domains` row.
+ *
+ * The residual risk, stated rather than buried: a leaked secret lets its holder
+ * name any verified tenant hostname. On authenticated routes `PrincipalGuard`
+ * still cross-checks the session's tenant and answers `tenant_mismatch`, so the
+ * secret alone yields no data; on `@Public()` routes — login, password reset,
+ * invite lookup — there is no session to cross-check, so it does expose those
+ * surfaces. That is why the secret is per-environment, rotatable, and never
+ * shipped to a browser.
  *
  * ## Why `SystemPrisma`
  *
@@ -46,11 +92,41 @@ import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
  */
 @Injectable()
 export class HostTenantGuard implements CanActivate {
+  private readonly logger = new Logger(HostTenantGuard.name);
+
+  /**
+   * The current secret and, during a rotation, the previous one.
+   *
+   * Read once at construction rather than per request: `validateEnv` has already
+   * run by then, the values cannot change while the process lives, and a
+   * `config.get` on the hot path of every request buys nothing.
+   *
+   * Both are accepted so the two services can be rolled independently — web
+   * first with the new value, then the API, then drop the previous — instead of
+   * needing a synchronised deploy that no platform offers.
+   */
+  private readonly trustedProxySecrets: readonly string[];
+
   constructor(
     private readonly reflector: Reflector,
     @Inject(SYSTEM_PRISMA) private readonly systemPrisma: SystemPrisma,
     private readonly tenantContext: TenantContextService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.trustedProxySecrets = [
+      config.get<string>('TRUSTED_PROXY_SECRET'),
+      config.get<string>('TRUSTED_PROXY_SECRET_PREVIOUS'),
+    ].filter((secret): secret is string => secret !== undefined && secret !== '');
+
+    // The flag, never the value. Whether forwarded-host trust is on is the first
+    // thing anybody debugging a tenant-wide `tenant_not_found` needs to know,
+    // and it is not otherwise visible from outside the process.
+    this.logger.log(
+      this.trustedProxySecrets.length > 0
+        ? `Forwarded-host trust is enabled (${String(this.trustedProxySecrets.length)} secret(s) accepted).`
+        : 'Forwarded-host trust is disabled: the tenant is resolved from the Host header alone.',
+    );
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     if (isPlatformRoute(this.reflector, context)) {
@@ -61,7 +137,7 @@ export class HostTenantGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<Request>();
-    const hostname = hostnameOf(request);
+    const hostname = hostnameOf(request, this.trustedProxySecrets);
 
     if (hostname === null) {
       throw tenantNotFound();
@@ -84,19 +160,113 @@ export class HostTenantGuard implements CanActivate {
   }
 }
 
-/**
- * The `Host` header with any port stripped, lowercased to match the `citext`
- * column.
- *
- * `req.hostname` already does this in Express 5 and honours `X-Forwarded-Host`
- * only when `trust proxy` is set — which it is not, so a client cannot pick its
- * own tenant by forging that header. When the platform sits behind a proxy that
- * rewrites `Host`, enabling `trust proxy` is a deliberate, reviewed change.
- */
-function hostnameOf(request: Request): string | null {
-  const hostname = request.hostname;
+/** The header the web tier presents to prove it is the web tier. */
+const EDGE_AUTH_HEADER = 'x-edge-auth';
 
-  return typeof hostname === 'string' && hostname !== '' ? hostname.toLowerCase() : null;
+/** The header it uses to name the host the browser actually asked for. */
+const FORWARDED_HOST_HEADER = 'x-forwarded-host';
+
+/**
+ * A DNS hostname and nothing else.
+ *
+ * Applied to the forwarded value only. It is not an injection defence — the
+ * lookup is a bound parameter — but a header is free text, and a value carrying
+ * a newline or a control character reaches the log before it reaches the query.
+ * `request.hostname` is Express's own parse of `Host` and is left as it was.
+ */
+const HOSTNAME_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
+
+/**
+ * Which host this request is *for*, port stripped and lowercased to match the
+ * `citext` column.
+ *
+ * Two sources, and the choice between them is the trust boundary:
+ *
+ *   1. `x-forwarded-host`, but **only** when `x-edge-auth` matches a configured
+ *      secret. That is our own web tier telling us what the browser asked for.
+ *   2. `request.hostname` otherwise — Express's parse of `Host`, which honours
+ *      `X-Forwarded-Host` only under `trust proxy`, which is off.
+ *
+ * There is deliberately no third case. Once the gate opens, an absent,
+ * multi-valued or malformed forwarded value answers `null` rather than falling
+ * back to `request.hostname`: a caller that authenticated as the edge and then
+ * sent a host we cannot read is a misconfiguration, and resolving it from the
+ * API's own host would only produce a confusing near-miss.
+ *
+ * A comma is rejected outright rather than split on. Leftmost-wins is how
+ * forwarded-header splicing gets in — an attacker appends a value the edge did
+ * not write, and a parser that takes an element gets the attacker's.
+ */
+function hostnameOf(request: Request, trustedProxySecrets: readonly string[]): string | null {
+  if (!presentsTrustedEdgeAuth(request, trustedProxySecrets)) {
+    const hostname = request.hostname;
+
+    return typeof hostname === 'string' && hostname !== '' ? hostname.toLowerCase() : null;
+  }
+
+  return forwardedHostOf(request.headers[FORWARDED_HOST_HEADER]);
+}
+
+/**
+ * Whether the request carries a secret we issued.
+ *
+ * `false` for every doubt: no secret configured, no header, an array of them
+ * (Node exposes repeated headers that way, and two values mean two claimants),
+ * or a value that does not match. The comparison itself reuses
+ * `PlatformAdminGuard`'s shape — hash both sides to a fixed 32 bytes, then
+ * `timingSafeEqual` — so neither the secret's length nor how far a guess matched
+ * is measurable.
+ */
+function presentsTrustedEdgeAuth(
+  request: Request,
+  trustedProxySecrets: readonly string[],
+): boolean {
+  if (trustedProxySecrets.length === 0) {
+    return false;
+  }
+
+  const presented = request.headers[EDGE_AUTH_HEADER];
+
+  if (typeof presented !== 'string' || presented === '') {
+    return false;
+  }
+
+  // Every secret is compared, without a short circuit on the first match: which
+  // of the two accepted values matched is not something a caller should be able
+  // to time during a rotation.
+  return trustedProxySecrets.reduce(
+    (matched, secret) => timingSafeEqual(sha256(presented), sha256(secret)) || matched,
+    false,
+  );
+}
+
+function forwardedHostOf(header: string | string[] | undefined): string | null {
+  // An array is Node's rendering of the header sent twice; a comma is it sent
+  // once with two values spliced in. Both mean more than one claimed host.
+  if (typeof header !== 'string' || header.includes(',')) {
+    return null;
+  }
+
+  const hostname = stripPort(header.trim()).toLowerCase();
+
+  return HOSTNAME_PATTERN.test(hostname) ? hostname : null;
+}
+
+/** `acme.example:3000` → `acme.example`. Bracketed IPv6 literals keep their brackets. */
+function stripPort(host: string): string {
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']');
+
+    return end === -1 ? host : host.slice(0, end + 1);
+  }
+
+  const colon = host.indexOf(':');
+
+  return colon === -1 ? host : host.slice(0, colon);
+}
+
+function sha256(value: string): Buffer {
+  return createHash('sha256').update(value, 'utf8').digest();
 }
 
 /**

@@ -14,6 +14,28 @@ change.
 
 ### Security
 
+- **`HostTenantGuard` can resolve a tenant behind the edge, without becoming a header a
+  caller can choose** — the guard read `request.hostname` only, and in every deployed
+  environment that is the API service's own hostname: Render routes by `Host` at its edge
+  and tenant domains (TAR-29) are attached to the _web_ service, and the browser path adds
+  a `rewrites()` hop to an absolute `API_BASE_URL` on top. It matched no `tenant_domains`
+  row, so every tenant route would have answered `tenant_not_found` the moment
+  `NEXT_PUBLIC_USE_MOCK_API` came off — SSR and browser paths alike. The guard now accepts
+  `x-forwarded-host`, but **only** when the request also presents `x-edge-auth` matching
+  `TRUSTED_PROXY_SECRET` (or `TRUSTED_PROXY_SECRET_PREVIOUS`, so the two services can be
+  rolled one at a time). The comparison reuses `PlatformAdminGuard`'s shape — hash both
+  sides to 32 bytes, then `timingSafeEqual` — rather than introducing a second trust
+  mechanism. No secret, a wrong secret, a repeated header or a multi-valued one all fall
+  back to `Host` or to nothing, never to the caller's value; a comma is refused outright
+  rather than split on, because leftmost-wins is how forwarded-header splicing gets in.
+  Express `trust proxy` stays off permanently — turning it on would make `req.hostname`
+  honour `X-Forwarded-Host` _ungated_, which is the exact spoof this guard exists to
+  prevent. The verified-domain requirement is unchanged, so even the secret's holder can
+  only name a hostname that is already verified. The API refuses to boot without the
+  secret under `NODE_ENV=production`, which every deployed environment sets: an API that
+  cannot route to a tenant serves nothing, so failing at startup beats coming up healthy
+  and 404ing every request. (TAR-64, ADR 0003)
+
 - **The auth pipeline is global, so a new endpoint is closed before anybody thinks about
   it** — `HostTenantGuard`, `PrincipalGuard` and `PermissionGuard` are registered as
   `APP_GUARD` by a new `RequestPipelineModule` and run on every route in the application.
@@ -284,6 +306,12 @@ change.
 
 ### Fixed
 
+- **`API_BASE_URL` was never declared for any deployed environment** — so both the
+  `rewrites()` proxy destination in `next.config.mjs` and `webEnv.serverApiBaseUrl` fell back
+  to `http://localhost:3001/api` in development, staging and production, which inside a
+  container is nothing at all. Declared on all three web services in `render.yaml` alongside
+  `NEXT_PUBLIC_API_BASE_URL`, whose value it takes. Found while implementing the
+  forwarded-host trust boundary above; nothing reaches the API over HTTP without it. (TAR-64)
 - **A malformed tenant id is refused as `TN001`, not raised as a cast error.** It previously
   reached the application as SQLSTATE `22P02`, which was reported as a fault rather than as
   the refusal it is. No isolation consequence — the cast raised before `set_config` either

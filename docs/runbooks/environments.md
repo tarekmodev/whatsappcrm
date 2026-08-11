@@ -114,7 +114,7 @@ database down and `detail` showing an authentication failure, this is why.
 Render assigns `https://<service-name>.onrender.com`, and the service names are
 fixed in `render.yaml` — so these are known before anything exists:
 
-| Environment | `WEB_ORIGIN`                                   | `NEXT_PUBLIC_API_BASE_URL`                         |
+| Environment | `WEB_ORIGIN`                                   | `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL`      |
 | ----------- | ---------------------------------------------- | -------------------------------------------------- |
 | development | `https://whatsappcrm-web-dev.onrender.com`     | `https://whatsappcrm-api-dev.onrender.com/api`     |
 | staging     | `https://whatsappcrm-web-staging.onrender.com` | `https://whatsappcrm-api-staging.onrender.com/api` |
@@ -123,6 +123,39 @@ fixed in `render.yaml` — so these are known before anything exists:
 They are prompted rather than wired automatically because Render's `fromService`
 supplies a hostname with no scheme, and both of these need one. They become custom
 domains once white-labelling lands.
+
+`API_BASE_URL` takes the **same value** as `NEXT_PUBLIC_API_BASE_URL` and is set
+on the web service alongside it. It is what the _server_ side of Next uses — the
+`rewrites()` proxy destination and every SSR call — and absent it silently falls
+back to `http://localhost:3001/api`, which inside a container is nothing at all.
+
+### The tenant routing secret
+
+`TRUSTED_PROXY_SECRET` is how `HostTenantGuard` tells "this `x-forwarded-host`
+came from our own web tier" from "this came from whoever asked" (ADR 0003).
+Render routes by `Host` at its edge and tenant domains are attached to the _web_
+service, so the API only ever sees its own hostname — without the secret it
+resolves no tenant and **every tenant route answers `tenant_not_found`.**
+
+1. `openssl rand -hex 32`, once per environment. Never reuse one across two.
+2. Set it in `whatsappcrm-secrets-<env>` (the API side) **and** as
+   `TRUSTED_PROXY_SECRET` on `whatsappcrm-web-<env>`. The two must be identical.
+   It is declared twice rather than inherited from the group, because that group
+   also holds database passwords and provider credentials the console has no
+   business holding.
+3. Never give it a `NEXT_PUBLIC_` prefix. That inlines it into the browser bundle
+   and hands a bearer token to every visitor.
+
+**The API refuses to boot without it under `NODE_ENV=production`, which every
+environment here sets** — so set it _before_ the deploy that first requires it,
+or that deploy fails at startup. The startup log says which way round it is:
+`Forwarded-host trust is enabled` or `… is disabled`, never the value.
+
+Rotating it: put the outgoing value in `TRUSTED_PROXY_SECRET_PREVIOUS` on the
+API, redeploy the API, then move the web service to the new value, then redeploy
+the API once more with `TRUSTED_PROXY_SECRET_PREVIOUS` cleared. Skipping the
+middle step makes the rotation a synchronised restart, and the gap between the
+two services is a total tenant routing outage.
 
 ### Everything else can wait
 
