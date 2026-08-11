@@ -85,9 +85,10 @@ change.
   trust is on and how many secrets it accepts (so an unfinished rotation is visible), and
   logs `tenancy.edge_auth_mismatch` at `warn`, once a minute at most, when a caller
   presents a secret matching neither — the failure a rotation mismatch produces, which is
-  otherwise a silent full-environment outage. Pairs with the web half; both services need
-  the same value, and `render.yaml` now carries it — along with `API_BASE_URL`, which was
-  declared nowhere and left the rewrite destination falling back to `localhost`. (TAR-148)
+  otherwise a silent full-environment outage. This is the half that reads what TAR-64's web
+  tier already sends, so tenant resolution works end to end for the first time; both
+  services must hold the same `TRUSTED_PROXY_SECRET`, and `render.yaml` gains
+  `TRUSTED_PROXY_SECRET_PREVIOUS` on each API service for the rotation. (TAR-148)
 
 - **The auth pipeline is global, so a new endpoint is closed before anybody thinks about
   it** — `HostTenantGuard`, `PrincipalGuard` and `PermissionGuard` are registered as

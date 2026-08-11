@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
+import { EDGE_AUTH_HEADER, TENANT_HOST_HEADER } from '@whatsappcrm/contracts';
 import type { Request } from 'express';
 import { ApiException } from '../common/errors/api.exception';
 import { isPlatformRoute } from '../common/request-pipeline/route-access';
@@ -15,25 +16,6 @@ import { matchesSharedSecret } from '../common/security/shared-secret';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Env } from '../config/env.schema';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
-
-/**
- * The host the web tier says the request arrived at. Read only behind the header
- * below.
- *
- * Deliberately **not** `x-forwarded-host`. That is a standard forwarding header
- * every hop on the path is entitled to set, overwrite or append to, and the path
- * here is a public one: `API_BASE_URL` points the web tier at
- * `https://whatsappcrm-api-<env>.onrender.com`, so the call leaves Render and
- * re-enters through TLS-terminating proxies that populate `x-forwarded-*`. An
- * edge that rewrote it would leave every tenant route answering a uniform
- * `tenant_not_found` while the boot line below still said `enabled`. A private
- * name nothing on the path has an opinion about removes the question, and costs
- * one string on each side.
- */
-const EDGE_HOST_HEADER = 'x-edge-host';
-
-/** The shared secret that makes the header above worth reading. */
-const EDGE_AUTH_HEADER = 'x-edge-auth';
 
 /**
  * Express 5 has already stripped the port from `req.hostname`; a forwarded host
@@ -84,6 +66,11 @@ const REFUSAL_LOG_INTERVAL_MS = 60_000;
  * here, gated or otherwise: it is a standard header the proxies between the two
  * services are entitled to rewrite, and a payload nobody on the path will touch
  * is worth more than one that merely looks conventional.
+ *
+ * Both names come from `@whatsappcrm/contracts`, which is where the web tier
+ * reads them too — they are a wire format shared by two deployed services, and a
+ * rename that reached only one of them would leave every tenant route answering
+ * `tenant_not_found` while both sides still reported the feature enabled.
  *
  * Express `trust proxy` stays off, deliberately. Turning it on would make
  * `req.hostname` honour `X-Forwarded-Host` *ungated*, which is precisely the
@@ -172,7 +159,7 @@ export class HostTenantGuard implements CanActivate, OnModuleInit {
 
     this.logger.log(
       `Forwarded-host tenant resolution is enabled (${this.edgeSecrets.length} secret(s) accepted${rotation}): ` +
-        `a request presenting a valid ${EDGE_AUTH_HEADER} resolves its tenant from ${EDGE_HOST_HEADER}.`,
+        `a request presenting a valid ${EDGE_AUTH_HEADER} resolves its tenant from ${TENANT_HOST_HEADER}.`,
     );
   }
 
@@ -221,7 +208,7 @@ export class HostTenantGuard implements CanActivate, OnModuleInit {
       return normalisedHostname(request.hostname);
     }
 
-    const forwarded = request.header(EDGE_HOST_HEADER);
+    const forwarded = request.header(TENANT_HOST_HEADER);
 
     if (forwarded === undefined || forwarded.trim() === '') {
       // A trusted edge that named no host is not an attack — a probe that reached

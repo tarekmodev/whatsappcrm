@@ -386,6 +386,12 @@ describe('the globally installed request pipeline', () => {
    * caller name its own tenant is `x-edge-auth`. Every case below arrives at
    * `API_HOST`, exactly as a real one does, so a pass means the forwarded value
    * was honoured and a `tenant_not_found` means it was not.
+   *
+   * The header names are written out rather than imported from
+   * `@whatsappcrm/contracts` on purpose, even though the guard reads them from
+   * there. These send what a real client sends, so a rename has to break this
+   * spec rather than follow it silently — the same reason `contract.test.ts`
+   * pins the literal spellings instead of comparing a constant to itself.
    */
   describe('a forwarded host', () => {
     it('resolves the tenant when the caller presents the shared secret', async () => {
