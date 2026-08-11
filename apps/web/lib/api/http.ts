@@ -1,7 +1,7 @@
 import { webEnv } from '@/lib/config/env';
 import { handleMockRequest } from '@/lib/api/mock/handlers';
 import { toApiRequestError } from '@/lib/api/error';
-import { tenantHostHeaders } from '@/lib/api/tenant-host';
+import { tenantRoutingHeaders } from '@/lib/api/tenant-host';
 import type { ApiRequest } from '@/lib/api/request';
 
 /**
@@ -30,13 +30,13 @@ export async function apiRequest(request: ApiRequest): Promise<unknown> {
     // Role and tenant scoping are decided per request; a cached list would
     // survive a role change and show one principal another one's data.
     cache: 'no-store',
-    // The tenant host goes on every server-side call, not just the authenticated
+    // The tenant goes on every server-side call, not just the authenticated
     // ones: sign-in and password reset are unauthenticated *and* tenant-scoped,
     // so they need it too. Here rather than per resource module, so a new call
     // site cannot forget it — the same reason the cookie has one home.
     headers: {
       'content-type': 'application/json',
-      ...(await tenantHostHeaders()),
+      ...(await tenantRoutingHeaders()),
       ...request.headers,
     },
     body: request.body === undefined ? undefined : JSON.stringify(request.body),

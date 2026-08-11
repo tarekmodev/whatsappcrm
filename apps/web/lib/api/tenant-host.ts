@@ -1,49 +1,48 @@
 import 'server-only';
 
 import { headers } from 'next/headers';
+import { EDGE_AUTH_HEADER, TENANT_HOST_HEADER } from '@whatsappcrm/contracts';
+import { webEnv } from '@/lib/config/env';
 
 /**
- * Names the tenant on a server-side call to the API.
+ * Names the tenant on a server-side call to the API, and proves the naming.
  *
- * `HostTenantGuard` resolves which tenant a request is for from the host it
- * arrived on, and that is the whole of the tenant-routing decision
+ * `HostTenantGuard` resolves which tenant a request is for from the host, and
+ * that is the whole of the tenant-routing decision
  * (`apps/api/src/tenancy/host-tenant.guard.ts`). A call that does not carry the
  * caller's host resolves no tenant and is answered `tenant_not_found` — so every
  * server-rendered page under `app/(app)` fails, not just the ones that read data.
  *
- * ## Why `x-forwarded-host` rather than `Host`
+ * ## Why a forwarded host, and not `Host`
  *
- * `Host` cannot be set on either path, and both were verified against the
- * versions in this repository rather than assumed:
+ * `Host` cannot carry the tenant in any deployed environment, and each of these
+ * was verified against the versions in this repository rather than assumed:
  *
+ *   - **Render routes by `Host` at its edge.** A request only reaches the API
+ *     service if `Host` names that service, and a tenant's custom domain (TAR-29)
+ *     is attached to the *web* service. `request.hostname` inside the API can
+ *     therefore never be a tenant hostname in production.
  *   - **Server-side.** `fetch` derives `Host` from the URL's authority and drops
- *     any `Host` the caller supplies — it is a forbidden header name. Node 22's
- *     implementation ignores it silently, so the wrong host is not even an error.
- *   - **Browser-side.** `next.config.mjs` rewrites `/api/*` to the API origin, and
- *     Next's proxy hardcodes `changeOrigin: true`
- *     (`next/dist/server/lib/router-utils/proxy-request.js`). It overwrites `Host`
- *     with the destination's and puts the browser's own host in
- *     `x-forwarded-host`. `rewrites()` exposes no option that changes this.
+ *     any `Host` the caller supplies — it is a forbidden header name. Node 22
+ *     ignores it silently, so the wrong host is not even an error.
+ *   - **Browser-side.** Next's rewrite proxy hardcodes `changeOrigin: true`
+ *     (`next/dist/server/lib/router-utils/proxy-request.js`), replacing `Host`
+ *     with the destination's. `rewrites()` exposes no option that changes it.
  *
- * So the browser path already delivers the tenant host in `x-forwarded-host`, and
- * this makes the server path say the same thing in the same header. One header
- * carries the tenant on both, which is what lets the API read it in one place.
+ * ## Why the secret
  *
- * ⚠️ **This is one half of the fix.** The API still resolves the tenant from
- * `Host` with Express `trust proxy` deliberately unset, so it does not read this
- * yet and both paths still answer `tenant_not_found` once the mock transport is
- * off. Whether — and on what evidence — the API may trust a forwarded host is an
- * `apps/api` decision, because the header is forgeable by anything that can reach
- * the API directly. See TAR-64.
+ * A forwarded host is a host the caller chose, which is the tenant spoof
+ * `HostTenantGuard`'s own docstring warns about. So the pair travels together:
+ * the API honours `x-forwarded-host` only from a request that also presents the
+ * secret both tiers hold, and otherwise falls back to `Host` exactly as it does
+ * today — never to the forwarded value. See the trust-boundary decision on
+ * TAR-64 for the options weighed and the residual risk accepted.
+ *
+ * The browser's own calls do not come through here — they are proxied by
+ * `next.config.mjs` — so `proxy.ts` injects the same pair on that path.
  */
 
-/**
- * Standard, and the name Next's own proxy already uses on the browser path.
- * Named rather than repeated so the two call sites cannot drift apart.
- */
-export const FORWARDED_HOST_HEADER = 'x-forwarded-host';
-
-export async function tenantHostHeaders(): Promise<Record<string, string>> {
+export async function tenantRoutingHeaders(): Promise<Record<string, string>> {
   const host = (await headers()).get('host');
 
   if (host === null || host === '') {
@@ -53,5 +52,27 @@ export async function tenantHostHeaders(): Promise<Record<string, string>> {
     throw new Error('The incoming request carries no Host, so no tenant can be named to the API.');
   }
 
-  return { [FORWARDED_HOST_HEADER]: host };
+  return { [TENANT_HOST_HEADER]: host, ...edgeAuthHeader() };
+}
+
+/**
+ * Configured everywhere the API is reached over HTTP. Absent, the API falls back
+ * to `Host`, resolves nothing and answers `tenant_not_found` on every tenant
+ * route — total and loud rather than a silent cross-tenant read, but still an
+ * outage, so a deployed environment refuses to serve rather than discover it one
+ * request at a time.
+ */
+function edgeAuthHeader(): Record<string, string> {
+  if (webEnv.trustedProxySecret === null) {
+    if (webEnv.isProduction) {
+      throw new Error(
+        'TRUSTED_PROXY_SECRET is not configured, so the API cannot be told which tenant ' +
+          'a server-side call is for. Set it to the same value the API holds.',
+      );
+    }
+
+    return {};
+  }
+
+  return { [EDGE_AUTH_HEADER]: webEnv.trustedProxySecret };
 }

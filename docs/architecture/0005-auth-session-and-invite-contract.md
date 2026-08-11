@@ -159,22 +159,34 @@ sequenceDiagram
 ```
 
 > **Correction (TAR-64): `Host` is not preserved, and cannot be.** This diagram originally
-> assumed the proxy passed the tenant's `Host` through untouched. It does not, on either
-> path, and neither is fixable from `apps/web`:
+> assumed the proxy passed the tenant's `Host` through untouched. It does not, and the
+> assumption was unimplementable in every deployed environment:
 >
+> - Render routes by `Host` at its edge. A request reaches the API service only if `Host`
+>   names _that_ service, and a tenant's custom domain (TAR-29) is attached to the web
+>   service — so `request.hostname` inside the API can never be a tenant hostname.
 > - Next's rewrite proxy hardcodes `changeOrigin: true`, so it replaces `Host` with the API
 >   origin and puts the browser's host in `x-forwarded-host`. `rewrites()` exposes no option
 >   that changes it.
 > - `fetch` derives `Host` from the URL and silently drops a caller-supplied one, so a
 >   server-rendered call cannot set it either.
 >
-> Both paths therefore name the tenant in `x-forwarded-host` — the browser path always did,
-> and `lib/api/tenant-host.ts` makes the server path match. **`HostTenantGuard` still reads
-> `Host` only**, so tenant resolution remains broken until the API is changed; whether it may
-> trust a forwarded host, and on what evidence, is the open decision on TAR-64. Note that
-> preserving `Host` end-to-end is not an option on the current Render topology: the API is a
-> public service whose edge routes by `Host`, so a request carrying a tenant's host would
-> never reach it.
+> **Decision:** the tenant host travels in `x-forwarded-host`, and the API honours it only
+> when the request also presents `x-edge-auth` carrying `TRUSTED_PROXY_SECRET` — the same
+> fail-closed, timing-safe shared secret `PlatformAdminGuard` already uses. Without a
+> matching secret the guard falls back to `Host` exactly as before, never to the forwarded
+> value, so a missing or rotated secret degrades to a uniform `tenant_not_found` rather than
+> to an attacker-chosen tenant. Express `trust proxy` stays off: turning it on would make
+> `req.hostname` honour the forwarded header _ungated_, which is the spoof the guard exists
+> to prevent. `apps/web` sends the pair on both paths — `lib/api/tenant-host.ts` for server
+> rendering, `proxy.ts` for the browser's calls through the `/api/*` rewrite. The guard-side
+> read is TAR-64's remaining backend work.
+>
+> Residual risk, stated plainly: a leaked secret lets its holder name any _verified_ tenant
+> hostname. On authenticated routes `PrincipalGuard` still cross-checks the session's tenant
+> and answers `tenant_mismatch`, so the secret alone yields no data; on `@Public()` routes —
+> login, password reset, invite lookup — there is no session to cross-check, so a leak does
+> expose those surfaces. Hence per-environment, rotatable, and never `NEXT_PUBLIC_`.
 
 ### Components and responsibilities
 

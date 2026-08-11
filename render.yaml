@@ -111,6 +111,19 @@ projects:
               # `fromService` cannot supply. Server-only — no NEXT_PUBLIC_ prefix.
               - key: API_BASE_URL
                 sync: false
+              # Proves to the API that a forwarded tenant host came from this tier
+              # and not from an arbitrary caller (TAR-64). Must hold the SAME value
+              # as the API service's TRUSTED_PROXY_SECRET in this environment; when
+              # they disagree the API resolves no tenant and every tenant route
+              # answers tenant_not_found. Generate per environment with
+              # `openssl rand -hex 32`.
+              #
+              # Server-only, and it must stay that way: a NEXT_PUBLIC_ prefix would
+              # inline it into the browser bundle and hand it to every visitor.
+              # Read at runtime, not baked into the build, so rotating it is a
+              # restart rather than a rebuild.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
 
           - type: keyvalue
             name: whatsappcrm-kv-dev
@@ -235,6 +248,10 @@ projects:
               # environment above for why omitting it breaks both API paths.
               - key: API_BASE_URL
                 sync: false
+              # Same value as this environment's API service. See the development
+              # environment above for what happens when the two disagree.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
 
           - type: keyvalue
             name: whatsappcrm-kv-staging
@@ -349,6 +366,10 @@ projects:
               # Read at build time as well as at runtime — see the development
               # environment above for why omitting it breaks both API paths.
               - key: API_BASE_URL
+                sync: false
+              # Same value as this environment's API service. See the development
+              # environment above for what happens when the two disagree.
+              - key: TRUSTED_PROXY_SECRET
                 sync: false
 
           - type: keyvalue

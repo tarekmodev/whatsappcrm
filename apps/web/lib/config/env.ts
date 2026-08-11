@@ -23,6 +23,18 @@ export interface WebEnv {
    */
   readonly serverApiBaseUrl: string;
   /**
+   * The shared secret that proves to the API a forwarded tenant host came from
+   * this tier rather than from an arbitrary caller (TAR-64). `null` when unset.
+   *
+   * **Server-only, and it must stay that way**: a `NEXT_PUBLIC_` prefix would
+   * inline it into the browser bundle and hand it to every visitor, which is the
+   * whole of the trust boundary. It is read here rather than validated, because
+   * this module is also evaluated in the browser — where `process.env` carries no
+   * server variables — and a throw would break the client. The server-side
+   * modules that send it are the ones that insist on it.
+   */
+  readonly trustedProxySecret: string | null;
+  /**
    * Serves every API call from the in-memory fixture layer instead of HTTP.
    * TAR-82 ships with this on so the UI can be built and reviewed before
    * TAR-81's endpoints land; turning it off is the entire "wire to the real
@@ -70,6 +82,13 @@ function readRequired(name: string, rawValue: string | undefined, fallback: stri
   return value;
 }
 
+/** Absent and empty are the same thing for a secret: not configured. */
+function readOptionalSecret(rawValue: string | undefined): string | null {
+  const value = (rawValue ?? '').trim();
+
+  return value.length === 0 ? null : value;
+}
+
 function readWebEnv(): WebEnv {
   const isProduction = process.env.NODE_ENV === 'production';
 
@@ -85,6 +104,7 @@ function readWebEnv(): WebEnv {
       process.env.API_BASE_URL,
       'http://localhost:3001/api',
     ),
+    trustedProxySecret: readOptionalSecret(process.env.TRUSTED_PROXY_SECRET),
     useMockApi: readFlag('NEXT_PUBLIC_USE_MOCK_API', process.env.NEXT_PUBLIC_USE_MOCK_API, false),
     enableRoleStub: readFlag(
       'NEXT_PUBLIC_ENABLE_ROLE_STUB',

@@ -134,6 +134,32 @@ export const TenantUpdateInputSchema = z.object({
   branding: TenantBrandingSchema.partial().optional(),
 });
 
+/**
+ * How a request tells the API which tenant it is for, once it has crossed the
+ * web tier (ADR 0005, TAR-64).
+ *
+ * `HostTenantGuard` resolves the tenant from the host, and the host alone. It
+ * cannot read it from `Host` in any deployed environment: Render routes by
+ * `Host` at its edge, so a request only reaches the API service if `Host` names
+ * the *API*, and a tenant's custom domain is attached to the web service. The
+ * browser path loses it at the `/api/*` rewrite — Next's proxy hardcodes
+ * `changeOrigin: true` — and the server path cannot restore it, because `fetch`
+ * derives `Host` from the URL and drops a caller-supplied one.
+ *
+ * So the tenant host travels in `x-forwarded-host`, and `x-edge-auth` is what
+ * makes it trustworthy: a forwarded host is only honoured when the request also
+ * presents the shared secret the web tier and the API both hold. Without it the
+ * guard falls back to `Host` exactly as before — **never** to the forwarded
+ * value, because a header any caller can set is a tenant any caller can choose.
+ *
+ * Named here so the two applications and their tests cannot drift apart, for the
+ * same reason `sessionCookieName` lives in this package.
+ */
+export const TENANT_HOST_HEADER = 'x-forwarded-host';
+
+/** The shared secret proving `x-forwarded-host` came from our own web tier. */
+export const EDGE_AUTH_HEADER = 'x-edge-auth';
+
 export type TenantBranding = z.infer<typeof TenantBrandingSchema>;
 export type TenantDomain = z.infer<typeof TenantDomainSchema>;
 export type TenantResponse = z.infer<typeof TenantResponseSchema>;
