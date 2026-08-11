@@ -7,6 +7,7 @@ import { TenantContextMiddleware } from './common/tenant-context/tenant-context.
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
+import { MediaModule } from './media/media.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { RequestLoggingMiddleware } from './observability/request-logging.middleware';
 import { PeopleModule } from './people/people.module';
@@ -56,6 +57,7 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     PeopleModule,
     WhatsAppModule,
     TicketsModule,
+    MediaModule,
     WebhooksModule,
   ],
 })

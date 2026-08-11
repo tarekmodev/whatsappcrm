@@ -198,6 +198,48 @@ const envShape = z.object({
   META_GRAPH_API_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
 
   // ---------------------------------------------------------------------------
+  // Media pipeline (TAR-20e)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Where re-hosted media is written.
+   *
+   * A filesystem root, because this platform has no object store yet: ADR 0001
+   * chose Render and took no decision on blob storage, and TAR-41 is the story
+   * that provisions infrastructure. `MediaStorage` is a port with exactly one
+   * adapter today for that reason — the S3-compatible adapter is a second
+   * implementation of the same three methods, not a rewrite of the pipeline.
+   *
+   * Until then this path **must be a durable volume**: a container's writable
+   * layer is not, and media written there is gone on the next deploy while the
+   * rows pointing at it survive. Relative paths resolve against the process
+   * working directory, which differs between `pnpm dev`, `pnpm test` and a
+   * container — give a deployed environment an absolute one.
+   */
+  MEDIA_STORAGE_ROOT: z.string().min(1).default('.media-storage'),
+
+  /**
+   * Per-request timeout for fetching the bytes of one media object from Meta's
+   * CDN.
+   *
+   * Separate from `META_GRAPH_API_TIMEOUT_MS`, and much larger, because it
+   * bounds a different thing: that one bounds a small JSON round trip, this one
+   * bounds a transfer that may legitimately be 100 MB. Sharing the value would
+   * mean either a 10-second cap that fails every large document or a
+   * 60-second cap on every template list.
+   */
+  MEDIA_DOWNLOAD_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
+
+  /**
+   * Attempts an inbound download gets before the attachment is parked `failed`.
+   *
+   * Meta's media URL is valid for five minutes, so the retry budget is small on
+   * purpose: past that window no further attempt can succeed, and spending
+   * twenty of them only delays the moment the inbox stops showing a spinner.
+   */
+  MEDIA_DOWNLOAD_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+
+  // ---------------------------------------------------------------------------
   // Infrastructure. Optional at scaffold time so the API boots with no backing
   // services. TAR-41 provisions these and promotes them to required.
   // ---------------------------------------------------------------------------

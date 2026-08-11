@@ -26,6 +26,7 @@ export * from './admin';
 // --- CRM, inbox and helpdesk ------------------------------------------------
 export * from './contacts';
 export * from './conversations';
+export * from './media';
 export * from './messages';
 export * from './tickets';
 export * from './ticket-linking';

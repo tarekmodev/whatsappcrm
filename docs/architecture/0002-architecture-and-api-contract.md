@@ -311,7 +311,8 @@ Entities, with the tenant-scoping and indexing decisions that matter.
 | `custom_field_defs`                 | ✓        | `UNIQUE (tenant_id, key)`                                                                                                                             | TAR-33    |
 | `conversations`                     | ✓        | `UNIQUE (tenant_id, whatsapp_account_id, contact_id)`; `service_window_expires_at`                                                                    | TAR-20    |
 | `messages`                          | ✓        | `UNIQUE (tenant_id, provider_message_id)`; `sent_at`; `status`                                                                                        | TAR-20    |
-| `message_attachments`               | ✓        | `message_id`; re-hosted `url`                                                                                                                         | TAR-20    |
+| `message_attachments`               | ✓        | `message_id`; re-hosted `url`; `media_object_id` — [amendment 3](#amendment-3--media-tar-20e)                                                         | TAR-20    |
+| `media_objects`                     | ✓        | one stored binary; `UNIQUE (tenant_id, storage_key)` — [amendment 3](#amendment-3--media-tar-20e)                                                     | TAR-20    |
 | `internal_notes`                    | ✓        | `conversation_id`; `mentioned_user_ids`                                                                                                               | TAR-20    |
 | `tickets`                           | ✓        | `UNIQUE (tenant_id, number)`; `status`; `priority`; `conversation_id`; one active ticket per contact — [0003](./0003-ticket-auto-linking-contract.md) | TAR-21/25 |
 | `ticket_counters`                   | ✓        | one row per tenant; the ticket-number allocator — [0003](./0003-ticket-auto-linking-contract.md)                                                      | TAR-21    |
@@ -536,6 +537,10 @@ POST   /api/v1/conversations/{id}/messages   → MessageResponse        conversa
 GET    /api/v1/conversations/{id}/notes      → CursorPage<InternalNoteResponse>
 POST   /api/v1/conversations/{id}/notes      → InternalNoteResponse   conversation:note
 POST   /api/v1/media                         → { mediaId }            multipart
+GET    /api/v1/media/{id}                    → MediaObjectResponse
+                                                                      added by amendment 3
+GET    /api/v1/media/{id}/content            → the bytes
+                                                                      added by amendment 3
 GET    /api/v1/message-templates             → CursorPage<MessageTemplateResponse>
                                                                       conversation:send
                                                                       added by amendment 1
@@ -1035,3 +1040,67 @@ onboarding path, which returns a code the server exchanges for a token, while TA
 endpoint accepts a pasted `accessToken`. There is no code-exchange endpoint in the
 contract. Amendment 2 covers the path shape, the audit record and the code exchange
 together once Tarek answers.
+
+### Amendment 3 — media (TAR-20e)
+
+_Numbered 3 rather than 2 because amendment 2 is already spoken for twice over: the WABA
+connection path above, and the `conversations.last_message_at` nullability clause ruled in
+the TAR-20 thread and shipped as `20260811120000_conversations_last_message_at_not_null`.
+Taking the next free number is cheaper than renumbering a migration comment and a branch._
+
+`POST /api/v1/media` has been in the endpoint surface since publication. Nothing else about
+media has, and three things turned out to be missing rather than merely unstated.
+
+**A stored binary is an entity, and `message_attachments` cannot be it.** The published
+endpoint returns a `mediaId` **before** any message exists — that is the whole point of it,
+because the composer attaches a file and then sends. `message_attachments.message_id` is
+`NOT NULL` and half of the composite foreign key to `messages`, so no row there can
+represent a file that has not been sent yet. `media_objects` is therefore added to the
+entity table: one row per stored binary, tenant-scoped, RLS-protected like every other
+scoped table, with `message_attachments` becoming the join between a message and one.
+
+_Rejected:_ making `message_id` nullable. It is additive, and it makes "an attachment
+attached to nothing" a legal state every later reader has to handle, with an upload that
+was never sent living permanently in the message-attachment table. _Also rejected:_
+returning the storage key as the `mediaId`, which would make the id a path the client
+supplies on the next request — a traversal and a cross-tenant read waiting to happen. Ids
+are opaque row ids, always.
+
+**Two read routes.** A media object that can be created and never read is not a feature,
+and `MessageAttachmentSchema.url` has published a re-hosted URL since TAR-39 with nothing
+serving one. `GET /api/v1/media/{id}` returns the metadata — the composer needs to render
+"invoice.pdf, 240 KB" after an upload without downloading the file back — and
+`GET /api/v1/media/{id}/content` streams the bytes. Both are session-authenticated and
+tenant-scoped: the id resolves through `TenantPrisma`, the storage key is read off the row
+that resolved, and another tenant's id is `not_found` rather than `forbidden`, per the
+security section. There is no route from a request to a storage location.
+
+_Rejected for now:_ short-lived signed URLs. They are the right answer once there is an
+object store to sign against, and the wrong thing to reach for first — a signing scheme
+with nowhere to keep keys, no revocation and no expiry policy is a cross-tenant leak with a
+nicer interface. `MediaStorage` is the port a signed-URL adapter attaches to later.
+
+**`attachments[].url` is stored as a path and published as a URL.** The column holds
+`/api/v1/media/{id}/content`; the response mapper makes it absolute against the request's
+own origin. A stored absolute URL would name whichever host was configured the day the row
+was written, and the same row is served through a tenant's platform subdomain and through
+its custom domain (TAR-29). `MessageAttachmentSchema.url` is unchanged — still an absolute
+URL, still nullable — and gains `kind` and `downloadState` alongside it, because an inbound
+download runs off the ingest path and the inbox has to render the interval in which a
+message exists and its picture does not.
+
+**Limits are Meta's, published, and enforced twice.** `WHATSAPP_MEDIA_LIMITS` in
+`@whatsappcrm/contracts` states the accepted media types and the size ceiling per kind, so
+the composer can refuse a 40 MB photo before spending the upload. The API enforces the same
+numbers: an unsupported type is `validation_failed`, an oversize one is `payload_too_large`.
+The kind is resolved from the _bytes_ before the size is checked — Meta's document ceiling
+is twenty times its image ceiling, and a check made before the kind was known would let a
+90 MB video through as a document.
+
+**Storage is a port with one adapter, and that is a known gap.** ADR 0001 chose Render and
+took no decision on object storage; TAR-41 provisions infrastructure and has not landed. So
+`MediaStorage` ships with a filesystem adapter, and `MEDIA_STORAGE_ROOT` must point at a
+durable shared volume until an S3-compatible adapter replaces it. On a container's writable
+layer, media is lost on every deploy while the rows naming it survive, and a second replica
+cannot read what the first wrote. Recorded here rather than only in a comment, because it is
+the one way to deploy this and be wrong.

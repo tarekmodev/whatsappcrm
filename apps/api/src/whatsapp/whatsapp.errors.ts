@@ -13,7 +13,13 @@
  * message is a credential in a log aggregator.
  */
 
-abstract class WhatsAppError extends Error {
+/**
+ * Exported so a caller can ask "is this a WhatsApp configuration failure?"
+ * without listing every subclass. TAR-20e's download job uses it to decide that
+ * a missing or undecryptable credential is not worth a retry — the same
+ * reasoning `MetaCloudApiError` is exported for.
+ */
+export abstract class WhatsAppError extends Error {
   protected constructor(message: string) {
     super(message);
     // `Error` breaks the prototype chain when a class extending it is

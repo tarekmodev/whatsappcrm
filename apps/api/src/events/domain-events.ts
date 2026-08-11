@@ -1,4 +1,5 @@
 import type {
+  MediaDownloadState,
   MessageContentType,
   MessageDirection,
   MessageStatus,
@@ -22,6 +23,7 @@ import type {
 
 export const MESSAGE_CREATED_EVENT = 'message.created';
 export const MESSAGE_STATUS_CHANGED_EVENT = 'message.status_changed';
+export const MESSAGE_ATTACHMENT_SETTLED_EVENT = 'message.attachment_settled';
 export const TICKET_CREATED_EVENT = 'ticket.created';
 
 /**
@@ -54,6 +56,33 @@ export interface MessageStatusChangedEvent {
   readonly messageId: string;
   readonly status: MessageStatus;
   readonly providerMessageId: string;
+}
+
+/**
+ * An inbound attachment stopped being `pending` — the bytes are re-hosted, or
+ * they never will be.
+ *
+ * Emitted because the download runs off the ingest path (TAR-20e), so
+ * `message.created` reaches the inbox with `url: null` and a spinner. Without a
+ * second event the spinner is permanent until the agent reloads: nothing else
+ * that happens to that message would ever mention its attachment.
+ *
+ * Both outcomes are published, not just the happy one. "It failed" is what
+ * turns the spinner into something the agent can act on — and a `failed`
+ * attachment is a support conversation, not a silent gap.
+ *
+ * `url` is a path, as the column holds it. The subscriber makes it absolute
+ * against the request or socket origin, the same way the message mapper does.
+ */
+export interface MessageAttachmentSettledEvent {
+  readonly tenantId: string;
+  readonly conversationId: string;
+  readonly messageId: string;
+  readonly attachmentId: string;
+  readonly downloadState: MediaDownloadState;
+  readonly url: string | null;
+  readonly mimeType: string;
+  readonly sizeBytes: number | null;
 }
 
 /**

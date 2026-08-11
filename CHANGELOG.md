@@ -14,6 +14,19 @@ change.
 
 ### Added
 
+- **Media pipeline** — inbound WhatsApp media is downloaded from Meta and re-hosted, and
+  `POST /api/v1/media` accepts a multipart upload and returns a `mediaId` a send can name.
+  Reads are `GET /api/v1/media/{id}` and `GET /api/v1/media/{id}/content`, both
+  session-authenticated and tenant-scoped. A new `media_objects` table holds one row per
+  stored binary; `message_attachments` becomes the join between a message and one, and
+  gains `download_state` so the inbox can render the interval in which a message exists and
+  its picture does not. Storage is behind a `MediaStorage` port with a filesystem adapter —
+  **`MEDIA_STORAGE_ROOT` must be a durable shared volume** until an object-store adapter
+  lands with TAR-41. Media types and size ceilings are Meta's own, published in
+  `WHATSAPP_MEDIA_LIMITS` and enforced server-side: an unsupported type is
+  `validation_failed`, an oversize one `payload_too_large`. Ruled as
+  [amendment 3](docs/architecture/0002-architecture-and-api-contract.md#amendment-3--media-tar-20e).
+  (TAR-20e)
 - **WhatsApp Business Account connection** — `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts`
   and `.../{wabaId}/template-sync`, behind the same platform admin guard, plus the Meta
   Cloud API client, the credential resolver and the sender service. (TAR-66)

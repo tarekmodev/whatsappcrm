@@ -10,6 +10,7 @@ import { MessageTemplateSyncService } from './message-template-sync.service';
 import { MessageTemplatesController } from './message-templates.controller';
 import { MetaCloudApiClient } from './meta-cloud-api.client';
 import { WhatsAppCredentialResolver } from './whatsapp-credential.resolver';
+import { WhatsAppMediaService } from './whatsapp-media.service';
 import { WhatsAppSenderService } from './whatsapp-sender.service';
 
 /**
@@ -19,8 +20,11 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
  * ## What it exports, and to whom
  *
  * `WhatsAppSenderService` is the send path. TAR-20c's inbox calls it to deliver
- * an agent's reply, and TAR-20e's media pipeline reuses the same access-token
- * plumbing for inbound downloads. `MessageTemplateSyncService` is exported so a
+ * an agent's reply. `WhatsAppMediaService` is the same arrangement for bytes:
+ * TAR-20e's media pipeline downloads inbound media and uploads outbound media
+ * through it, which is how that module reuses this one's access-token plumbing
+ * without becoming a second place a token is decrypted.
+ * `MessageTemplateSyncService` is exported so a
  * scheduled refresh can drive it once TAR-41 lands `QueueModule` — templates are
  * a cache of Meta's approval decisions, and today they are only as current as
  * the last sync somebody asked for.
@@ -54,9 +58,10 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
     MessageTemplateSyncService,
     MessageTemplateQueryService,
     WhatsAppSenderService,
+    WhatsAppMediaService,
     PlatformAdminGuard,
     ApiExceptionFilter,
   ],
-  exports: [WhatsAppSenderService, MessageTemplateSyncService],
+  exports: [WhatsAppSenderService, WhatsAppMediaService, MessageTemplateSyncService],
 })
 export class WhatsAppModule {}

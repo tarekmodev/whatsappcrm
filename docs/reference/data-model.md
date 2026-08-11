@@ -1,7 +1,7 @@
 # Data model reference
 
-The database as it stands on `main` after TAR-47, TAR-48, TAR-51, TAR-52, TAR-66, TAR-80
-and TAR-92. Written for engineers building against it.
+The database as it stands on `main` after TAR-47, TAR-48, TAR-51, TAR-52, TAR-66, TAR-80,
+TAR-92 and TAR-20e. Written for engineers building against it.
 
 `apps/api/prisma/schema.prisma` is the source of truth for columns, types and defaults,
 and carries the per-model reasoning next to each model. This document does not transcribe
@@ -339,12 +339,51 @@ collide NULLs — and once set it is what makes a replayed webhook a no-op. `sta
 ordered ladder (`queued` → `sent` → `delivered` → `read`) so a late webhook cannot un-read
 a message; `received` is the terminal state of an inbound message and never advances.
 
-#### `message_attachments`
+#### `media_objects`
 
-- **Indexes:** `(tenant_id, message_id)`
+One stored binary. **Not in TAR-39's entity table** — added by TAR-20e and ruled in
+[amendment 3](../architecture/0002-architecture-and-api-contract.md#amendment-3--media-tar-20e).
+
+- **Unique:** `(tenant_id, id)`; `(tenant_id, storage_key)`
+- **Indexes:** `(tenant_id, created_at DESC, id DESC)`, `(tenant_id, uploaded_by_user_id)`
 - **Owned by:** TAR-20
 
-`url` is re-hosted by us, because Meta's media URLs expire.
+It exists because `POST /api/v1/media` returns a `mediaId` **before** any message does, and
+`message_attachments.message_id` is `NOT NULL` — so an attachment row cannot represent a
+file that has not been sent yet. A binary is an entity; an attachment is the join between a
+message and one.
+
+`storage_key` is `tenants/{tenant}/{kind}/{id}` — tenant first, so a per-tenant delete is a
+prefix operation and a stray object in a listing names its owner. The last segment is its
+own identifier rather than the row id, because the bytes are written before the row exists:
+a stray blob is housekeeping, a row pointing at bytes that were never written is a broken
+attachment an agent sees. No file name ever appears in a key.
+
+`checksum_sha256` is measured on the way in, so a truncated inbound transfer can be proven
+against the digest Meta publishes rather than suspected. There is no Meta handle for the
+_outbound_ direction: Meta's upload handle is per phone number and expires on Meta's
+schedule, so the bytes are uploaded per send instead of cached.
+
+#### `message_attachments`
+
+- **Unique:** `(tenant_id, message_id, provider_media_id)`
+- **Indexes:** `(tenant_id, message_id)`, `(tenant_id, download_state, created_at)`
+- **Owned by:** TAR-20
+
+`url` is re-hosted by us, because Meta's media URLs expire. It holds a **path**
+(`/api/v1/media/{id}/content`), not an absolute URL: the same row is served through a
+tenant's platform subdomain and through its custom domain (TAR-29), so the origin is the
+request's to supply and the response mapper joins the two.
+
+`download_state` exists because an inbound download runs off the ingest path — Meta's media
+endpoint is a second network call and a document may be 100 MB — so there is a real
+interval in which the message exists and its picture does not. `pending` → `stored`, or
+`pending` → `failed` with the reason in `download_error`. A `failed` attachment keeps its
+row: the customer did send a file, and a gap would say otherwise.
+
+The unique constraint is what makes a replayed webhook a no-op rather than a second
+attachment on the same message. It tolerates the outbound case, where `provider_media_id`
+is null, because PostgreSQL does not collide NULLs.
 
 #### `internal_notes`
 
@@ -577,38 +616,41 @@ never a secret value; a redacted before/after at most.
 
 ## Enums
 
-24 native PostgreSQL enums rather than text plus a `CHECK`. They are the closed sets in the
+27 native PostgreSQL enums rather than text plus a `CHECK`. They are the closed sets in the
 contract, and a typo becomes an error at write time instead of a filter that silently
 matches nothing. The trade-off is that adding a value is cheap (`ALTER TYPE ... ADD VALUE`)
 and removing one is not, so anything genuinely open-ended — `ticket_events.type`, workflow
 definitions — stays text or JSON.
 
-| Enum                                    | Values                                                                                                                       |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `tenant_status`                         | `pending`, `active`, `suspended`, `cancelled`                                                                                |
-| `tenant_domain_kind`                    | `platform`, `custom`                                                                                                         |
-| `user_role`                             | `admin`, `supervisor`, `agent` — `owner` removed by TAR-80; it is exactly `TENANT_ROLES` in `packages/contracts/src/rbac.ts` |
-| `user_status`                           | `invited`, `active`, `suspended`, `removed`                                                                                  |
-| `user_availability`                     | `available`, `away`, `offline`                                                                                               |
-| `whatsapp_business_verification_status` | `not_verified`, `pending`, `verified`, `rejected`                                                                            |
-| `whatsapp_account_status`               | `connected`, `disconnected`, `error`                                                                                         |
-| `whatsapp_quality_rating`               | `green`, `yellow`, `red`, `unknown`                                                                                          |
-| `message_template_status`               | `pending`, `approved`, `rejected`, `paused`, `disabled`                                                                      |
-| `custom_field_type`                     | `text`, `number`, `date`, `boolean`, `select`, `multi_select`                                                                |
-| `conversation_status`                   | `open`, `pending`, `resolved`                                                                                                |
-| `message_direction`                     | `inbound`, `outbound`                                                                                                        |
-| `message_status`                        | `received`, `queued`, `sent`, `delivered`, `read`, `failed`                                                                  |
-| `message_content_type`                  | `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `system`        |
-| `ticket_status`                         | `open`, `pending`, `resolved`, `closed`                                                                                      |
-| `ticket_priority`                       | `low`, `normal`, `high`, `urgent`                                                                                            |
-| `sla_target_kind`                       | `first_response`, `resolution`                                                                                               |
-| `sla_timer_state`                       | `running`, `met`, `breached`, `cancelled`                                                                                    |
-| `workflow_run_status`                   | `pending`, `running`, `succeeded`, `failed`                                                                                  |
-| `knowledge_document_status`             | `pending`, `indexed`, `failed`                                                                                               |
-| `billing_interval`                      | `month`, `year`                                                                                                              |
-| `subscription_status`                   | `trialing`, `active`, `past_due`, `cancelled`, `incomplete`                                                                  |
-| `webhook_event_status`                  | `received`, `processing`, `processed`, `failed`                                                                              |
-| `idempotency_key_state`                 | `in_progress`, `completed`                                                                                                   |
+| Enum                                    | Values                                                                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `tenant_status`                         | `pending`, `active`, `suspended`, `cancelled`                                                                                        |
+| `tenant_domain_kind`                    | `platform`, `custom`                                                                                                                 |
+| `user_role`                             | `admin`, `supervisor`, `agent` — `owner` removed by TAR-80; it is exactly `TENANT_ROLES` in `packages/contracts/src/rbac.ts`         |
+| `user_status`                           | `invited`, `active`, `suspended`, `removed`                                                                                          |
+| `user_availability`                     | `available`, `away`, `offline`                                                                                                       |
+| `whatsapp_business_verification_status` | `not_verified`, `pending`, `verified`, `rejected`                                                                                    |
+| `whatsapp_account_status`               | `connected`, `disconnected`, `error`                                                                                                 |
+| `whatsapp_quality_rating`               | `green`, `yellow`, `red`, `unknown`                                                                                                  |
+| `message_template_status`               | `pending`, `approved`, `rejected`, `paused`, `disabled`                                                                              |
+| `custom_field_type`                     | `text`, `number`, `date`, `boolean`, `select`, `multi_select`                                                                        |
+| `conversation_status`                   | `open`, `pending`, `resolved`                                                                                                        |
+| `message_direction`                     | `inbound`, `outbound`                                                                                                                |
+| `message_status`                        | `received`, `queued`, `sent`, `delivered`, `read`, `failed`                                                                          |
+| `message_content_type`                  | `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `system`, `unsupported` |
+| `media_kind`                            | `image`, `video`, `audio`, `document`, `sticker` — narrower than `message_content_type` on purpose: none of these is not a file      |
+| `media_source`                          | `inbound`, `upload`                                                                                                                  |
+| `media_download_state`                  | `pending`, `stored`, `failed`                                                                                                        |
+| `ticket_status`                         | `open`, `pending`, `resolved`, `closed`                                                                                              |
+| `ticket_priority`                       | `low`, `normal`, `high`, `urgent`                                                                                                    |
+| `sla_target_kind`                       | `first_response`, `resolution`                                                                                                       |
+| `sla_timer_state`                       | `running`, `met`, `breached`, `cancelled`                                                                                            |
+| `workflow_run_status`                   | `pending`, `running`, `succeeded`, `failed`                                                                                          |
+| `knowledge_document_status`             | `pending`, `indexed`, `failed`                                                                                                       |
+| `billing_interval`                      | `month`, `year`                                                                                                                      |
+| `subscription_status`                   | `trialing`, `active`, `past_due`, `cancelled`, `incomplete`                                                                          |
+| `webhook_event_status`                  | `received`, `processing`, `processed`, `failed`                                                                                      |
+| `idempotency_key_state`                 | `in_progress`, `completed`                                                                                                           |
 
 `message_status` is ordered, and the order is load-bearing: TAR-20's
 `isMessageStatusAdvance` reads it so a late `sent` webhook cannot un-read a message.
@@ -618,21 +660,27 @@ definitions — stays text or JSON.
 Applied in this order. Every directory carries a hand-written `down.sql` beside Prisma's
 `migration.sql`.
 
-| Migration                                               | What it does                                                                                                                                                    | Story   |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `20260810120000_baseline_extensions`                    | `pgcrypto` and `citext`. Creates no tables                                                                                                                      | TAR-42  |
-| `20260810130000_initial_data_model`                     | Every table and enum above, as TAR-47 shipped them                                                                                                              | TAR-47  |
-| `20260810140000_tenant_isolation_rls`                   | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                              | TAR-48  |
-| `20260810150000_tenant_deactivation_guard`              | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                      | TAR-51  |
-| `20260810160000_whatsapp_business_account_entity`       | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                      | TAR-52  |
-| `20260810170000_harden_tenant_deactivation_guard`       | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                     | TAR-51  |
-| `20260810180000_message_template_list_index`            | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                            | TAR-20a |
-| `20260810190000_agent_team_role_alignment`              | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes | TAR-80  |
-| `20260811120000_conversations_last_message_at_not_null` | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                     | TAR-92  |
+| Migration                                               | What it does                                                                                                                                                     | Story   |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `20260810120000_baseline_extensions`                    | `pgcrypto` and `citext`. Creates no tables                                                                                                                       | TAR-42  |
+| `20260810130000_initial_data_model`                     | Every table and enum above, as TAR-47 shipped them                                                                                                               | TAR-47  |
+| `20260810140000_tenant_isolation_rls`                   | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                               | TAR-48  |
+| `20260810150000_tenant_deactivation_guard`              | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                       | TAR-51  |
+| `20260810160000_whatsapp_business_account_entity`       | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                       | TAR-52  |
+| `20260810170000_harden_tenant_deactivation_guard`       | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                      | TAR-51  |
+| `20260810180000_message_template_list_index`            | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                             | TAR-20a |
+| `20260810190000_agent_team_role_alignment`              | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes  | TAR-80  |
+| `20260811120000_conversations_last_message_at_not_null` | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                      | TAR-92  |
+| `20260811140000_media_pipeline`                         | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable | TAR-20e |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's
-migration.
+migration; the 35th, `ticket_counters`, carries its policy in TAR-74's; the 36th,
+`media_objects`, carries its policy in TAR-20e's.
+
+`20260810180000_message_content_type_unsupported` shares the `180000` slot with the
+template-list index and is absent from the table above only because it was added on a
+different branch; it adds `message_content_type.unsupported` and nothing else.
 
 TAR-52's directory takes the `160000` slot even though `170000` landed on `main` first.
 That is coordinated, not an accident: the two are independent — one replaces a function and

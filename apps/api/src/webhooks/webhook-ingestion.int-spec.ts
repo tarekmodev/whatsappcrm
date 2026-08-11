@@ -84,6 +84,9 @@ const ENV: Record<string, unknown> = {
   WEBHOOK_MAX_ATTEMPTS: 5,
   WEBHOOK_STUCK_AFTER_MS: 60_000,
   WEBHOOK_SWEEP_INTERVAL_MS: 30_000,
+  // Read by the inbound writer when it queues a media download (TAR-20e). No
+  // scenario here sends media, so the value only has to exist.
+  MEDIA_DOWNLOAD_MAX_ATTEMPTS: 3,
 };
 
 const CONFIG = {
@@ -233,7 +236,7 @@ describe('WhatsApp webhook ingestion, end to end', () => {
       CONFIG,
       repository,
       new WhatsAppAccountResolver(systemPrisma),
-      new WhatsAppInboundWriter(tenantPrisma, emitter),
+      new WhatsAppInboundWriter(CONFIG, tenantPrisma, emitter, queue),
       tenantContext,
     );
     sweeper = new WebhookSweeperService(CONFIG, repository, queue);
