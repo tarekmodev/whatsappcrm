@@ -266,5 +266,13 @@ value.
 ## Backups
 
 Provider-managed, per ADR 0002. Every environment is on a paid Postgres instance
-type, which is what makes that true. Schedule, retention and the restore drill
-belong to TAR-43.
+type, which is what makes that true. Continuous backup with point-in-time
+recovery, no job of ours to audit.
+
+Schedule, recovery window, how to restore on Render, and the restore drill that
+proves a restore still has its RLS policies: docs/runbooks/backups.md.
+
+One thing worth knowing here rather than there: Render recovery creates a **new**
+instance, and the application roles are cluster state that a new instance does not
+have. Run `pnpm --filter @whatsappcrm/api db:provision-roles` against it before
+pointing the API at it, or every request fails to authenticate.

@@ -14,7 +14,8 @@
     "test:db": "jest --config jest.int.config.js --runInBand",
     "db:check-migrations": "node scripts/check-down-migrations.mjs",
     "db:rollback": "node scripts/db-rollback.mjs",
-    "db:provision-roles": "node scripts/provision-roles.mjs"
+    "db:provision-roles": "node scripts/provision-roles.mjs",
+    "db:restore-drill": "node scripts/db-restore-drill.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.28",

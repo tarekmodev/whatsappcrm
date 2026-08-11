@@ -71,6 +71,7 @@ not yet installed and arrives with the realtime gateway.
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                    |
 | [Environments runbook](docs/runbooks/environments.md)                                        | Provisioning, secrets, health, alerting, rollback                           |
 | [Migrations runbook](docs/runbooks/migrations.md)                                            | How a migration reaches an environment, and how to undo one                 |
+| [Backups runbook](docs/runbooks/backups.md)                                                  | Backup coverage, restoring on Render, and the restore drill                 |
 
 ## Getting started
 
@@ -189,11 +190,21 @@ in `.env` instead.
 | `pnpm db:roles:login`    | Gives those roles the throwaway local password                        |
 | `pnpm db:roles:down`     | Removes those roles                                                   |
 | `pnpm db:verify:rls`     | Proves two tenants cannot see each other's rows                       |
+| `pnpm db:canary`         | Loads the small fixture the restore drill compares against            |
+| `pnpm db:restore-drill`  | Dumps, restores into a scratch database, and diffs the two            |
 
-The last four run `psql` inside the Postgres container against
-`apps/api/prisma/sql`, which `docker-compose.yml` mounts at `/sql`. They assume the
-default `whatsappcrm` user and database; if you changed either in `.env`, run `psql`
-directly instead.
+`db:roles`, `db:roles:login`, `db:roles:down`, `db:verify:rls` and `db:canary` run
+`psql` inside the Postgres container against `apps/api/prisma/sql`, which
+`docker-compose.yml` mounts at `/sql`. They assume the default `whatsappcrm` user
+and database; if you changed either in `.env`, run `psql` directly instead.
+
+`pnpm db:restore-drill` is the one that proves a backup is a backup — it restores
+into `whatsappcrm_restore_drill` and refuses any target not named that way, then
+diffs the two databases down to the row-level security policy predicates. Run it
+after a migration that adds a table, a policy or an extension. It needs no
+PostgreSQL client tools installed: without `pg_dump` on `PATH` it runs the client
+binaries in a container. Full cadence, and how to point it at a Render database:
+[docs/runbooks/backups.md](docs/runbooks/backups.md).
 
 `pnpm db:down` leaves your data in place. To throw it away as well —
 `docker compose down -v`, which deletes the volumes and, on the next `pnpm db:up`,

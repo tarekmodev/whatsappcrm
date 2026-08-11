@@ -14,6 +14,13 @@ change.
 
 ### Added
 
+- **Backup coverage and a restore drill** — `docs/runbooks/backups.md` records what
+  Render's continuous backup and point-in-time recovery actually cover per
+  environment, how to restore, and the cadence for proving it. `pnpm db:restore-drill`
+  dumps a database, restores it into a scratch target and diffs the two on eleven
+  dimensions — including the RLS flags and policy predicates, which a silently
+  degraded restore loses without anything else noticing. First drill run and
+  recorded 2026-08-11. (TAR-43)
 - **Media pipeline** — inbound WhatsApp media is downloaded from Meta and re-hosted, and
   `POST /api/v1/media` accepts a multipart upload and returns a `mediaId` a send can name.
   Reads are `GET /api/v1/media/{id}` and `GET /api/v1/media/{id}/content`, both

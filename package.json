@@ -30,6 +30,8 @@
     "db:roles:login": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -v password=local_dev_only -f /sql/app-roles-login.sql",
     "db:roles:down": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/app-roles-down.sql",
     "db:verify:rls": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/verify-tenant-isolation.sql",
+    "db:canary": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U whatsappcrm -d whatsappcrm -f /sql/restore-drill-canary.sql",
+    "db:restore-drill": "pnpm --filter @whatsappcrm/api run db:restore-drill",
     "test:db": "turbo run test:db"
   },
   "devDependencies": {

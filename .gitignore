@@ -24,6 +24,10 @@ apps/api/src/generated/
 .env.*
 !.env.example
 
+# Dump files and reports written by `pnpm db:restore-drill`. A dump of a real
+# database is the database — it never belongs in the repository.
+.drill/
+
 .DS_Store
 Thumbs.db
 *.log
