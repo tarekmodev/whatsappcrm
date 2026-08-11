@@ -12,10 +12,13 @@ name: whatsappcrm
 
 services:
   postgres:
-    # Pinned to the major line Render's managed Postgres offers. Patch floats so
-    # a `docker compose pull` picks up security fixes; the major does not move
-    # without a deliberate change here.
-    image: postgres:17-alpine
+    # Pinned to the major line Render actually runs — `postgresMajorVersion: '16'`
+    # on all three databases in `render.yaml`. CI builds its database from these
+    # same migrations, so a mismatch here means a construct that only exists in
+    # the newer major passes CI and fails on Render's `preDeployCommand`. Move
+    # this and `render.yaml` together, never one alone. Patch floats so a
+    # `docker compose pull` picks up security fixes.
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-whatsappcrm}

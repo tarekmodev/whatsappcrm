@@ -70,7 +70,9 @@ function parseArgs(argv) {
     sourceUrl: process.env.DATABASE_URL ?? '',
     targetUrl: '',
     client: 'auto',
-    clientImage: 'postgres:17-alpine',
+    // The major the compose stack and Render both run. `pg_dump` refuses to dump
+    // a server newer than itself, so this tracks docker-compose.yml.
+    clientImage: 'postgres:16-alpine',
     createTarget: true,
     forceTarget: false,
     keep: false,
@@ -131,8 +133,8 @@ function usage() {
       '  --target-url URL     Where to restore. Default: the source server, database',
       `                       <source>${SCRATCH_SUFFIX}.`,
       '  --client MODE        path | docker | auto (default). How to reach pg_dump.',
-      '  --client-image IMG   Image for --client docker. Match the server major:',
-      '                       postgres:16-alpine for Render, postgres:17-alpine local.',
+      '  --client-image IMG   Image for --client docker. Default postgres:16-alpine,',
+      '                       the major both the compose stack and Render run.',
       '  --no-create-target   Target already exists and is empty; do not drop/create it.',
       `  --force-target       Allow a target not named *${SCRATCH_SUFFIX}. Never allows`,
       '                       a target that looks like production.',

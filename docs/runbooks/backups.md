@@ -135,23 +135,18 @@ types a dump/restore round trip actually gets wrong.
 
 ### Running it against a Render database
 
-Three things change.
+Two things change.
 
-**Client version.** `pg_dump` refuses to dump a server newer than itself. Render
-runs Postgres 16 and the compose stack runs 17, so dumping Render needs the 16
-client:
-
-```bash
-pnpm db:restore-drill -- \
-  --source-url "$STAGING_DATABASE_URL" \
-  --client-image postgres:16-alpine
-```
+`pg_dump` refuses to dump a server newer than itself, but that is not a concern
+here: Render and the compose stack both run Postgres 16, which is what
+`--client-image` already defaults to. Override it only if a database is moved to
+a different major — and move `docker-compose.yml` and `render.yaml` together when
+that happens.
 
 **The target.** Render's database user has no `CREATEDB`, so the drill cannot
 create its scratch database on the same server. Either restore into the local
-compose stack (fine, and the usual choice — a 17 client restores a 16 dump
-without complaint), or provision a scratch Render instance and pass
-`--no-create-target` with a target that is already empty.
+compose stack (fine, and the usual choice), or provision a scratch Render
+instance and pass `--no-create-target` with a target that is already empty.
 
 **The role.** Connect as the instance owner, not as the application role. Row
 counts are the only check that reads user data, and RLS filters them: with no

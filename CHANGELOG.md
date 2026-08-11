@@ -234,6 +234,23 @@ change.
 
 ### Changed
 
+- **The local Postgres major matches Render's.** `docker-compose.yml` pinned
+  `postgres:17-alpine` under a comment claiming it tracked the managed offering, while all
+  three databases in `render.yaml` pin `postgresMajorVersion: '16'`. CI builds its database
+  from the same Compose file, so a construct that only exists in 17 would have passed every
+  check and failed on Render's `preDeployCommand` instead. No such construct had been
+  written yet. `db:restore-drill` now defaults its client image to 16 for the same reason.
+  **An existing `pgdata` volume created by the 17 image will not start under 16** — a data
+  directory cannot be downgraded in place; `docker compose down -v` and rebuild, per the
+  README. (TAR-147)
+- **`x-request-id` is repeated only within a bound.** The caller's value is echoed into the
+  response header, every log line, the error envelope and the Sentry tags for the request,
+  and was previously accepted at any length and any content. It now has to be at most 128
+  characters of `A-Za-z0-9._-`; anything else gets a fresh UUID rather than a truncation
+  that would look like the caller's id and correlate with nothing. Nothing was injectable
+  through it — pino JSON-encodes its fields and Node rejects control characters in a header
+  value — but the API deliberately does not trust the proxy in front of it, and an
+  unbounded id is a caller deciding how much log volume the platform pays for. (TAR-147)
 - **Revoking a session marks it revoked rather than deleting the row.** A role, status or
   team change — and an admin suspending or removing an agent — now writes `revoked_at` and
   `revoked_reason` instead of `DELETE`ing, and purges the Redis principal cache on both
@@ -284,6 +301,17 @@ change.
 
 ### Fixed
 
+- **`SENTRY_DSN` can be set from the repository `.env`.** `instrument.ts` runs before
+  `AppModule` exists — that is the point, the SDK has to instrument modules before they are
+  imported — so it read `process.env` before `ConfigModule` had loaded the root `.env`, and
+  a DSN put there was silently ignored. It now loads that file itself, the same way
+  `prisma.config.mjs` does, so pointing local development at a tracker works. Deployed
+  environments were never affected: there the DSN is a real environment variable, and
+  neither loader overwrites one that is already set. (TAR-147)
+- **README's model counts match the schema.** It claimed 37 models and 34 tenant-scoped
+  while `docs/reference/data-model.md` claimed 40 and 37; `schema.prisma` has 41 models, 38
+  of them tenant-scoped with a `tenant_isolation` policy each. Both documents, and
+  `docs/reference/tenancy.md`, now say the same thing. (TAR-147)
 - **A malformed tenant id is refused as `TN001`, not raised as a cast error.** It previously
   reached the application as SQLSTATE `22P02`, which was reported as a fault rather than as
   the refusal it is. No isolation consequence — the cast raised before `set_config` either
