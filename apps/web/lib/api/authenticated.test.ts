@@ -124,6 +124,23 @@ describe('authenticatedRequest', () => {
     expect(redirectToLogin).not.toHaveBeenCalled();
   });
 
+  /**
+   * TAR-163. `POST /v1/auth/password` answers a wrong `currentPassword` with 401
+   * `invalid_credentials` — the same code login uses — and does not touch the
+   * session. Redirecting on it signed the user out of `/settings/security`
+   * instead of letting the form show the inline error it already renders.
+   */
+  it('leaves a wrong current password to the caller instead of signing them out', async () => {
+    apiRequest.mockRejectedValue(
+      new ApiRequestError(401, 'invalid_credentials', 'The current password is incorrect.', null),
+    );
+
+    await expect(
+      authenticatedRequest({ method: 'POST', path: '/v1/auth/password' }),
+    ).rejects.toMatchObject({ code: 'invalid_credentials' });
+    expect(redirectToLogin).not.toHaveBeenCalled();
+  });
+
   it('leaves an unreachable API to the caller, so it can be retried', async () => {
     apiRequest.mockRejectedValue(new ApiRequestError(502, 'upstream_unavailable', 'Down', null));
 
