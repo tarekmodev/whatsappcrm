@@ -225,7 +225,7 @@ change.
 - **Local development harness** — Docker Compose stack for PostgreSQL 17 and Redis 7, the
   Prisma runner, the application-role scripts and the documented setup steps. (TAR-42)
 - **Continuous integration** — Lint, Type-check, Test and Database jobs on every push to
-  `main` and every pull request; branch protection on the first three. (TAR-40)
+  `main` and every pull request; branch protection on all four. (TAR-40, TAR-96)
 - **Published architecture and API contract** — module boundaries, tenant resolution, the
   endpoint surface, webhook ingestion, and the billing and usage ports.
   (TAR-39, amended by TAR-20a)
@@ -250,6 +250,11 @@ change.
   widens what its members can see. The address is still reserved as an `invited` account, so
   the people list and seat accounting are unchanged. `InviteResponse` gains `teamIds` and
   `revokedAt`, and `invitedByUserId` becomes nullable to match the column. (TAR-55)
+- **The `Database` job gates the merge.** It is now one of `main`'s required status checks
+  alongside `Lint`, `Type-check` and `Test`. It ran on every pull request before, but a red
+  result did not block anything — and it is the only check that proves tenant isolation, so
+  a broken policy, a missing grant or a `BYPASSRLS` role could go red and merge anyway.
+  (TAR-96)
 - **`conversations.last_message_at` is `NOT NULL`, defaulting to the row's insert time.**
   It leads all three inbox keyset indexes, and PostgreSQL orders NULLs first under `DESC`,
   so a message-less conversation pinned itself to page one and the resume predicate

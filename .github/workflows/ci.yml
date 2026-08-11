@@ -1,7 +1,7 @@
 name: CI
 
 # Gates everything that can reach `main`: pushes to the branch itself, and every
-# pull request targeting it. `main` is branch-protected on the three job names
+# pull request targeting it. `main` is branch-protected on all four job names
 # below — renaming a job here means updating that protection rule too.
 on:
   push:
@@ -73,8 +73,8 @@ jobs:
   # runs the same commands a developer runs locally, against the same Compose
   # stack, so a green run here means the README's instructions work too.
   #
-  # Not yet one of `main`'s required checks. Adding it to the protection rule is
-  # a repository-settings change, not a change to this file.
+  # Required to pass before merge, alongside `Lint`/`Type-check`/`Test` (TAR-96)
+  # — an isolation regression that only this job catches must not be mergeable.
   database:
     name: Database
     runs-on: ubuntu-latest
