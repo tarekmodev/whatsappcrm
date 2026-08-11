@@ -29,6 +29,8 @@ export const content = {
     openMenu: 'Open menu',
     closeMenu: 'Close menu',
     menuHeading: 'Menu',
+    collapseNav: 'Collapse navigation',
+    expandNav: 'Expand navigation',
     inbox: 'Inbox',
     settings: 'Settings',
     people: 'People',

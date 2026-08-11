@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
+import { Icon } from '@/components/ui/Icon';
 import { useContent } from '@/lib/content';
 import { useScrollLock } from '@/lib/hooks/useScrollLock';
 import { useFocusTrap } from '@/lib/hooks/useFocusTrap';
@@ -95,9 +96,7 @@ export function MobileMenu({
           setIsOpen((current) => !current);
         }}
       >
-        <span aria-hidden="true" className={styles.triggerIcon}>
-          {isOpen ? '✕' : '☰'}
-        </span>
+        <Icon name={isOpen ? 'close' : 'menu'} />
         {isOpen ? content.nav.closeMenu : content.nav.openMenu}
       </Button>
 

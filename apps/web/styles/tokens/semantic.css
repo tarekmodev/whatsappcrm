@@ -51,8 +51,28 @@
   --color-info-subtle: var(--palette-blue-100);
   --color-on-info-subtle: var(--palette-blue-500);
 
+  /* --- The console frame -------------------------------------------------- */
+  /*
+   * The navigation rail is a dark region in both themes — that is the point of
+   * the layout, not an accident of the light palette — so these roles map onto
+   * the navy family rather than onto `surface`, and they are the only roles a
+   * theme swap can leave alone.
+   */
+  --color-rail: var(--palette-navy-900);
+  --color-rail-hover: var(--palette-navy-800);
+  --color-rail-selected: var(--palette-navy-700);
+  --color-rail-border: var(--palette-navy-800);
+  --color-on-rail: var(--palette-slate-300);
+  --color-on-rail-strong: var(--palette-white);
+  --color-on-rail-muted: var(--palette-slate-400);
+  /* The marker beside a current entry, so "current" is never colour alone. */
+  --color-rail-marker: var(--palette-green-300);
+
+  --color-bar: var(--palette-white);
+  --color-bar-border: var(--palette-slate-200);
+
   /* --- Overlays and placeholders ----------------------------------------- */
-  --color-scrim: rgb(2 6 23 / 45%);
+  --color-scrim: rgb(13 26 38 / 45%);
   --color-skeleton-base: var(--palette-slate-200);
   --color-skeleton-highlight: var(--palette-slate-100);
 
@@ -93,6 +113,23 @@
   --color-info: var(--palette-blue-300);
   --color-info-subtle: var(--palette-blue-500);
   --color-on-info-subtle: var(--palette-blue-100);
+
+  /*
+   * Dark theme drops the navy for the neutral scale: navy against a near-black
+   * canvas reads as a colour cast rather than as a distinct region, and the
+   * separation the rail needs comes from its border instead.
+   */
+  --color-rail: var(--palette-slate-950);
+  --color-rail-hover: var(--palette-slate-800);
+  --color-rail-selected: var(--palette-slate-700);
+  --color-rail-border: var(--palette-slate-800);
+  --color-on-rail: var(--palette-slate-300);
+  --color-on-rail-strong: var(--palette-slate-100);
+  --color-on-rail-muted: var(--palette-slate-400);
+  --color-rail-marker: var(--palette-green-300);
+
+  --color-bar: var(--palette-slate-900);
+  --color-bar-border: var(--palette-slate-700);
 
   --color-scrim: rgb(2 6 23 / 70%);
   --color-skeleton-base: var(--palette-slate-800);
@@ -167,6 +204,12 @@
   --border-hairline: var(--scale-size-border-hairline);
   --focus-ring-width: var(--scale-size-focus-ring);
   --focus-ring-offset: var(--scale-size-focus-ring);
+  --size-icon-sm: var(--scale-size-icon-sm);
+  --size-icon-md: var(--scale-size-icon-md);
+  --size-rail: var(--scale-size-rail);
+  --size-rail-collapsed: var(--scale-size-rail-collapsed);
+  --size-bar: var(--scale-size-bar);
+  --size-marker: var(--scale-size-marker);
 }
 
 /*

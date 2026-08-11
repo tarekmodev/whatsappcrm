@@ -6,11 +6,6 @@
   gap: var(--space-2);
 }
 
-.triggerIcon {
-  font-size: var(--font-size-body-lg);
-  line-height: 1;
-}
-
 .scrim {
   position: fixed;
   inset: 0;

@@ -1,8 +1,0 @@
-.subnav {
-  padding-block-end: var(--space-3);
-  border-block-end: var(--border-hairline) solid var(--color-border);
-  /* Scrolls rather than wrapping when more sections are added, with the gutter
-     bleeding out so the first item is not clipped at 320px. */
-  overflow-x: auto;
-  overscroll-behavior-inline: contain;
-}

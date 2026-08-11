@@ -18,6 +18,7 @@
 .link {
   display: flex;
   align-items: center;
+  gap: var(--space-3);
   min-block-size: var(--size-touch-target);
   padding-inline: var(--space-3);
   border-radius: var(--radius-md);
@@ -26,6 +27,11 @@
   font-weight: var(--font-weight-medium);
   text-decoration: none;
   transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+.label {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
 }
 
 @media (hover: hover) {
@@ -45,11 +51,59 @@
   content: '';
   inline-size: var(--space-1);
   block-size: 1em;
-  margin-inline-end: var(--space-2);
   background: currentcolor;
   border-radius: var(--radius-pill);
 }
 
 .list[data-orientation='vertical'] .link {
   inline-size: 100%;
+}
+
+/* --- Rail ----------------------------------------------------------------- */
+/*
+ * The rail is a dark region in both themes, so its entries read the `rail` role
+ * tokens rather than the surface ones. Same markup, different paint.
+ */
+.list[data-appearance='rail'] .link {
+  color: var(--color-on-rail);
+  /* Room for the current-entry marker, reserved on every entry so nothing
+     shifts sideways when the current one changes. */
+  padding-inline-start: calc(var(--space-3) - var(--size-marker));
+  border-inline-start: var(--size-marker) solid transparent;
+}
+
+@media (hover: hover) {
+  .list[data-appearance='rail'] .link:hover {
+    background: var(--color-rail-hover);
+    color: var(--color-on-rail-strong);
+  }
+}
+
+.list[data-appearance='rail'] .link[aria-current='page'] {
+  background: var(--color-rail-selected);
+  border-inline-start-color: var(--color-rail-marker);
+  color: var(--color-on-rail-strong);
+}
+
+/* The rail carries the state on its own inline-start marker instead. */
+.list[data-appearance='rail'] .link[aria-current='page']::before {
+  content: none;
+}
+
+.list[data-appearance='rail'][data-collapsed='true'] .link {
+  justify-content: center;
+  padding-inline: var(--space-2);
+}
+
+/*
+ * Collapsed, the label is hidden from the eye and kept for the accessibility
+ * tree — `display: none` would strip the links of their names.
+ */
+.list[data-appearance='rail'][data-collapsed='true'] .label {
+  position: absolute;
+  inline-size: var(--border-hairline);
+  block-size: var(--border-hairline);
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

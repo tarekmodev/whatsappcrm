@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
+import { Figtree } from 'next/font/google';
 import { content } from '@/content/en';
 import { readTheme } from '@/lib/theme/read-theme';
 import { ToastProvider } from '@/components/ui/ToastProvider';
@@ -26,11 +27,26 @@ export const metadata: Metadata = {
   description: content.app.description,
 };
 
+/**
+ * The console's geometric sans (0001). `next/font` self-hosts it at build time
+ * and emits the `@font-face` itself, so there is no request to a third party at
+ * runtime and no layout shift to design around: the variable it exposes is what
+ * `--scale-font-family-sans` reads.
+ *
+ * One family, one variable axis. A second weight file is a second download for a
+ * difference the type scale already expresses.
+ */
+const bodyFont = Figtree({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-sans',
+});
+
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const theme = await readTheme();
 
   return (
-    <html lang="en" dir="ltr" data-theme={theme}>
+    <html lang="en" dir="ltr" data-theme={theme} className={bodyFont.variable}>
       <body>
         <ToastProvider>{children}</ToastProvider>
       </body>

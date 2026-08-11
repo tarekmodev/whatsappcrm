@@ -1,0 +1,52 @@
+.tabs {
+  border-block-end: var(--border-hairline) solid var(--color-border);
+  /* Scrolls rather than wrapping when more tabs are added, so the strip stays
+     one row at 320px. */
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.list {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-3);
+  /* Reserved on every tab, so marking one current moves nothing. */
+  border-block-end: var(--size-marker) solid transparent;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .tab:hover {
+    color: var(--color-on-surface);
+  }
+}
+
+/*
+ * Current is carried by the underline *and* by the weight and colour change —
+ * the underline alone would be a colour-only signal in forced-colours mode.
+ */
+.tab[aria-current='page'] {
+  border-block-end-color: var(--color-accent);
+  color: var(--color-accent);
+  font-weight: var(--font-weight-strong);
+}
+
+@media (forced-colors: active) {
+  .tab[aria-current='page'] {
+    border-block-end-color: Highlight;
+  }
+}
