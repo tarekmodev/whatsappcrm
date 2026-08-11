@@ -17,8 +17,16 @@ export interface NavItem {
   readonly id: string;
   readonly label: string;
   readonly href: string;
-  /** Rendered only if the principal holds at least one of these. */
-  readonly requiresAny: readonly Permission[];
+  /**
+   * Rendered only if the principal holds at least one of these.
+   *
+   * `undefined` means every signed-in principal, and it is not the same as an
+   * empty array — `canAny([])` is false, so an empty list would hide the entry
+   * from everyone. It is for a surface whose subject is the *caller* rather than
+   * the tenant: changing your own password is gated by no permission, because
+   * there is no role that should be unable to do it.
+   */
+  readonly requiresAny?: readonly Permission[];
   readonly children?: readonly NavItem[];
 }
 
@@ -37,6 +45,13 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     href: routes.settingsAssignment(),
     requiresAny: ['report:read_all', 'assignment_rule:read'],
   },
+  {
+    id: 'settings-security',
+    label: content.nav.security,
+    href: routes.settingsSecurity(),
+    // Everyone. See `requiresAny` above — an agent who cannot reach this page
+    // has no way to change their own password.
+  },
 ];
 
 export const NAV_ITEMS: readonly NavItem[] = [
@@ -53,10 +68,21 @@ export const NAV_ITEMS: readonly NavItem[] = [
     href: routes.settings(),
     // Derived from the children rather than restated, so a settings section added
     // later cannot forget to widen its parent.
-    requiresAny: SETTINGS_CHILDREN.flatMap((child) => child.requiresAny),
+    requiresAny: derivedRequirements(SETTINGS_CHILDREN),
     children: SETTINGS_CHILDREN,
   },
 ];
+
+/**
+ * The union of what a parent's children need — or `undefined` when any one child
+ * is open to everyone, because a parent narrower than a child it contains would
+ * hide a destination the principal is allowed to reach.
+ */
+function derivedRequirements(children: readonly NavItem[]): readonly Permission[] | undefined {
+  return children.some((child) => child.requiresAny === undefined)
+    ? undefined
+    : children.flatMap((child) => child.requiresAny ?? []);
+}
 
 /** Drops every entry — and every child — the principal may not reach. */
 export function visibleNavItems(
@@ -65,7 +91,7 @@ export function visibleNavItems(
 ): readonly NavItem[] {
   return (
     items
-      .filter((item) => checker.canAny(item.requiresAny))
+      .filter((item) => item.requiresAny === undefined || checker.canAny(item.requiresAny))
       .map((item) =>
         item.children === undefined
           ? item

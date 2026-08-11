@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect } from 'react';
-import { ErrorState } from '@/components/ui/ErrorState';
-import { PageShell } from '@/components/shell/PageShell';
+import { RouteErrorFallback } from '@/components/ui/RouteErrorFallback';
+import { MAIN_CONTENT_ID } from '@/components/shell/main-content';
 
 /**
  * The app-wide error boundary — the last one before the browser shows nothing.
- * Individual routes and sections have their own, so reaching this means the failure
- * was outside all of them.
+ * Reaching it means the failure was outside both route groups and outside every
+ * boundary inside them, so it renders its own `<main>`: the shell that normally
+ * provides the landmark is exactly what did not render.
  */
 export default function AppError({
   error,
@@ -16,13 +16,9 @@ export default function AppError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  useEffect(() => {
-    console.error('Unhandled application error', error.digest ?? error.message);
-  }, [error]);
-
   return (
-    <PageShell>
-      <ErrorState onRetry={reset} requestId={error.digest ?? null} />
-    </PageShell>
+    <main id={MAIN_CONTENT_ID} tabIndex={-1}>
+      <RouteErrorFallback error={error} reset={reset} label="Unhandled application error" />
+    </main>
   );
 }

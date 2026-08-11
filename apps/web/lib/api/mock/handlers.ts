@@ -3,6 +3,9 @@ import 'server-only';
 import {
   ConversationListQuerySchema,
   InviteCreateInputSchema,
+  PasswordChangeInputSchema,
+  PasswordResetConfirmInputSchema,
+  PasswordResetRequestInputSchema,
   TeamCreateInputSchema,
   TeamUpdateInputSchema,
   UserListQuerySchema,
@@ -87,8 +90,10 @@ export async function handleMockRequest(request: ApiRequest): Promise<unknown> {
   );
 }
 
+const HTTP_UNAUTHORIZED = 401;
 const HTTP_FORBIDDEN = 403;
 const HTTP_NOT_FOUND = 404;
+const HTTP_GONE = 410;
 const HTTP_UNPROCESSABLE = 422;
 const MOCK_REQUEST_ID = 'mock-request';
 const UUID_SEGMENT = '([0-9a-fA-F-]{36})';
@@ -141,6 +146,27 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/conversations$/,
     permission: 'conversation:read',
     handle: listConversations,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/auth\/password-reset$/,
+    // Reachable with no session at all: the caller has lost their way in.
+    permission: null,
+    handle: requestPasswordReset,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/auth\/password-reset\/confirm$/,
+    permission: null,
+    handle: confirmPasswordReset,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/auth\/password$/,
+    // Signed in, but gated by no permission — the resource *is* the caller, and
+    // no role should be unable to change its own password.
+    permission: null,
+    handle: changePassword,
   },
 ];
 
@@ -379,6 +405,61 @@ function updateTeam({ principal, params, body }: RouteContext): TeamResponse {
   return toTeamResponse(updated);
 }
 
+// --- Passwords (TAR-57) ----------------------------------------------------
+//
+// The happy paths are unconditional, because the real endpoints are: a reset
+// request answers 204 whatever the address is. The two failure paths a person
+// actually meets — a dead link, a mistyped current password — are reachable
+// through the sentinels below, so QA can walk them without an API and without a
+// stopwatch to wait an hour for a token to expire.
+
+/**
+ * A reset token whose link is dead. Visit `/reset-password#token=expired` in mock
+ * mode to see the "request a new link" state.
+ */
+export const MOCK_EXPIRED_RESET_TOKEN = 'expired';
+
+/** Any other value is accepted as the current password; this one never is. */
+export const MOCK_WRONG_CURRENT_PASSWORD = 'wrong';
+
+function requestPasswordReset({ body }: RouteContext): null {
+  if (!PasswordResetRequestInputSchema.safeParse(body).success) {
+    throw validationFailed();
+  }
+
+  // Deliberately no lookup. Whether that address has an account is exactly what
+  // this endpoint must not reveal.
+  return null;
+}
+
+function confirmPasswordReset({ body }: RouteContext): null {
+  const parsed = PasswordResetConfirmInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  if (parsed.data.token === MOCK_EXPIRED_RESET_TOKEN) {
+    throw tokenInvalid();
+  }
+
+  return null;
+}
+
+function changePassword({ body }: RouteContext): null {
+  const parsed = PasswordChangeInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  if (parsed.data.currentPassword === MOCK_WRONG_CURRENT_PASSWORD) {
+    throw refused('invalid_credentials', 'The current password is incorrect.', HTTP_UNAUTHORIZED);
+  }
+
+  return null;
+}
+
 // --- Conversations ---------------------------------------------------------
 
 /**
@@ -590,8 +671,21 @@ function forbidden(permission: Permission): ApiRequestError {
 }
 
 /** A refusal from a rule the route's declared permission does not express. */
-function refused(code: string, message: string): ApiRequestError {
-  return new ApiRequestError(HTTP_FORBIDDEN, code, message, MOCK_REQUEST_ID);
+function refused(code: string, message: string, status: number = HTTP_FORBIDDEN): ApiRequestError {
+  return new ApiRequestError(status, code, message, MOCK_REQUEST_ID);
+}
+
+/**
+ * A reset link that is unknown, expired, already used, or whose owner can no
+ * longer sign in. 410 rather than 404, per TAR-53: the reset screen has to be
+ * able to tell "dead link, ask for another" apart from "no such page".
+ */
+function tokenInvalid(): ApiRequestError {
+  return refused(
+    'token_invalid',
+    'This password reset link has expired. Request a new one.',
+    HTTP_GONE,
+  );
 }
 
 function notFound(): ApiRequestError {

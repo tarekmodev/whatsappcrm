@@ -37,6 +37,22 @@ change.
 
 ### Added
 
+- **Password recovery and change screens** — `/forgot-password` requests a link and shows
+  one confirmation whatever came back, so the screen cannot answer the question the
+  endpoint's unconditional 204 refuses to; `/reset-password` reads the token from the URL
+  **fragment**, scrubs it from the address bar, and turns a dead link into "request a new
+  one" rather than an error above a form nobody can use; `/settings/security` changes a
+  known password and says plainly that this device stays signed in while every other one
+  does not. All three are token-driven and copy-driven, so TAR-29's white-label branding
+  applies without touching a component. `app/` gains two route groups — `(app)` carries the
+  console shell, `(auth)` carries the signed-out card frame — because a visitor following a
+  reset link has no session to resolve; every URL is unchanged. New shared pieces:
+  `AuthCard`, `AuthForm`, `AuthOutcomeCard`, `PasswordField`, `FormError` (extracted from
+  `FormDialog`), `TextLink` and `RouteErrorFallback`, all of which TAR-60's login and
+  invite-accept screens reuse as they stand. `/settings/security` is the first navigation
+  entry with no `requiresAny`, meaning every signed-in role, because a password screen
+  gated on a permission is a password some people cannot change. (TAR-61)
+
 - **Brute-force protection an admin can see and clear** (TAR-59) — the lockout TAR-56
   writes is now readable and reversible. `UserResponse` carries a `security` object
   (`lockedUntil`, `failedLoginAttempts`) for callers holding `user:update`, and `null` for
