@@ -1,0 +1,38 @@
+/* Shared rules for the native form controls, so an input and a select cannot
+   drift apart visually. Composed rather than copied. */
+
+.control {
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-3);
+  padding-block: var(--space-2);
+  background: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface);
+  /* 1rem base: anything smaller makes iOS Safari zoom the page on focus. */
+  font-size: var(--font-size-body);
+}
+
+.control::placeholder {
+  /* `on-surface-muted`, not `subtle`: WCAG applies to placeholder text, and the
+     subtle role is a 2.6:1 decoration colour that fails AA outright. */
+  color: var(--color-on-surface-muted);
+}
+
+.control[aria-invalid='true'] {
+  border-color: var(--color-danger);
+}
+
+.control:disabled {
+  background: var(--color-surface-sunken);
+  color: var(--color-on-surface-muted);
+  cursor: not-allowed;
+}
+
+.select {
+  /* Room for the platform's own disclosure arrow, which is deliberately left
+     native — a custom one is one more thing to get wrong in forced-colors mode. */
+  padding-inline-end: var(--space-6);
+}

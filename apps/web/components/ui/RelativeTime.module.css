@@ -1,0 +1,5 @@
+.time {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+}

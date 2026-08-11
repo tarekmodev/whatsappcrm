@@ -1,0 +1,28 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  block-size: 100%;
+  padding: var(--space-4);
+  background: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.name {
+  font-size: var(--font-size-body);
+  overflow-wrap: anywhere;
+}
+
+.description {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  /* Pushes the action to the card's block end so every card's button lines up. */
+  margin-block-start: auto;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
