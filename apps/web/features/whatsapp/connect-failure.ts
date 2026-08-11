@@ -38,6 +38,12 @@ export const WHATSAPP_CONNECT_FAILURES = [
   // --- Ended in the browser, before or instead of a request -----------------
   /** `CANCEL`, or Meta's window closed without an authorisation. */
   'cancelled',
+  /**
+   * The run held one half of Meta's answer and the other never arrived. Distinct
+   * from `cancelled` because nobody cancelled anything — telling someone they
+   * closed a window they did not close sends them looking for the wrong mistake.
+   */
+  'timed_out',
   /** Meta's own `ERROR` event. */
   'meta_error',
   /** Meta's SDK never loaded — blocked, offline, or refused. */

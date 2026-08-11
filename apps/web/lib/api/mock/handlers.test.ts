@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CursorPage, TeamResponse, TenantRole, UserResponse } from '@whatsappcrm/contracts';
+import {
+  ConnectedWhatsAppBusinessAccountResponseSchema,
+  whatsAppSignupFailureReason,
+  type ApiError,
+  type ConnectedWhatsAppBusinessAccountResponse,
+  type CursorPage,
+  type TeamResponse,
+  type TenantRole,
+  type UserResponse,
+} from '@whatsappcrm/contracts';
 
 /**
  * The mock transport is the only place a tenant-scoping or permission decision can
@@ -20,7 +29,7 @@ vi.mock('next/headers', () => ({
     }),
 }));
 
-const { handleMockRequest } = await import('./handlers');
+const { handleMockRequest, MOCK_EXPIRED_SIGNUP_CODE } = await import('./handlers');
 const { resetMockState } = await import('./store');
 const { OTHER_TENANT_ID, MOCK_IDS, MOCK_TENANT_ID } = await import('./fixtures');
 const { ApiRequestError } = await import('@/lib/api/http');
@@ -333,5 +342,72 @@ describe('validation', () => {
         body: { email: 'amina@northwind.example', role: 'agent', teamIds: [] },
       }),
     ).rejects.toMatchObject({ code: 'conflict' });
+  });
+});
+
+/**
+ * The WhatsApp connection (TAR-169). The endpoint exists here so the console's
+ * connected view can be reached in mock mode at all — without it every run in
+ * that mode ends in `not_found`, which reads as a bug in the flow rather than as
+ * a gap in the fixtures.
+ */
+describe('connecting a WhatsApp Business Account', () => {
+  const CONNECT_PATH = '/v1/whatsapp/business-accounts';
+  const WABA_ID = '102290129340398';
+
+  it('answers with the connected account and its numbers', async () => {
+    const connected = (await handleMockRequest({
+      method: 'POST',
+      path: CONNECT_PATH,
+      body: { code: 'a-fresh-code', wabaId: WABA_ID },
+    })) as ConnectedWhatsAppBusinessAccountResponse;
+
+    expect(connected.wabaId).toBe(WABA_ID);
+    expect(connected.accounts).toHaveLength(1);
+    expect(connected.accounts[0]?.whatsappBusinessAccountId).toBe(connected.id);
+    // The whole response has to satisfy the contract, or the console's own parse
+    // would reject what this hands it.
+    expect(() => ConnectedWhatsAppBusinessAccountResponseSchema.parse(connected)).not.toThrow();
+  });
+
+  /**
+   * Carries an envelope, unlike every other refusal in the transport: the console
+   * branches on `details.reason`, and a `whatsapp_signup_failed` without one
+   * exercises the fallback instead of the taxonomy.
+   */
+  it('refuses the sentinel code with a reason the console can branch on', async () => {
+    const error = await handleMockRequest({
+      method: 'POST',
+      path: CONNECT_PATH,
+      body: { code: MOCK_EXPIRED_SIGNUP_CODE, wabaId: WABA_ID },
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect((error as InstanceType<typeof ApiRequestError>).code).toBe('whatsapp_signup_failed');
+    expect(whatsAppSignupFailureReason((error as { envelope: ApiError }).envelope)).toBe(
+      'code_expired',
+    );
+  });
+
+  it('refuses a caller whose role does not include channel:manage', async () => {
+    asRole('supervisor');
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: CONNECT_PATH,
+        body: { code: 'a-fresh-code', wabaId: WABA_ID },
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('rejects a body the contract does not accept', async () => {
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: CONNECT_PATH,
+        body: { code: 'a-fresh-code', wabaId: 'not-a-meta-id' },
+      }),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
   });
 });

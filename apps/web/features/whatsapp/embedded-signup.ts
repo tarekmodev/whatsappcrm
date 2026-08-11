@@ -22,20 +22,42 @@ import { MetaPhoneNumberIdSchema, MetaWabaIdSchema } from '@whatsappcrm/contract
  */
 export const META_SDK_SRC = 'https://connect.facebook.net/en_US/sdk.js';
 
+/** Meta's registrable domain. Everything Embedded Signup posts from is under it. */
+const META_MESSAGE_DOMAIN = 'facebook.com';
+
 /**
- * The origins an Embedded Signup message may arrive from.
+ * Whether an Embedded Signup message may be trusted, by origin.
  *
- * An exact allow-list, deliberately: Meta's own snippet tests
- * `origin.endsWith('facebook.com')`, which `evilfacebook.com` satisfies. This
- * message decides which WABA the console claims, so an origin check that a
- * look-alike domain passes is a way to have somebody else's WABA id submitted
- * under this session.
+ * Meta's own published snippet tests `origin.endsWith('facebook.com')`, which
+ * `https://evilfacebook.com` satisfies — and this message decides which WABA the
+ * console claims, so that check is a way to have somebody else's WABA id
+ * submitted under this session.
+ *
+ * A fixed list of hosts closes that hole and opens another: Meta posts from
+ * `www`, `web`, `business`, `m` and regional hosts, and a host it adds later is
+ * one this build drops **silently**, which strands the run rather than failing
+ * it. Guessing Meta's host list correctly, forever, is not a thing this code can
+ * do.
+ *
+ * So the test is on the parsed URL rather than on the string: HTTPS, and either
+ * `facebook.com` itself or a subdomain of it. The leading dot is what the suffix
+ * check was missing — `evilfacebook.com` does not end in `.facebook.com`, and
+ * every host Meta can add does.
  */
-const TRUSTED_MESSAGE_ORIGINS: readonly string[] = [
-  'https://www.facebook.com',
-  'https://web.facebook.com',
-  'https://business.facebook.com',
-];
+function isTrustedMessageOrigin(origin: string): boolean {
+  let url: URL;
+
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+
+  return (
+    url.protocol === 'https:' &&
+    (url.hostname === META_MESSAGE_DOMAIN || url.hostname.endsWith(`.${META_MESSAGE_DOMAIN}`))
+  );
+}
 
 /** The `type` every Embedded Signup message carries. */
 const EMBEDDED_SIGNUP_MESSAGE_TYPE = 'WA_EMBEDDED_SIGNUP';
@@ -81,7 +103,7 @@ export interface EmbeddedSignupMessage {
  * finished run costs the user another trip through Meta.
  */
 export function parseEmbeddedSignupMessage(message: MessageEvent): EmbeddedSignupMessage | null {
-  if (!TRUSTED_MESSAGE_ORIGINS.includes(message.origin)) {
+  if (!isTrustedMessageOrigin(message.origin)) {
     return null;
   }
 

@@ -40,20 +40,33 @@ describe('parseEmbeddedSignupMessage', () => {
     );
   });
 
-  it('refuses a look-alike domain that an endsWith check would let through', () => {
-    expect(
-      parseEmbeddedSignupMessage(
-        message('https://evilfacebook.com', JSON.stringify(FINISH_PAYLOAD)),
-      ),
-    ).toBeNull();
+  it.each([
+    ['a look-alike domain an endsWith check would let through', 'https://evilfacebook.com'],
+    ['a look-alike with the name in a longer label', 'https://notfacebook.com'],
+    ['the domain as a subdomain of somebody else', 'https://facebook.com.evil.example'],
+    ['plain http', 'http://www.facebook.com'],
+    ['an origin that is not a URL at all', 'null'],
+  ])('refuses %s', (_label, origin) => {
+    expect(parseEmbeddedSignupMessage(message(origin, JSON.stringify(FINISH_PAYLOAD)))).toBeNull();
   });
 
-  it('refuses the same payload over plain http', () => {
+  /**
+   * Meta posts from `www`, `web`, `business`, `m` and regional hosts, and adds
+   * more without telling anyone. A fixed list would drop a run **silently** the
+   * day it changed, so the test is "https, under facebook.com" — which the
+   * look-alikes above still fail.
+   */
+  it.each([
+    'https://www.facebook.com',
+    'https://web.facebook.com',
+    'https://business.facebook.com',
+    'https://m.facebook.com',
+    'https://en-gb.facebook.com',
+    'https://facebook.com',
+  ])('accepts %s', (origin) => {
     expect(
-      parseEmbeddedSignupMessage(
-        message('http://www.facebook.com', JSON.stringify(FINISH_PAYLOAD)),
-      ),
-    ).toBeNull();
+      parseEmbeddedSignupMessage(message(origin, JSON.stringify(FINISH_PAYLOAD)))?.isCompletion,
+    ).toBe(true);
   });
 
   it.each([

@@ -44,7 +44,43 @@ import { connectWhatsAppAccountAction } from './whatsapp.actions';
  * The handlers are registered once and must see the *current* attempt, not the
  * one captured when they were created; and `isSettled` is read twice in the same
  * tick when a `CANCEL` chases a `FINISH`, which state cannot answer correctly.
+ *
+ * ## Every wait has an end
+ *
+ * The panel's only control is disabled while the flow is in progress, so a state
+ * this hook can enter and never leave is a page with no way forward short of a
+ * reload — which nobody thinks to do. Two waits could do that, and both are
+ * bounded here rather than trusted:
+ *
+ *   - **the SDK arriving**, which `next/script` reports exactly once per page
+ *     load and never again for a script it has already cached, so a return visit
+ *     to this route gets no `onLoad` at all;
+ *   - **the run itself**, which needs two messages Meta may only send one of.
+ *
+ * Neither timeout is a retry. They end a wait that has stopped being one and
+ * hand the user back a button.
  */
+
+/**
+ * How long a run may sit with half of Meta's answer before it is called off.
+ *
+ * Generous on purpose: the user is inside Meta's own window for most of it,
+ * choosing a business and a number, and cutting that short would abandon a run
+ * that was going fine. This is the backstop for a `FINISH` that is never coming —
+ * a message from a host outside the allow-list, an event Meta renamed, a privacy
+ * extension that blocked the post — not a progress indicator.
+ */
+const ATTEMPT_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * How long to wait for Meta's script before saying it is not coming.
+ *
+ * Past this the button would be a spinner with nothing behind it, so the panel
+ * switches to the blocked-script explanation instead. Recoverable rather than
+ * final: a script that arrives late still runs `onLoad`, which puts the panel
+ * back into working order.
+ */
+const SDK_READY_TIMEOUT_MS = 20_000;
 
 export type EmbeddedSignupStatus = 'idle' | 'authorising' | 'connecting' | 'connected' | 'failed';
 
@@ -94,27 +130,42 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
   const [sdkStatus, setSdkStatus] = useState<MetaSdkStatus>('loading');
   const attemptRef = useRef<Attempt>(freshAttempt());
   const isMountedRef = useRef(true);
+  const attemptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Read inside handlers registered once; a ref keeps them from capturing a stale
   // callback without re-registering the window listener on every render.
   const onConnectedRef = useRef(onConnected);
 
   onConnectedRef.current = onConnected;
 
+  const clearAttemptTimer = useCallback((): void => {
+    if (attemptTimerRef.current !== null) {
+      clearTimeout(attemptTimerRef.current);
+      attemptTimerRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     isMountedRef.current = true;
 
     return () => {
       isMountedRef.current = false;
+      // Never leave a timer running past the panel: it would fire into a
+      // component that no longer exists.
+      clearAttemptTimer();
     };
-  }, []);
+  }, [clearAttemptTimer]);
 
-  const settle = useCallback((next: EmbeddedSignupState): void => {
-    attemptRef.current.isSettled = true;
+  const settle = useCallback(
+    (next: EmbeddedSignupState): void => {
+      attemptRef.current.isSettled = true;
+      clearAttemptTimer();
 
-    if (isMountedRef.current) {
-      setState(next);
-    }
-  }, []);
+      if (isMountedRef.current) {
+        setState(next);
+      }
+    },
+    [clearAttemptTimer],
+  );
 
   const fail = useCallback(
     (report: WhatsAppConnectFailureReport): void => {
@@ -130,9 +181,10 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
   /**
    * Sends the moment both halves are in hand, and does nothing until then.
    *
-   * Marks the attempt settled *before* awaiting, so a `CANCEL` arriving while the
-   * request is in flight — Meta closes its window after `FINISH` — cannot replace
-   * a connection in progress with "you cancelled".
+   * Settles *before* awaiting, so a `CANCEL` arriving while the request is in
+   * flight — Meta closes its window after `FINISH` — cannot replace a connection
+   * in progress with "you cancelled", and so the run's watchdog stops before the
+   * request it is no longer watching.
    */
   const submitIfReady = useCallback((): void => {
     const attempt = attemptRef.current;
@@ -156,8 +208,7 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
         : { phoneNumberId: attempt.signup.phoneNumberId }),
     };
 
-    attempt.isSettled = true;
-    setState({ status: 'connecting' });
+    settle({ status: 'connecting' });
 
     void connectWhatsAppAccountAction(input)
       .then((result) => {
@@ -182,7 +233,7 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
           setState({ status: 'failed', report: connectFailureFromError(error) });
         }
       });
-  }, [fail]);
+  }, [fail, settle]);
 
   /**
    * Registered once for the panel's lifetime rather than per run: Meta can post
@@ -223,12 +274,16 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
     };
   }, [fail, submitIfReady]);
 
-  const onSdkLoad = useCallback((): void => {
+  /**
+   * Configures Meta's SDK and marks it usable, reporting whether it was there to
+   * configure. Safe to call more than once — `FB.init` is idempotent, and this
+   * has to be callable from both the load event and a plain mount.
+   */
+  const initialiseSdk = useCallback((): boolean => {
     const sdk = window.FB;
 
     if (sdk === undefined || webEnv.metaAppId === null) {
-      setSdkStatus('unavailable');
-      return;
+      return false;
     }
 
     sdk.init({
@@ -241,7 +296,52 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
     });
 
     setSdkStatus('ready');
+
+    return true;
   }, []);
+
+  /**
+   * Readiness is a fact about `window.FB`, not about the load event.
+   *
+   * `next/script` fires `onLoad` once per page load: it keeps a module-level
+   * cache of scripts it has already inserted, so the second time this panel
+   * mounts in the same session — an admin visiting Settings → People and coming
+   * back — the script is not re-inserted and no callback runs. Deriving readiness
+   * from the load event alone left `sdkStatus` at `'loading'` for the rest of
+   * that session, which disabled the page's only button with no way back short of
+   * a full reload.
+   *
+   * So the mount asks the SDK directly. `onReady` would cover the same remount,
+   * but only for as long as Next keeps calling it; `window.FB` being present is
+   * the thing that actually decides whether `FB.login` can run.
+   *
+   * `false` here is the ordinary first visit — the script has not arrived yet —
+   * and is not a failure. The timeout below is what turns "not yet" into an
+   * answer.
+   */
+  useEffect(() => {
+    if (initialiseSdk()) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      // Still nothing. Say so, rather than leaving a control that cannot be used
+      // and does not explain itself. A late `onLoad` still recovers it.
+      setSdkStatus((current) => (current === 'loading' ? 'unavailable' : current));
+    }, SDK_READY_TIMEOUT_MS);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [initialiseSdk]);
+
+  const onSdkLoad = useCallback((): void => {
+    if (!initialiseSdk()) {
+      // The script reported itself loaded and left no `FB` behind — a truncated
+      // response, or something serving a different body from that URL.
+      setSdkStatus('unavailable');
+    }
+  }, [initialiseSdk]);
 
   const onSdkError = useCallback((): void => {
     setSdkStatus('unavailable');
@@ -261,6 +361,18 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
     attemptRef.current = freshAttempt();
     setState({ status: 'authorising' });
 
+    // The run needs two messages and can only ever receive one of them. Meta
+    // posting from a host this build does not trust, renaming the event, or a
+    // privacy extension eating the post all leave the flow waiting for a half
+    // that is not coming — and every one of those is silent by design, because
+    // an unrecognised message must not end a run that is still going. This is
+    // what makes "still going" a claim with an expiry date.
+    clearAttemptTimer();
+    attemptTimerRef.current = setTimeout(() => {
+      attemptTimerRef.current = null;
+      fail(connectFailure('timed_out'));
+    }, ATTEMPT_TIMEOUT_MS);
+
     sdk.login((response) => {
       const code = response.authResponse?.code;
 
@@ -274,7 +386,7 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
       attemptRef.current.code = code;
       submitIfReady();
     }, embeddedSignupLoginOptions(webEnv.metaEmbeddedSignupConfigId));
-  }, [fail, submitIfReady]);
+  }, [clearAttemptTimer, fail, submitIfReady]);
 
   return {
     state,

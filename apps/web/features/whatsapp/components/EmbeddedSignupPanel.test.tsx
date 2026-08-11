@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ConnectedWhatsAppBusinessAccountResponse } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
@@ -43,14 +43,28 @@ vi.mock('@/lib/config/env', () => env);
 
 vi.mock('../whatsapp.actions', () => ({ connectWhatsAppAccountAction: transport.connect }));
 
-// Meta's script is a network fetch the test environment must not make. The stub
-// reports itself loaded, which is exactly what `next/script` does once it is.
+/**
+ * Meta's script is a network fetch the test environment must not make.
+ *
+ * The stub fires `onLoad` **once**, which is the part of `next/script` that
+ * matters here: it keeps a module-level cache of the scripts it has inserted, so
+ * a component that mounts a second time in the same page load gets no callback
+ * at all. A stub that fired on every mount would hide exactly the bug the return
+ * visit produces.
+ */
+const script = vi.hoisted(() => ({ hasFiredLoad: false, isBlocked: false }));
+
 vi.mock('next/script', async () => {
   const { useEffect } = await import('react');
 
   return {
     default: function MockScript({ onLoad }: { onLoad?: () => void }) {
       useEffect(() => {
+        if (script.hasFiredLoad || script.isBlocked) {
+          return;
+        }
+
+        script.hasFiredLoad = true;
         onLoad?.();
       }, [onLoad]);
 
@@ -127,6 +141,8 @@ const FINISH_DATA = { waba_id: WABA_ID, phone_number_id: PHONE_NUMBER_ID };
 beforeEach(() => {
   vi.clearAllMocks();
   loginCallback = null;
+  script.hasFiredLoad = false;
+  script.isBlocked = false;
   env.webEnv = {
     metaAppId: '1234567890',
     metaEmbeddedSignupConfigId: '9876543210',
@@ -334,5 +350,119 @@ describe('EmbeddedSignupPanel', () => {
     expect(
       screen.queryByRole('button', { name: content.whatsapp.connectButton }),
     ).not.toBeInTheDocument();
+  });
+
+  /**
+   * The return visit. `next/script` fires `onLoad` once per page load, so a panel
+   * that took its readiness from that callback alone left the button disabled for
+   * the rest of the session — the page's only control, with no way back short of
+   * a full reload. Readiness comes from `window.FB` instead, which is the thing
+   * that actually decides whether `FB.login` can run.
+   */
+  it('still works on a return visit, when next/script does not fire onLoad again', () => {
+    const first = renderPanel();
+
+    expect(
+      screen.getByRole('button', { name: content.whatsapp.connectButton }),
+    ).not.toHaveAttribute('aria-disabled');
+
+    first.unmount();
+    init.mockClear();
+    renderPanel();
+
+    // Meta's script is cached, so nothing reported it a second time.
+    expect(script.hasFiredLoad).toBe(true);
+    // The panel asked the SDK directly rather than waiting for a callback.
+    expect(init).toHaveBeenCalledTimes(1);
+
+    const button = screen.getByRole('button', { name: content.whatsapp.connectButton });
+
+    expect(button).not.toHaveAttribute('aria-disabled');
+
+    fireEvent.click(button);
+
+    expect(login).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The two waits that could once go on forever. Both end in an explanation and a
+ * button, because the alternative is a disabled control that never says why.
+ */
+describe('EmbeddedSignupPanel waits that must end', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * Only half of Meta's answer arrives. Every way that happens is silent by
+   * design — a message from a host outside the trusted domain, an event Meta
+   * renamed, an extension that ate the post — because an unrecognised message
+   * must not end a run that is still going. This is what gives "still going" an
+   * expiry date.
+   */
+  it('calls off a run that only ever receives the code', () => {
+    renderPanel();
+    clickConnect();
+
+    answerLogin({ authResponse: { code: CODE } });
+
+    expect(transport.connect).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(5 * 60_000);
+    });
+
+    const alert = screen.getByRole('alert');
+
+    expect(alert).toHaveTextContent(content.whatsapp.connectFailures.timed_out.heading);
+    // Not "you cancelled": nobody did, and saying so sends them looking for the
+    // wrong mistake.
+    expect(alert).not.toHaveTextContent(content.whatsapp.connectFailures.cancelled.heading);
+    expect(screen.getByRole('button', { name: content.common.retry })).toBeInTheDocument();
+    expect(transport.connect).not.toHaveBeenCalled();
+  });
+
+  it('leaves a run that completed in time alone', () => {
+    renderPanel();
+    clickConnect();
+
+    postFromMeta('FINISH', FINISH_DATA);
+    answerLogin({ authResponse: { code: CODE } });
+
+    act(() => {
+      vi.advanceTimersByTime(5 * 60_000);
+    });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  /**
+   * Meta's script never arrives and never reports an error either — a blocker or
+   * a privacy setting that drops the request silently. Without this the button is
+   * a spinner with nothing behind it.
+   */
+  it('stops waiting for a script that is not coming, and says what to do', () => {
+    script.isBlocked = true;
+    delete window.FB;
+    renderPanel();
+
+    // Queried by pattern, not by exact name: a pending button folds the spinner's
+    // own label into its accessible name.
+    expect(
+      screen.getByRole('button', { name: new RegExp(content.whatsapp.connectButton) }),
+    ).toHaveAttribute('aria-disabled', 'true');
+
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      content.whatsapp.connectFailures.sdk_unavailable.heading,
+    );
   });
 });

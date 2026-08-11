@@ -10,8 +10,12 @@ import {
   TeamUpdateInputSchema,
   UserListQuerySchema,
   UserUpdateInputSchema,
+  WhatsAppEmbeddedSignupInputSchema,
   isRoleWithin,
   roleHasPermission,
+  whatsAppSignupFailureDetails,
+  type ApiError,
+  type ConnectedWhatsAppBusinessAccountResponse,
   type ConversationResponse,
   type CursorPage,
   type Permission,
@@ -91,6 +95,7 @@ export async function handleMockRequest(request: ApiRequest): Promise<unknown> {
   );
 }
 
+const HTTP_BAD_REQUEST = 400;
 const HTTP_UNAUTHORIZED = 401;
 const HTTP_FORBIDDEN = 403;
 const HTTP_NOT_FOUND = 404;
@@ -174,6 +179,12 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/auth\/password-reset\/confirm$/,
     permission: null,
     handle: confirmPasswordReset,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/whatsapp\/business-accounts$/,
+    permission: 'channel:manage',
+    handle: connectWhatsAppBusinessAccount,
   },
   {
     method: 'POST',
@@ -495,6 +506,91 @@ function changePassword({ body }: RouteContext): null {
   }
 
   return null;
+}
+
+// --- WhatsApp (TAR-169) ----------------------------------------------------
+
+/**
+ * A signup code that this transport always refuses, so the console's failure
+ * branch can be walked without a Meta app. Use it by editing the `code` in the
+ * request, or reach it from the UI by running the flow against a Meta app that
+ * takes longer than 30 seconds — the sentinel is the version that does not need
+ * one.
+ */
+export const MOCK_EXPIRED_SIGNUP_CODE = 'expired';
+
+/**
+ * `POST /v1/whatsapp/business-accounts` — the tenant-facing connection.
+ *
+ * Stateless, unlike the users and teams above: there is no WABA in the fixture
+ * store to update, because there is no tenant-facing `GET` for a later render to
+ * read one back from. It answers with a plausible connected account so the
+ * console's success view can be seen, and refuses the sentinel code above so the
+ * failure view can be too. Both are what the real endpoint returns in shape; the
+ * exchange it stands in for cannot be faked, and is not what this is for.
+ */
+function connectWhatsAppBusinessAccount({
+  body,
+}: RouteContext): ConnectedWhatsAppBusinessAccountResponse {
+  const parsed = WhatsAppEmbeddedSignupInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  if (parsed.data.code === MOCK_EXPIRED_SIGNUP_CODE) {
+    throw signupFailed('code_expired');
+  }
+
+  const businessAccountId = nextMockId();
+
+  return {
+    id: businessAccountId,
+    wabaId: parsed.data.wabaId,
+    name: 'Northwind Traders',
+    verificationStatus: 'verified',
+    createdAt: MOCK_CREATED_AT,
+    updatedAt: MOCK_CREATED_AT,
+    accounts: [
+      {
+        id: nextMockId(),
+        whatsappBusinessAccountId: businessAccountId,
+        phoneNumberId: parsed.data.phoneNumberId ?? '106540352242922',
+        displayPhoneNumber: '+966501234567',
+        verifiedName: 'Northwind Support',
+        // Meta has not rated a number nobody has messaged yet.
+        qualityRating: null,
+        status: 'connected',
+        createdAt: MOCK_CREATED_AT,
+        updatedAt: MOCK_CREATED_AT,
+      },
+    ],
+  };
+}
+
+/**
+ * The one refusal in this file that carries an envelope, because the console
+ * reads `details.reason` off it — a `whatsapp_signup_failed` without one would
+ * exercise the fallback branch rather than the taxonomy the flow is built on.
+ */
+function signupFailed(reason: 'code_expired'): ApiRequestError {
+  const message = 'This WhatsApp authorization expired before it could be used.';
+  const envelope: ApiError = {
+    error: {
+      code: 'whatsapp_signup_failed',
+      message,
+      details: whatsAppSignupFailureDetails(reason),
+      requestId: MOCK_REQUEST_ID,
+    },
+  };
+
+  return new ApiRequestError(
+    HTTP_BAD_REQUEST,
+    'whatsapp_signup_failed',
+    message,
+    MOCK_REQUEST_ID,
+    envelope,
+  );
 }
 
 // --- Conversations ---------------------------------------------------------

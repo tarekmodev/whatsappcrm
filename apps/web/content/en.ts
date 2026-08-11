@@ -368,6 +368,10 @@ export const content = {
         heading: 'Connection cancelled',
         body: 'Meta’s window closed before the connection finished. Start again whenever you are ready.',
       },
+      timed_out: {
+        heading: 'The connection did not finish',
+        body: 'Meta started the connection but never confirmed it. Nothing was changed in this workspace — start again, and contact support if it happens twice.',
+      },
       sdk_unavailable: {
         heading: 'Meta’s connection window could not load',
         body: 'Something blocked Meta’s script — an ad blocker or a strict privacy setting is the usual cause. Allow connect.facebook.net, reload this page, and try again.',
