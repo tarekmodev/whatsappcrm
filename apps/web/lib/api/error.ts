@@ -1,4 +1,4 @@
-import { ApiErrorSchema } from '@whatsappcrm/contracts';
+import { ApiErrorSchema, type ApiError } from '@whatsappcrm/contracts';
 
 /**
  * The one error type every API call in the app throws, and the one place a
@@ -14,13 +14,32 @@ export class ApiRequestError extends Error {
   readonly status: number;
   readonly code: string;
   readonly requestId: string | null;
+  /**
+   * The envelope this error was parsed from, when there was one — `null` for a
+   * response that was not JSON or did not match the contract's shape.
+   *
+   * Kept whole rather than unpacked into more fields, because `details` is where
+   * a code carries the thing a caller branches on: `whatsapp_signup_failed`
+   * publishes its `reason` there, and the contract's own reader
+   * (`whatsAppSignupFailureReason`) takes the envelope precisely so that
+   * encoding is written down in one place. Handing it the object it was designed
+   * for keeps this module from learning the encoding a second time.
+   */
+  readonly envelope: ApiError | null;
 
-  constructor(status: number, code: string, message: string, requestId: string | null) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    requestId: string | null,
+    envelope: ApiError | null = null,
+  ) {
     super(message);
     this.name = 'ApiRequestError';
     this.status = status;
     this.code = code;
     this.requestId = requestId;
+    this.envelope = envelope;
   }
 }
 
@@ -43,5 +62,5 @@ export async function toApiRequestError(response: Response): Promise<ApiRequestE
 
   const { code, message, requestId } = parsed.data.error;
 
-  return new ApiRequestError(response.status, code, message, requestId);
+  return new ApiRequestError(response.status, code, message, requestId, parsed.data);
 }

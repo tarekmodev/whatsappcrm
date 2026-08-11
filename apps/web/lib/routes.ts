@@ -10,6 +10,8 @@ export const routes = {
   settings: () => '/settings',
   settingsPeople: (query?: PeopleQuery) => withQuery('/settings/people', peopleSearchParams(query)),
   settingsAssignment: () => '/settings/assignment',
+  /** Where a tenant admin connects its own WhatsApp Business Account (TAR-169). */
+  settingsWhatsApp: () => '/settings/whatsapp',
   settingsSecurity: () => '/settings/security',
   /**
    * Sign in. `redirectTo` is where the user was heading when the guard turned

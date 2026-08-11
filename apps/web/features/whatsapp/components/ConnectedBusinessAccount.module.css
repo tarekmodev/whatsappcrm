@@ -1,0 +1,37 @@
+.summary {
+  padding: var(--space-4);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-sunken);
+}
+
+.name {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-heading-sm);
+  line-height: var(--line-height-heading);
+  font-weight: var(--font-weight-strong);
+  /* A business name Meta accepted can be long, and a card must not scroll sideways. */
+  overflow-wrap: anywhere;
+}
+
+.metaLabel {
+  margin: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.metaValue {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+  overflow-wrap: anywhere;
+}
+
+.numbersCount {
+  margin: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}

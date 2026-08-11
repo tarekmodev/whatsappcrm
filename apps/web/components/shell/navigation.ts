@@ -46,6 +46,14 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     requiresAny: ['report:read_all', 'assignment_rule:read'],
   },
   {
+    id: 'settings-whatsapp',
+    label: content.nav.whatsapp,
+    href: routes.settingsWhatsApp(),
+    // The same permission the endpoint behind it requires. A principal without it
+    // never sees the entry, and the API refuses the call regardless (TAR-169).
+    requiresAny: ['channel:manage'],
+  },
+  {
     id: 'settings-security',
     label: content.nav.security,
     href: routes.settingsSecurity(),
