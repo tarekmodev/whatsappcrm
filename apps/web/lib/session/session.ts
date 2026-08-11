@@ -4,6 +4,7 @@ import { cache } from 'react';
 import { cookies } from 'next/headers';
 import {
   SESSION_COOKIE_NAME,
+  SESSION_COOKIE_NAME_SECURE,
   SessionResponseSchema,
   type Permission,
   type SessionPrincipal,
@@ -57,7 +58,7 @@ export const resolveSession = cache(async (): Promise<ResolvedSession> => {
     method: 'GET',
     path: SESSION_ENDPOINT,
     // The API authenticates by cookie; forward the one the browser sent us.
-    headers: forwardedSessionCookie(cookieStore.get(SESSION_COOKIE_NAME)?.value),
+    headers: forwardedSessionCookie(cookieStore),
   });
 
   const principal = SessionResponseSchema.parse(response).user;
@@ -65,8 +66,30 @@ export const resolveSession = cache(async (): Promise<ResolvedSession> => {
   return { principal, checker: checkerForPrincipal(principal), isStubbed: false };
 });
 
-function forwardedSessionCookie(value: string | undefined): Record<string, string> {
-  return value === undefined ? {} : { cookie: `${SESSION_COOKIE_NAME}=${value}` };
+/**
+ * The session cookie carries the `__Host-` prefix wherever `SESSION_COOKIE_SECURE`
+ * is on — which is everywhere except local development, where Safari refuses a
+ * `__Host-` cookie on plain-HTTP localhost and login would be impossible.
+ *
+ * The frontend does not read that flag, so it forwards whichever of the two names
+ * the browser actually sent, preferring the secure spelling. Naming only the
+ * development one would leave every deployed environment forwarding nothing, and
+ * the symptom would be "signed in, then immediately signed out again".
+ */
+const SESSION_COOKIE_NAMES = [SESSION_COOKIE_NAME_SECURE, SESSION_COOKIE_NAME] as const;
+
+function forwardedSessionCookie(
+  cookieStore: Awaited<ReturnType<typeof cookies>>,
+): Record<string, string> {
+  for (const name of SESSION_COOKIE_NAMES) {
+    const value = cookieStore.get(name)?.value;
+
+    if (value !== undefined) {
+      return { cookie: `${name}=${value}` };
+    }
+  }
+
+  return {};
 }
 
 /**

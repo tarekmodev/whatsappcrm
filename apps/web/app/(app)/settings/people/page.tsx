@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { TENANT_ROLES, type TenantRole } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { searchParamKeys } from '@/lib/routes';
+import { firstSearchParam, type RouteSearchParams } from '@/lib/search-params';
 import { requireAnyPermission } from '@/lib/session/session';
 import { PageHeader } from '@/components/shell/PageHeader';
 import { Stack } from '@/components/layout/Stack';
@@ -32,7 +33,7 @@ const PEOPLE_MANAGEMENT_PERMISSIONS = ['user:invite', 'user:update', 'team:write
 export default async function PeoplePage({
   searchParams,
 }: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
+  searchParams: Promise<RouteSearchParams>;
 }) {
   const session = await requireAnyPermission(PEOPLE_MANAGEMENT_PERMISSIONS);
 
@@ -42,8 +43,8 @@ export default async function PeoplePage({
 
   const params = await searchParams;
   const filters = {
-    role: parseRole(firstValue(params[searchParamKeys.peopleRole])),
-    q: firstValue(params[searchParamKeys.peopleQuery]),
+    role: parseRole(firstSearchParam(params[searchParamKeys.peopleRole])),
+    q: firstSearchParam(params[searchParamKeys.peopleQuery]),
   };
 
   return (
@@ -66,12 +67,6 @@ export default async function PeoplePage({
       </SectionErrorBoundary>
     </Stack>
   );
-}
-
-function firstValue(value: string | string[] | undefined): string | undefined {
-  const candidate = Array.isArray(value) ? value[0] : value;
-
-  return candidate === undefined || candidate.trim() === '' ? undefined : candidate;
 }
 
 /** An unrecognised `?role=` is dropped, not an error — the URL is untrusted. */

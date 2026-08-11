@@ -11,6 +11,14 @@ export const routes = {
   settingsPeople: (query?: PeopleQuery) => withQuery('/settings/people', peopleSearchParams(query)),
   settingsAssignment: () => '/settings/assignment',
   forbidden: () => '/forbidden',
+  login: (query?: LoginQuery) =>
+    withQuery('/login', { [searchParamKeys.redirectTo]: query?.redirectTo }),
+  /**
+   * The target of the invitation email. The token travels in the URL *fragment*
+   * (`/invite#token=…`), which browsers never send to a server, so it is not part
+   * of this function's output — the mailer appends it (ADR 0005).
+   */
+  invite: () => '/invite',
 } as const;
 
 /** Query keys are named once so a link and the page that reads it cannot drift. */
@@ -20,7 +28,30 @@ export const searchParamKeys = {
   peopleTab: 'tab',
   peopleRole: 'role',
   peopleQuery: 'q',
+  /** Where sign-in sends the user afterwards. Read through `parseRedirectPath`. */
+  redirectTo: 'next',
 } as const;
+
+export interface LoginQuery {
+  redirectTo?: string;
+}
+
+/**
+ * Narrows an untrusted `?next=` value to a path inside this app.
+ *
+ * Anything else is dropped rather than corrected: a value like
+ * `//evil.example.com` or `https://evil.example.com` is a browser-protocol-relative
+ * URL, and following it after a successful sign-in is an open redirect that hands
+ * a freshly authenticated user to somebody else's site. A backslash is rejected
+ * for the same reason — some browsers normalise `/\` to `//`.
+ */
+export function parseRedirectPath(value: string | undefined, fallback: string): string {
+  if (value === undefined || !value.startsWith('/')) {
+    return fallback;
+  }
+
+  return value.startsWith('//') || value.startsWith('/\\') ? fallback : value;
+}
 
 export type InboxScope = ConversationListQuery['scope'];
 export type ConversationStatusFilter = NonNullable<ConversationListQuery['status']>;

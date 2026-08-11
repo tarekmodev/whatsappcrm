@@ -1,0 +1,13 @@
+.link {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--size-touch-target);
+  color: var(--color-accent);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  text-decoration: underline;
+}
+
+.link:hover {
+  color: var(--color-accent-hover);
+}

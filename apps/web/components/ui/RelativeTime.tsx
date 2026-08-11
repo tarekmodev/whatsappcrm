@@ -53,19 +53,26 @@ function formatAbsolute(isoTimestamp: string): string {
   }).format(new Date(isoTimestamp));
 }
 
+/**
+ * Picks the unit from the *distance* to now, not the signed difference, so a
+ * future timestamp — an invitation's expiry, say — reads "in 6 days" rather than
+ * "in 619,918 seconds". `Intl.RelativeTimeFormat` already handles the direction
+ * from the sign; only the unit choice has to be symmetric.
+ */
 function formatRelative(isoTimestamp: string): string {
   const elapsedSeconds = (Date.now() - new Date(isoTimestamp).getTime()) / MS_PER_SECOND;
+  const distanceSeconds = Math.abs(elapsedSeconds);
   const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
 
-  if (elapsedSeconds < SECONDS_PER_MINUTE) {
+  if (distanceSeconds < SECONDS_PER_MINUTE) {
     return formatter.format(-Math.round(elapsedSeconds), 'second');
   }
 
-  if (elapsedSeconds < SECONDS_PER_HOUR) {
+  if (distanceSeconds < SECONDS_PER_HOUR) {
     return formatter.format(-Math.round(elapsedSeconds / SECONDS_PER_MINUTE), 'minute');
   }
 
-  if (elapsedSeconds < SECONDS_PER_DAY) {
+  if (distanceSeconds < SECONDS_PER_DAY) {
     return formatter.format(-Math.round(elapsedSeconds / SECONDS_PER_HOUR), 'hour');
   }
 

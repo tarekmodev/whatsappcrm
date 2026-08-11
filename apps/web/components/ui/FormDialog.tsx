@@ -2,10 +2,10 @@
 
 import type { ReactNode } from 'react';
 import { Button } from './Button';
+import { FormError } from './FormError';
 import { Modal } from './Modal';
 import { Stack } from '@/components/layout/Stack';
 import { useContent } from '@/lib/content';
-import styles from './FormDialog.module.css';
 
 /**
  * A dialog wrapping a real `<form>`, with the submit/cancel row and the form-level
@@ -85,16 +85,8 @@ export function FormDialog({
         }}
       >
         <Stack gap="4">
-          {formError === null ? null : (
-            // `alert` so the failure is announced without the user having to hunt
-            // for it, and it appears above the actions rather than below the fold.
-            <div className={styles.formError} role="alert">
-              <p>{formError}</p>
-              {requestId === undefined || requestId === null ? null : (
-                <p className={styles.requestId}>{content.errors.correlationId(requestId)}</p>
-              )}
-            </div>
-          )}
+          {/* Above the actions rather than below the fold, and announced. */}
+          <FormError message={formError} requestId={requestId} />
           {children}
         </Stack>
       </form>

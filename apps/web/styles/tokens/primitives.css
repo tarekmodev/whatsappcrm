@@ -103,6 +103,8 @@
   --scale-size-touch-target: 2.75rem; /* 44px — the WCAG 2.2 target minimum. */
   --scale-size-control-sm: 2rem;
   --scale-size-control-md: 2.5rem;
+  /* A single-column reading measure: the sign-in and invite screens. */
+  --scale-size-container-sm: 26rem;
   --scale-size-container-md: 48rem;
   --scale-size-container-lg: 72rem;
   --scale-size-container-xl: 90rem;

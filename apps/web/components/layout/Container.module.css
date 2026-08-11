@@ -5,6 +5,10 @@
   padding-inline: clamp(var(--space-4), 4vw, var(--space-6));
 }
 
+.container[data-size='sm'] {
+  max-inline-size: var(--size-container-sm);
+}
+
 .container[data-size='md'] {
   max-inline-size: var(--size-container-md);
 }

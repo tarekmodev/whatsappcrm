@@ -7,7 +7,7 @@ import styles from './Container.module.css';
  * The gutter is fluid, so nothing needs a breakpoint to stay off the edge at 320px.
  */
 
-export const CONTAINER_SIZES = ['md', 'lg', 'xl'] as const;
+export const CONTAINER_SIZES = ['sm', 'md', 'lg', 'xl'] as const;
 export type ContainerSize = (typeof CONTAINER_SIZES)[number];
 
 export interface ContainerProps {

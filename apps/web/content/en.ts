@@ -127,6 +127,63 @@ export const content = {
     assignee: 'Assignee',
   },
 
+  auth: {
+    signInTitle: 'Sign in',
+    signInDescription: 'Use the email address your workspace invited.',
+    signInSubmit: 'Sign in',
+    signInSuccess: (displayName: string) => `Signed in as ${displayName}`,
+    emailLabel: 'Email address',
+    passwordLabel: 'Password',
+    // The short form is the visible label; the long one is the accessible name.
+    // WCAG 2.5.3 is satisfied because the accessible name contains the visible
+    // text, and a two-character button does not crowd a 320px-wide field.
+    showPassword: 'Show',
+    showPasswordAria: 'Show password',
+    hidePassword: 'Hide',
+    hidePasswordAria: 'Hide password',
+    // A length floor with no character-class theatre, per the contract's
+    // `PasswordSchema`. The number comes from `AUTH_POLICY`, never from here.
+    passwordLengthHint: (minimum: number) => `At least ${minimum} characters.`,
+    passwordTooShortError: (minimum: number) => `Use at least ${minimum} characters.`,
+    passwordTooLongError: (maximum: number) => `Use at most ${maximum} characters.`,
+
+    // The API answers `invalid_credentials` for a wrong password, an unknown
+    // address and a suspended account alike, so this line must not hint at which.
+    invalidCredentialsError: 'That email address and password do not match.',
+    lockedOutError: (minutes: number) =>
+      `Too many failed sign-in attempts. Try again in ${minutes} minutes, or ask an admin to unlock the account.`,
+    workspaceInactiveError: 'This workspace is not active. Contact your administrator.',
+    workspaceNotFoundError: 'This address is not set up for a workspace. Check the link you used.',
+    signInFailedError: 'We could not sign you in. Try again.',
+
+    inviteTitle: 'Accept your invitation',
+    inviteDescription: 'Set a password to finish creating your account.',
+    inviteLoading: 'Loading your invitation',
+    invitedByTo: (inviter: string, workspace: string) =>
+      `${inviter} invited you to join ${workspace}.`,
+    invitedTo: (workspace: string) => `You have been invited to join ${workspace}.`,
+    inviteExpiryLabel: 'Invitation expires',
+    inviteExpires: 'Expires',
+    inviteRoleLabel: 'Role',
+    inviteDisplayNameLabel: 'Your name',
+    inviteDisplayNameHint: 'Teammates see this on the conversations you handle.',
+    inviteDisplayNameTooLongError: 'That name is too long. Use a shorter one.',
+    invitePasswordLabel: 'Choose a password',
+    inviteSubmit: 'Create account',
+    inviteSuccess: (workspace: string) => `Welcome to ${workspace}`,
+    inviteFailedError: 'We could not create your account. Try again.',
+    inviteAccountExistsError:
+      'There is already an account for this address in this workspace. Sign in instead.',
+
+    inviteMissingTokenHeading: 'This link is incomplete',
+    inviteMissingTokenBody:
+      'Open the invitation link from your email again, without editing the address.',
+    inviteDeadLinkHeading: 'This invitation link no longer works',
+    inviteDeadLinkBody:
+      'It may have expired, already been used, or been withdrawn. Ask a workspace admin to send a new one.',
+    goToSignIn: 'Go to sign in',
+  },
+
   people: {
     title: 'People',
     subtitle: 'Agents, roles and teams in this workspace.',
