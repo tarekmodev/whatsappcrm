@@ -1,6 +1,11 @@
+import { createHmac } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { MessageTemplateStatus } from '@whatsappcrm/contracts';
+import type {
+  MessageTemplateStatus,
+  WhatsAppBusinessVerificationStatus,
+  WhatsAppQualityRating,
+} from '@whatsappcrm/contracts';
 import {
   MetaAuthenticationError,
   MetaRateLimitedError,
@@ -28,6 +33,57 @@ const TRANSIENT_CODES = new Set([1, 2, 131000]);
 
 /** Meta's page size cap for `message_templates`. Asking for more is an error, not a truncation. */
 const TEMPLATE_PAGE_SIZE = 100;
+
+/**
+ * How many of a WABA's numbers one `listPhoneNumbers` call asks for.
+ *
+ * Matched to `ConnectWhatsAppBusinessAccountInputSchema`'s own ceiling of 20:
+ * asking for more would return numbers the connection cannot accept anyway.
+ * Meta reporting a further page is carried back as `hasMore` rather than
+ * dropped, so a WABA larger than this is a fact the caller can report instead of
+ * a silent truncation.
+ */
+const PHONE_NUMBER_PAGE_SIZE = 20;
+
+/**
+ * Meta's business-verification vocabulary, mapped onto the four states
+ * `WhatsAppBusinessVerificationStatusSchema` publishes.
+ *
+ * `business_verification_status` on the WABA node is the field this reads —
+ * "current status of business verification of the Meta Business Account which
+ * owns this WhatsApp Business Account" — and not `account_review_status`, which
+ * is Meta's review of the WABA itself and a different question. 0002's contract
+ * left the choice between the two open pending this verification (TAR-167).
+ *
+ * Meta's `pending_submission` and `pending_need_more_info` are both waiting on
+ * the business, so both read as `pending`. Anything else — `expired`, `revoked`,
+ * `failed`, or a value Meta adds tomorrow — maps to `null` on the same reasoning
+ * as `TEMPLATE_STATUSES`: guessing `verified` or `rejected` for a state this
+ * build does not model would put a wrong badge in front of an operator.
+ */
+const BUSINESS_VERIFICATION_STATUSES: Readonly<Record<string, WhatsAppBusinessVerificationStatus>> =
+  {
+    verified: 'verified',
+    not_verified: 'not_verified',
+    pending: 'pending',
+    pending_submission: 'pending',
+    pending_need_more_info: 'pending',
+    rejected: 'rejected',
+  };
+
+/**
+ * Meta's per-number quality rating. `UNKNOWN` and `NA` are both Meta's own way
+ * of saying it has not rated the number, and the contract models that as
+ * `unknown`; a rating this build does not know is `null`, which the contract
+ * distinguishes as "we have not read one".
+ */
+const QUALITY_RATINGS: Readonly<Record<string, WhatsAppQualityRating>> = {
+  GREEN: 'green',
+  YELLOW: 'yellow',
+  RED: 'red',
+  UNKNOWN: 'unknown',
+  NA: 'unknown',
+};
 
 /**
  * Meta's template statuses, mapped onto ours. Anything absent — `IN_APPEAL`,
@@ -179,6 +235,78 @@ export interface UploadMediaCommand {
   timeoutMs: number;
 }
 
+// ---------------------------------------------------------------------------
+// Embedded Signup (TAR-167, 0002 amendment 2)
+// ---------------------------------------------------------------------------
+
+export interface ExchangeSignupCodeCommand {
+  /**
+   * Meta's exchangeable token code, straight from the browser's `FINISH` event.
+   * Single-use, and alive for about 30 seconds — the reason nothing in this
+   * flow may be queued or retried.
+   */
+  code: string;
+}
+
+/**
+ * The business integration system user access token Meta issues for the
+ * customer's WABA, and what Meta says about its life.
+ *
+ * `expiresInSeconds` is read defensively and is `null` on the response Meta's
+ * Tech Provider flow documents, which carries `access_token` and `token_type`
+ * and no `expires_in`. It is surfaced rather than discarded because
+ * `whatsapp_business_accounts` has no `token_expires_at` and the send path
+ * assumes a credential that keeps working: a non-null value here is the signal
+ * that assumption has stopped holding, and it is the caller's to act on.
+ */
+export interface ExchangedBusinessToken {
+  accessToken: string;
+  expiresInSeconds: number | null;
+}
+
+export interface DescribeBusinessAccountCommand {
+  wabaId: string;
+  accessToken: string;
+}
+
+/**
+ * What Meta says the WABA is, read back with the token that was just issued for
+ * it. `wabaId` is Meta's own answer rather than the one that was asked for, so
+ * the caller can compare the two instead of trusting the browser's claim.
+ */
+export interface MetaBusinessAccount {
+  wabaId: string;
+  name: string | null;
+  /** `null` when Meta reported a verification state this build does not model. */
+  verificationStatus: WhatsAppBusinessVerificationStatus | null;
+}
+
+export interface ListPhoneNumbersCommand {
+  wabaId: string;
+  accessToken: string;
+}
+
+/** One of the WABA's business phone numbers, as Meta describes it. */
+export interface MetaPhoneNumber {
+  phoneNumberId: string;
+  /** Meta's formatted display form, e.g. `+966 50 123 4567`. Not E.164. */
+  displayPhoneNumber: string;
+  verifiedName: string | null;
+  /** `null` when Meta reported a rating this build does not model. */
+  qualityRating: WhatsAppQualityRating | null;
+}
+
+export interface MetaPhoneNumberPage {
+  phoneNumbers: MetaPhoneNumber[];
+  /** True when the WABA holds more numbers than `PHONE_NUMBER_PAGE_SIZE` returned. */
+  hasMore: boolean;
+}
+
+export interface SubscribeAppCommand {
+  wabaId: string;
+  accessToken: string;
+}
+
 /**
  * Meta's CDN hosts that a media URL may point at.
  *
@@ -195,6 +323,16 @@ export interface UploadMediaCommand {
  * covered without listing them, and `evil-fbcdn.net` is not.
  */
 const MEDIA_HOST_SUFFIXES = ['.fbcdn.net', '.facebook.com', '.fbsbx.com', '.whatsapp.net'] as const;
+
+/** What varies between one Graph API round trip and the next. See `request`. */
+interface GraphRequestOptions {
+  /** Omitted only by `exchangeSignupCode`, which authenticates as the app. */
+  accessToken?: string;
+  /** Kept apart from the path, which is what a failure logs. */
+  query?: URLSearchParams;
+  /** Overrides `META_GRAPH_API_TIMEOUT_MS`. Used only by the media upload. */
+  timeoutMs?: number;
+}
 
 /**
  * The only place in this codebase that speaks to Meta's Graph API.
@@ -284,16 +422,17 @@ export class MetaCloudApiClient {
   async listMessageTemplates(
     command: ListMessageTemplatesCommand,
   ): Promise<MetaMessageTemplatePage> {
-    const query = new URLSearchParams({
-      fields: 'id,name,language,category,status,components',
-      limit: String(TEMPLATE_PAGE_SIZE),
-      ...(command.after === undefined ? {} : { after: command.after }),
-    });
-
     const payload = await this.request(
-      `${command.wabaId}/message_templates?${query.toString()}`,
+      `${command.wabaId}/message_templates`,
       { method: 'GET' },
-      command.accessToken,
+      {
+        accessToken: command.accessToken,
+        query: new URLSearchParams({
+          fields: 'id,name,language,category,status,components',
+          limit: String(TEMPLATE_PAGE_SIZE),
+          ...(command.after === undefined ? {} : { after: command.after }),
+        }),
+      },
     );
 
     return readTemplatePage(payload);
@@ -313,7 +452,9 @@ export class MetaCloudApiClient {
     const payload = await this.request(
       `${command.providerMediaId}`,
       { method: 'GET' },
-      command.accessToken,
+      {
+        accessToken: command.accessToken,
+      },
     );
 
     const descriptor = readMediaDescriptor(payload);
@@ -391,8 +532,7 @@ export class MetaCloudApiClient {
     const payload = await this.request(
       `${command.phoneNumberId}/media`,
       { method: 'POST', body: form },
-      command.accessToken,
-      command.timeoutMs,
+      { accessToken: command.accessToken, timeoutMs: command.timeoutMs },
     );
 
     const id = asRecord(payload)?.id;
@@ -402,6 +542,199 @@ export class MetaCloudApiClient {
     }
 
     return id;
+  }
+
+  /**
+   * Trades Meta's exchangeable token code for the customer's business
+   * integration system user access token.
+   *
+   * The one call in this client that authenticates as *the app* rather than
+   * with a per-call token: there is no token yet, which is the whole point.
+   * `client_id` and `client_secret` go in the query string, as Meta's Tech
+   * Provider onboarding guide documents (`GET /{version}/oauth/access_token`
+   * with `client_id`, `client_secret` and `code`) — and **no `redirect_uri`**,
+   * because the JS SDK returns the code to the opener rather than to a redirect,
+   * and sending one Meta never saw is a rejection.
+   *
+   * The query string is kept out of `path` deliberately: `path` is what a
+   * failure logs, and this one carries the app secret and the code.
+   *
+   * A spent, replayed or malformed code comes back as `MetaRequestRejectedError`
+   * through the ordinary classifier, which is the correct reading — the code
+   * does not come back, so the retry reasoning that applies to a send does not
+   * apply here. The console re-runs the flow for a fresh one.
+   */
+  async exchangeSignupCode(command: ExchangeSignupCodeCommand): Promise<ExchangedBusinessToken> {
+    const payload = await this.request(
+      'oauth/access_token',
+      { method: 'GET' },
+      {
+        query: new URLSearchParams({
+          client_id: this.requireConfigured('META_APP_ID'),
+          client_secret: this.requireConfigured('WHATSAPP_APP_SECRET'),
+          code: command.code,
+        }),
+      },
+    );
+
+    const token = readExchangedToken(payload);
+
+    if (token === null) {
+      // A 200 with no token is an answer we cannot act on: there is nothing to
+      // store and nothing to call Meta with. Transient by the same reasoning as
+      // a send with no message id — except that the code is already spent, so
+      // the caller reports it rather than retrying.
+      throw new MetaUnavailableError(
+        200,
+        null,
+        'no access token in a successful exchange response',
+      );
+    }
+
+    return token;
+  }
+
+  /**
+   * Reads one WABA back **with the token just issued for it**.
+   *
+   * This is the authorization check of the signup flow, not a lookup: the
+   * browser asserts a `wabaId`, and the only thing that can confirm the
+   * assertion is whether the new token can see it. Meta's own `id` is returned
+   * alongside the rest so the caller compares answers rather than trusting the
+   * claim it sent.
+   */
+  async describeBusinessAccount(
+    command: DescribeBusinessAccountCommand,
+  ): Promise<MetaBusinessAccount> {
+    const payload = await this.request(
+      command.wabaId,
+      { method: 'GET' },
+      {
+        accessToken: command.accessToken,
+        query: this.signed(command.accessToken, {
+          fields: 'id,name,business_verification_status',
+        }),
+      },
+    );
+
+    const account = readBusinessAccount(payload);
+
+    if (account === null) {
+      throw new MetaUnavailableError(200, null, 'no business account id in a successful response');
+    }
+
+    return account;
+  }
+
+  /**
+   * The WABA's business phone numbers, which is what the connection is actually
+   * made of.
+   *
+   * Read from Meta rather than from the request body on purpose: `verified_name`
+   * and the display number are fields the connection requires and the browser
+   * does not have, so there is one authority for what was connected and it is
+   * the party that issued the token.
+   */
+  async listPhoneNumbers(command: ListPhoneNumbersCommand): Promise<MetaPhoneNumberPage> {
+    const payload = await this.request(
+      `${command.wabaId}/phone_numbers`,
+      { method: 'GET' },
+      {
+        accessToken: command.accessToken,
+        query: this.signed(command.accessToken, {
+          fields: 'id,display_phone_number,verified_name,quality_rating',
+          limit: String(PHONE_NUMBER_PAGE_SIZE),
+        }),
+      },
+    );
+
+    return readPhoneNumberPage(payload);
+  }
+
+  /**
+   * Subscribes this app to the WABA's webhooks.
+   *
+   * Without it the connection looks healthy and the inbox stays empty: Meta
+   * accepts the WABA, the token works, and not one inbound message is ever
+   * delivered. Treated as part of connecting rather than as a follow-up for
+   * that reason.
+   */
+  async subscribeApp(command: SubscribeAppCommand): Promise<void> {
+    const payload = await this.request(
+      `${command.wabaId}/subscribed_apps`,
+      { method: 'POST' },
+      {
+        accessToken: command.accessToken,
+        query: this.signed(command.accessToken, {}),
+      },
+    );
+
+    if (asRecord(payload)?.success !== true) {
+      // Meta answers `{ "success": true }`. A 200 saying anything else is a
+      // subscription we cannot claim was made, and claiming it is how a tenant
+      // ends up with a connected WABA and a silent inbox.
+      throw new MetaUnavailableError(200, null, 'the app subscription was not acknowledged');
+    }
+  }
+
+  /**
+   * A configured value the signup flow cannot proceed without.
+   *
+   * `META_APP_ID` and `WHATSAPP_APP_SECRET` are both optional in the env schema
+   * so an environment that does not use the channel still boots (0002, amendment
+   * 2). Absent, this refuses **before** the call rather than sending
+   * `client_id=undefined` — which Meta answers with a rejection that reads like
+   * a bad code and would send the tenant round the flow again for a
+   * configuration problem only an operator can fix.
+   *
+   * `MetaRequestRejectedError` because it is permanent and retrying cannot help,
+   * with `status` 0 to say the client refused rather than Meta — the same shape
+   * `assertMetaMediaUrl` already uses. The name of the variable is named; its
+   * value is not, and never is.
+   */
+  private requireConfigured(name: 'META_APP_ID' | 'WHATSAPP_APP_SECRET'): string {
+    const value = this.config.get<string>(name);
+
+    if (value === undefined || value.length === 0) {
+      throw new MetaRequestRejectedError(0, {
+        code: null,
+        subcode: null,
+        message: `Embedded Signup is not configured on this environment: ${name} is not set`,
+        traceId: null,
+      });
+    }
+
+    return value;
+  }
+
+  /**
+   * Query parameters plus `appsecret_proof`, when the app secret is configured.
+   *
+   * Meta requires the proof on every call made with a portable token **when the
+   * app has "Require App Secret" turned on** (App Dashboard → Settings →
+   * Advanced → Security), and accepts it whether or not that setting is on. A
+   * business integration system user token is issued to this app, so the proof
+   * is HMAC-SHA256 of the token under this app's own secret and verifies under
+   * both settings — sending it always is the answer that cannot be wrong, where
+   * omitting it fails every call in this flow the day the setting is turned on.
+   *
+   * Deliberately not applied to the send path: those calls carry tokens from the
+   * operator paste path, which this story does not touch. Extending it there is
+   * a separate change with its own test.
+   *
+   * Absent `WHATSAPP_APP_SECRET` the proof is simply omitted rather than
+   * refused — the exchange that issued the token already failed closed on the
+   * same variable, so a caller holding a token has one.
+   */
+  private signed(accessToken: string, params: Record<string, string>): URLSearchParams {
+    const appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
+
+    return new URLSearchParams({
+      ...params,
+      ...(appSecret === undefined || appSecret.length === 0
+        ? {}
+        : { appsecret_proof: createHmac('sha256', appSecret).update(accessToken).digest('hex') }),
+    });
   }
 
   private async send(
@@ -416,7 +749,7 @@ export class MetaCloudApiClient {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ messaging_product: 'whatsapp', ...message }),
       },
-      accessToken,
+      { accessToken },
     );
 
     const providerMessageId = readSentMessageId(payload);
@@ -437,28 +770,45 @@ export class MetaCloudApiClient {
    * with a timeout, and turn anything other than a 2xx JSON body into a typed
    * error.
    *
-   * `timeoutOverrideMs` exists for exactly one caller. Every Graph call but the
+   * `options.timeoutMs` exists for exactly one caller. Every Graph call but the
    * media upload is a small JSON exchange that `META_GRAPH_API_TIMEOUT_MS` sizes
    * correctly; an upload carries up to 100 MB, and holding it to ten seconds
    * would fail every large document while raising the shared value would leave
    * a stalled template list hanging for a minute.
+   *
+   * `options.query` is separate from `path` rather than concatenated into it
+   * because `path` is what a failure logs, and one query string in this client
+   * carries the app secret and the signup code (`exchangeSignupCode`). Splitting
+   * them is what makes "nothing logs a secret" a property of this method instead
+   * of a rule every caller has to remember.
+   *
+   * `options.accessToken` is optional for exactly one caller too: the code
+   * exchange authenticates as the app and has no token yet.
    */
   private async request(
     path: string,
     init: RequestInit,
-    accessToken: string,
-    timeoutOverrideMs?: number,
+    options: GraphRequestOptions,
   ): Promise<unknown> {
     const base = this.config.getOrThrow<string>('META_GRAPH_API_BASE_URL');
     const version = this.config.getOrThrow<string>('META_GRAPH_API_VERSION');
     const timeoutMs =
-      timeoutOverrideMs ?? this.config.getOrThrow<number>('META_GRAPH_API_TIMEOUT_MS');
+      options.timeoutMs ?? this.config.getOrThrow<number>('META_GRAPH_API_TIMEOUT_MS');
+    const query = options.query?.toString();
 
-    const response = await fetch(`${base}/${version}/${path}`, {
-      ...init,
-      headers: { ...init.headers, authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    }).catch((error: unknown) => {
+    const response = await fetch(
+      `${base}/${version}/${path}${query === undefined || query.length === 0 ? '' : `?${query}`}`,
+      {
+        ...init,
+        headers: {
+          ...init.headers,
+          ...(options.accessToken === undefined
+            ? {}
+            : { authorization: `Bearer ${options.accessToken}` }),
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    ).catch((error: unknown) => {
       // A network failure or the timeout above. `error` is not put in the
       // message: an undici error string quotes the request URL, and the URL
       // carries the phone number id.
@@ -746,6 +1096,99 @@ function readTemplate(raw: unknown): MetaMessageTemplate[] {
       status: status ?? null,
       components: template.components ?? null,
       providerTemplateId: typeof template.id === 'string' ? template.id : null,
+    },
+  ];
+}
+
+/**
+ * `{ access_token, token_type }`, and `expires_in` if Meta ever sends one.
+ *
+ * Only `access_token` is required — `token_type` is `bearer` and carries no
+ * decision. `expires_in` is read rather than ignored precisely because Meta's
+ * documented response for this flow does not contain it: if it appears, the
+ * assumption that a connected WABA's credential keeps working has changed, and
+ * the caller needs to be able to see that rather than discover it weeks later
+ * as a tenant's inbox going quiet.
+ */
+function readExchangedToken(payload: unknown): ExchangedBusinessToken | null {
+  const accessToken = asRecord(payload)?.access_token;
+
+  if (typeof accessToken !== 'string' || accessToken.length === 0) {
+    return null;
+  }
+
+  return {
+    accessToken,
+    expiresInSeconds: readPositiveInteger(asRecord(payload)?.expires_in),
+  };
+}
+
+/** `{ id, name, business_verification_status }`, defensively. */
+function readBusinessAccount(payload: unknown): MetaBusinessAccount | null {
+  const account = asRecord(payload);
+  const wabaId = account?.id;
+
+  if (typeof wabaId !== 'string' || wabaId.length === 0) {
+    return null;
+  }
+
+  const status = account?.business_verification_status;
+
+  return {
+    wabaId,
+    name: typeof account?.name === 'string' ? account.name : null,
+    verificationStatus:
+      typeof status === 'string'
+        ? (BUSINESS_VERIFICATION_STATUSES[status.toLowerCase()] ?? null)
+        : null,
+  };
+}
+
+/**
+ * `{ data: [...], paging: { next } }`.
+ *
+ * `paging.next` decides `hasMore` for the same reason it decides the template
+ * cursor: Meta returns `cursors.after` on the last page too.
+ */
+function readPhoneNumberPage(payload: unknown): MetaPhoneNumberPage {
+  const root = asRecord(payload);
+  const data = root?.data;
+  const next = asRecord(root?.paging)?.next;
+
+  return {
+    phoneNumbers: (Array.isArray(data) ? data : []).flatMap(readPhoneNumber),
+    hasMore: typeof next === 'string' && next.length > 0,
+  };
+}
+
+/**
+ * Drops a number missing its id or its display form, rather than returning a
+ * partial one. Both are required by `ConnectWhatsAppPhoneNumberInputSchema`, so
+ * a half-read number would fail validation one layer up with nothing to say
+ * about which of Meta's rows was at fault.
+ */
+function readPhoneNumber(raw: unknown): MetaPhoneNumber[] {
+  const number = asRecord(raw);
+
+  if (number === undefined) {
+    return [];
+  }
+
+  const { id, display_phone_number: displayPhoneNumber } = number;
+
+  if (typeof id !== 'string' || id.length === 0 || typeof displayPhoneNumber !== 'string') {
+    return [];
+  }
+
+  const rating = number.quality_rating;
+
+  return [
+    {
+      phoneNumberId: id,
+      displayPhoneNumber,
+      verifiedName: typeof number.verified_name === 'string' ? number.verified_name : null,
+      qualityRating:
+        typeof rating === 'string' ? (QUALITY_RATINGS[rating.toUpperCase()] ?? null) : null,
     },
   ];
 }

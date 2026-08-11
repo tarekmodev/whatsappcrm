@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { MetaCloudApiClient } from './meta-cloud-api.client';
 import {
@@ -24,14 +26,28 @@ const ACCESS_TOKEN = 'a-meta-access-token';
 const RECIPIENT = '+966501234567';
 const WAMID = 'wamid.HBgLOTY2NTAxMjM0NTY3FQIAERgS';
 
-const CONFIG = {
-  getOrThrow: (name: string) =>
-    ({
-      META_GRAPH_API_BASE_URL: BASE_URL,
-      META_GRAPH_API_VERSION: VERSION,
-      META_GRAPH_API_TIMEOUT_MS: TIMEOUT_MS,
-    })[name],
-} as unknown as ConfigService;
+const APP_ID = '1234567890123456';
+const APP_SECRET = 'a-meta-app-secret';
+
+/**
+ * The two axes a signup test varies: whether the app id and the app secret are
+ * configured. `getOrThrow` covers the values every call needs; `get` covers the
+ * two that are optional in the env schema and fail closed here.
+ */
+function configWith(optional: Record<string, string | undefined>): ConfigService {
+  const required: Record<string, string | number> = {
+    META_GRAPH_API_BASE_URL: BASE_URL,
+    META_GRAPH_API_VERSION: VERSION,
+    META_GRAPH_API_TIMEOUT_MS: TIMEOUT_MS,
+  };
+
+  return {
+    getOrThrow: (name: string) => required[name],
+    get: (name: string) => optional[name],
+  } as unknown as ConfigService;
+}
+
+const CONFIG = configWith({ META_APP_ID: APP_ID, WHATSAPP_APP_SECRET: APP_SECRET });
 
 /** A `fetch` result, with only the surface the client actually reads. */
 function metaResponds(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -680,6 +696,469 @@ describe('MetaCloudApiClient', () => {
             timeoutMs: TRANSFER_TIMEOUT_MS,
           }),
         ).rejects.toThrow(MetaUnavailableError);
+      });
+    });
+  });
+
+  describe('embedded signup (TAR-167)', () => {
+    const CODE = 'AQBx-an-exchangeable-token-code';
+    const BUSINESS_TOKEN = 'EAAJc-a-business-integration-token';
+
+    /** The proof Meta expects: HMAC-SHA256 of the token under the app secret. */
+    const PROOF = createHmac('sha256', APP_SECRET).update(BUSINESS_TOKEN).digest('hex');
+
+    /** The query string of the single request the client made. */
+    function sentQuery(): URLSearchParams {
+      return new URL(callArgs()[0]).searchParams;
+    }
+
+    describe('exchangeSignupCode', () => {
+      it('trades the code for the business token, as the app rather than as a tenant', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(200, { access_token: BUSINESS_TOKEN, token_type: 'bearer' }),
+        );
+
+        await expect(client.exchangeSignupCode({ code: CODE })).resolves.toEqual({
+          accessToken: BUSINESS_TOKEN,
+          // Meta's documented response for this flow carries no `expires_in`,
+          // and the schema has no `token_expires_at` to put one in.
+          expiresInSeconds: null,
+        });
+
+        const [url, init] = callArgs();
+        const query = sentQuery();
+
+        expect(url.startsWith(`${BASE_URL}/${VERSION}/oauth/access_token?`)).toBe(true);
+        expect(init.method).toBe('GET');
+        expect(query.get('client_id')).toBe(APP_ID);
+        expect(query.get('client_secret')).toBe(APP_SECRET);
+        expect(query.get('code')).toBe(CODE);
+      });
+
+      it('sends no redirect_uri, because the JS SDK flow never had one', async () => {
+        // Meta rejects a `redirect_uri` it never issued the code against, which
+        // would fail every signup in a way that reads like a bad code.
+        fetchMock.mockResolvedValue(metaResponds(200, { access_token: BUSINESS_TOKEN }));
+
+        await client.exchangeSignupCode({ code: CODE });
+
+        expect(sentQuery().has('redirect_uri')).toBe(false);
+      });
+
+      it('carries no bearer header, because there is no token yet', async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { access_token: BUSINESS_TOKEN }));
+
+        await client.exchangeSignupCode({ code: CODE });
+
+        expect(callArgs()[1].headers).not.toHaveProperty('authorization');
+      });
+
+      it('surfaces an expiry Meta sends, rather than discarding it', async () => {
+        // The send path assumes a credential that keeps working. A non-null
+        // value here is the signal that assumption has stopped holding.
+        fetchMock.mockResolvedValue(
+          metaResponds(200, { access_token: BUSINESS_TOKEN, expires_in: 5_183_814 }),
+        );
+
+        await expect(client.exchangeSignupCode({ code: CODE })).resolves.toMatchObject({
+          expiresInSeconds: 5_183_814,
+        });
+      });
+
+      it.each([
+        ['a spent code', 36009, 'This authorization code has been used.'],
+        ['an expired code', 36007, 'This authorization code has expired.'],
+      ])('reports %s as a rejection, so nothing retries it', async (_name, subcode, message) => {
+        // The code is single-use and lives 30 seconds. Classifying either as
+        // transient would retry a credential that cannot come back.
+        fetchMock.mockResolvedValue(
+          metaResponds(400, {
+            error: { message, type: 'OAuthException', code: 100, error_subcode: subcode },
+          }),
+        );
+
+        const error = await client
+          .exchangeSignupCode({ code: CODE })
+          .catch((thrown: unknown) => thrown);
+
+        expect(error).toBeInstanceOf(MetaRequestRejectedError);
+        expect((error as MetaRequestRejectedError).detail?.subcode).toBe(subcode);
+      });
+
+      it('reports a missing permission as an authentication failure', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(400, {
+            error: {
+              message: '(#200) Requires whatsapp_business_management permission',
+              type: 'OAuthException',
+              code: 200,
+            },
+          }),
+        );
+
+        await expect(client.exchangeSignupCode({ code: CODE })).rejects.toBeInstanceOf(
+          MetaAuthenticationError,
+        );
+      });
+
+      it('reports Meta throttling the app as rate limited', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(400, { error: { message: 'Application request limit reached', code: 4 } }),
+        );
+
+        await expect(client.exchangeSignupCode({ code: CODE })).rejects.toBeInstanceOf(
+          MetaRateLimitedError,
+        );
+      });
+
+      it('reports a Meta outage as transient', async () => {
+        fetchMock.mockResolvedValue(metaResponds(500, null));
+
+        await expect(client.exchangeSignupCode({ code: CODE })).rejects.toBeInstanceOf(
+          MetaUnavailableError,
+        );
+      });
+
+      it('treats a 200 with no token as an answer it cannot act on', async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { token_type: 'bearer' }));
+
+        await expect(client.exchangeSignupCode({ code: CODE })).rejects.toBeInstanceOf(
+          MetaUnavailableError,
+        );
+      });
+
+      it.each(['META_APP_ID', 'WHATSAPP_APP_SECRET'])(
+        'fails closed when %s is absent, rather than calling Meta without it',
+        async (missing) => {
+          // `client_id=undefined` reaches Meta as a rejection that reads like a
+          // bad code, sending the tenant round a 30-second flow again for a
+          // configuration problem only an operator can fix.
+          const configured: Record<string, string | undefined> = {
+            META_APP_ID: APP_ID,
+            WHATSAPP_APP_SECRET: APP_SECRET,
+            [missing]: undefined,
+          };
+
+          const unconfigured = new MetaCloudApiClient(configWith(configured));
+          const error = await unconfigured
+            .exchangeSignupCode({ code: CODE })
+            .catch((thrown: unknown) => thrown);
+
+          expect(error).toBeInstanceOf(MetaRequestRejectedError);
+          // `status` 0 says the client refused, not Meta.
+          expect((error as MetaRequestRejectedError).status).toBe(0);
+          expect((error as MetaRequestRejectedError).message).toContain(missing);
+          expect(fetchMock).not.toHaveBeenCalled();
+        },
+      );
+
+      it('never puts the secret or the code in the line it logs', async () => {
+        const logged = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+        fetchMock.mockResolvedValue(
+          metaResponds(400, { error: { message: 'nope', code: 100, fbtrace_id: 'Az8...' } }),
+        );
+
+        const error = await client
+          .exchangeSignupCode({ code: CODE })
+          .catch((thrown: unknown) => thrown);
+
+        const line = String(logged.mock.calls[0]?.[0]);
+
+        expect(line).toContain('oauth/access_token');
+        expect(line).not.toContain(APP_SECRET);
+        expect(line).not.toContain(CODE);
+        expect(JSON.stringify(error)).not.toContain(APP_SECRET);
+        expect(JSON.stringify(error)).not.toContain(CODE);
+
+        logged.mockRestore();
+      });
+    });
+
+    describe('describeBusinessAccount', () => {
+      it('reads the WABA back with the token just issued for it', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(200, {
+            id: WABA_ID,
+            name: "Jasper's Market",
+            business_verification_status: 'verified',
+          }),
+        );
+
+        await expect(
+          client.describeBusinessAccount({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).resolves.toEqual({
+          // Meta's own answer, so the caller compares rather than trusts the
+          // `wabaId` the browser claimed.
+          wabaId: WABA_ID,
+          name: "Jasper's Market",
+          verificationStatus: 'verified',
+        });
+
+        const [url, init] = callArgs();
+
+        expect(url.startsWith(`${BASE_URL}/${VERSION}/${WABA_ID}?`)).toBe(true);
+        expect(init.headers).toMatchObject({ authorization: `Bearer ${BUSINESS_TOKEN}` });
+        expect(sentQuery().get('fields')).toBe('id,name,business_verification_status');
+      });
+
+      it.each([
+        ['pending_submission', 'pending'],
+        ['pending_need_more_info', 'pending'],
+        ['not_verified', 'not_verified'],
+        ['rejected', 'rejected'],
+      ])('maps Meta\'s "%s" onto the published vocabulary', async (metaStatus, expected) => {
+        fetchMock.mockResolvedValue(
+          metaResponds(200, { id: WABA_ID, business_verification_status: metaStatus }),
+        );
+
+        await expect(
+          client.describeBusinessAccount({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).resolves.toMatchObject({ verificationStatus: expected });
+      });
+
+      it('reports a verification state it does not model as null rather than guessing', async () => {
+        // `expired` and `revoked` are neither verified nor rejected, and a wrong
+        // badge in front of an operator is worse than an absent one.
+        fetchMock.mockResolvedValue(
+          metaResponds(200, { id: WABA_ID, business_verification_status: 'revoked' }),
+        );
+
+        await expect(
+          client.describeBusinessAccount({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).resolves.toMatchObject({ verificationStatus: null, name: null });
+      });
+
+      it('reports a token that cannot see the WABA as an authentication failure', async () => {
+        // This is the check that stops a browser claiming a WABA its token does
+        // not cover; the caller turns it into `waba_mismatch`.
+        fetchMock.mockResolvedValue(
+          metaResponds(400, { error: { message: 'Invalid OAuth access token', code: 190 } }),
+        );
+
+        await expect(
+          client.describeBusinessAccount({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).rejects.toBeInstanceOf(MetaAuthenticationError);
+      });
+
+      it('reports a WABA the token may not read as a rejection', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(400, {
+            error: { message: 'Unsupported get request.', code: 100, error_subcode: 33 },
+          }),
+        );
+
+        await expect(
+          client.describeBusinessAccount({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).rejects.toBeInstanceOf(MetaRequestRejectedError);
+      });
+
+      it('treats a 200 with no id as transient', async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { name: 'nameless' }));
+
+        await expect(
+          client.describeBusinessAccount({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).rejects.toBeInstanceOf(MetaUnavailableError);
+      });
+    });
+
+    describe('listPhoneNumbers', () => {
+      it('hydrates the numbers from Meta, not from the browser', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(200, {
+            data: [
+              {
+                id: PHONE_NUMBER_ID,
+                display_phone_number: '+966 50 123 4567',
+                verified_name: "Jasper's Market",
+                quality_rating: 'GREEN',
+              },
+            ],
+            paging: { cursors: { after: 'LAST' } },
+          }),
+        );
+
+        await expect(
+          client.listPhoneNumbers({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).resolves.toEqual({
+          phoneNumbers: [
+            {
+              phoneNumberId: PHONE_NUMBER_ID,
+              displayPhoneNumber: '+966 50 123 4567',
+              verifiedName: "Jasper's Market",
+              qualityRating: 'green',
+            },
+          ],
+          // Meta sends `cursors.after` on the final page too; only `paging.next`
+          // means there is more.
+          hasMore: false,
+        });
+
+        expect(callArgs()[0].startsWith(`${BASE_URL}/${VERSION}/${WABA_ID}/phone_numbers?`)).toBe(
+          true,
+        );
+        expect(sentQuery().get('fields')).toBe(
+          'id,display_phone_number,verified_name,quality_rating',
+        );
+      });
+
+      it('reports a WABA with more numbers than one page, rather than truncating silently', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(200, {
+            data: [{ id: PHONE_NUMBER_ID, display_phone_number: '+966 50 123 4567' }],
+            paging: { next: 'https://graph.test/next' },
+          }),
+        );
+
+        await expect(
+          client.listPhoneNumbers({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).resolves.toMatchObject({ hasMore: true });
+      });
+
+      it("reads Meta's own 'not rated yet' values as unknown, and anything else as null", async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(200, {
+            data: [
+              { id: '1', display_phone_number: '+1', quality_rating: 'NA' },
+              { id: '2', display_phone_number: '+2', quality_rating: 'PLATINUM' },
+              { id: '3', display_phone_number: '+3' },
+            ],
+            paging: {},
+          }),
+        );
+
+        const page = await client.listPhoneNumbers({
+          wabaId: WABA_ID,
+          accessToken: BUSINESS_TOKEN,
+        });
+
+        expect(page.phoneNumbers.map((number) => number.qualityRating)).toEqual([
+          'unknown',
+          null,
+          null,
+        ]);
+      });
+
+      it('drops a number with no id or no display number, which the connection could not accept', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(200, {
+            data: [{ display_phone_number: '+1' }, { id: '2' }, null, 'nonsense'],
+            paging: {},
+          }),
+        );
+
+        await expect(
+          client.listPhoneNumbers({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).resolves.toMatchObject({ phoneNumbers: [] });
+      });
+
+      it('reports Meta throttling as rate limited, with the wait it asked for', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(429, { error: { message: 'Too many calls' } }, { 'retry-after': '12' }),
+        );
+
+        const error = await client
+          .listPhoneNumbers({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN })
+          .catch((thrown: unknown) => thrown);
+
+        expect(error).toBeInstanceOf(MetaRateLimitedError);
+        expect((error as MetaRateLimitedError).retryAfterSeconds).toBe(12);
+      });
+
+      it('reports a Meta outage as transient', async () => {
+        fetchMock.mockResolvedValue(metaResponds(503, null));
+
+        await expect(
+          client.listPhoneNumbers({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).rejects.toBeInstanceOf(MetaUnavailableError);
+      });
+    });
+
+    describe('subscribeApp', () => {
+      it("posts to the WABA's subscribed_apps edge with the business token", async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { success: true }));
+
+        await expect(
+          client.subscribeApp({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).resolves.toBeUndefined();
+
+        const [url, init] = callArgs();
+
+        expect(url.startsWith(`${BASE_URL}/${VERSION}/${WABA_ID}/subscribed_apps`)).toBe(true);
+        expect(init.method).toBe('POST');
+        expect(init.headers).toMatchObject({ authorization: `Bearer ${BUSINESS_TOKEN}` });
+      });
+
+      it('refuses to claim a subscription Meta did not acknowledge', async () => {
+        // A connected WABA with no subscription looks healthy and receives
+        // nothing; reporting success here is how an inbox stays silent.
+        fetchMock.mockResolvedValue(metaResponds(200, { success: false }));
+
+        await expect(
+          client.subscribeApp({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).rejects.toBeInstanceOf(MetaUnavailableError);
+      });
+
+      it('reports a missing permission as an authentication failure', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(403, {
+            error: {
+              message: '(#200) Requires whatsapp_business_management permission',
+              code: 200,
+            },
+          }),
+        );
+
+        await expect(
+          client.subscribeApp({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ).rejects.toBeInstanceOf(MetaAuthenticationError);
+      });
+    });
+
+    describe('appsecret_proof', () => {
+      it.each([
+        [
+          'describeBusinessAccount',
+          () => client.describeBusinessAccount({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ],
+        [
+          'listPhoneNumbers',
+          () => client.listPhoneNumbers({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ],
+        [
+          'subscribeApp',
+          () => client.subscribeApp({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ],
+      ])('proves the app secret on %s, which Meta may require', async (_name, call) => {
+        // Meta accepts the proof whether or not "Require App Secret" is on, and
+        // requires it when it is — so sending it always is the answer that
+        // cannot be wrong.
+        fetchMock.mockResolvedValue(metaResponds(200, { id: WABA_ID, data: [], success: true }));
+
+        await call();
+
+        expect(sentQuery().get('appsecret_proof')).toBe(PROOF);
+      });
+
+      it('omits the proof when no app secret is configured, rather than sending a wrong one', async () => {
+        const unconfigured = new MetaCloudApiClient(configWith({ META_APP_ID: APP_ID }));
+
+        fetchMock.mockResolvedValue(metaResponds(200, { id: WABA_ID }));
+
+        await unconfigured.describeBusinessAccount({
+          wabaId: WABA_ID,
+          accessToken: BUSINESS_TOKEN,
+        });
+
+        expect(sentQuery().has('appsecret_proof')).toBe(false);
+      });
+
+      it('never puts the business token in the proof it sends', async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { id: WABA_ID }));
+
+        await client.describeBusinessAccount({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN });
+
+        expect(callArgs()[0]).not.toContain(BUSINESS_TOKEN);
       });
     });
   });
