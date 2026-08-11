@@ -1,12 +1,15 @@
 import type {
   AgentAvailability,
   ConversationStatus,
+  MessageStatus,
+  MessageType,
   TenantRole,
   UserStatus,
   WhatsAppAccountStatus,
   WhatsAppBusinessVerificationStatus,
   WhatsAppQualityRating,
 } from '@whatsappcrm/contracts';
+import type { FileSizeUnit } from '@/lib/format/file-size';
 
 /**
  * The content layer. Every user-facing string in `apps/web` comes from here, so
@@ -83,6 +86,46 @@ export const content = {
     closed: 'Closed',
   } satisfies Record<ConversationStatus, string>,
 
+  /**
+   * The outbound send ladder. Inbound messages are born `delivered`, so these
+   * are only ever rendered on the team's own side of a thread.
+   */
+  messageStatuses: {
+    queued: 'Queued',
+    sent: 'Sent',
+    delivered: 'Delivered',
+    read: 'Read',
+    failed: 'Not delivered',
+  } satisfies Record<MessageStatus, string>,
+
+  /**
+   * What a message *is*, for the types the thread cannot render as themselves.
+   * Text and the four media kinds render their own content; the rest get a
+   * labelled placeholder, because a customer who sent their location deserves a
+   * row saying so rather than a gap.
+   */
+  messageTypes: {
+    text: 'Message',
+    image: 'Photo',
+    video: 'Video',
+    audio: 'Voice message',
+    document: 'Document',
+    sticker: 'Sticker',
+    location: 'Location',
+    contacts: 'Shared contact',
+    interactive: 'Interactive message',
+    template: 'Template message',
+    system: 'System message',
+    unsupported: 'Unsupported message',
+  } satisfies Record<MessageType, string>,
+
+  fileSizeUnits: {
+    bytes: 'bytes',
+    kb: 'KB',
+    mb: 'MB',
+    gb: 'GB',
+  } satisfies Record<FileSizeUnit, string>,
+
   common: {
     save: 'Save changes',
     cancel: 'Cancel',
@@ -130,6 +173,81 @@ export const content = {
     contact: 'Contact',
     status: 'Status',
     assignee: 'Assignee',
+
+    // --- Opening a thread from the list ------------------------------------
+    openConversation: (name: string) => `Open the conversation with ${name}`,
+    unclaimed: 'Unclaimed',
+    botHandling: 'Bot is answering',
+
+    // --- Claiming ----------------------------------------------------------
+    claim: 'Claim',
+    claimAria: (name: string) => `Claim the conversation with ${name}`,
+    claimSuccess: (name: string) => `You are handling ${name}`,
+    release: 'Release',
+    releaseAria: (name: string) => `Release the conversation with ${name}`,
+    releaseSuccess: (name: string) => `${name} is back in the shared pool`,
+    /**
+     * Said plainly rather than left as a missing button. ADR 0002 amendment 4
+     * opens an unclaimed thread to every agent and rules that taking it still
+     * needs `conversation:assign`, which an agent does not hold.
+     */
+    claimNotPermitted:
+      'Anyone can read a conversation nobody has claimed. Taking one is a supervisor’s to do — ask, and it will appear in your assigned list.',
+
+    // --- The two-pane layout ------------------------------------------------
+    threadHeading: 'Conversation',
+    backToList: 'Back to conversations',
+    noThreadHeading: 'No conversation open',
+    noThreadBody: 'Pick a conversation from the list to read it and reply.',
+    scopeNarrowedAllNotice:
+      'You are seeing your own and your teams’ conversations plus everything nobody has claimed — not the whole workspace.',
+  },
+
+  thread: {
+    messagesHeading: 'Messages',
+    loading: 'Loading this conversation',
+    emptyHeading: 'Nothing here yet',
+    emptyBody: 'Messages in this conversation appear here as they arrive.',
+    /** The thread opens on one page; older messages are a follow-up (TAR-20g). */
+    olderMessagesNotice: (count: number) =>
+      `Showing the most recent ${String(count)} messages in this conversation.`,
+    inbound: 'From the customer',
+    outbound: 'From your team',
+    sentBy: (name: string) => `Sent by ${name}`,
+    sentByAutomation: 'Sent automatically',
+    sentAt: 'Sent',
+    failureReason: (reason: string) => `Not delivered: ${reason}`,
+
+    attachmentDownloading: 'Still downloading — it will appear here when it arrives.',
+    attachmentFailed: 'This attachment could not be downloaded.',
+    imageFromCustomer: 'Photo sent by the customer',
+    imageFromTeam: 'Photo sent by your team',
+    stickerFromCustomer: 'Sticker sent by the customer',
+    stickerFromTeam: 'Sticker sent by your team',
+    openDocument: (fileName: string) => `Open ${fileName}`,
+    unnamedDocument: 'Document',
+    fileSize: (value: string, unit: string) => `${value} ${unit}`,
+    audioUnsupported: 'Your browser cannot play this voice message.',
+    videoUnsupported: 'Your browser cannot play this video.',
+    unrenderableBody: 'This message cannot be shown here. Open WhatsApp to see it in full.',
+  },
+
+  notes: {
+    heading: 'Internal notes',
+    /** Repeated at the composer, because "the customer never sees this" is the
+        one thing that must not depend on the reader having scrolled up. */
+    privacyNotice: 'Only your team sees these. They are never sent to the customer.',
+    loading: 'Loading internal notes',
+    emptyHeading: 'No notes yet',
+    emptyBody: 'Leave a note so whoever picks this up next knows where it stands.',
+    authorUnknown: 'A teammate',
+    mentioned: (names: string) => `Mentioned ${names}`,
+    addLabel: 'Add an internal note',
+    addPlaceholder: 'What should the next agent know?',
+    addSubmit: 'Add note',
+    addSuccess: 'Note added',
+    bodyRequiredError: 'Write something before adding the note',
+    bodyTooLongError: (maxLength: number) => `Use at most ${String(maxLength)} characters`,
   },
 
   people: {

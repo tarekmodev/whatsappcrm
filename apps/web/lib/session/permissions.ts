@@ -4,6 +4,7 @@ import {
   type SessionPrincipal,
   type TenantRole,
 } from '@whatsappcrm/contracts';
+import type { InboxScope } from '@/lib/routes';
 
 /**
  * Permission helpers. The UI asks "may this principal do X", never "is this
@@ -39,14 +40,18 @@ export function checkerForRole(role: TenantRole): PermissionChecker {
 }
 
 /**
- * The conversation scopes a principal may actually request. An agent without
- * `conversation:read_all` gets `assigned` only; offering them `all` would render
- * a tab that the API narrows behind their back.
+ * True when the API will return less than the scope the caller named.
+ *
+ * Every role may request every scope — `INBOX_SCOPES` in `lib/routes.ts` says
+ * so, and explains why the agent cap that used to live here was removed. Only
+ * `all` can be narrowed: for a principal without `conversation:read_all` it
+ * means "mine ∪ my teams' ∪ unclaimed" rather than the whole tenant, and the API
+ * narrows rather than rejecting so a supervisor's shared link still renders.
+ * Saying so is what stops an agent wondering why the list looks short.
  */
-export function allowedConversationScopes(
+export function isConversationScopeNarrowed(
   checker: PermissionChecker,
-): readonly ('assigned' | 'unassigned' | 'all')[] {
-  return checker.can('conversation:read_all')
-    ? (['assigned', 'unassigned', 'all'] as const)
-    : (['assigned'] as const);
+  scope: InboxScope,
+): boolean {
+  return scope === 'all' && !checker.can('conversation:read_all');
 }

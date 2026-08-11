@@ -1,25 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { allowedConversationScopes, checkerForRole } from './permissions';
+import { checkerForRole, isConversationScopeNarrowed } from './permissions';
+import { INBOX_SCOPES } from '@/lib/routes';
 
 /**
- * TAR-22, acceptance criterion 1: an agent's inbox is capped at their own and
- * their teams' conversations, so the UI must not offer them a wider scope.
+ * The inbox offers every scope to every role.
+ *
+ * This used to assert the opposite — TAR-22 capped an agent at `assigned`. ADR
+ * 0002 amendment 4 then ruled that an unclaimed conversation is visible to every
+ * agent on the tenant, and the API's `inboxScopeFilter` opens `unassigned`
+ * accordingly, so a console that hid the tab would leave arriving customers
+ * unanswered. What replaces the cap is the narrowing notice below.
  */
-describe('allowedConversationScopes', () => {
-  it('offers an agent only their assigned conversations', () => {
-    expect(allowedConversationScopes(checkerForRole('agent'))).toEqual(['assigned']);
+describe('inbox scopes', () => {
+  it('offers all three scopes whatever the role', () => {
+    expect(INBOX_SCOPES).toEqual(['assigned', 'unassigned', 'all']);
   });
 
-  it('offers a supervisor the tenant-wide scopes', () => {
-    expect(allowedConversationScopes(checkerForRole('supervisor'))).toEqual([
-      'assigned',
-      'unassigned',
-      'all',
-    ]);
+  it('tells an agent that `all` is narrower than it sounds', () => {
+    expect(isConversationScopeNarrowed(checkerForRole('agent'), 'all')).toBe(true);
   });
 
-  it('offers an admin the tenant-wide scopes', () => {
-    expect(allowedConversationScopes(checkerForRole('admin'))).toContain('all');
+  it('does not claim a narrowing for a principal who may read every thread', () => {
+    expect(isConversationScopeNarrowed(checkerForRole('supervisor'), 'all')).toBe(false);
+    expect(isConversationScopeNarrowed(checkerForRole('admin'), 'all')).toBe(false);
+  });
+
+  it('never claims a narrowing for the scopes that mean the same to everyone', () => {
+    const agent = checkerForRole('agent');
+
+    expect(isConversationScopeNarrowed(agent, 'assigned')).toBe(false);
+    expect(isConversationScopeNarrowed(agent, 'unassigned')).toBe(false);
   });
 });
 

@@ -1,8 +1,12 @@
 import 'server-only';
 
 import {
+  ConversationAssignInputSchema,
   ConversationListQuerySchema,
+  CursorPageQuerySchema,
+  InternalNoteCreateInputSchema,
   InviteCreateInputSchema,
+  MessageListQuerySchema,
   PasswordChangeInputSchema,
   PasswordResetConfirmInputSchema,
   PasswordResetRequestInputSchema,
@@ -18,6 +22,8 @@ import {
   type ConnectedWhatsAppBusinessAccountResponse,
   type ConversationResponse,
   type CursorPage,
+  type InternalNoteResponse,
+  type MessageResponse,
   type Permission,
   type SessionPrincipal,
   type SessionResponse,
@@ -26,7 +32,14 @@ import {
 } from '@whatsappcrm/contracts';
 import { ApiRequestError, type ApiRequest } from '@/lib/api/http';
 import { mockState, nextMockId } from '@/lib/api/mock/store';
-import type { MockConversation, MockTeam, MockUser, TenantScoped } from '@/lib/api/mock/fixtures';
+import type {
+  MockConversation,
+  MockInternalNote,
+  MockMessage,
+  MockTeam,
+  MockUser,
+  TenantScoped,
+} from '@/lib/api/mock/fixtures';
 import { resolveStubPrincipal } from '@/lib/session/stub-principal';
 
 /**
@@ -152,6 +165,39 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/conversations$/,
     permission: 'conversation:read',
     handle: listConversations,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}$`),
+    permission: 'conversation:read',
+    handle: getConversation,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/messages$`),
+    permission: 'conversation:read',
+    handle: listMessages,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/notes$`),
+    permission: 'conversation:read',
+    handle: listInternalNotes,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/notes$`),
+    permission: 'conversation:note',
+    handle: createInternalNote,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/assign$`),
+    // Supervisor and above. An agent may read work nobody has claimed and may
+    // not take it — ADR 0002 amendment 4, restated as a refusal here so the
+    // console's permission gate is exercised against a real 403.
+    permission: 'conversation:assign',
+    handle: assignConversation,
   },
   {
     method: 'GET',
@@ -596,10 +642,14 @@ function signupFailed(reason: 'code_expired'): ApiRequestError {
 // --- Conversations ---------------------------------------------------------
 
 /**
- * Mirrors the contract's stated behaviour: a caller without
- * `conversation:read_all` has `scope` **silently narrowed** rather than
- * rejected, so a supervisor's shared URL still renders for an agent — with less
- * in it. See `ConversationListQuerySchema`.
+ * Mirrors `inboxScopeFilter` on the API side.
+ *
+ * `all` is **narrowed** rather than rejected for a caller without
+ * `conversation:read_all`, so a supervisor's shared URL still renders for an
+ * agent — with less in it. `unassigned` is open to everybody, because ADR 0002
+ * amendment 4 rules that a conversation nobody has claimed is visible to every
+ * agent on the tenant: it was created by a customer writing in, so an unclaimed
+ * one would otherwise be visible to nobody at all.
  */
 function listConversations({ principal, query }: RouteContext): CursorPage<ConversationResponse> {
   const parsed = ConversationListQuerySchema.safeParse(Object.fromEntries(query));
@@ -608,9 +658,7 @@ function listConversations({ principal, query }: RouteContext): CursorPage<Conve
     throw validationFailed();
   }
 
-  const { status, limit } = parsed.data;
-  const mayReadAll = roleHasPermission(principal.role, 'conversation:read_all');
-  const scope = mayReadAll ? parsed.data.scope : 'assigned';
+  const { status, limit, scope } = parsed.data;
 
   const items = tenantConversations(principal)
     .filter((conversation) => status === undefined || conversation.status === status)
@@ -627,21 +675,196 @@ function matchesScope(
   scope: 'assigned' | 'unassigned' | 'all',
   principal: SessionPrincipal,
 ): boolean {
-  if (scope === 'all') {
-    return true;
-  }
-
   if (scope === 'unassigned') {
-    return conversation.assignedUserId === null && conversation.assignedTeamId === null;
+    return isUnclaimed(conversation);
   }
 
-  // `assigned` for an agent means "mine or my teams'", which is exactly TAR-22's
-  // first acceptance criterion.
+  // `assigned` means "mine or my teams'" for every role — a filter the caller
+  // chose, not a permission decision.
+  if (scope === 'assigned') {
+    return isAssignedTo(conversation, principal);
+  }
+
+  return (
+    roleHasPermission(principal.role, 'conversation:read_all') ||
+    isAssignedTo(conversation, principal) ||
+    isUnclaimed(conversation)
+  );
+}
+
+function getConversation({ principal, params }: RouteContext): ConversationResponse {
+  return toConversationResponse(findConversationInTenant(principal, params[0]));
+}
+
+/**
+ * `GET /v1/conversations/{id}/messages` — newest first, exactly as the API
+ * pages a thread. The first page of a long conversation is its *end*.
+ */
+function listMessages({ principal, params, query }: RouteContext): CursorPage<MessageResponse> {
+  const conversation = findConversationInTenant(principal, params[0]);
+  const parsed = MessageListQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { limit, order } = parsed.data;
+  const items = tenantMessages(principal)
+    .filter((message) => message.conversationId === conversation.id)
+    // `sentAt` — the provider's timestamp, never insert order.
+    .sort((left, right) =>
+      order === 'asc'
+        ? left.sentAt.localeCompare(right.sentAt)
+        : right.sentAt.localeCompare(left.sentAt),
+    )
+    .slice(0, limit)
+    .map(toMessageResponse);
+
+  return { items, nextCursor: null };
+}
+
+/** `GET /v1/conversations/{id}/notes` — newest first. */
+function listInternalNotes({
+  principal,
+  params,
+  query,
+}: RouteContext): CursorPage<InternalNoteResponse> {
+  const conversation = findConversationInTenant(principal, params[0]);
+  const parsed = CursorPageQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const items = tenantNotes(principal)
+    .filter((note) => note.conversationId === conversation.id)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, parsed.data.limit)
+    .map(toInternalNoteResponse);
+
+  return { items, nextCursor: null };
+}
+
+/**
+ * `POST /v1/conversations/{id}/notes`.
+ *
+ * The author is the principal and is never read from the body — a note is a
+ * statement about who said what. Mentions are checked against this tenant, for
+ * the reason the API checks them: a mention that names nobody notifies nobody
+ * while looking as though it did.
+ */
+function createInternalNote({ principal, params, body }: RouteContext): InternalNoteResponse {
+  const conversation = findConversationInTenant(principal, params[0]);
+  const parsed = InternalNoteCreateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const mentionedUserIds = [...new Set(parsed.data.mentionedUserIds)];
+
+  assertUsersInTenant(principal, mentionedUserIds);
+
+  const created: MockInternalNote = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    conversationId: conversation.id,
+    authorUserId: principal.userId,
+    body: parsed.data.body,
+    mentionedUserIds,
+    createdAt: MOCK_CREATED_AT,
+  };
+
+  mockState().internalNotes.set(created.id, created);
+
+  return toInternalNoteResponse(created);
+}
+
+/**
+ * `POST /v1/conversations/{id}/assign` — the claim.
+ *
+ * Absent leaves a column alone, `null` clears it, an id sets it; the three cases
+ * are what let one endpoint claim, route to a team and release. An assignee who
+ * is not an active member of this tenant is refused with `validation_failed`
+ * naming the field, exactly as the API does.
+ */
+function assignConversation({ principal, params, body }: RouteContext): ConversationResponse {
+  const conversation = findConversationInTenant(principal, params[0]);
+  const parsed = ConversationAssignInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { userId, teamId } = parsed.data;
+
+  if (typeof userId === 'string') {
+    const user = findUserInTenant(principal, userId);
+
+    if (user.status !== 'active') {
+      throw refused(
+        'validation_failed',
+        'That user cannot take conversations.',
+        HTTP_UNPROCESSABLE,
+      );
+    }
+  }
+
+  if (typeof teamId === 'string') {
+    findTeamInTenant(principal, teamId);
+  }
+
+  const updated: MockConversation = {
+    ...conversation,
+    ...(userId === undefined ? {} : { assignedUserId: userId }),
+    ...(teamId === undefined ? {} : { assignedTeamId: teamId }),
+  };
+
+  mockState().conversations.set(updated.id, updated);
+
+  return toConversationResponse(updated);
+}
+
+function isUnclaimed(conversation: MockConversation): boolean {
+  return conversation.assignedUserId === null && conversation.assignedTeamId === null;
+}
+
+function isAssignedTo(conversation: MockConversation, principal: SessionPrincipal): boolean {
   return (
     conversation.assignedUserId === principal.userId ||
     (conversation.assignedTeamId !== null &&
       principal.teamIds.includes(conversation.assignedTeamId))
   );
+}
+
+/**
+ * The API's `isVisibleOrUnclaimed`, mirrored: everything in the tenant for a
+ * principal holding `conversation:read_all`, otherwise their own work, their
+ * teams' work, and anything nobody has claimed (ADR 0002 amendment 4).
+ *
+ * A thread outside that set answers `not_found`, never `forbidden` — a 403 would
+ * confirm the id names a real conversation somebody else is handling.
+ */
+function findConversationInTenant(
+  principal: SessionPrincipal,
+  id: string | undefined,
+): MockConversation {
+  const conversation = tenantConversations(principal).find((candidate) => candidate.id === id);
+
+  if (conversation === undefined) {
+    throw notFound();
+  }
+
+  const isVisible =
+    roleHasPermission(principal.role, 'conversation:read_all') ||
+    isAssignedTo(conversation, principal) ||
+    isUnclaimed(conversation);
+
+  if (!isVisible) {
+    throw notFound();
+  }
+
+  return conversation;
 }
 
 // --- Tenant-scoped readers -------------------------------------------------
@@ -659,6 +882,18 @@ function tenantTeams(principal: SessionPrincipal): MockTeam[] {
 function tenantConversations(principal: SessionPrincipal): MockConversation[] {
   return [...mockState().conversations.values()].filter(
     (conversation) => conversation.tenantId === principal.tenantId,
+  );
+}
+
+function tenantMessages(principal: SessionPrincipal): MockMessage[] {
+  return [...mockState().messages.values()].filter(
+    (message) => message.tenantId === principal.tenantId,
+  );
+}
+
+function tenantNotes(principal: SessionPrincipal): MockInternalNote[] {
+  return [...mockState().internalNotes.values()].filter(
+    (note) => note.tenantId === principal.tenantId,
   );
 }
 
@@ -777,6 +1012,14 @@ function toTeamResponse(team: MockTeam): TeamResponse {
 
 function toConversationResponse(conversation: MockConversation): ConversationResponse {
   return stripTenant(conversation);
+}
+
+function toMessageResponse(message: MockMessage): MessageResponse {
+  return stripTenant(message);
+}
+
+function toInternalNoteResponse(note: MockInternalNote): InternalNoteResponse {
+  return stripTenant(note);
 }
 
 // --- Helpers ---------------------------------------------------------------

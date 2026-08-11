@@ -1,0 +1,46 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* The same box as the notes skeleton, so the swap does not resize the panel.
+     It scrolls rather than growing, so the composer stays reachable. */
+  max-block-size: var(--size-scroll-region);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  /* A warning-tinted surface, so a note never reads as a message to the
+     customer even at a glance. The notice above says it in words. */
+  background: var(--color-warning-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-on-warning-subtle);
+}
+
+.author {
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-body-sm);
+}
+
+.mentions {
+  font-size: var(--font-size-caption);
+}
+
+.form {
+  /* Separated from the list it appends to, without a margin on a sibling. */
+  padding-block-start: var(--space-3);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}

@@ -1,10 +1,12 @@
 import {
   InvitePreviewResponseSchema,
+  RealtimeTicketResponseSchema,
   SessionResponseSchema,
   type InviteAcceptInput,
   type InviteLookupInput,
   type InvitePreviewResponse,
   type LoginInput,
+  type RealtimeTicketResponse,
   type SessionPrincipal,
 } from '@whatsappcrm/contracts';
 import { webEnv } from '@/lib/config/env';
@@ -12,10 +14,10 @@ import { toApiRequestError } from '@/lib/api/error';
 import type { ApiRequest } from '@/lib/api/request';
 
 /**
- * The three calls that have to be made **by the browser**, and the small
+ * The four calls that have to be made **by the browser**, and the small
  * transport that makes them.
  *
- * Everything else in `lib/api` goes through `http.ts` on the server. These three
+ * Everything else in `lib/api` goes through `http.ts` on the server. These four
  * cannot, and the reason is the same for all of them: sign-in and invite
  * acceptance answer with `Set-Cookie`, and a cookie set on a fetch made by the
  * Next process belongs to the Next process, not to the person signing in. Sending
@@ -25,6 +27,8 @@ import type { ApiRequest } from '@/lib/api/request';
  *
  * The invite lookup has no cookie of its own, but it is on the same screen as the
  * accept and reads a token that only the browser can see, so it lives here too.
+ * The realtime ticket is here because the socket it is for is opened by the
+ * browser: a ticket minted for the Next process would be spent by nobody.
  *
  * No token is read, stored or forwarded by any of this: the browser holds the
  * cookie and sends it back on its own, which is the whole of the console's
@@ -80,6 +84,31 @@ export async function acceptInvite(input: InviteAcceptInput): Promise<SessionPri
   });
 
   return SessionResponseSchema.parse(response).user;
+}
+
+/**
+ * `POST /api/v1/auth/realtime-ticket` — the credential the Socket.IO handshake
+ * presents (TAR-180).
+ *
+ * The socket cannot use the session cookie: under a white-label custom domain
+ * the browser sits on the tenant's host while the realtime server is on the
+ * platform's, which makes that cookie third-party and therefore blocked. So the
+ * ticket is fetched over the same-origin proxy — where the cookie *is*
+ * first-party — and presented in the handshake instead.
+ *
+ * A `POST` because each call mints and stores a new credential, which is not
+ * something a safe method may do or an intermediary may replay. The ticket is
+ * single-use and lives about a minute, so it is fetched immediately before the
+ * connection and never stored.
+ */
+export async function requestRealtimeTicket(): Promise<RealtimeTicketResponse> {
+  const response = await browserRequest({
+    method: 'POST',
+    path: `${AUTH_PATH}/realtime-ticket`,
+    body: {},
+  });
+
+  return RealtimeTicketResponseSchema.parse(response);
 }
 
 async function browserRequest(request: ApiRequest): Promise<unknown> {

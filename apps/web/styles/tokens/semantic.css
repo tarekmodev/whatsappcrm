@@ -164,6 +164,16 @@
   --size-container-lg: var(--scale-size-container-lg);
   --size-container-xl: var(--scale-size-container-xl);
   --size-drawer: var(--scale-size-drawer);
+  /* The inbox's conversation list beside its thread, and the notes panel. */
+  --size-pane-list: var(--scale-size-pane-md);
+  --size-pane-side: var(--scale-size-pane-sm);
+  /* How tall a scrolling region may grow before it scrolls rather than the page. */
+  --size-scroll-region: var(--scale-size-viewport-tall);
+  --size-media-thumb: var(--scale-size-media-sm);
+  --size-media-inline: var(--scale-size-media-md);
+  --measure-body: var(--scale-measure-body);
+  --aspect-media: var(--scale-aspect-media);
+  --aspect-media-square: var(--scale-aspect-square);
   --border-hairline: var(--scale-size-border-hairline);
   --focus-ring-width: var(--scale-size-focus-ring);
   --focus-ring-offset: var(--scale-size-focus-ring);

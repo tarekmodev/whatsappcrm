@@ -2,9 +2,13 @@ import 'server-only';
 
 import {
   MOCK_CONVERSATIONS,
+  MOCK_INTERNAL_NOTES,
+  MOCK_MESSAGES,
   MOCK_TEAMS,
   MOCK_USERS,
   type MockConversation,
+  type MockInternalNote,
+  type MockMessage,
   type MockTeam,
   type MockUser,
 } from '@/lib/api/mock/fixtures';
@@ -23,6 +27,8 @@ interface MockState {
   users: Map<string, MockUser>;
   teams: Map<string, MockTeam>;
   conversations: Map<string, MockConversation>;
+  messages: Map<string, MockMessage>;
+  internalNotes: Map<string, MockInternalNote>;
   /** Monotonic counter for fabricated ids — never `Math.random()`, which would break resume. */
   nextId: number;
 }
@@ -45,6 +51,8 @@ function seed(): MockState {
     conversations: new Map(
       MOCK_CONVERSATIONS.map((conversation) => [conversation.id, conversation]),
     ),
+    messages: new Map(MOCK_MESSAGES.map((message) => [message.id, message])),
+    internalNotes: new Map(MOCK_INTERNAL_NOTES.map((note) => [note.id, note])),
     nextId: 1,
   };
 }

@@ -1,0 +1,27 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-inline-size: 0;
+}
+
+.scroller {
+  /* The same box whether it holds skeletons, messages or nothing, so the swap
+     never resizes the card around it. */
+  block-size: var(--size-scroll-region);
+  overflow-y: auto;
+  /* Keeps the newest message pinned while earlier ones load above it. */
+  overflow-anchor: auto;
+  padding-inline-end: var(--space-2);
+  /* Momentum scrolling on iOS without trapping the page's own scroll. */
+  overscroll-behavior: contain;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
