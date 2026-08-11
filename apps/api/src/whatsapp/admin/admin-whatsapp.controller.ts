@@ -28,10 +28,8 @@ import { TenantNotActiveError } from '../../prisma/prisma.errors';
 import { AdminTenantScopeService } from '../../tenancy/admin/admin-tenant-scope.service';
 import { PlatformAdminGuard } from '../../tenancy/admin/platform-admin.guard';
 import { TenantNotFoundError } from '../../tenancy/tenant-deactivation.errors';
-import {
-  WhatsAppBusinessAccountConnectionService,
-  type ConnectBusinessAccountResult,
-} from '../business-account-connection.service';
+import { WhatsAppBusinessAccountConnectionService } from '../business-account-connection.service';
+import { toConnectedBusinessAccountResponse } from '../connected-business-account.response';
 import {
   MessageTemplateSyncService,
   type SyncMessageTemplatesResult,
@@ -131,7 +129,7 @@ export class AdminWhatsAppController {
       response.status(HttpStatus.OK);
     }
 
-    return toConnectedResponse(result);
+    return toConnectedBusinessAccountResponse(result);
   }
 
   /**
@@ -230,35 +228,6 @@ function translateWhatsAppFailure(error: unknown): never {
   }
 
   throw error;
-}
-
-/**
- * Explicit rather than spread, so widening a projection cannot quietly add a
- * field to the API. This is the mapping the encrypted access token would have to
- * pass through to escape, and it does not appear here.
- */
-function toConnectedResponse({
-  businessAccount,
-}: ConnectBusinessAccountResult): ConnectedWhatsAppBusinessAccountResponse {
-  return {
-    id: businessAccount.id,
-    wabaId: businessAccount.wabaId,
-    name: businessAccount.name,
-    verificationStatus: businessAccount.verificationStatus,
-    createdAt: businessAccount.createdAt.toISOString(),
-    updatedAt: businessAccount.updatedAt.toISOString(),
-    accounts: businessAccount.accounts.map((account) => ({
-      id: account.id,
-      whatsappBusinessAccountId: account.whatsappBusinessAccountId,
-      phoneNumberId: account.phoneNumberId,
-      displayPhoneNumber: account.displayPhoneNumber,
-      verifiedName: account.verifiedName,
-      qualityRating: account.qualityRating,
-      status: account.status,
-      createdAt: account.createdAt.toISOString(),
-      updatedAt: account.updatedAt.toISOString(),
-    })),
-  };
 }
 
 function toSyncResponse(result: SyncMessageTemplatesResult): SyncMessageTemplatesResponse {

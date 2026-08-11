@@ -5,6 +5,8 @@ import { TenancyModule } from '../tenancy/tenancy.module';
 import { WhatsAppAccessTokenCipher } from './access-token.cipher';
 import { AdminWhatsAppController } from './admin/admin-whatsapp.controller';
 import { WhatsAppBusinessAccountConnectionService } from './business-account-connection.service';
+import { WhatsAppBusinessAccountsController } from './business-accounts.controller';
+import { WhatsAppEmbeddedSignupService } from './embedded-signup.service';
 import { MessageTemplateQueryService } from './message-template-query.service';
 import { MessageTemplateSyncService } from './message-template-sync.service';
 import { MessageTemplatesController } from './message-templates.controller';
@@ -42,19 +44,27 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
  *
  * `PlatformAdminGuard` is declared here rather than imported. It is a stateless
  * guard, so a second instance costs nothing, and declaring it keeps the
- * authentication decision visible in this module's own provider list.
+ * authentication decision visible in this module's own provider list. It guards
+ * `AdminWhatsAppController` only: `WhatsAppBusinessAccountsController` is the
+ * tenant-facing Embedded Signup route (TAR-168) and stands on the globally
+ * installed pipeline, with no second authentication scheme of its own.
  *
  * `TenantPrisma`, `SystemPrisma` and `TenantContextService` are not listed: all
  * three come from global modules.
  */
 @Module({
   imports: [TenancyModule],
-  controllers: [AdminWhatsAppController, MessageTemplatesController],
+  controllers: [
+    AdminWhatsAppController,
+    WhatsAppBusinessAccountsController,
+    MessageTemplatesController,
+  ],
   providers: [
     WhatsAppAccessTokenCipher,
     WhatsAppCredentialResolver,
     MetaCloudApiClient,
     WhatsAppBusinessAccountConnectionService,
+    WhatsAppEmbeddedSignupService,
     MessageTemplateSyncService,
     MessageTemplateQueryService,
     WhatsAppSenderService,
