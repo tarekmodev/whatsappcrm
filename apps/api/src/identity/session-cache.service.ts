@@ -30,6 +30,14 @@ import { AUTH_KEY_PREFIX, AuthRedisClient } from './auth-redis.client';
  * treating a cache miss as "revoked" — is impossible, because a miss returns
  * `null` and `null` means "ask the database".
  *
+ * ## An entry is never cached before it is indexed
+ *
+ * `purgeUser` can only delete what the index names, so a principal cached
+ * without a matching index entry is unreachable by every revocation path and
+ * answers until its TTL lapses. `track` therefore reports whether the index
+ * write landed, and the two callers write the entry only when it did — a cache
+ * miss costs one Postgres read, an un-purgeable entry costs a revocation.
+ *
  * The connection, its timeouts and the swallowing of failures live in
  * `AuthRedisClient`, shared with TAR-59's failure window.
  */
@@ -82,14 +90,31 @@ export class SessionCacheService {
    * handle, not a cache — so it carries the session's absolute cap rather than
    * the 60-second TTL. A hash left in it for a session that has since expired
    * costs one wasted `DEL` on the next purge.
+   *
+   * Returns whether the hash is now indexed. `false` covers no Redis, an
+   * unreachable one, and a partially applied write — every case in which a
+   * later `purgeUser` might not see this hash, which is the only question the
+   * caller asks before deciding to cache the principal.
+   *
+   * The two commands go in one `MULTI` rather than in sequence: an `SADD` whose
+   * `PEXPIRE` never ran leaves the revocation index with no TTL at all, and a
+   * key that is never collected is the one kind of leak a 30-day cap exists to
+   * prevent.
    */
-  async track(tenantId: string, userId: string, tokenHash: string): Promise<void> {
-    await this.redis.run('session cache track', async (client) => {
+  async track(tenantId: string, userId: string, tokenHash: string): Promise<boolean> {
+    const tracked = await this.redis.run('session cache track', async (client) => {
       const key = userSessionsKey(tenantId, userId);
 
-      await client.sadd(key, tokenHash);
-      await client.pexpire(key, AUTH_POLICY.sessionAbsoluteMs);
+      const replies = await client
+        .multi()
+        .sadd(key, tokenHash)
+        .pexpire(key, AUTH_POLICY.sessionAbsoluteMs)
+        .exec();
+
+      return everyCommandSucceeded(replies);
     });
+
+    return tracked === true;
   }
 
   /** Drops one session's cache entry and its place in the user's index. */
@@ -136,6 +161,15 @@ function sessionKey(tokenHash: string): string {
 
 function userSessionsKey(tenantId: string, userId: string): string {
   return `${AUTH_KEY_PREFIX}:tenant:${tenantId}:user:${userId}:sessions`;
+}
+
+/**
+ * ioredis reports a discarded `EXEC` as `null` and a per-command failure as the
+ * first half of that command's `[error, reply]` pair. Either means the index
+ * write cannot be assumed to have landed.
+ */
+function everyCommandSucceeded(replies: [Error | null, unknown][] | null): boolean {
+  return replies !== null && replies.every(([error]) => error === null);
 }
 
 function safeJsonParse(value: string): unknown {

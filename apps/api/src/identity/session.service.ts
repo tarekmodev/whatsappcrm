@@ -43,6 +43,10 @@ import { createSessionToken, hashSessionToken } from './session-token';
  * can fail entirely without changing an answer. Revocation writes Postgres
  * transactionally and purges the cache on both sides of the commit, so
  * "revoked immediately, not on next expiry" holds even with Redis down.
+ *
+ * The bound holds only for entries the revocation index can reach, which is why
+ * nothing here caches a principal it did not manage to index first — see
+ * `cacheIfIndexed`.
  */
 
 /**
@@ -166,8 +170,7 @@ export class SessionService {
    * not exist — the one direction of staleness this design does not tolerate.
    */
   async publish(issued: IssuedSession, principal: SessionPrincipal): Promise<void> {
-    await this.cache.track(principal.tenantId, principal.userId, issued.tokenHash);
-    await this.cache.write(issued.tokenHash, principal, issued.expiresAt);
+    await this.cacheIfIndexed(issued.tokenHash, principal, issued.expiresAt);
   }
 
   /**
@@ -231,8 +234,7 @@ export class SessionService {
     );
     const principal = toPrincipal(row, expiresAt);
 
-    await this.cache.write(tokenHash, principal, expiresAt);
-    await this.cache.track(principal.tenantId, principal.userId, tokenHash);
+    await this.cacheIfIndexed(tokenHash, principal, expiresAt);
 
     return principal;
   }
@@ -385,6 +387,34 @@ export class SessionService {
    */
   async purgeCacheFor(tenantId: string, userId: string): Promise<void> {
     await this.cache.purgeUser(tenantId, userId, true);
+  }
+
+  /**
+   * Caches a principal, but only once the revocation index names it.
+   *
+   * The order is the point, and so is the condition. `purgeUser` deletes what
+   * it finds in that index and nothing else, so an entry cached while the index
+   * write failed is invisible to every revocation path — a session that keeps
+   * answering for the rest of its TTL after somebody was suspended, logged out
+   * everywhere, or had their password reset. `AuthRedisClient` swallows its own
+   * failures, so "the index write failed" is a realistic outcome of one slow
+   * Redis command rather than a hypothetical: the timeout is 500 ms.
+   *
+   * Skipping the write costs one Postgres read per request for up to 60
+   * seconds. That is the cheaper side of this trade by a wide margin.
+   */
+  private async cacheIfIndexed(
+    tokenHash: string,
+    principal: SessionPrincipal,
+    expiresAt: Date,
+  ): Promise<void> {
+    const indexed = await this.cache.track(principal.tenantId, principal.userId, tokenHash);
+
+    if (!indexed) {
+      return;
+    }
+
+    await this.cache.write(tokenHash, principal, expiresAt);
   }
 
   /**

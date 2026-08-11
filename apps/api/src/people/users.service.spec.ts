@@ -68,6 +68,8 @@ interface Recorded {
   inviteWithdrawals: Record<string, unknown>[];
   /** Users whose lockout `UsersService` asked `LoginThrottleService` to clear. */
   unlockedUserIds: string[];
+  /** The Redis half of the same unlock, keyed by the address rather than the row. */
+  clearedEmailLocks: { tenantId: string; email: string }[];
 }
 
 function buildService(state: FakeState): {
@@ -82,6 +84,7 @@ function buildService(state: FakeState): {
     updates: [],
     inviteWithdrawals: [],
     unlockedUserIds: [],
+    clearedEmailLocks: [],
   };
 
   const lockout = state.lockout ?? { lockedUntil: null, failedLoginAttempts: 0 };
@@ -183,6 +186,11 @@ function buildService(state: FakeState): {
       // The real one reports whether the conditional `UPDATE` matched, which is
       // what decides whether an audit row is written.
       return Promise.resolve(lockout.lockedUntil !== null || lockout.failedLoginAttempts > 0);
+    },
+    clearEmailFailures: (tenantId: string, email: string) => {
+      recorded.clearedEmailLocks.push({ tenantId, email });
+
+      return Promise.resolve();
     },
   } as unknown as LoginThrottleService;
 
@@ -550,6 +558,18 @@ describe('UsersService — lockout visibility and unlock (TAR-59)', () => {
       expect(recorded.unlockedUserIds).toEqual([TARGET]);
       expect(response.security).toEqual({ lockedUntil: null, failedLoginAttempts: 0 });
       expect(recorded.audits.map((entry) => entry.action)).toEqual(['auth.unlock']);
+    });
+
+    it('clears the Redis lock as well, so the unlock is actually an unlock', async () => {
+      const { users, tenantContext, recorded } = withLockout(lockedOut);
+
+      const response = await asPrincipal(tenantContext, 'admin', () => users.unlock(TARGET));
+
+      // The per-email lockout refuses this account for fifteen minutes from the
+      // tenth failure, and an admin cannot see it. Clearing only the durable
+      // columns would make "let them back in now" mean "in up to fifteen
+      // minutes", refused by a layer nobody can point at.
+      expect(recorded.clearedEmailLocks).toEqual([{ tenantId: TENANT, email: response.email }]);
     });
 
     it('records what it cleared, so the trail distinguishes a lockout from a creeping counter', async () => {

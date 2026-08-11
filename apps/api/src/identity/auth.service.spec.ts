@@ -69,7 +69,9 @@ interface Harness {
   hash: jest.Mock;
   updates: Record<string, unknown>[];
   assertAddress: jest.Mock;
+  assertEmail: jest.Mock;
   recordedFailures: jest.Mock;
+  clearedFailures: jest.Mock;
 }
 
 /**
@@ -146,13 +148,17 @@ function buildHarness(rows: { user?: Record<string, unknown> | null; failure?: u
   } as unknown as SessionService;
 
   // The counters themselves have their own spec; what matters here is that
-  // login consults the address window *before* it reads anything, and counts
-  // every credential rejection in both layers.
+  // login consults both windows *before* it reads anything, and counts every
+  // credential rejection in all three layers.
   const assertAddress = jest.fn().mockResolvedValue(undefined);
+  const assertEmail = jest.fn().mockResolvedValue(undefined);
   const recordedFailures = jest.fn().mockResolvedValue(undefined);
+  const clearedFailures = jest.fn().mockResolvedValue(undefined);
   const throttle = {
     assertAddressWithinLimit: assertAddress,
+    assertEmailWithinLimit: assertEmail,
     recordFailure: recordedFailures,
+    clearEmailFailures: clearedFailures,
   } as unknown as LoginThrottleService;
 
   const tenantContext = new TenantContextService();
@@ -171,7 +177,9 @@ function buildHarness(rows: { user?: Record<string, unknown> | null; failure?: u
     hash,
     updates,
     assertAddress,
+    assertEmail,
     recordedFailures,
+    clearedFailures,
   };
 }
 
@@ -210,6 +218,7 @@ describe('AuthService.login', () => {
       expect(harness.recordedFailures).toHaveBeenCalledWith({
         tenantId: TENANT,
         userId: null,
+        email: LOGIN.email,
         ipAddress: CONTEXT.ipAddress,
       });
     });
@@ -262,6 +271,7 @@ describe('AuthService.login', () => {
       expect(harness.recordedFailures).toHaveBeenCalledWith({
         tenantId: TENANT,
         userId: USER,
+        email: LOGIN.email,
         ipAddress: CONTEXT.ipAddress,
       });
       expect(harness.issued).not.toHaveBeenCalled();
@@ -285,6 +295,25 @@ describe('AuthService.login', () => {
       expect(harness.verifyDummy).not.toHaveBeenCalled();
     });
 
+    it('refuses a locked email before it knows whether the account exists', async () => {
+      const harness = buildHarness({ user: null });
+
+      harness.assertEmail.mockRejectedValue(new TooManyAttemptsError(97));
+
+      const error = await inTenant(harness.tenantContext, () =>
+        harness.auth.login(LOGIN, CONTEXT),
+      ).catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(TooManyAttemptsError);
+      expect(harness.assertEmail).toHaveBeenCalledWith(TENANT, LOGIN.email);
+      // Before the lookup, so an address with no account is refused at exactly
+      // the same point, and for exactly the same cost, as one with an account.
+      // A check placed after the lookup would put the oracle back as a timing
+      // difference instead of a status-code one.
+      expect(harness.statements).toHaveLength(0);
+      expect(harness.verifyDummy).not.toHaveBeenCalled();
+    });
+
     it('answers a throttled address exactly as it answers a locked account', () => {
       const throttled = new TooManyAttemptsError(97);
       const locked = new AccountLockedError(97);
@@ -292,6 +321,29 @@ describe('AuthService.login', () => {
       // Two different messages would tell a caller which of the two happened —
       // and one of them only ever fires for an account that exists.
       expect(throttled.message).toBe(locked.message);
+    });
+
+    it('counts the typed address whether or not it named an account', async () => {
+      const known = buildHarness({});
+      const unknown = buildHarness({ user: null });
+
+      known.verify.mockResolvedValue(false);
+
+      await inTenant(known.tenantContext, () => known.auth.login(LOGIN, CONTEXT)).catch(
+        () => undefined,
+      );
+      await inTenant(unknown.tenantContext, () => unknown.auth.login(LOGIN, CONTEXT)).catch(
+        () => undefined,
+      );
+
+      // The property the per-email lockout rests on. If only the first of these
+      // carried an email, the lock would still fire only for real accounts and
+      // the 429 would go back to being the answer to "does this address exist".
+      const [knownAttempt] = known.recordedFailures.mock.calls[0] as [{ email: string }];
+      const [unknownAttempt] = unknown.recordedFailures.mock.calls[0] as [{ email: string }];
+
+      expect(knownAttempt.email).toBe(LOGIN.email);
+      expect(unknownAttempt.email).toBe(LOGIN.email);
     });
   });
 
@@ -341,6 +393,17 @@ describe('AuthService.login', () => {
       expect(harness.issued.mock.invocationCallOrder[0]).toBeLessThan(
         harness.published.mock.invocationCallOrder[0] ?? 0,
       );
+    });
+
+    it('clears the email failure counter it no longer has a reason to hold', async () => {
+      const harness = buildHarness({});
+
+      await inTenant(harness.tenantContext, () => harness.auth.login(LOGIN, CONTEXT));
+
+      // The Redis mirror of `resetLoginState` zeroing the durable counter.
+      // Without it, nine failures followed by a correct password would still
+      // lock the account holder out on their next typo.
+      expect(harness.clearedFailures).toHaveBeenCalledWith(TENANT, LOGIN.email);
     });
 
     it('upgrades a hash written under weaker parameters', async () => {

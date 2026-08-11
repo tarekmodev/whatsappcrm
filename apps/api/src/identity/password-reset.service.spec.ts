@@ -4,6 +4,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import type { SessionRevocationService } from '../rbac/session-revocation.service';
 import { ResetTokenInvalidError } from './identity.errors';
+import { LoginThrottleService } from './login-throttle.service';
 import { PasswordResetService } from './password-reset.service';
 import { PasswordService } from './password.service';
 import { hashResetToken } from './reset-token';
@@ -85,6 +86,8 @@ interface Recorded {
   /** The after-commit cache purges — the other half of "revoked immediately". */
   purges: string[];
   emails: OutboundEmail[];
+  /** Addresses whose per-email lockout was cleared alongside the durable one. */
+  clearedEmailLocks: string[];
 }
 
 function build(overrides: Partial<FakeState> = {}): {
@@ -101,6 +104,7 @@ function build(overrides: Partial<FakeState> = {}): {
     revocations: [],
     purges: [],
     emails: [],
+    clearedEmailLocks: [],
   };
 
   const tx = {
@@ -166,6 +170,17 @@ function build(overrides: Partial<FakeState> = {}): {
 
   const tenantContext = new TenantContextService();
 
+  // A completed reset has to clear the per-email lockout as well as the durable
+  // columns, or the one way out of 'forgot my password and then locked myself
+  // out' still ends at a 429.
+  const loginThrottle = {
+    clearEmailFailures: (_tenantId: string, email: string) => {
+      recorded.clearedEmailLocks.push(email);
+
+      return Promise.resolve();
+    },
+  } as unknown as LoginThrottleService;
+
   return {
     resets: new PasswordResetService(
       prisma,
@@ -174,6 +189,7 @@ function build(overrides: Partial<FakeState> = {}): {
       tenantContext,
       audit,
       sessions,
+      loginThrottle,
     ),
     recorded,
     run: (work) =>
@@ -295,6 +311,9 @@ describe('PasswordResetService.confirm', () => {
     await run(() => resets.confirm({ token: 'whatever', password: NEW_PASSWORD }));
 
     expect(only(recorded.userUpdates)).toMatchObject({ failedLoginAttempts: 0, lockedUntil: null });
+    // Both counters, or it is not a way back in: the per-email lockout refuses
+    // the address for the rest of the window whatever the columns say.
+    expect(recorded.clearedEmailLocks).toEqual([ACTIVE_USER.email]);
   });
 
   it('audits the completion and notifies the account holder', async () => {

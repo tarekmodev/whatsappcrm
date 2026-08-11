@@ -320,9 +320,19 @@ export class UsersService {
    * not revoke sessions and does not touch the password: an account is locked
    * because somebody was guessing, which says nothing about whether the
    * credential is still good.
+   *
+   * Clears **both** counters that can refuse this account: the durable columns,
+   * and the Redis lockout keyed by the address. Leaving the second would make
+   * "let them back in now" mean "in up to fifteen minutes", which is the
+   * complaint the endpoint exists to answer. It hands an attacker nothing the
+   * durable reset does not — that already restores a full allowance of guesses.
+   * The per-client-address window is a different matter and is deliberately
+   * untouched: that one belongs to whoever was guessing, not to the account.
    */
   async unlock(userId: string): Promise<UserResponse> {
-    return this.prisma.$tenantTransaction(async (tx) => {
+    const tenantId = this.tenantContext.requireTenantId();
+
+    const response = await this.prisma.$tenantTransaction(async (tx) => {
       const row = await tx.user.findUnique({ where: { id: userId }, select: USER_PROJECTION });
 
       if (row === null) {
@@ -353,6 +363,13 @@ export class UsersService {
       // it may see it by definition.
       return toUserResponse(row, { lockedUntil: null, failedLoginAttempts: 0 });
     });
+
+    // After the commit, and unconditional: clearing a lock that was not set
+    // costs one Redis `DEL`, while skipping one that was would leave the
+    // account refused by a layer the admin cannot see.
+    await this.loginThrottle.clearEmailFailures(tenantId, response.email);
+
+    return response;
   }
 
   /**

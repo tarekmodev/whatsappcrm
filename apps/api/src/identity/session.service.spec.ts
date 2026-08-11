@@ -87,7 +87,9 @@ function buildHarness(rowsFor: (sql: string) => unknown[]): Harness {
   const cache = {
     read: jest.fn().mockResolvedValue(null),
     write: jest.fn().mockResolvedValue(undefined),
-    track: jest.fn().mockResolvedValue(undefined),
+    // `true` is "the revocation index now names this hash", which is the only
+    // condition under which the principal may be cached at all.
+    track: jest.fn().mockResolvedValue(true),
     forget: jest.fn().mockResolvedValue(undefined),
     purgeUser: jest.fn().mockResolvedValue(undefined),
   };
@@ -160,6 +162,51 @@ describe('SessionService.resolve', () => {
     );
     // Indexed so a later revocation can find it without scanning.
     expect(harness.cache.track).toHaveBeenCalledWith(TENANT, USER, hashSessionToken(TOKEN));
+    // …and indexed *first*. An entry written before the index exists is
+    // reachable by a purge only if the index write then lands.
+    expect(harness.cache.track.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.cache.write.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it('does not cache a principal the revocation index failed to record', async () => {
+    const harness = buildHarness((sql) =>
+      sql.includes('FROM sessions s') ? [sessionRow(null)] : [],
+    );
+
+    // One slow `SADD` against a 500 ms command timeout, swallowed by
+    // `AuthRedisClient` like every other Redis failure in this module.
+    harness.cache.track.mockResolvedValue(false);
+
+    const principal = await harness.sessions.resolve(TOKEN, TENANT);
+
+    // `purgeUser` deletes what the index names and nothing else, so an entry
+    // cached here would answer for the rest of its TTL after a suspension, a
+    // logout-everywhere or a password reset — invisible to every revocation
+    // path. The request still gets its principal; it just costs a Postgres read
+    // on the next one.
+    expect(principal).toEqual(principalIn(TENANT));
+    expect(harness.cache.write).not.toHaveBeenCalled();
+  });
+
+  it('publishes a new session the same way round', async () => {
+    const harness = buildHarness(() => []);
+
+    harness.cache.track.mockResolvedValue(false);
+
+    await harness.sessions.publish(
+      {
+        token: TOKEN,
+        tokenHash: hashSessionToken(TOKEN),
+        sessionId: SESSION,
+        expiresAt: EXPIRES_AT,
+      },
+      principalIn(TENANT),
+    );
+
+    // Login takes the same path as resolution: there is one rule about when a
+    // principal may be cached, and it is not per call site.
+    expect(harness.cache.write).not.toHaveBeenCalled();
   });
 
   describe('the sliding window', () => {

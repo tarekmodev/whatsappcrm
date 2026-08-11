@@ -191,8 +191,8 @@ without a module dependency.
 | Invite / reset token       | 32 random bytes, base64url, SHA-256 at rest, single-use             | Signed stateless token (JWT/PASETO)                         | Single-use and revocable require state anyway; a stateless token needs a consumed-list to match    |
 | Token delivery in the link | URL **fragment** (`/invite#token=…`)                                | Query string; path segment                                  | A fragment is never sent to a server — stays out of access logs, proxies and `Referer`             |
 | Token in the API call      | Request **body**, on `POST`                                         | Path segment (`/invites/{token}/accept`, TAR-39's spelling) | Same reason. A `GET` with a secret in the path is logged by every hop                              |
-| Lockout counter            | Durable columns on `users` + Redis per-IP window                    | Redis-only counters                                         | Redis-only loses the lockout on restart and cannot be shown to an admin or audited                 |
-| Lockout response           | Existing `rate_limited` (429) + `Retry-After`                       | New `account_locked` code                                   | A distinct code confirms the account exists; 429 says the same useful thing without the leak       |
+| Lockout counter            | Durable columns on `users` + Redis per-IP and per-email windows     | Redis-only counters                                         | Redis-only loses the lockout on restart and cannot be shown to an admin or audited                 |
+| Lockout response           | Existing `rate_limited` (429) + `Retry-After`                       | New `account_locked` code                                   | A distinct code confirms the account exists — and so does a 429 only a real one can reach          |
 | Bad token response         | New `token_invalid` (410) with `details.reason`                     | Reuse `not_found`                                           | The frontend must offer "request a new link", which needs to be distinguishable from a 404 page    |
 | CSRF defence               | `SameSite=Lax` + `Origin`/`Sec-Fetch-Site` check on unsafe methods  | Double-submit CSRF token                                    | A token adds a whole endpoint and state; Lax already blocks cross-site form POSTs                  |
 
@@ -314,9 +314,53 @@ audit row above had to go somewhere else.
   three columns answer in one index lookup, and because it is a free place for an attacker
   to make us write rows.
 
-Both keys are tenant-scoped, so tenant A's attacker cannot lock out or throttle tenant B's
+Every key is tenant-scoped, so tenant A's attacker cannot lock out or throttle tenant B's
 agents — TAR-59's fourth acceptance criterion, satisfied by the key shape rather than by a
 check.
+
+**Amendment (TAR-64 review) — a third layer, keyed by the typed email.** As built, the two
+layers above left the 429 itself as a per-tenant existence oracle:
+`LOGIN_IP_THROTTLE_ENABLED` defaults to off, so in the shipped configuration a lockout was
+the _only_ producer of a 429 on login, and a lockout is reachable only for an `active`
+account that has a password hash. Eleven wrong passwords therefore answered 429 for a real
+address and 401 for one with no account — a difference the identical bodies and the dummy
+verify do nothing about.
+
+The fix is a Redis lockout keyed by the **address that was typed** rather than by a row:
+`emailfail:{tenantId}:{sha256(email)}` counts, and `emaillock:{tenantId}:{sha256(email)}`
+holds the lock. It deliberately reuses `loginFailureThreshold` and `loginLockoutMs`, so an
+address with no account locks on the same attempt and for the same duration as one with an
+account, and the two answers are identical in code, body and `Retry-After`. It is checked
+before the account lookup, so they cost the same too. It carries no feature flag and needs
+none: the email comes from the request body, so it identifies one attempt's target however
+many proxies the request crossed, and the only address an attacker can lock with it is one
+they can already lock durably through the account layer.
+
+It fails open like every other Redis path here, and the cost of that is stated rather than
+hidden: while Redis is unreachable the durable lockout is again the only producer of a 429,
+and the oracle is open with it. The addresses are hashed because an email is PII and
+`redis-cli KEYS` is not a list of who has an account here — and because free text from a
+request body must not reach a key verbatim. Both keys are cleared wherever
+`failed_login_attempts = 0` is written — a successful sign-in, an admin unlock, a completed
+reset, a password change and an accepted invite — since an unlock that left the account
+refused by a layer no admin can see would not be an unlock, and a reset that still ended at
+a 429 would not be a way back in. The IP window is cleared by none of them: it belongs to
+whoever was guessing rather than to the account they were guessing at.
+
+**What this does not yet close, and why the word is "narrowed" rather than "closed"
+(TAR-154).** The two counters lock on the same attempt, for the same duration, through the
+same reset paths — but they **forget on different clocks**. The email key carries
+`loginLockoutMs` as its TTL; `failed_login_attempts` carries none and only ever returns to
+zero through one of the five paths above. Nine failures, a sixteen-minute pause and two
+more attempts therefore put them out of step: the email counter has expired and is back at
+one, the durable counter reaches ten and locks, and attempt eleven answers 429 for a real
+address and 401 for one with no account. That is the oracle again, at the cost of one wait,
+and cheaper still against an address whose durable count is already warm from its owner's
+own typos. The layer closes the eleven-request version outright, which is why it ships, but
+the honest claim is that a paced attacker can still tell the two apart. TAR-154 windows the
+durable count inside the statement that already writes `last_failed_login_at`, making the
+retention identical by construction rather than by two numbers somebody has to keep equal —
+which is the principle the threshold and the duration already follow.
 
 ---
 
@@ -621,25 +665,31 @@ Existing codes carry the rest, with no additions:
 **Login** — `POST /api/v1/auth/login`
 
 1. IP window check (`authfail:{tenantId}:{ip}`). Over → 429 `rate_limited`.
-2. `users.findUnique({ tenantId_email })` under `TenantPrisma`.
-3. If no row, or `password_hash IS NULL`, or `status ≠ 'active'`: run argon2id verify
+2. Email lockout check (`emaillock:{tenantId}:{sha256(email)}`). Over → 429 `rate_limited`.
+   Before the lookup and for every address, whether or not it names an account — see the
+   TAR-64 amendment under decision 3.
+3. `users.findUnique({ tenantId_email })` under `TenantPrisma`.
+4. If no row, or `password_hash IS NULL`, or `status ≠ 'active'`: run argon2id verify
    against a **fixed dummy hash**, then answer `invalid_credentials`. The dummy verify is
    not optional — without it, response time separates "no such user" from "wrong password"
    and the endpoint becomes a user-enumeration oracle.
-4. If `locked_until > now()`: 429 with `Retry-After` = seconds remaining. No password
+5. If `locked_until > now()`: 429 with `Retry-After` = seconds remaining. No password
    verification is performed.
-5. Verify. On failure: `failed_login_attempts += 1`, `last_failed_login_at = now()`; if the
+6. Verify. On failure: `failed_login_attempts += 1`, `last_failed_login_at = now()`; if the
    new count is a positive multiple of `loginFailureThreshold`, set
    `locked_until = now() + loginLockoutMs`, write an `auth.lockout` audit row, and send the
-   `account_locked` email. Increment the IP window. Answer `invalid_credentials`.
+   `account_locked` email. Increment the IP window **and the email counter** — the latter
+   for every rejection, including step 4's, which is the case no per-account counter can
+   see. Answer `invalid_credentials`.
    **The email fires on the transition into lockout, not on each failed attempt** — that is
    what bounds an unauthenticated caller to at most one message per `loginLockoutMs` per
    address, and it is also the only moment the notification carries information the account
    holder can act on. This is the sole producer of the `account_locked` template.
-6. On success, in one `$tenantTransaction`: reset `failed_login_attempts = 0`,
-   `locked_until = NULL`, set `last_login_at`, insert the session row. Then populate the
-   Redis cache and `SADD user:{id}:sessions`. Answer `SessionResponse` + `Set-Cookie`.
-7. If `password_hash` was produced with parameters older than the current `AUTH_POLICY`,
+7. On success, in one `$tenantTransaction`: reset `failed_login_attempts = 0`,
+   `locked_until = NULL`, set `last_login_at`, insert the session row. Then index the hash
+   in `user:{id}:sessions` and — only if that landed — populate the Redis cache. Clear the
+   email counter and lock. Answer `SessionResponse` + `Set-Cookie`.
+8. If `password_hash` was produced with parameters older than the current `AUTH_POLICY`,
    re-hash and store it inside the same transaction. Free upgrade path when the parameters
    are raised; costs one comparison of the encoded parameter string.
 
@@ -758,6 +808,16 @@ stale-positive for less than 60 seconds, and only if both purges fail.**
 A role change (TAR-22) does **not** revoke sessions — forcing a logout because someone was
 promoted is hostile — but it does purge the cache, so materialised `permissions` are correct
 on the next request rather than up to 60 seconds later.
+
+**Amendment (TAR-64 review) — the index write comes first, and gates the cache write.** Step
+1 above can only find what the SET names, so an entry written while the `SADD` failed is
+unreachable by every revocation path and answers for the rest of its TTL. Both writers —
+login and session resolution — therefore `SADD` first and write `sess:{tokenHash}` only if
+that landed. The two commands go in one `MULTI` for the same reason, so an `SADD` whose
+`PEXPIRE` never ran cannot leave the index with no TTL at all. The failure is realistic
+rather than theoretical: the auth Redis client has a 500 ms command timeout and one retry,
+and it swallows its own failures by design. Skipping the cache write costs one Postgres read
+per request for up to 60 seconds; caching an un-purgeable entry costs a revocation.
 
 ### Cookie
 
@@ -881,8 +941,12 @@ Everything in TAR-39's security section still applies. What this document adds:
 - **Constant-ish responses:** login, reset request and invite lookup answer identically for
   known and unknown inputs, and login performs a dummy hash verify so timing does not leak
   existence.
-- **Enumeration:** no endpoint distinguishes "no such user" from "wrong password", and the
-  lockout answers 429 rather than a code that would confirm the account exists.
+- **Enumeration:** no endpoint distinguishes "no such user" from "wrong password"; the
+  lockout answers 429 rather than a code that would confirm the account exists; and an
+  address with **no** account reaches that same 429, on the same attempt and for the same
+  duration, so the status is not the answer the body refuses to give. The last part is the
+  per-email lockout added by the TAR-64 review — without it the 429 was itself the oracle,
+  because only a real account could produce one.
 - **The tenant is never client-supplied.** It comes from the `Host` and is cross-checked
   against the session. There is no tenant id in any auth request body, header or query
   parameter — including for the platform-admin bootstrap invite, where it is a path
