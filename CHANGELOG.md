@@ -298,6 +298,23 @@ change.
 
 ### Security
 
+- **A cached session the revocation index never recorded can no longer outlive its
+  revocation.** `SessionService.resolve` wrote the principal entry and added its hash to
+  the user's index as two independent Redis calls, each swallowing its own failure.
+  `purgeUser` deletes only what `SMEMBERS` returns, so an entry cached after a failed
+  `SADD` — realistic at a 500 ms `commandTimeout` with one retry — was invisible to every
+  revocation path and kept answering for its full 60-second TTL. `track` now reports
+  whether the index write landed, and both call sites index first and skip the cache write
+  on failure: an un-purgeable entry is worse than a cache miss, and a miss costs one
+  indexed Postgres read. (TAR-64)
+- **The login 429 is documented as the account-existence signal it actually is.** With
+  `LOGIN_IP_THROTTLE_ENABLED` off — the shipped default, because `request.ip` behind an
+  unconfigured proxy is the proxy — `AccountLockedError` is the only producer of a 429 on
+  login, so eleven wrong passwords separate a real address from an unknown one whatever
+  the response bodies say. No behaviour change: TAR-35 requires the lockout be observable,
+  and the class comment now states the delivered property, its bound, and the deployment
+  switch that closes it rather than claiming an ambiguity the default config does not
+  provide. (TAR-64)
 - **A password reset or change now ends the sessions it revokes immediately, not up to a
   minute later.** Both flows revoked the session rows correctly but skipped the
   after-commit `purgeCacheFor` that `SessionRevocationService` documents as mandatory, so
