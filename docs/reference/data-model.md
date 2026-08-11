@@ -43,7 +43,7 @@ Six rules hold across every model. A change that breaks one needs a reason in re
 
 ## Tenancy classification
 
-37 models. **34 are tenant-scoped**: they carry a non-null `tenant_id`, have
+38 models. **35 are tenant-scoped**: they carry a non-null `tenant_id`, have
 `ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Three are
 not, each deliberately:
 
@@ -367,11 +367,50 @@ with the note, and never queried the other way round.
   supervisor dashboards; `(tenant_id, assigned_user_id, status, created_at DESC, id DESC)`
   and `(tenant_id, assigned_team_id, status, created_at DESC, id DESC)` — the
   `ticket:read` (no `_all`) queue, carrying its own sort key for the same reason the inbox
-  ones do; `(tenant_id, conversation_id)`, `(tenant_id, contact_id)`
-- **Owned by:** TAR-21 / TAR-25, sort keys added by TAR-80
+  ones do; `(tenant_id, conversation_id)`, `(tenant_id, contact_id)`;
+  **`tickets_one_active_per_contact`** — `UNIQUE (tenant_id, contact_id)`
+  `WHERE status IN ('open','pending')`
+- **Owned by:** TAR-21 / TAR-25, sort keys added by TAR-80, the partial unique index by
+  TAR-74
 
-TAR-21 owns how `number` is allocated; the unique constraint is what makes a racy allocator
-fail loudly instead of duplicating.
+`number` is allocated by [`ticket_counters`](#ticket_counters); the unique constraint is
+what makes a racy allocator fail loudly instead of duplicating.
+
+`tickets_one_active_per_contact` is TAR-21's "one active ticket per contact" invariant,
+enforced by the database rather than by whichever call site remembers to check
+(TAR-73, decision 2). Three things about it are load-bearing:
+
+- **The predicate is `open` _and_ `pending`.** `pending` means waiting on the customer, so
+  that ticket is still their live thread. Narrowing it to `open` would hand a duplicate to
+  every paused conversation on the customer's next message. `resolved` and `closed` are
+  terminal — writing back after resolution opens a new ticket.
+- **`contact_id` stays nullable.** PostgreSQL does not collide NULLs in a unique index, so
+  a manually created ticket with no contact (TAR-25) never conflicts. `NOT NULL` would
+  break that.
+- **Prisma cannot express it,** so it exists only in
+  `20260811130000_ticket_active_constraint_and_counters` — not in `schema.prisma`, and not
+  in anything `migrate dev` would regenerate.
+  `src/prisma/ticket-active-uniqueness.int-spec.ts` asserts the index definition for that
+  reason.
+
+#### `ticket_counters`
+
+The per-tenant ticket-number allocator. One row per tenant holding the _next_ number to
+hand out, created lazily by that tenant's first ticket rather than at provisioning, so
+TAR-50's flow needs no change.
+
+- **Primary key:** `tenant_id` — one row per tenant, and it is also the FK to `tenants`
+- **Owned by:** TAR-74, per TAR-73 decision 3
+
+Numbers are unique and monotonic but **not gapless**: the allocating CTE still increments
+when the ticket insert loses the race to `tickets_one_active_per_contact`. Nothing depends
+on density.
+
+`updated_at` carries a database-level `DEFAULT now()`, which no other table here does. The
+allocator is a raw upsert naming only `(tenant_id, next_number)`; without the default that
+statement violates `NOT NULL` and no ticket can be created at all. Prisma's `@updatedAt`
+still wins whenever the client writes the row, and a caller taking the `DO UPDATE` branch
+should set `updated_at = now()` itself — PostgreSQL does not refresh a default on update.
 
 #### `ticket_events`
 
@@ -612,7 +651,11 @@ row-level security:
    `system_unrestricted` policy.
 
 Forgetting either fails `pnpm db:verify:rls` by name. A tenant-scoped table without a policy
-looks finished in review and returns every tenant's rows at runtime.
+looks finished in review, which is exactly why the grant is not automatic: until step 2 runs,
+`whatsappcrm_app` holds no privilege at all on the new table and every query against it fails
+with a permission error (TAR-95). Step 1 forgotten used to mean a table returning every
+tenant's rows at runtime; now it means a table nobody can reach, which is the same mistake
+with a loud, local symptom instead of a silent, remote one.
 
 ### Adding a function
 

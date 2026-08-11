@@ -16,14 +16,18 @@
 -- of a fail-closed policy. Point this at a local or disposable database. Every
 -- row it touches carries a `tar48-fixture` marker and a fixed id, and the
 -- script deletes those rows before it starts as well as after it finishes, so
--- an interrupted run cleans up on the next one.
+-- an interrupted run cleans up on the next one. Phase 1 also creates and drops
+-- one empty probe table, `tar95_default_privilege_probe`, inside a single
+-- transaction — it never outlives the statement that makes it, even on failure.
 --
 -- Reconnecting (`\connect -`) inherits psql's current connection parameters. On
 -- the local Docker stack that is a Unix socket and needs no password; over TCP,
 -- export `PGPASSWORD` first or psql will stop to prompt.
 --
 -- Prerequisites: migrations applied through 20260810140000_tenant_isolation_rls,
--- and `app-roles.sql` run afterwards.
+-- and `app-roles.sql` run afterwards. Re-run `app-roles.sql` after any later
+-- migration that adds a table: a new table has no grants and no
+-- `system_unrestricted` policy until it does, and phase 1 names it here.
 --
 -- ---------------------------------------------------------------------------
 -- What it proves
@@ -32,13 +36,24 @@
 --   Structure   Every table carrying `tenant_id` has RLS enabled AND forced AND
 --               a `tenant_isolation` policy. Every table the app role can touch
 --               is either protected or on a two-entry read-only allowlist. The
---               app role holds neither SUPERUSER nor BYPASSRLS.
---   Behaviour   On a connection that has never set the GUC, all 34 protected
---               tables return zero rows. With the GUC set, each tenant sees its
+--               app role holds neither SUPERUSER nor BYPASSRLS. A table created
+--               *after* `app-roles.sql` last ran is reachable by the system
+--               role and by nobody else — the grant waits for the policy
+--               instead of arriving ahead of it (TAR-95).
+--   Behaviour   On a connection that has never set the GUC, every protected
+--               table returns zero rows. With the GUC set, each tenant sees its
 --               own rows and none of the other's. Writing another tenant's
 --               `tenant_id` is rejected; updating and deleting its rows match
 --               nothing. `webhook_events` is unreachable by grant. The system
 --               role sees across tenants, which is what it is for.
+--
+-- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74) as well
+-- as the conversation tables. Phase 3a is a loop over whatever the catalog says
+-- is protected, so an empty table passes it trivially — a real row in the two
+-- tables that story added is what makes the assertion mean something for them.
+-- The *constraint* those tables exist for is a separate property, proven in
+-- `src/prisma/ticket-active-uniqueness.int-spec.ts`; this file is about
+-- isolation only.
 
 \set ON_ERROR_STOP on
 
@@ -204,6 +219,71 @@ BEGIN
 END
 $$;
 
+DO $$
+DECLARE
+    probe constant text := 'tar95_default_privilege_probe';
+    priv text;
+    app_granted text[] := '{}';
+    system_missing text[] := '{}';
+BEGIN
+    -- 1e. The default privileges themselves (TAR-95). Everything above reads
+    -- the tables that exist; this one asks what happens to the *next* table,
+    -- which is where the dangerous mistake lives — a migration that adds a
+    -- tenant-scoped table and forgets its RLS block. The grant must not arrive
+    -- ahead of the policy, so a table `app-roles.sql` has not seen must be
+    -- unreachable by the app role rather than wide open to it.
+    --
+    -- Created for real rather than read out of `pg_default_acl`: default
+    -- privileges are per creating role, and the ACL a new table actually ends
+    -- up with is the composition of that entry with the built-in default.
+    -- Creating one and asking is the only form of this check that cannot be
+    -- fooled by reasoning about the catalog incorrectly.
+    --
+    -- No cleanup branch: a DO block is one transaction and DDL is transactional
+    -- in PostgreSQL, so the probe table disappears on the RAISE below exactly
+    -- as it does on the DROP.
+    EXECUTE format(
+        'CREATE TABLE "public".%I ("id" uuid PRIMARY KEY, "tenant_id" uuid NOT NULL)',
+        probe
+    );
+
+    FOREACH priv IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
+        IF has_table_privilege('whatsappcrm_app', format('"public".%I', probe), priv) THEN
+            app_granted := app_granted || priv;
+        END IF;
+    END LOOP;
+
+    -- The other half, and the reason this is not simply "revoke everything":
+    -- SystemPrisma still has to reach a new table on the day it is created.
+    -- Losing that is a fail-closed outage rather than a leak, but it is an
+    -- outage, and it would be invisible until something queried the new table.
+    FOREACH priv IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE'] LOOP
+        IF NOT has_table_privilege('whatsappcrm_system', format('"public".%I', probe), priv) THEN
+            system_missing := system_missing || priv;
+        END IF;
+    END LOOP;
+
+    EXECUTE format('DROP TABLE "public".%I', probe);
+
+    IF array_length(app_granted, 1) > 0 THEN
+        RAISE EXCEPTION
+            E'a brand-new table is already reachable by whatsappcrm_app (%) — default privileges are fail-OPEN\n'
+            '  a migration that forgets its tenant_isolation block would ship a table every tenant can read\n'
+            '  fix: the ALTER DEFAULT PRIVILEGES block in app-roles.sql must not grant ON TABLES to the app role',
+            array_to_string(app_granted, ', ');
+    END IF;
+
+    IF array_length(system_missing, 1) > 0 THEN
+        RAISE EXCEPTION
+            E'a brand-new table is not reachable by whatsappcrm_system (missing %)\n'
+            '  re-run app-roles.sql; if that does not fix it, its ALTER DEFAULT PRIVILEGES block is wrong',
+            array_to_string(system_missing, ', ');
+    END IF;
+
+    RAISE NOTICE 'ok: a new table is unreachable by the app role until app-roles.sql grants it, and reachable by the system role';
+END
+$$;
+
 -- ---------------------------------------------------------------------------
 -- Phase 2 — the two-tenant fixture.
 --
@@ -225,6 +305,10 @@ SET LOCAL lock_timeout = '3s';
 -- leave to chance.
 SET LOCAL app.tenant_id = :'tenant_a';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_a';
+-- Before the conversation and contact they reference: those foreign keys are
+-- NoAction, so the parents cannot go first.
+DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_a';
@@ -233,6 +317,8 @@ DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
@@ -264,6 +350,15 @@ INSERT INTO "public"."conversations" ("id", "tenant_id", "whatsapp_account_id", 
 INSERT INTO "public"."messages" ("id", "tenant_id", "conversation_id", "direction", "status", "body", "sent_at", "updated_at")
     VALUES ('11111111-1111-7111-8111-1111111111a5', :'tenant_a', '11111111-1111-7111-8111-1111111111a4',
             'inbound', 'received', 'fixture A message', now(), now());
+-- TAR-74's two tables. The counter row is written with the column list the
+-- allocator actually uses — no `updated_at` — so a future migration that drops
+-- its `now()` default breaks the fixture here rather than ticket creation in
+-- production.
+INSERT INTO "public"."ticket_counters" ("tenant_id", "next_number")
+    VALUES (:'tenant_a', 2);
+INSERT INTO "public"."tickets" ("id", "tenant_id", "number", "status", "conversation_id", "contact_id", "updated_at")
+    VALUES ('11111111-1111-7111-8111-1111111111a6', :'tenant_a', 1, 'open',
+            '11111111-1111-7111-8111-1111111111a4', '11111111-1111-7111-8111-1111111111a3', now());
 
 SET LOCAL app.tenant_id = :'tenant_b';
 
@@ -281,10 +376,18 @@ INSERT INTO "public"."conversations" ("id", "tenant_id", "whatsapp_account_id", 
 INSERT INTO "public"."messages" ("id", "tenant_id", "conversation_id", "direction", "status", "body", "sent_at", "updated_at")
     VALUES ('22222222-2222-7222-8222-2222222222b5', :'tenant_b', '22222222-2222-7222-8222-2222222222b4',
             'inbound', 'received', 'fixture B message', now(), now());
+INSERT INTO "public"."ticket_counters" ("tenant_id", "next_number")
+    VALUES (:'tenant_b', 2);
+-- Ticket #1 in tenant B as well. Two tenants both holding ticket number 1 is
+-- correct — the key is `(tenant_id, number)` — and asserting it here means a
+-- future "globally unique ticket number" cannot slip in unnoticed.
+INSERT INTO "public"."tickets" ("id", "tenant_id", "number", "status", "conversation_id", "contact_id", "updated_at")
+    VALUES ('22222222-2222-7222-8222-2222222222b6', :'tenant_b', 1, 'open',
+            '22222222-2222-7222-8222-2222222222b4', '22222222-2222-7222-8222-2222222222b3', now());
 
 COMMIT;
 
-\echo 'fixture committed: 2 tenants, 6 rows each'
+\echo 'fixture committed: 2 tenants, 8 rows each'
 
 -- ---------------------------------------------------------------------------
 -- Phase 3 — behaviour, on a connection that has never set the GUC.
@@ -374,7 +477,22 @@ BEGIN
     SELECT count(*) INTO n FROM "public"."messages" WHERE "tenant_id" = tenant_b;
     IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of messages returned % rows', n; END IF;
 
-    RAISE NOTICE 'ok: tenant A sees its own 6 rows and none of tenant B''s';
+    -- TAR-74's two tables, read the same two ways: own rows visible, the other
+    -- tenant's not — including `ticket_counters`, whose primary key is the
+    -- tenant id itself and which would otherwise be trivially guessable.
+    SELECT count(*) INTO n FROM "public"."tickets";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 ticket, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."tickets" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of tickets returned % rows', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."ticket_counters";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 ticket_counters row, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."ticket_counters" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of ticket_counters returned % rows', n; END IF;
+
+    RAISE NOTICE 'ok: tenant A sees its own 8 rows and none of tenant B''s';
 
     -- 3c. Tenant B, symmetrically. Same connection, same role — only the GUC
     -- changed, which is exactly what the client extension will do per request.
@@ -412,6 +530,14 @@ BEGIN
     DELETE FROM "public"."contacts" WHERE "tenant_id" = tenant_b;
     GET DIAGNOSTICS n = ROW_COUNT;
     IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant DELETE removed % rows', n; END IF;
+
+    -- The `ticket_counters` version of the same thing, and the reason it is
+    -- worth naming separately: its primary key *is* the tenant id, so reaching
+    -- another tenant's row needs no id to leak first. Burning their ticket
+    -- numbers would be a cheap nuisance if the policy were not there.
+    UPDATE "public"."ticket_counters" SET "next_number" = 999999 WHERE "tenant_id" = tenant_b;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant UPDATE of ticket_counters modified % rows', n; END IF;
 
     RAISE NOTICE 'ok: cross-tenant UPDATE and DELETE match 0 rows';
 
@@ -464,6 +590,10 @@ SET LOCAL lock_timeout = '3s';
 
 SET LOCAL app.tenant_id = :'tenant_a';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_a';
+-- Before the conversation and contact they reference: those foreign keys are
+-- NoAction, so the parents cannot go first.
+DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_a';
@@ -472,6 +602,8 @@ DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
@@ -494,6 +626,9 @@ BEGIN
 
     SELECT count(*) INTO n FROM "public"."contacts" WHERE "tenant_id" IN (tenant_a, tenant_b);
     IF n <> 0 THEN RAISE EXCEPTION 'fixture contacts survived cleanup: %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."ticket_counters" WHERE "tenant_id" IN (tenant_a, tenant_b);
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture ticket counters survived cleanup: %', n; END IF;
 
     SELECT count(*) INTO n FROM "public"."tenants" WHERE "id" IN (tenant_a, tenant_b);
     IF n <> 0 THEN RAISE EXCEPTION 'fixture tenants survived cleanup: %', n; END IF;

@@ -14,7 +14,7 @@ Three pieces, each of which fails closed on its own.
 
 ### 1. Row-level security on every tenant-scoped table
 
-All 34 tenant-scoped tables have `ENABLE`/`FORCE ROW LEVEL SECURITY` and one policy:
+All 35 tenant-scoped tables have `ENABLE`/`FORCE ROW LEVEL SECURITY` and one policy:
 
 ```sql
 CREATE POLICY tenant_isolation ON conversations
@@ -47,6 +47,16 @@ deploy user on a managed PostgreSQL may not have.
 `SUPERUSER` and `BYPASSRLS` skip policy evaluation entirely, so the app role must hold
 neither — `pnpm db:verify:rls` fails if it ever does, and `app-roles.sql` re-asserts
 `NOSUPERUSER NOBYPASSRLS` on every run rather than assuming it.
+
+The two roles are treated identically except in one place: **default privileges on future
+tables**. `whatsappcrm_system` gets them automatically; `whatsappcrm_app` gets nothing until
+`app-roles.sql` grants it table by table. The asymmetry is the point. A grant is automatic and
+a `tenant_isolation` policy is hand-written per migration, so a role that is auto-granted picks
+up new tables _before_ the policy that constrains them — and a migration that forgets its RLS
+block would ship a table every tenant can read. Inverted, the same slip costs a permission
+error on the first query, and the fix is the `pnpm db:roles` re-run that was already skipped
+(TAR-95). `pnpm db:verify:rls` creates a throwaway table and asserts this directly, so the
+default cannot drift back open unnoticed.
 
 `system_unrestricted` is deliberately a _policy_ rather than the `BYPASSRLS` role attribute.
 `BYPASSRLS` is cluster-wide, applies to every table in every database, cannot be narrowed and
@@ -182,7 +192,7 @@ require making the function `SECURITY DEFINER` in the same change.
 
 ### The extension does not inject `tenantId`
 
-Deliberately. RLS already filters the 34 scoped models, and a generic injection has to get
+Deliberately. RLS already filters the 35 scoped models, and a generic injection has to get
 nested writes, `connect`, `upsert` and relation filters right or it silently drops rows —
 worse than not having it.
 
@@ -299,13 +309,15 @@ pnpm test:db         # the same guarantee through TenantPrisma
 the GUC, and asserts that all 34 tables return zero rows; that each tenant then sees its own
 rows and none of the other's; that a cross-tenant insert is rejected and a cross-tenant update
 or delete matches nothing. It reads the catalog rather than a list, so a new table with no
-policy is caught by name rather than assumed to be fine. It exits non-zero on the first failure
-and cleans up after itself — and it writes to the database it is pointed at, so point it at a
-local or disposable one.
+policy is caught by name rather than assumed to be fine, and it creates one throwaway table of
+its own to assert that a table nothing has granted yet is unreachable by the app role and
+reachable by the system role. It exits non-zero on the first failure and cleans up after itself
+— and it writes to the database it is pointed at, so point it at a local or disposable one.
 
 `pnpm test:db` covers the same guarantee through the client, plus provisioning and
 deactivation. Isolation is a property of the database rather than of any one function, so a
 unit test cannot assert it.
 
-Both passed with `main` at `6b900e2`: `PASS — tenant isolation is enforced at the data
-layer`, and 70 integration tests across 5 suites.
+Both passed with `main` at `e6cfe99` plus TAR-95, against a database rebuilt from empty:
+`PASS — tenant isolation is enforced at the data layer`, and 87 integration tests across 6
+suites.
