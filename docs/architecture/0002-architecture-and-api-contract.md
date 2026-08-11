@@ -547,7 +547,10 @@ and provisioning has to work before the first user exists. Stages 2–6 have not
 resolve for such a caller. The trade the guard's own comment states plainly: a shared
 secret has no per-operator identity, no revocation and no audit trail beyond "someone with
 the token" — right-sized for provisioning, and the thing to replace when a platform-admin
-identity exists.
+identity exists. [Amendment 2](#amendment-2--tenant-self-service-waba-connection-tar-161)
+narrows it where it matters most: the credential becomes a set of labelled entries and the
+matching label lands on the audit row, so writing a customer's Meta credential is
+attributable even though the caller is still not a session.
 
 ### Endpoint surface
 
@@ -619,6 +622,13 @@ GET    /api/v1/billing/subscription          → BillingSummaryResponse     bill
 GET    /api/v1/billing/usage                 → UsageSummaryResponse       billing:read
 POST   /api/v1/billing/checkout              → HostedSession              billing:manage
 POST   /api/v1/billing/portal                → HostedSession              billing:manage
+
+# WhatsApp channel administration                                         TAR-161
+POST   /api/v1/whatsapp/business-accounts    → ConnectedWhatsAppBusinessAccountResponse
+                                                                      channel:manage
+                                                                      201 new · 200 updated
+                                                                      no Idempotency-Key
+                                                                      added by amendment 2
 
 # Platform operator — PlatformAdminGuard bearer token, never a session   TAR-19/51
 # Shapes, errors, idempotency and retention: docs/reference/admin-api.md
@@ -903,7 +913,9 @@ dropping the encrypted token outright.
 
 _Needs verification at implementation time:_ the exact Embedded Signup flow, permission
 scopes, and whether template listing is exposed per WABA or per number — against Meta's
-current documentation. Not asserted here.
+current documentation. Not asserted here. The flow shape is ruled in
+[Amendment 2](#amendment-2--tenant-self-service-waba-connection-tar-161), which carries its
+own — shorter — list of what is still to be confirmed.
 
 **Question 3 — tenant-scoped users: confirmed as recommended.**
 
@@ -1083,25 +1095,224 @@ shipped — `PlatformAdminGuard`, `admin.ts`, `admin-tenants.controller.ts`, fro
 TAR-51 — and this revision records it in the endpoint surface and the request pipeline,
 where it had been omitted. TAR-66 is following that convention, not proposing one.
 
-What is open is narrower: whether a tenant may connect its own WABA, which is a product
-call pending with Tarek on TAR-20. It decides the path, not the guard — a tenant-facing
-route is `POST /api/v1/whatsapp/business-accounts` under `channel:manage`, because a
-tenant-facing route never names its own tenant in the path (decision 2). Operator-only is
-close to zero marginal work: the principal, the guard and the path convention all exist.
-Adding the tenant-facing route later is additive either way.
+What was open — whether a tenant may connect its own WABA, the audit record that guard
+needs, and the missing code-exchange endpoint — is **answered in
+[Amendment 2](#amendment-2--tenant-self-service-waba-connection-tar-161)**.
 
-One caveat that is not a reason to answer differently, but is a reason to add something:
-what flows through this endpoint is a WABA access token, the most sensitive credential in
-the system, and `PlatformAdminGuard` is a shared secret with no per-operator identity and
-no audit trail. Provisioning a tenant under that guard is one thing; writing a customer's
-Meta credential under it is another. Whichever way the product call goes, the operator
-path needs an audit record of who connected what and when.
+### Amendment 2 — tenant self-service WABA connection (TAR-161)
 
-Also unruled and independent of the product call: `0002` records Embedded Signup as the
-onboarding path, which returns a code the server exchanges for a token, while TAR-66's
-endpoint accepts a pasted `accessToken`. There is no code-exchange endpoint in the
-contract. Amendment 2 covers the path shape, the audit record and the code exchange
-together once Tarek answers.
+**Answered by Tarek: a tenant connects its own WABA.** Amendment 1 left three things open
+together — the path shape, the audit record, and the fact that `0002` records Embedded
+Signup as the onboarding path while TAR-66 accepts a pasted `accessToken` with no
+code-exchange endpoint anywhere in the contract. They are ruled here as one, because the
+answer to the first decides what the other two are attached to.
+
+The operator path stays. `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts` is
+the support and manual-onboarding fallback — a tenant whose Embedded Signup run fails at
+Meta still has to be got onto the platform by someone. What changes about it is the audit
+record, below, which it needs whether or not the tenant-facing route exists.
+
+#### The route
+
+```
+POST /api/v1/whatsapp/business-accounts    → ConnectedWhatsAppBusinessAccountResponse
+                                             channel:manage · 201 new · 200 updated
+```
+
+Tenant-facing, so it never names its own tenant in the path (decision 2), and it sits
+inside the ordinary request pipeline: `HostTenantGuard`, `AuthGuard`, `PermissionGuard`.
+No `@PlatformRoute()`, no second authentication scheme. A caller without `channel:manage`
+is `forbidden` by stage 5 before the handler exists, which is the same tenant-isolation
+guarantee every other tenant-scoped route gets, from the same mechanism.
+
+The request body is **not** a WABA payload:
+
+```ts
+{
+  code: string,          // Meta's exchangeable token code, from the browser
+  wabaId: string,        // what Embedded Signup told the browser it granted
+  phoneNumberId?: string // ditto; a hint, not the source of truth
+}
+```
+
+`accessToken` does not appear, and no tenant-facing schema in `whatsapp.ts` will ever
+publish one. The browser never holds a WABA token: Embedded Signup hands it a code, the
+code goes to us, and the exchange is server-to-server with the app secret — which is the
+whole reason the flow returns a code rather than a token.
+
+`ConnectWhatsAppBusinessAccountInputSchema` is unchanged and stays the **operator** input.
+Two schemas rather than one union with an either-`code`-or-`accessToken` refinement: they
+are different credentials arriving from different principals through different guards, and
+collapsing them would put "a pasted token is acceptable here" one boolean away from a
+tenant-facing route.
+
+#### The code has a 30-second life, and that shapes the endpoint
+
+_Verified against Meta's documentation on 2026-08-11; re-verify at implementation time._
+The exchangeable token code has a **time-to-live of 30 seconds**. Three consequences, none
+of them optional:
+
+- **Nothing queues.** The exchange happens inside the request, synchronously. A job that
+  picks the code up two seconds later is a job that sometimes picks it up thirty-one
+  seconds later, and the tenant sees a connection that failed for no reason they can see.
+- **The `POST` is not retryable and takes no `Idempotency-Key`.** Replaying it replays a
+  spent code, which fails at Meta. The retry unit is the _flow_, not the request: the
+  console re-runs Embedded Signup and gets a new code. That is what the error taxonomy
+  below has to say, because "try again" pointed at the wrong thing is worse than nothing.
+- **The underlying operation is still idempotent on `wabaId`.** Connecting the same WABA
+  twice through two completed flows updates one row, exactly as the operator path does —
+  which is also how a tenant rotates a credential Meta has invalidated.
+
+#### What the server trusts, and what it verifies
+
+`wabaId` arrives from the browser, and the browser is not an authority on which WABA a
+token covers. It is treated as an assertion and checked: the server exchanges the code,
+then reads that WABA back **with the token it just received**. A token that cannot read
+the WABA the caller named ends the request — no row, no stored credential.
+
+The phone numbers are then read from Meta rather than accepted from the request. This is
+not only a trust argument: `display_phone_number`, `verified_name` and the WABA's own name
+and verification status are fields `ConnectBusinessAccountCommand` requires and the browser
+does not have. One authority for what was connected, and it is the same authority that
+issued the token.
+
+_Rejected — take `{ code }` alone and discover the WABA from the token._ Meta exposes the
+granted target ids on the token, so this is possible, and it is the shape to move to if the
+`wabaId` assertion turns out to be unreliable. Rejected for now because it needs a
+verification pass of its own on a documented-but-unconfirmed response shape, and it removes
+nothing: the read-back calls happen either way, to hydrate the row.
+
+_Rejected — let the browser post the whole payload it observed._ It is one call cheaper and
+it makes the most sensitive row in the schema describable by a client.
+
+#### Failure leaves nothing behind
+
+Every Meta call — exchange, read-back, number list — happens **before**
+`WhatsAppBusinessAccountConnectionService.connect()` is entered. The transaction, the
+advisory lock on `wabaId`, the encryption and the audit row are untouched by this
+amendment: they run once there is a verified token and a hydrated payload, or they do not
+run at all. A failed exchange leaves no partial WABA row because there was never a
+transaction to leave one in.
+
+That is why `connect()`'s "it does not call Meta" property survives this. It was written
+about a **connection**, and it holds: what calls Meta here is the code exchange, which is
+by definition a Meta operation and cannot be made independent of Meta's availability.
+
+The failures are published rather than folded into `validation_failed`, because the
+console's next action differs per case and a single code cannot carry it:
+
+| `code`                   | `details.reason`           | What the console does                       |
+| ------------------------ | -------------------------- | ------------------------------------------- |
+| `whatsapp_signup_failed` | `code_expired`             | Re-run Embedded Signup — do not retry this  |
+| `whatsapp_signup_failed` | `code_invalid`             | Re-run Embedded Signup                      |
+| `whatsapp_signup_failed` | `insufficient_permissions` | Re-run and grant the missing permissions    |
+| `whatsapp_signup_failed` | `waba_mismatch`            | Support: the grant does not cover this WABA |
+| `conflict`               | —                          | That WABA is connected elsewhere            |
+| `rate_limited`           | —                          | Meta throttled us; wait                     |
+| `upstream_unavailable`   | —                          | Meta is down; retry the flow later          |
+
+`whatsapp_send_failed` is deliberately not reused: nothing was sent, and an operator
+reading it in a log would go looking for a message. Adding a code is safe by construction —
+`ApiErrorSchema.code` is a plain string precisely so yesterday's bundle does not hard-fail
+on today's value.
+
+#### Webhook subscription is part of connecting
+
+A WABA connected without `POST /{waba-id}/subscribed_apps` receives nothing: no inbound
+message ever reaches `/api/webhooks/whatsapp`, and the row looks perfectly healthy while
+the inbox stays empty. The operator path gets away with not calling it because an operator
+doing manual onboarding is standing in Meta's UI anyway. **In self-service there is nobody
+to do it**, so the subscription is part of this endpoint's work, on the token it just
+obtained, before the transaction opens.
+
+_Deferred, and flagged rather than assumed:_ registering the phone number for Cloud API use
+(`POST /{phone-number-id}/register`, `messaging_product` and a six-digit `pin`). It needs a
+PIN, which is a credential of its own with its own storage and rotation question, and the
+answer may be that the tenant supplies it in the console rather than that we generate one.
+Until that is ruled, a self-service connection can receive and read but a number that was
+never registered cannot send — which is a visible, explainable state, unlike a silent
+inbox.
+
+#### The audit record — who, on both paths
+
+TAR-66 already writes an `audit_logs` row on connection. What it cannot write is **who**:
+`actor_user_id` is null on the operator path because the operator is not a user in the
+tenant, and `PlatformAdminGuard` is one shared secret with no identity behind it. "Someone
+with the token connected a customer's Meta credential" is not an audit trail.
+
+Three changes, and they apply to both paths:
+
+1. **`audit_logs` gains `actor_type` and `actor_label`.** `actor_type` is
+   `user | platform_operator | system | unattributed`; `actor_label` names the operator
+   credential when `actor_type` is `platform_operator`, and is null otherwise. Existing
+   rows backfill to `user` where `actor_user_id` is set and to `unattributed` where it is
+   not — honest about the fact that nothing recorded who, rather than back-dating an
+   attribution nobody made. New code never writes `unattributed`.
+
+   _Rejected — put the actor in `metadata`._ It is additive and needs no migration, and it
+   makes "everything this operator did" a `jsonb` scan of the one table an auditor filters
+   for a living. Columns, indexed with `(tenant_id, actor_type, created_at DESC)`.
+
+2. **Platform-admin credentials get names.** `PLATFORM_ADMIN_TOKEN` becomes a set of
+   `label:secret` entries; the guard compares the presented value against every entry —
+   without an early exit, so which one matched is not timing-observable — and publishes the
+   matching label on the request scope. Everything the guard's own comment promises stays:
+   fail-closed with nothing configured, constant-time comparison, no session.
+
+   _Rejected — accept the unlabelled form during a transition._ It keeps the exact hole
+   this closes open for an unbounded window. The variable is set by us, in environments
+   with no live tenants, and a boot that refuses an unlabelled token is one deploy.
+
+3. **The write goes through `AuditService`.** TAR-66 calls `tx.auditLog.create` directly
+   with a locally-declared action string, which is how a closed vocabulary stops being
+   closed. `whatsapp.business_account.connected` moves into `AUDIT_ACTIONS` **at the same
+   string value** — rows carrying it already exist and an auditor filtering the history has
+   to keep finding them — `targetType` widens to include `whatsapp_business_account`, and
+   the actor comes from the request scope rather than from an argument, which is the rule
+   that stops a service attributing a change to the wrong person.
+
+What the row records is unchanged in one respect, stated because it is the point: **never
+the token, encrypted or not, and never the code.**
+
+#### Configuration
+
+| Variable                         | Status | Purpose                                                     |
+| -------------------------------- | ------ | ----------------------------------------------------------- |
+| `META_APP_ID`                    | new    | `client_id` on the exchange                                 |
+| `WHATSAPP_APP_SECRET`            | reuse  | `client_secret` on the exchange                             |
+| `META_EMBEDDED_SIGNUP_CONFIG_ID` | new    | The Facebook Login for Business config the console launches |
+
+`WHATSAPP_APP_SECRET` is reused rather than duplicated: it is the same Meta app secret that
+verifies `X-Hub-Signature-256`, and a second variable holding the same value is a rotation
+that silently half-applies. Both new variables are optional in the schema and fail closed
+at the route — an environment without them answers `whatsapp_signup_failed` /
+`insufficient_permissions` on this endpoint and is otherwise unaffected, the same shape
+`WHATSAPP_TOKEN_ENCRYPTION_KEY` already uses. The exchange itself is
+`GET /oauth/access_token` with `client_id`, `client_secret` and `code`, and no
+`redirect_uri` — it is the JS-SDK flow, not a redirect flow.
+
+The console's half is `FB.login` with `config_id`, `response_type: 'code'` and
+`override_default_response_type: true`, plus a `message` listener for
+`{ type: 'WA_EMBEDDED_SIGNUP', event: 'FINISH' | 'CANCEL' | 'ERROR', data: { waba_id,
+phone_number_id, ... } }`. `META_APP_ID` and `META_EMBEDDED_SIGNUP_CONFIG_ID` reach the
+browser as public configuration — neither is a secret — and Meta's SDK origin has to be
+allowed by the console's `script-src`.
+
+_Needs verification at implementation time, against Meta's current documentation and not
+asserted here:_
+
+- **The permission scopes on the Login-for-Business configuration.** The expected set is
+  WhatsApp business management and messaging plus business management, and the exact names
+  and access levels are Meta's to state.
+- **Whether `appsecret_proof` is required** on calls made with the business token. It
+  depends on an app-level setting, and a wrong answer fails every Graph call in this path.
+- **Whether the business integration system user token expires.** The schema has no
+  `token_expires_at` column and the send path assumes a credential that keeps working. If
+  verification says otherwise, that column and a refresh path are a follow-up story, not a
+  detail — flag it rather than absorbing it.
+- **The `FINISH` variants.** `FINISH_ONLY_WABA` and `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`
+  are documented alongside `FINISH`; which of them this product accepts decides what the
+  console does with a run that ends in one.
 
 ### Amendment 3 — media (TAR-20e)
 
