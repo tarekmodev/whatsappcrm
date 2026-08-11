@@ -52,11 +52,27 @@ describe('navigation visibility by role', () => {
     expect(ids).toContain('settings-assignment');
   });
 
+  /**
+   * TAR-169: the WhatsApp connection surface is gated on `channel:manage`, which
+   * the contract's table gives to admin alone. A supervisor never sees a link to
+   * a page whose only action the API would refuse.
+   */
+  it('keeps the WhatsApp connection surface to the role that may connect one', () => {
+    expect(navIdsFor('admin')).toContain('settings-whatsapp');
+    expect(navIdsFor('supervisor')).not.toContain('settings-whatsapp');
+    expect(navIdsFor('agent')).not.toContain('settings-whatsapp');
+  });
+
   it('gives an admin every entry', () => {
     const ids = navIdsFor('admin');
 
     expect(ids).toEqual(
-      expect.arrayContaining(['inbox', 'settings-people', 'settings-assignment']),
+      expect.arrayContaining([
+        'inbox',
+        'settings-people',
+        'settings-assignment',
+        'settings-whatsapp',
+      ]),
     );
   });
 

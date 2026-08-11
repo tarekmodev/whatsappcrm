@@ -3,6 +3,9 @@ import type {
   ConversationStatus,
   TenantRole,
   UserStatus,
+  WhatsAppAccountStatus,
+  WhatsAppBusinessVerificationStatus,
+  WhatsAppQualityRating,
 } from '@whatsappcrm/contracts';
 
 /**
@@ -30,6 +33,7 @@ export const content = {
     settings: 'Settings',
     people: 'People',
     assignment: 'Assignment',
+    whatsapp: 'WhatsApp',
     security: 'Security',
   },
 
@@ -236,6 +240,143 @@ export const content = {
     unassignedEmptyBody: 'Every conversation in this workspace has an owner.',
     unassignedCount: (count: number) =>
       count === 1 ? '1 conversation waiting' : `${count} conversations waiting`,
+  },
+
+  whatsapp: {
+    title: 'WhatsApp',
+    subtitle: 'Connect this workspace to your WhatsApp Business Account.',
+    loading: 'Loading WhatsApp settings',
+
+    connectHeading: 'WhatsApp Business Account',
+    connectDescription:
+      'Meta hosts this connection. You sign in to Meta, choose the business account and the number, and come straight back here.',
+    connectIntro:
+      'Connecting brings your WhatsApp numbers into this workspace, so conversations arrive in the inbox and your team replies from here. Nothing is shared with Meta beyond what you approve in their window.',
+    connectButton: 'Connect WhatsApp',
+    connectAnotherButton: 'Connect another account',
+    /** Shown while Meta's own window is open — the wait belongs to them, not to us. */
+    authorisingHeading: 'Waiting for Meta',
+    authorisingBody:
+      'Finish the steps in Meta’s window. If you cannot see it, check for a blocked pop-up.',
+    /**
+     * The interval between Meta returning and the workspace being connected.
+     * Worth its own line: the authorisation Meta hands back is valid for about 30
+     * seconds, so this is the one moment nobody should navigate away.
+     */
+    connectingHeading: 'Finishing the connection',
+    connectingBody:
+      'Meta has authorised the connection and we are setting it up. Stay on this page — it only takes a moment.',
+
+    unconfiguredHeading: 'Self-service connection is not set up',
+    unconfiguredBody:
+      'This console has no Meta app configured for connecting WhatsApp yourself. Contact support and they can connect your WhatsApp Business Account for you.',
+
+    connectedHeading: 'Connected account',
+    connectedToast: (name: string) => `${name} connected`,
+    connectedNumbersCaption: 'Connected WhatsApp numbers',
+    connectedNumbersCount: (count: number) =>
+      count === 1 ? '1 connected number' : `${count} connected numbers`,
+    columnNumber: 'Number',
+    columnVerifiedName: 'Verified name',
+    columnQuality: 'Quality rating',
+    columnNumberStatus: 'Status',
+    wabaIdLabel: 'Meta business account ID',
+    unnamedAccount: 'WhatsApp Business Account',
+    noVerifiedName: 'Not set yet',
+    noQualityRating: 'Not rated yet',
+    /**
+     * The gap Phase 6 (TAR-170) is parked on, said plainly rather than left to be
+     * discovered as "sending is broken": a number Meta never registered for Cloud
+     * API use can receive here but cannot send.
+     */
+    registrationNotice:
+      'A number that has never been registered for the WhatsApp Cloud API can receive messages here but cannot send yet. Contact support to finish registering it.',
+
+    verificationStatuses: {
+      not_verified: 'Not verified',
+      pending: 'Verification pending',
+      verified: 'Verified',
+      rejected: 'Verification rejected',
+    } satisfies Record<WhatsAppBusinessVerificationStatus, string>,
+
+    qualityRatings: {
+      green: 'High',
+      yellow: 'Medium',
+      red: 'Low',
+      // Meta's own value: it has rated the number and cannot place it.
+      unknown: 'Unrated by Meta',
+    } satisfies Record<WhatsAppQualityRating, string>,
+
+    accountStatuses: {
+      connected: 'Connected',
+      disconnected: 'Disconnected',
+      error: 'Error',
+    } satisfies Record<WhatsAppAccountStatus, string>,
+
+    /**
+     * One entry per outcome the connection flow can end in, keyed by
+     * `WhatsAppConnectFailure`. Distinct copy per key is the point of the
+     * `details.reason` taxonomy: "something went wrong" would throw away the one
+     * thing that tells somebody whether to try again, grant a permission, or
+     * call support (0002, amendment 2).
+     *
+     * Whether a key offers the button again is `isConnectFailureRetryable`'s
+     * decision, not this table's — copy stays copy.
+     */
+    connectFailures: {
+      code_expired: {
+        heading: 'The connection took too long',
+        body: 'Meta’s authorisation is valid for about 30 seconds. Start again and complete Meta’s steps without pausing.',
+      },
+      code_invalid: {
+        heading: 'Meta rejected this authorisation',
+        body: 'Start the connection again to get a fresh authorisation from Meta.',
+      },
+      insufficient_permissions: {
+        heading: 'Some permissions were not granted',
+        body: 'This connection needs WhatsApp business management, WhatsApp messaging and business management. Start again and accept every permission Meta asks for.',
+      },
+      waba_mismatch: {
+        heading: 'That business account could not be read',
+        body: 'The access Meta granted does not cover the WhatsApp Business Account it named. Contact support — starting again will not change this.',
+      },
+      signup_failed: {
+        heading: 'The connection could not be completed',
+        body: 'Meta accepted the sign-in but the account could not be set up. Start again, and contact support if it happens twice.',
+      },
+      meta_error: {
+        heading: 'Meta could not complete the connection',
+        body: 'Meta reported a problem part-way through. Start again, and contact support if it keeps happening.',
+      },
+      conflict: {
+        heading: 'That account is already connected',
+        body: 'This WhatsApp Business Account or one of its numbers belongs to another workspace. Contact support to move it.',
+      },
+      rate_limited: {
+        heading: 'Meta is limiting requests right now',
+        body: 'Too many requests reached Meta just now. Wait a few minutes, then start the connection again.',
+      },
+      upstream_unavailable: {
+        heading: 'Meta is not responding',
+        body: 'Meta could not be reached. Start the connection again shortly.',
+      },
+      forbidden: {
+        heading: 'You cannot connect an account',
+        body: 'Your role no longer includes managing channels. Ask a workspace admin.',
+      },
+      cancelled: {
+        heading: 'Connection cancelled',
+        body: 'Meta’s window closed before the connection finished. Start again whenever you are ready.',
+      },
+      sdk_unavailable: {
+        heading: 'Meta’s connection window could not load',
+        body: 'Something blocked Meta’s script — an ad blocker or a strict privacy setting is the usual cause. Allow connect.facebook.net, reload this page, and try again.',
+      },
+      unknown: {
+        heading: 'We could not complete the connection',
+        body: 'Something went wrong on the way to Meta. Start the connection again.',
+      },
+    },
   },
 
   auth: {
