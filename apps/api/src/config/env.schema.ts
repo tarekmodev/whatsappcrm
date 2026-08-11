@@ -61,6 +61,19 @@ const envShape = z.object({
   PLATFORM_DOMAIN: z.string().min(1).default('app.localhost'),
 
   /**
+   * The scheme put in front of a tenant's hostname when an email has to carry an
+   * absolute link back into the product — the invite and password-reset links
+   * (TAR-53, link shapes).
+   *
+   * Configuration rather than a branch on the environment name: `https` is the
+   * only correct answer anywhere the platform is deployed, and `http` is needed
+   * only on a local machine where nothing is serving TLS. A service that decided
+   * this by reading `DEPLOY_ENV` would be one `if` away from mailing a plaintext
+   * link into production.
+   */
+  APP_LINK_SCHEME: z.enum(['http', 'https']).default('https'),
+
+  /**
    * Bearer credential for `/api/v1/admin/*`. Optional here and **absent means
    * the whole admin surface refuses every request** — an environment that has
    * not been given a token cannot provision tenants, which is the safe default

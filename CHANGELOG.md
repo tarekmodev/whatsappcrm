@@ -29,6 +29,20 @@ change.
   resolve through a shared Redis cache with a 60-second TTL and fall back to Postgres when
   it is absent. New: `SESSION_COOKIE_SECURE` (the API refuses to boot with it off under
   `NODE_ENV=production`). (TAR-56)
+- **Password reset and password change** — `POST /api/v1/auth/password-reset` issues a
+  single-use, 60-minute link and answers 204 unconditionally, so it cannot be used to ask
+  whether an address has an account; `POST /api/v1/auth/password-reset/confirm` redeems it
+  once, sets the new password and revokes **every** session for that account;
+  `POST /api/v1/auth/password` changes a known password and revokes every session
+  **except the caller's own**. A dead link answers `token_invalid` (410) with the reason,
+  so the reset screen can offer a new one rather than a 404. Single-use is a conditional
+  `UPDATE … RETURNING` and every expiry is judged by the database's `now()`, so two
+  simultaneous redemptions cannot both win and a skewed node clock cannot revive a spent
+  link. Both flows hash through the same `PasswordService` login uses; the token itself is
+  never stored, only its SHA-256. `IdentityModule` also carries the `MAILER` seam —
+  `ConsoleMailer` renders the link to the log outside production, and a deployed
+  environment gets `UndeliverableMailer` until TAR-41 wires a provider. New optional
+  `APP_LINK_SCHEME` (default `https`) fixes the scheme on emailed links. (TAR-57)
 - **Backup coverage and a restore drill** — `docs/runbooks/backups.md` records what
   Render's continuous backup and point-in-time recovery actually cover per
   environment, how to restore, and the cadence for proving it. `pnpm db:restore-drill`

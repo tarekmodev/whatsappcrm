@@ -58,3 +58,51 @@ export class SessionNotFoundError extends Error {
     this.name = 'SessionNotFoundError';
   }
 }
+
+/**
+ * Why a reset link did not work, in TAR-53's vocabulary for `token_invalid`'s
+ * `details`.
+ *
+ *   * `unknown`  — no such token. A typo, a truncated link, or a guess.
+ *   * `expired`  — past `expires_at`.
+ *   * `consumed` — already redeemed. Single-use is the point.
+ *   * `revoked`  — the token is live, but its owner can no longer sign in.
+ */
+export const RESET_TOKEN_REJECTIONS = ['unknown', 'expired', 'consumed', 'revoked'] as const;
+
+export type ResetTokenRejection = (typeof RESET_TOKEN_REJECTIONS)[number];
+
+/**
+ * Telling the holder *why* their link failed leaks nothing. The token is 256
+ * bits of uniform entropy, so anyone able to ask this question already holds it
+ * — and the reset screen has to offer "request a new link", which it cannot do
+ * without knowing this is a dead link rather than a 404 page.
+ */
+const REJECTION_MESSAGES: Record<ResetTokenRejection, string> = {
+  unknown: 'This password reset link is not valid. Request a new one.',
+  expired: 'This password reset link has expired. Request a new one.',
+  consumed: 'This password reset link has already been used. Request a new one.',
+  revoked: 'This password reset link is no longer usable. Ask an administrator for access.',
+};
+
+export class ResetTokenInvalidError extends Error {
+  constructor(readonly reason: ResetTokenRejection) {
+    super(REJECTION_MESSAGES[reason]);
+    this.name = 'ResetTokenInvalidError';
+  }
+}
+
+/**
+ * The `currentPassword` on a password change did not match — or the account has
+ * no password set at all, which is an invited user who never accepted.
+ *
+ * One error for both, and one message, on the same reasoning login uses: a
+ * distinct answer for "you have no password yet" would be a fact about the
+ * account, and this endpoint is reachable by anyone holding a session cookie.
+ */
+export class CurrentPasswordIncorrectError extends Error {
+  constructor() {
+    super('The current password is incorrect.');
+    this.name = 'CurrentPasswordIncorrectError';
+  }
+}
