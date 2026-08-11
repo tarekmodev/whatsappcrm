@@ -39,6 +39,12 @@ export const AUDIT_ACTIONS = {
    * table an auditor reads.
    */
   authLockout: 'auth.lockout',
+  /**
+   * An admin clearing a lockout through `POST /users/{id}/unlock` (TAR-59).
+   * Written only when something was actually cleared, so a retried unlock does
+   * not leave a second row claiming an account was rescued twice.
+   */
+  authUnlock: 'auth.unlock',
   /** A forgotten password recovered through a reset link (TAR-57). */
   passwordResetCompleted: 'password.reset_completed',
   /** A signed-in user changing their own password (TAR-57). */

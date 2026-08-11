@@ -14,6 +14,23 @@ change.
 
 ### Added
 
+- **Brute-force protection an admin can see and clear** (TAR-59) — the lockout TAR-56
+  writes is now readable and reversible. `UserResponse` carries a `security` object
+  (`lockedUntil`, `failedLoginAttempts`) for callers holding `user:update`, and `null` for
+  everyone else, so an admin or supervisor can see who is locked out while an agent — who
+  also holds `user:read` — cannot watch a colleague's failures climb.
+  `POST /api/v1/users/{id}/unlock` clears it, is idempotent, and audits `auth.unlock` only
+  when it actually cleared something. Alongside the per-account counter, a per-address
+  sliding window in Redis (`AUTH_POLICY.ipFailureThreshold` failures per
+  `ipFailureWindowMs`, keyed by tenant **and** address) catches credential stuffing sprayed
+  at addresses that have no account here and so trip no per-account counter; it is checked
+  before the user lookup, so a blocked address never reaches an Argon2id verify. Both
+  layers answer `rate_limited` with `Retry-After` and the same message as each other, so
+  neither confirms an address exists. New: `LOGIN_IP_THROTTLE_ENABLED`, off by default —
+  `trust proxy` is deliberately unset, so behind a load balancer `request.ip` is the proxy
+  and one shared window would lock a whole tenant out. The per-account lockout does not
+  depend on it.
+
 - **Login and the session lifecycle** — `POST /api/v1/auth/login` authenticates an email
   and password against the tenant the request `Host` resolves to and issues an opaque
   256-bit session in a `__Host-wac_session` cookie; `GET /api/v1/auth/session` reads the

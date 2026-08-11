@@ -31,19 +31,51 @@ export class InvalidCredentialsError extends Error {
 }
 
 /**
- * The account has crossed `AUTH_POLICY.loginFailureThreshold` and is locked
- * until the window elapses.
+ * The caller has been throttled and should come back later.
  *
  * Answered as `rate_limited` (429) with `Retry-After`, deliberately not as a
  * distinct `account_locked` code: a code that only a real account can produce
  * confirms the address exists, which is the one thing `InvalidCredentialsError`
  * is careful not to say. A 429 says the useful half — come back later — without
  * the leak.
+ *
+ * Both subclasses carry **the same message** for the same reason. One is raised
+ * only for an account that exists and the other before any account is looked
+ * up, so two different messages would tell a caller which of the two happened,
+ * and that is the enumeration oracle again wearing a different hat.
  */
-export class AccountLockedError extends Error {
-  constructor(readonly retryAfterSeconds: number) {
+export abstract class RateLimitedError extends Error {
+  protected constructor(readonly retryAfterSeconds: number) {
     super('Too many failed sign-in attempts. Try again later.');
+    this.name = 'RateLimitedError';
+  }
+}
+
+/**
+ * The account has crossed `AUTH_POLICY.loginFailureThreshold` and is locked
+ * until the window elapses. Durable, per account, and visible to a tenant admin
+ * on `UserResponse.security` — see `LoginThrottleService`.
+ */
+export class AccountLockedError extends RateLimitedError {
+  constructor(retryAfterSeconds: number) {
+    super(retryAfterSeconds);
     this.name = 'AccountLockedError';
+  }
+}
+
+/**
+ * The requesting address has crossed `AUTH_POLICY.ipFailureThreshold` failures
+ * against this tenant inside `AUTH_POLICY.ipFailureWindowMs`.
+ *
+ * Raised **before** the account lookup, which is the whole point of the layer:
+ * credential stuffing sprays addresses that mostly have no user row, so there
+ * is nothing per-account to count. It says nothing about whether any of the
+ * addresses tried exists.
+ */
+export class TooManyAttemptsError extends RateLimitedError {
+  constructor(retryAfterSeconds: number) {
+    super(retryAfterSeconds);
+    this.name = 'TooManyAttemptsError';
   }
 }
 

@@ -1,6 +1,7 @@
 import { permissionsForRole, type SessionPrincipal, type TenantRole } from '@whatsappcrm/contracts';
 import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
+import { LoginThrottleService } from '../identity/login-throttle.service';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import { SessionRevocationService } from '../rbac/session-revocation.service';
 import {
@@ -53,6 +54,8 @@ interface FakeState {
   activeAdminIds: readonly string[];
   teams: readonly string[];
   memberships: readonly string[];
+  /** TAR-59's lockout state on the target, as the columns hold it. */
+  lockout?: { lockedUntil: Date | null; failedLoginAttempts: number };
 }
 
 interface Recorded {
@@ -63,6 +66,8 @@ interface Recorded {
   updates: Record<string, unknown>[];
   /** `where` clauses passed to `invite.updateMany` — the withdrawal on removal. */
   inviteWithdrawals: Record<string, unknown>[];
+  /** Users whose lockout `UsersService` asked `LoginThrottleService` to clear. */
+  unlockedUserIds: string[];
 }
 
 function buildService(state: FakeState): {
@@ -76,7 +81,10 @@ function buildService(state: FakeState): {
     purgedUserIds: [],
     updates: [],
     inviteWithdrawals: [],
+    unlockedUserIds: [],
   };
+
+  const lockout = state.lockout ?? { lockedUntil: null, failedLoginAttempts: 0 };
 
   const row = {
     id: TARGET,
@@ -88,12 +96,15 @@ function buildService(state: FakeState): {
     availability: 'offline',
     lastSeenAt: null,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    ...lockout,
     teamMemberships: state.memberships.map((teamId) => ({ teamId })),
   };
 
   const tx = {
     user: {
-      findUnique: () => Promise.resolve(state.target),
+      // The whole projection, not only what the invariant checks read: `unlock`
+      // maps the row it finds straight into a response.
+      findUnique: () => Promise.resolve(state.target === null ? null : { ...row, ...state.target }),
       findFirst: () => Promise.resolve(null),
       update: ({ data }: { data: Record<string, unknown> }) => {
         recorded.updates.push(data);
@@ -141,6 +152,8 @@ function buildService(state: FakeState): {
   };
 
   const prisma = {
+    // The non-transactional reads, for the paths that do not open one.
+    user: { findMany: () => Promise.resolve([row]) },
     $tenantTransaction: (work: (client: unknown) => Promise<unknown>) => work(tx),
   } as unknown as TenantPrisma;
 
@@ -164,8 +177,17 @@ function buildService(state: FakeState): {
     },
   } as unknown as SessionRevocationService;
 
+  const loginThrottle = {
+    clearAccountLock: (_tx: unknown, userId: string) => {
+      recorded.unlockedUserIds.push(userId);
+      // The real one reports whether the conditional `UPDATE` matched, which is
+      // what decides whether an audit row is written.
+      return Promise.resolve(lockout.lockedUntil !== null || lockout.failedLoginAttempts > 0);
+    },
+  } as unknown as LoginThrottleService;
+
   return {
-    users: new UsersService(prisma, tenantContext, audit, sessions),
+    users: new UsersService(prisma, tenantContext, audit, sessions, loginThrottle),
     recorded,
     tenantContext,
   };
@@ -460,6 +482,122 @@ describe('UsersService — role write invariants', () => {
           );
         },
       );
+    });
+  });
+});
+
+describe('UsersService — lockout visibility and unlock (TAR-59)', () => {
+  const lockedUntil = new Date('2026-08-11T09:15:00.000Z');
+  const lockedOut = { lockedUntil, failedLoginAttempts: 10 };
+
+  function withLockout(lockout: { lockedUntil: Date | null; failedLoginAttempts: number }) {
+    return buildService({
+      target: activeAgent,
+      activeAdminIds: [CALLER, TARGET],
+      teams: [],
+      memberships: [],
+      lockout,
+    });
+  }
+
+  describe('who may see it', () => {
+    it('shows an admin how close an account is to being locked out', async () => {
+      const { users, tenantContext } = withLockout(lockedOut);
+
+      const page = await asPrincipal(tenantContext, 'admin', () => users.list({ limit: 20 }));
+
+      expect(page.items[0]?.security).toEqual({
+        lockedUntil: lockedUntil.toISOString(),
+        failedLoginAttempts: 10,
+      });
+    });
+
+    it('tells an agent nothing, because every agent holds user:read', async () => {
+      const { users, tenantContext } = withLockout(lockedOut);
+
+      const page = await asPrincipal(tenantContext, 'agent', () => users.list({ limit: 20 }));
+
+      // Flat fields would give anyone in the tenant a live readout of a named
+      // colleague's failed attempts, and confirmation the moment they lock out.
+      expect(page.items[0]?.security).toBeNull();
+    });
+
+    it('shows a supervisor, who may administer the same people', async () => {
+      const { users, tenantContext } = withLockout(lockedOut);
+
+      const page = await asPrincipal(tenantContext, 'supervisor', () => users.list({ limit: 20 }));
+
+      expect(page.items[0]?.security).not.toBeNull();
+    });
+
+    it('reports an unlocked account as unlocked rather than as unknown', async () => {
+      const { users, tenantContext } = withLockout({ lockedUntil: null, failedLoginAttempts: 0 });
+
+      const page = await asPrincipal(tenantContext, 'admin', () => users.list({ limit: 20 }));
+
+      // Never `null` for somebody who may see it: an admin reading `null` could
+      // not tell "not locked" from "not allowed to know".
+      expect(page.items[0]?.security).toEqual({ lockedUntil: null, failedLoginAttempts: 0 });
+    });
+  });
+
+  describe('clearing it', () => {
+    it('clears the lockout and answers with the cleared state', async () => {
+      const { users, tenantContext, recorded } = withLockout(lockedOut);
+
+      const response = await asPrincipal(tenantContext, 'admin', () => users.unlock(TARGET));
+
+      expect(recorded.unlockedUserIds).toEqual([TARGET]);
+      expect(response.security).toEqual({ lockedUntil: null, failedLoginAttempts: 0 });
+      expect(recorded.audits.map((entry) => entry.action)).toEqual(['auth.unlock']);
+    });
+
+    it('records what it cleared, so the trail distinguishes a lockout from a creeping counter', async () => {
+      const { users, tenantContext, recorded } = withLockout(lockedOut);
+
+      await asPrincipal(tenantContext, 'admin', () => users.unlock(TARGET));
+
+      expect(recorded.audits[0]?.metadata).toEqual({
+        failedAttemptsCleared: 10,
+        wasLockedUntil: lockedUntil.toISOString(),
+      });
+    });
+
+    it('is a no-op on an account that was never locked, and is not audited as one', async () => {
+      const { users, tenantContext, recorded } = withLockout({
+        lockedUntil: null,
+        failedLoginAttempts: 0,
+      });
+
+      const response = await asPrincipal(tenantContext, 'admin', () => users.unlock(TARGET));
+
+      expect(response.security).toEqual({ lockedUntil: null, failedLoginAttempts: 0 });
+      // A retried unlock must not leave a second row claiming the same account
+      // was rescued twice.
+      expect(recorded.audits).toEqual([]);
+    });
+
+    it('refuses an id that is not in this tenant', async () => {
+      const { users, tenantContext } = buildService({
+        target: null,
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+      });
+
+      // `not_found`, never `forbidden` — RLS makes "absent" and "somebody
+      // else's" the same answer, and a 403 would confirm the id exists.
+      await expect(
+        asPrincipal(tenantContext, 'admin', () => users.unlock(TARGET)),
+      ).rejects.toBeInstanceOf(UserNotFoundError);
+    });
+
+    it('leaves the account signed in: a lockout is not a compromise', async () => {
+      const { users, tenantContext, recorded } = withLockout(lockedOut);
+
+      await asPrincipal(tenantContext, 'admin', () => users.unlock(TARGET));
+
+      expect(recorded.revokedUserIds).toEqual([]);
     });
   });
 });

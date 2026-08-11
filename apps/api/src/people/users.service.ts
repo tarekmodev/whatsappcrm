@@ -13,9 +13,10 @@ import { AUDIT_ACTIONS } from '../audit/audit.actions';
 import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { Prisma } from '../generated/prisma/client';
+import { LoginThrottleService } from '../identity/login-throttle.service';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { SessionRevocationService } from '../rbac/session-revocation.service';
-import { toUserResponse, type UserRow } from './people.mapper';
+import { toUserResponse, type UserRow, type UserSecurityRow } from './people.mapper';
 import { LastAdminRequiredError, SelfRoleChangeError, UserNotFoundError } from './people.errors';
 import { assertRoleAssignable } from './role-assignment';
 import { assertTeamsExist } from './team-references';
@@ -36,6 +37,14 @@ const USER_PROJECTION = {
   availability: true,
   lastSeenAt: true,
   createdAt: true,
+  // Two more scalars out of a tuple already being read, so this costs no extra
+  // I/O — and the projection is not what gates them. `toUserResponse` takes the
+  // security state as a *separate argument*, so a handler that forgets the
+  // permission check gets `null` rather than a leak, and the alternative — a
+  // conditional `select` — would make the row type a union at every call site
+  // for nothing.
+  lockedUntil: true,
+  failedLoginAttempts: true,
   // Prisma resolves this as one batched `IN` over the page's users, not one
   // query per row, and it is served by TAR-80's `(tenant_id, user_id, team_id)`
   // index without touching the heap.
@@ -71,6 +80,7 @@ export class UsersService {
     private readonly tenantContext: TenantContextService,
     private readonly audit: AuditService,
     private readonly sessions: SessionRevocationService,
+    private readonly loginThrottle: LoginThrottleService,
   ) {}
 
   /**
@@ -101,7 +111,7 @@ export class UsersService {
       take: query.limit + 1,
     });
 
-    return toPage(rows, query.limit);
+    return toPage(rows, query.limit, this.maySeeSecurity());
   }
 
   /**
@@ -164,6 +174,7 @@ export class UsersService {
         input.teamIds === undefined
           ? after
           : { ...after, teamMemberships: input.teamIds.map((teamId) => ({ teamId })) },
+        this.securityFor(after),
       );
     });
 
@@ -298,6 +309,53 @@ export class UsersService {
   }
 
   /**
+   * `POST /users/{id}/unlock` — clears a brute-force lockout (TAR-59).
+   *
+   * The counterpart to the lockout being *visible*: an admin who can see that
+   * an agent is locked out needs a way to let them back in before the window
+   * elapses, otherwise "observable" means "watch them wait". `user:update`,
+   * the same permission that reveals the state.
+   *
+   * Idempotent, and audited only when it actually cleared something. It does
+   * not revoke sessions and does not touch the password: an account is locked
+   * because somebody was guessing, which says nothing about whether the
+   * credential is still good.
+   */
+  async unlock(userId: string): Promise<UserResponse> {
+    return this.prisma.$tenantTransaction(async (tx) => {
+      const row = await tx.user.findUnique({ where: { id: userId }, select: USER_PROJECTION });
+
+      if (row === null) {
+        // Absent, or in another tenant — RLS makes the two indistinguishable.
+        throw new UserNotFoundError(userId);
+      }
+
+      const cleared = await this.loginThrottle.clearAccountLock(tx, userId);
+
+      if (cleared) {
+        await this.audit.record(tx, {
+          action: AUDIT_ACTIONS.authUnlock,
+          targetType: 'user',
+          targetId: userId,
+          // What was cleared, so the trail distinguishes "unlocked a locked
+          // account" from "reset a counter that was creeping up".
+          metadata: {
+            failedAttemptsCleared: row.failedLoginAttempts,
+            wasLockedUntil: row.lockedUntil?.toISOString() ?? null,
+          },
+        });
+
+        this.logger.log(`Unlocked user ${userId}`);
+      }
+
+      // The post-state, which this transaction just wrote — not a second read.
+      // Never gated: the route requires `user:update`, so a caller who reached
+      // it may see it by definition.
+      return toUserResponse(row, { lockedUntil: null, failedLoginAttempts: 0 });
+    });
+  }
+
+  /**
    * `PATCH /users/me/availability`. No permission: the resource is the caller.
    *
    * Deliberately not reachable for anybody else's availability. Auto-assignment
@@ -314,7 +372,25 @@ export class UsersService {
       select: USER_PROJECTION,
     });
 
-    return toUserResponse(row);
+    return toUserResponse(row, this.securityFor(row));
+  }
+
+  /**
+   * Whether the caller may be told about lockout state at all (TAR-53).
+   *
+   * `user:read` is held by every agent, so flat lockout fields on a people list
+   * would give anyone in the tenant a live readout of how close a named
+   * colleague is to being locked out, and confirmation when it lands. TAR-35
+   * asks for a lockout observable to a tenant *admin* — which in the permission
+   * vocabulary is whoever may administer that person, `user:update`.
+   */
+  private maySeeSecurity(): boolean {
+    return this.tenantContext.requirePrincipal().permissions.includes('user:update');
+  }
+
+  /** The security state to publish for one row: the real thing, or nothing. */
+  private securityFor(row: UserSecurityRow): UserSecurityRow | null {
+    return this.maySeeSecurity() ? row : null;
   }
 
   /** Invariants 1 and 2, applied to a role write on an existing user. */
@@ -498,14 +574,17 @@ function searchFilter(q: string): Prisma.UserWhereInput {
   };
 }
 
-function toPage(rows: readonly UserRow[], limit: number): CursorPage<UserResponse> {
+function toPage(
+  rows: readonly (UserRow & UserSecurityRow)[],
+  limit: number,
+  withSecurity: boolean,
+): CursorPage<UserResponse> {
   const items = rows.slice(0, limit);
 
   return {
     // Arrow, not a bare reference: `map` would pass the index as the second
-    // argument, which is `security` (TAR-53). The list omits lockout state —
-    // `user:read` is an agent permission, and only `user:update` may see it.
-    items: items.map((row) => toUserResponse(row)),
+    // argument, which is `security` (TAR-53).
+    items: items.map((row) => toUserResponse(row, withSecurity ? row : null)),
     nextCursor: rows.length > limit ? (items.at(-1)?.id ?? null) : null,
   };
 }

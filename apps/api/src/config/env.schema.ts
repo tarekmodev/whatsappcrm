@@ -137,6 +137,24 @@ const envShape = z.object({
    */
   SESSION_COOKIE_SECURE: z.stringbool().default(true),
 
+  /**
+   * Whether `request.ip` is the address of the **client**, which is what
+   * decides whether the per-address login failure window (TAR-59) is enforced.
+   *
+   * Off by default, and that default is the safe one rather than the timid one.
+   * Express `trust proxy` is deliberately not set — `HostTenantGuard` depends on
+   * `Host` being unforgeable — so behind a load balancer `request.ip` is the
+   * *proxy's* address and every agent in a tenant shares one window. Twenty
+   * failed sign-ins would then lock the whole tenant out of logging in for
+   * fifteen minutes, which is a denial of service dressed as a control.
+   *
+   * Turn it on where the API terminates connections from clients directly, or
+   * once the forwarded-address question `HostTenantGuard` defers has been
+   * decided. Nothing else changes: the durable per-account lockout is
+   * unconditional and is the layer that protects an individual account.
+   */
+  LOGIN_IP_THROTTLE_ENABLED: z.stringbool().default(false),
+
   // ---------------------------------------------------------------------------
   // WhatsApp webhook ingestion (TAR-20)
   //
