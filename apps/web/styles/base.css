@@ -1,0 +1,104 @@
+/*
+ * Reset plus base element styles. This is the only global stylesheet in the app;
+ * everything else is a colocated CSS Module.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  /* iOS Safari zooms the page on input focus below 16px; the body scale is 1rem. */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--color-canvas);
+  color: var(--color-on-surface);
+  font-family: var(--font-family-body);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: var(--line-height-heading);
+  font-weight: var(--font-weight-strong);
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--font-size-heading-lg);
+}
+
+h2 {
+  font-size: var(--font-size-heading-md);
+}
+
+h3 {
+  font-size: var(--font-size-heading-sm);
+}
+
+p {
+  text-wrap: pretty;
+}
+
+img,
+picture,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+code,
+kbd,
+samp {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.15em;
+}
+
+/*
+ * One focus style for the whole app, defined once so no component can ship an
+ * invisible one. `:focus-visible` keeps it off mouse clicks.
+ */
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--radius-sm);
+}
+
+/* Set by the drawer and modal while open, so only one place owns scroll locking. */
+body[data-scroll-locked='true'] {
+  overflow: hidden;
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
+}

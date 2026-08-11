@@ -1,0 +1,52 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-inline: var(--space-2);
+  padding-block: var(--space-1);
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-tight);
+  white-space: nowrap;
+}
+
+.badge[data-tone='neutral'] {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+  color: var(--color-on-surface-muted);
+}
+
+.badge[data-tone='accent'] {
+  background: var(--color-accent-subtle);
+  color: var(--color-on-accent-subtle);
+}
+
+.badge[data-tone='success'] {
+  background: var(--color-success-subtle);
+  color: var(--color-on-success-subtle);
+}
+
+.badge[data-tone='warning'] {
+  background: var(--color-warning-subtle);
+  color: var(--color-on-warning-subtle);
+}
+
+.badge[data-tone='danger'] {
+  background: var(--color-danger-subtle);
+  color: var(--color-on-danger-subtle);
+}
+
+.badge[data-tone='info'] {
+  background: var(--color-info-subtle);
+  color: var(--color-on-info-subtle);
+}
+
+/* In forced-colors mode the tone backgrounds are dropped, so the border is what
+   keeps the badge readable as a discrete object. */
+@media (forced-colors: active) {
+  .badge {
+    border-color: CanvasText;
+  }
+}

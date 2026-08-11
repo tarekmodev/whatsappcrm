@@ -1,0 +1,37 @@
+.grid {
+  display: grid;
+  gap: var(--auto-grid-gap);
+  /*
+   * `min()` keeps the track from exceeding the viewport on a 320px screen, which
+   * a bare `minmax(18rem, 1fr)` would do and would cause horizontal scroll.
+   */
+  grid-template-columns: repeat(auto-fit, minmax(min(var(--auto-grid-min-item), 100%), 1fr));
+}
+
+.grid[data-gap='1'] {
+  --auto-grid-gap: var(--space-1);
+}
+
+.grid[data-gap='2'] {
+  --auto-grid-gap: var(--space-2);
+}
+
+.grid[data-gap='3'] {
+  --auto-grid-gap: var(--space-3);
+}
+
+.grid[data-gap='4'] {
+  --auto-grid-gap: var(--space-4);
+}
+
+.grid[data-gap='5'] {
+  --auto-grid-gap: var(--space-5);
+}
+
+.grid[data-gap='6'] {
+  --auto-grid-gap: var(--space-6);
+}
+
+.grid[data-gap='7'] {
+  --auto-grid-gap: var(--space-7);
+}

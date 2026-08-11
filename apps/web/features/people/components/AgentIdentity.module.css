@@ -1,0 +1,18 @@
+.identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.name {
+  font-weight: var(--font-weight-medium);
+  /* A long name wraps rather than widening the column past the viewport. */
+  overflow-wrap: anywhere;
+}
+
+.email {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}

@@ -1,0 +1,31 @@
+.error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  /* Same floor as EmptyState so error and empty are interchangeable in a slot. */
+  min-block-size: var(--space-8);
+  padding-block: var(--space-6);
+  padding-inline: var(--space-4);
+  background: var(--color-danger-subtle);
+  border: var(--border-hairline) solid var(--color-danger);
+  border-radius: var(--radius-md);
+  color: var(--color-on-danger-subtle);
+  text-align: center;
+}
+
+.heading {
+  font-weight: var(--font-weight-strong);
+}
+
+.body {
+  max-inline-size: 40ch;
+  font-size: var(--font-size-body-sm);
+}
+
+.requestId {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  opacity: 0.8;
+}

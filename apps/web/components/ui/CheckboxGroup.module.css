@@ -1,0 +1,79 @@
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  padding: 0;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.hint {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  /* The whole row is the target, so it clears 44px without a spacer. */
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-3);
+  padding-block: var(--space-2);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .option:hover {
+    background: var(--color-surface-hover);
+  }
+}
+
+.option:has(.checkbox:checked) {
+  background: var(--color-accent-subtle);
+  border-color: var(--color-accent);
+}
+
+.checkbox {
+  inline-size: var(--space-4);
+  block-size: var(--space-4);
+  margin-block-start: var(--space-1);
+  accent-color: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.optionText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.optionLabel {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.optionHint {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}

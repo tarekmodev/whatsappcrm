@@ -6,12 +6,15 @@ WhatsApp Business Cloud API.
 > **Status: early.** This repository contains the project skeleton, the stack decision, the
 > local development harness, the database schema, its tenant isolation, the two Prisma
 > clients that enforce it, the platform admin surface that provisions and deactivates
-> tenants, and the first product path end to end — inbound WhatsApp webhooks. Feature work
-> is tracked as the TAR-18 epic. The database has **tables but almost no rows**: the data
-> model landed with TAR-47, row-level security with TAR-48, the client split with TAR-49,
-> provisioning and deactivation with TAR-50 and TAR-51, the WhatsApp Business Account
-> entity with TAR-52, webhook ingestion with TAR-20, and seed data arrives with TAR-46.
-> Everything below works today.
+> tenants, and the first product path end to end — inbound WhatsApp webhooks. On the
+> frontend it contains the design-token and component foundation plus the agent/team/role
+> management console (TAR-82), which currently reads fixtures rather than the API — see
+> [Interim state](#interim-state-mock-api-and-stubbed-role). Feature work is tracked as the
+> TAR-18 epic. The database has **tables but almost no rows**: the data model landed with
+> TAR-47, row-level security with TAR-48, the client split with TAR-49, provisioning and
+> deactivation with TAR-50 and TAR-51, the WhatsApp Business Account entity with TAR-52,
+> webhook ingestion with TAR-20, and seed data arrives with TAR-46. Everything below works
+> today.
 
 ## Stack
 
@@ -40,7 +43,10 @@ not yet installed and arrives with the realtime gateway.
 | `apps/api/src/webhooks`    | WhatsApp webhook ingest, its worker and the stuck-event sweep |
 | `apps/api/prisma`          | Database schema and migrations                                |
 | `apps/api/prisma/sql`      | Operational SQL that is not a migration — roles, RLS check    |
-| `apps/web`                 | Next.js agent console                                         |
+| `apps/web`                 | Next.js agent console — see [Frontend](#frontend)             |
+| `apps/web/styles/tokens`   | The design token layers. A theme swap starts and ends here    |
+| `apps/web/components/ui`   | Domain-free UI primitives (Button, Modal, DataTable, …)       |
+| `apps/web/features`        | Domain-aware feature slices (`people`, `inbox`, `assignment`) |
 | `packages/contracts`       | Zod schemas and types shared by both apps — the API contract  |
 | `packages/tsconfig`        | Shared TypeScript configuration                               |
 | `docker-compose.yml`       | Local PostgreSQL and Redis                                    |
@@ -623,8 +629,108 @@ is what makes `DATABASE_URL=… pnpm db:migrate:deploy` work against any target.
 - **Shared types live in `packages/contracts`.** If the API and the frontend both need to
   know a shape, it is a Zod schema there, not a duplicated interface.
 - **Errors have one envelope** (`ApiErrorSchema`), and the frontend has one error type
-  (`ApiRequestError` in `apps/web/lib/api.ts`). Every response carries `x-request-id`,
+  (`ApiRequestError` in `apps/web/lib/api/http.ts`). Every response carries `x-request-id`,
   which ties a user-reported error to a log line.
+
+## Frontend
+
+`apps/web` is a Next.js App Router console. Data is read in server components and written
+through server actions, so no list in the app pays for a client-side fetch waterfall and
+every permission decision happens where the session lives.
+
+### Design tokens — every project is a theme
+
+Three layers, and the direction is one-way:
+
+| Layer     | File                           | Contains                                                               |
+| --------- | ------------------------------ | ---------------------------------------------------------------------- |
+| Primitive | `styles/tokens/primitives.css` | Raw scales: palette, spacing, type, radii, shadows, motion, z-index    |
+| Semantic  | `styles/tokens/semantic.css`   | Role names: `--color-surface`, `--space-4`, `--radius-md`, `--z-modal` |
+| Base      | `styles/base.css`              | Reset, base element styles, the one focus ring                         |
+
+**Components read semantic tokens only.** They never reference a primitive and never
+contain a raw colour, px value, duration or z-index. Dark mode re-declares the same
+semantic names under `[data-theme='dark']`, so swapping the whole visual identity means
+editing two files and no components. `prefers-reduced-motion` is handled once, in the token
+layer, by collapsing the duration tokens.
+
+The theme is resolved on the server from the `wac_theme` cookie and rendered into
+`<html data-theme>` in the first response — so a reload paints the right theme on the first
+frame with no flash and nothing to correct after hydration.
+
+Two contrast rules worth knowing: `--color-on-surface-muted` is the darkest muted role that
+clears WCAG AA (4.5:1) in both themes and is what secondary text uses;
+`--color-on-surface-subtle` is around 2.6:1 and is **decoration only** — never put text on it.
+
+### Styling
+
+CSS Modules, colocated with the component, semantic class names. No inline style objects for
+static styling, no utility classes, no CSS-in-JS. Global CSS is limited to
+`app/globals.css`, which imports the three layers above and nothing else.
+
+Dynamic state is a `data-` attribute or a module class toggle (`cx()` in `lib/cx.ts`), never
+a concatenated class string. Layout uses logical properties (`margin-inline-start`,
+`inset-inline-end`) so RTL works without a second stylesheet.
+
+### Adding a component, with its skeleton
+
+1. **Look for an existing one first.** `components/ui/` holds the domain-free primitives.
+   Extend one with a `variant`/`size`/`tone` prop before forking a near-duplicate.
+2. Colocate `Component.tsx` + `Component.module.css` (+ `Component.test.tsx`). One component
+   per file, named the same as the file.
+3. Copy goes in `content/en.ts` and is read through `useContent()`. Route paths come from
+   `lib/routes.ts`. Neither belongs inline.
+4. **Export the skeleton from the same file**, as `ComponentSkeleton`. Build it from the
+   _same_ structure as the real thing — reuse the same layout primitives and column
+   metadata rather than hand-drawing boxes. `AgentsTable` and `AgentsTableSkeleton` both
+   build from `agent-columns.ts` for exactly this reason: adding a column cannot leave the
+   skeleton behind.
+5. Skeleton nodes are `aria-hidden`; the region announces itself once through
+   `<LoadingAnnouncement />`.
+6. If the component is not above the fold, put it behind `next/dynamic` with its own
+   skeleton as the `loading` fallback, and wrap it in `<LazyBoundary>`.
+
+Primitives never import from `features/`. Features may import primitives.
+
+### Loading, error and empty states
+
+Every async region gets a structure-matching skeleton — never a bare spinner, never a blank
+gap. Spinners are allowed only for a button's own pending state (`<Button isPending>`).
+
+- Route level: `loading.tsx` composed from the page's section skeletons, `error.tsx` for the
+  route boundary.
+- Section level: `<Suspense>` with that section's skeleton, inside a
+  `<SectionErrorBoundary>` so one broken widget cannot blank the page. That boundary also
+  detects a chunk-load failure after a deploy and offers a reload rather than a retry that
+  can never succeed.
+- Empty and error use the shared `EmptyState` / `ErrorState`, sized like the content they
+  replace.
+
+### Permissions in the UI
+
+The UI asks _"may this principal do X"_, never _"is this principal an admin"_ — the same rule
+TAR-39 fixed for the API guards. `lib/session/permissions.ts` builds a checker from the
+principal's permissions, which `ROLE_PERMISSIONS` in `packages/contracts/src/rbac.ts`
+materialises from the role. Navigation entries declare `requiresAny` in
+`components/shell/navigation.ts` and are filtered once, on the server.
+
+**None of this is a security boundary.** A server action asserts the permission again, and
+the API asserts it a third time. The UI gating exists so a role is never shown a control
+that leads to a refusal.
+
+### Interim state: mock API and stubbed role
+
+Two flags in `.env.example` exist because TAR-82 was built ahead of its dependencies. Both
+default to off and both must stay off in a deployed environment:
+
+- `NEXT_PUBLIC_USE_MOCK_API` serves every API call from `lib/api/mock/` instead of HTTP.
+  The mock is a _transport_, not a per-feature fake: the resource modules in `lib/api/` are
+  identical in both modes, so wiring the real endpoints is one flag. The mock enforces the
+  same tenant scoping and permissions the real API does, and seeds a second tenant purely so
+  that isolation is testable.
+- `NEXT_PUBLIC_ENABLE_ROLE_STUB` reads the role from a cookie and exposes a switcher, so the
+  agent/supervisor/admin views can be demonstrated before TAR-35's sessions exist.
+  `resolveSession()` refuses it in production regardless of the flag.
 
 ## License
 

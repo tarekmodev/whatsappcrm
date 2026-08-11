@@ -1,0 +1,6 @@
+.shell {
+  padding-block: var(--space-5);
+  /* Clears the toast region's mobile position, so a toast never covers the last
+     action on the page. */
+  padding-block-end: calc(var(--space-8) + env(safe-area-inset-bottom));
+}
