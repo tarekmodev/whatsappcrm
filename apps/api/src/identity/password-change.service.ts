@@ -6,6 +6,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { SessionRevocationService } from '../rbac/session-revocation.service';
 import { CurrentPasswordIncorrectError } from './identity.errors';
+import { LoginThrottleService } from './login-throttle.service';
 import { MAILER, type MailerPort } from './mailer/mailer.port';
 import { PasswordService } from './password.service';
 
@@ -35,6 +36,7 @@ export class PasswordChangeService {
     private readonly tenantContext: TenantContextService,
     private readonly audit: AuditService,
     private readonly sessions: SessionRevocationService,
+    private readonly loginThrottle: LoginThrottleService,
   ) {}
 
   async change(input: PasswordChangeInput): Promise<void> {
@@ -98,6 +100,11 @@ export class PasswordChangeService {
     // matters — a password change made after a suspected compromise would keep
     // the attacker signed in for another `sessionCacheTtlMs`.
     await this.sessions.purgeCacheFor(tenantId, principal.userId);
+
+    // The Redis half of the lockout clear inside the transaction, kept in step
+    // with it: the two counters that can refuse this address are cleared
+    // together everywhere, or the invariant is one somebody has to remember.
+    await this.loginThrottle.clearEmailFailures(tenantId, account.email);
 
     this.logger.log(`Password changed; ${sessionsRevoked} other session(s) revoked.`);
 

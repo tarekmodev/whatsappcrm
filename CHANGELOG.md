@@ -14,6 +14,57 @@ change.
 
 ### Security
 
+- **A locked account and an address with no account now answer identically, to an attacker
+  who does not pause** — the login 429 was a per-tenant user-enumeration oracle in the
+  shipped configuration.
+  `LOGIN_IP_THROTTLE_ENABLED` defaults to off, so `AccountLockedError` was the only thing
+  that could produce a 429 on login, and it is reachable only for an `active` account that
+  has a password hash: eleven wrong passwords answered 429 for a real address and 401 for
+  one with no account, which the identical bodies and the dummy verify did nothing about.
+  `LoginThrottleService` gains a third layer keyed by the address that was **typed** —
+  `emailfail:{tenantId}:{sha256(email)}` counting and
+  `emaillock:{tenantId}:{sha256(email)}` locking — reusing `loginFailureThreshold` and
+  `loginLockoutMs` so an unknown address locks on the same attempt, for the same duration,
+  with the same code, body and `Retry-After` as a real one. Checked before the account
+  lookup, so the two cost the same as well. No feature flag: the address comes from the
+  request body rather than from a proxy-derived header, and the only account an attacker
+  can lock with it is one they can already lock durably. Addresses are hashed — an email is
+  PII, and free text from a request body must not reach a Redis key verbatim — and lower-
+  cased first, because `users.email` is `citext` and two windows for one account would
+  double the allowance for the price of a shift key. Both keys are cleared everywhere
+  `failed_login_attempts = 0` is written — a successful sign-in, an admin unlock, a
+  completed password reset, a password change and an accepted invite — since a lockout the
+  admin cleared but a Redis key still enforces is not an unlock, and a reset that still ends
+  at a 429 is not a way back in. It fails open like every other Redis path here, which means
+  the oracle is open again while Redis is unreachable; that is stated in the code, in ADR
+  0005 and here rather than left to be discovered.
+
+  **Two caveats, both deliberate and both stated rather than implied.** The first is that
+  Redis-down degradation. The second is that the two counters lock on the same attempt but
+  **forget on different clocks**: the email key carries `loginLockoutMs` as its TTL, while
+  `failed_login_attempts` carries none and resets only through the five paths that write
+  zero. Nine failures, a sixteen-minute pause and two more attempts therefore put them out
+  of step, and the eleventh answers 429 for a real address and 401 for one with none — the
+  oracle again, at the cost of one wait, and cheaper still against an address whose durable
+  count is already warm from its owner's own typos. This closes the eleven-request version
+  outright and leaves the paced one, so it is a clear net improvement, but "closed" is not
+  the honest word until the retention matches. **TAR-154** windows the durable count inside
+  the statement that already writes `last_failed_login_at`. (TAR-64 review)
+
+- **A cached session principal is never written before the revocation index names it** —
+  `SessionService.resolve` wrote `sess:{tokenHash}` and then `SADD`ed the hash to the user's
+  index as two independent calls, each swallowing its own failure. `purgeUser` deletes only
+  what `SMEMBERS` returns, so an entry cached while the `SADD` failed was invisible to every
+  revocation path and kept answering for the rest of its 60-second TTL — through a
+  suspension, a logout-everywhere, a password reset or a change. With a 500 ms command
+  timeout and one retry on the auth Redis client, a brief stall between the two calls is a
+  realistic outcome rather than a hypothetical. `SessionCacheService.track` now reports
+  whether the index write landed and issues its two commands in one `MULTI` (an `SADD`
+  whose `PEXPIRE` never ran left the index with no TTL at all), and both writers — login's
+  `publish` and resolution's cache fill — write the principal only when it did. A skipped
+  write costs one Postgres read per request; an un-purgeable entry costs a revocation.
+  (TAR-64 review)
+
 - **The auth pipeline is global, so a new endpoint is closed before anybody thinks about
   it** — `HostTenantGuard`, `PrincipalGuard` and `PermissionGuard` are registered as
   `APP_GUARD` by a new `RequestPipelineModule` and run on every route in the application.
@@ -234,6 +285,23 @@ change.
 
 ### Changed
 
+- **The local Postgres major matches Render's.** `docker-compose.yml` pinned
+  `postgres:17-alpine` under a comment claiming it tracked the managed offering, while all
+  three databases in `render.yaml` pin `postgresMajorVersion: '16'`. CI builds its database
+  from the same Compose file, so a construct that only exists in 17 would have passed every
+  check and failed on Render's `preDeployCommand` instead. No such construct had been
+  written yet. `db:restore-drill` now defaults its client image to 16 for the same reason.
+  **An existing `pgdata` volume created by the 17 image will not start under 16** — a data
+  directory cannot be downgraded in place; `docker compose down -v` and rebuild, per the
+  README. (TAR-147)
+- **`x-request-id` is repeated only within a bound.** The caller's value is echoed into the
+  response header, every log line, the error envelope and the Sentry tags for the request,
+  and was previously accepted at any length and any content. It now has to be at most 128
+  characters of `A-Za-z0-9._-`; anything else gets a fresh UUID rather than a truncation
+  that would look like the caller's id and correlate with nothing. Nothing was injectable
+  through it — pino JSON-encodes its fields and Node rejects control characters in a header
+  value — but the API deliberately does not trust the proxy in front of it, and an
+  unbounded id is a caller deciding how much log volume the platform pays for. (TAR-147)
 - **Revoking a session marks it revoked rather than deleting the row.** A role, status or
   team change — and an admin suspending or removing an agent — now writes `revoked_at` and
   `revoked_reason` instead of `DELETE`ing, and purges the Redis principal cache on both
@@ -331,6 +399,17 @@ change.
   `/api/*` rewrite destination into `.next/routes-manifest.json`. Every deployed build
   therefore proxied the browser to `http://localhost:3001/api`, and server-side calls went
   to the same place, so the console could not reach the API at all regardless of tenancy.
+- **`SENTRY_DSN` can be set from the repository `.env`.** `instrument.ts` runs before
+  `AppModule` exists — that is the point, the SDK has to instrument modules before they are
+  imported — so it read `process.env` before `ConfigModule` had loaded the root `.env`, and
+  a DSN put there was silently ignored. It now loads that file itself, the same way
+  `prisma.config.mjs` does, so pointing local development at a tracker works. Deployed
+  environments were never affected: there the DSN is a real environment variable, and
+  neither loader overwrites one that is already set. (TAR-147)
+- **README's model counts match the schema.** It claimed 37 models and 34 tenant-scoped
+  while `docs/reference/data-model.md` claimed 40 and 37; `schema.prisma` has 41 models, 38
+  of them tenant-scoped with a `tenant_isolation` policy each. Both documents, and
+  `docs/reference/tenancy.md`, now say the same thing. (TAR-147)
 - **A malformed tenant id is refused as `TN001`, not raised as a cast error.** It previously
   reached the application as SQLSTATE `22P02`, which was reported as a fault rather than as
   the refusal it is. No isolation consequence — the cast raised before `set_config` either

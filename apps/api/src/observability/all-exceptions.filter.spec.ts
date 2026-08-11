@@ -15,10 +15,8 @@ import { Test } from '@nestjs/testing';
 import { ApiErrorSchema } from '@whatsappcrm/contracts';
 import type { Server } from 'node:http';
 import request from 'supertest';
-import {
-  TenantContextMiddleware,
-  REQUEST_ID_HEADER,
-} from '../common/tenant-context/tenant-context.middleware';
+import { REQUEST_ID_HEADER } from '../common/tenant-context/request-id';
+import { TenantContextMiddleware } from '../common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from '../common/tenant-context/tenant-context.module';
 import { validateEnv } from '../config/env';
 import { ErrorTrackingService } from './error-tracking.service';

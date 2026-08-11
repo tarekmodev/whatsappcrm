@@ -28,6 +28,7 @@ import {
   InviteTokenInvalidError,
   type TokenRejectionReason,
 } from './identity.errors';
+import { LoginThrottleService } from './login-throttle.service';
 import { MAILER } from './mailer/mailer.port';
 import { PasswordService } from './password.service';
 import { SessionService } from './session.service';
@@ -90,6 +91,7 @@ export class InviteService {
     private readonly audit: AuditService,
     private readonly passwords: PasswordService,
     private readonly sessions: SessionService,
+    private readonly loginThrottle: LoginThrottleService,
   ) {}
 
   /**
@@ -414,6 +416,16 @@ export class InviteService {
     // principal for a transaction that rolled back would be a live credential
     // for a session that does not exist.
     await this.sessions.publish(accepted.issued, accepted.principal);
+
+    // The Redis half of the clean start the columns above give a reactivated
+    // account. The per-email lockout counts every address that is typed at
+    // login, including one that has no account yet, so an invitee whose address
+    // somebody had been guessing at would otherwise accept and then be unable
+    // to sign in again for the rest of the window.
+    await this.loginThrottle.clearEmailFailures(
+      accepted.principal.tenantId,
+      accepted.principal.email,
+    );
 
     this.logger.log(`Invite accepted; activated user ${accepted.principal.userId}`);
 

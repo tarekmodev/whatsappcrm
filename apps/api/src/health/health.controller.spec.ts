@@ -5,7 +5,7 @@ import type { Server } from 'node:http';
 import request from 'supertest';
 import { AppModule } from '../app.module';
 import { configureApp } from '../bootstrap';
-import { REQUEST_ID_HEADER } from '../common/tenant-context/tenant-context.middleware';
+import { REQUEST_ID_HEADER } from '../common/tenant-context/request-id';
 
 // The suite runs with no DATABASE_URL and no REDIS_URL (jest.setup.js), which is
 // exactly the "dependencies unreachable" case readiness has to report honestly.
@@ -53,6 +53,21 @@ describe('health endpoints', () => {
         .expect(200);
 
       expect(response.headers[REQUEST_ID_HEADER]).toBe('req_from_caller');
+    });
+
+    // The echo above is the reason the header is caller-controlled input reaching
+    // the logs, the error envelope and Sentry. `resolveRequestId` bounds it; this
+    // proves the middleware actually asks (`request-id.spec.ts` covers the rest).
+    it('substitutes its own id for an oversized caller-supplied one', async () => {
+      const overlong = 'a'.repeat(1_024);
+
+      const response = await request(server)
+        .get('/api/health')
+        .set(REQUEST_ID_HEADER, overlong)
+        .expect(200);
+
+      expect(response.headers[REQUEST_ID_HEADER]).not.toBe(overlong);
+      expect(response.headers[REQUEST_ID_HEADER]).toHaveLength(36);
     });
   });
 

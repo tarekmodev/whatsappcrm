@@ -48,7 +48,9 @@ executed against a local stack built from `main` — see [Verification](#verific
 
 `details` is present on validation failures only. `requestId` is on every error and is
 echoed in the `x-request-id` response header, which is what ties an operator's report to a
-log line.
+log line. Send your own `x-request-id` to correlate across services: up to 128 characters
+from `A-Za-z0-9._-`. Anything longer or outside that set is replaced with a fresh UUID
+rather than truncated, so an id that comes back changed did not meet the rule.
 
 ## Authentication
 

@@ -8,6 +8,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import type { SessionRevocationService } from '../rbac/session-revocation.service';
 import { CurrentPasswordIncorrectError } from './identity.errors';
+import { LoginThrottleService } from './login-throttle.service';
 import { PasswordChangeService } from './password-change.service';
 import { PasswordService } from './password.service';
 
@@ -37,6 +38,8 @@ interface Recorded {
   /** The after-commit cache purges — the other half of "revoked immediately". */
   purges: string[];
   emails: OutboundEmail[];
+  /** Addresses whose per-email lockout was cleared alongside the durable one. */
+  clearedEmailLocks: string[];
 }
 
 /**
@@ -57,6 +60,7 @@ async function build(storedPassword: string | null): Promise<{
     revocations: [],
     purges: [],
     emails: [],
+    clearedEmailLocks: [],
   };
 
   const tx = {
@@ -108,8 +112,26 @@ async function build(storedPassword: string | null): Promise<{
 
   const tenantContext = new TenantContextService();
 
+  // Kept in step with the durable clear inside the transaction: both counters
+  // that can refuse this address go together, everywhere.
+  const loginThrottle = {
+    clearEmailFailures: (_tenantId: string, email: string) => {
+      recorded.clearedEmailLocks.push(email);
+
+      return Promise.resolve();
+    },
+  } as unknown as LoginThrottleService;
+
   return {
-    changes: new PasswordChangeService(prisma, mailer, passwords, tenantContext, audit, sessions),
+    changes: new PasswordChangeService(
+      prisma,
+      mailer,
+      passwords,
+      tenantContext,
+      audit,
+      sessions,
+      loginThrottle,
+    ),
     recorded,
     run: (work) =>
       tenantContext.run(
@@ -153,6 +175,17 @@ describe('PasswordChangeService', () => {
 
     expect(recorded.audits).toEqual(['password.changed']);
     expect(recorded.emails.map((email) => email.template)).toEqual(['password_changed']);
+  });
+
+  it('clears both lockout counters, not only the durable one', async () => {
+    const { changes, recorded, run } = await build(CURRENT);
+
+    await run(() => changes.change({ currentPassword: CURRENT, newPassword: REPLACEMENT }));
+
+    expect(recorded.userUpdates[0]).toMatchObject({ failedLoginAttempts: 0, lockedUntil: null });
+    // The Redis lockout is keyed by the address rather than the row, so nothing
+    // in the transaction above reaches it.
+    expect(recorded.clearedEmailLocks).toEqual([PRINCIPAL.email]);
   });
 
   it('refuses a wrong current password and writes nothing', async () => {

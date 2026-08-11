@@ -43,6 +43,13 @@ export class InvalidCredentialsError extends Error {
  * only for an account that exists and the other before any account is looked
  * up, so two different messages would tell a caller which of the two happened,
  * and that is the enumeration oracle again wearing a different hat.
+ *
+ * The same message is necessary but not sufficient: it closes nothing unless a
+ * 429 is *reachable* for an address with no account. `LoginThrottleService`'s
+ * per-email lockout is what makes it reachable, at the same threshold and for
+ * the same duration as `AccountLockedError` — without it, only a real account
+ * could produce a 429 at all and the status would answer the question the body
+ * refuses to.
  */
 export abstract class RateLimitedError extends Error {
   protected constructor(readonly retryAfterSeconds: number) {
@@ -64,13 +71,17 @@ export class AccountLockedError extends RateLimitedError {
 }
 
 /**
- * The requesting address has crossed `AUTH_POLICY.ipFailureThreshold` failures
- * against this tenant inside `AUTH_POLICY.ipFailureWindowMs`.
+ * Either Redis layer refusing the attempt: the client address has crossed
+ * `AUTH_POLICY.ipFailureThreshold` failures against this tenant inside
+ * `AUTH_POLICY.ipFailureWindowMs`, or the typed email address has crossed
+ * `AUTH_POLICY.loginFailureThreshold` and is locked for
+ * `AUTH_POLICY.loginLockoutMs`.
  *
- * Raised **before** the account lookup, which is the whole point of the layer:
- * credential stuffing sprays addresses that mostly have no user row, so there
- * is nothing per-account to count. It says nothing about whether any of the
- * addresses tried exists.
+ * Raised **before** the account lookup, which is the whole point of both
+ * layers: credential stuffing sprays addresses that mostly have no user row, so
+ * there is nothing per-account to count. It says nothing about whether any of
+ * the addresses tried exists — and because the email layer locks an unknown
+ * address exactly as it locks a known one, the refusal itself does not either.
  */
 export class TooManyAttemptsError extends RateLimitedError {
   constructor(retryAfterSeconds: number) {

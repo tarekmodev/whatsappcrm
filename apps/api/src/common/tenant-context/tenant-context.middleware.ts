@@ -1,9 +1,7 @@
-import { randomUUID } from 'node:crypto';
 import { Injectable, type NestMiddleware } from '@nestjs/common';
 import type { NextFunction, Request, Response } from 'express';
+import { REQUEST_ID_HEADER, resolveRequestId } from './request-id';
 import { TenantContextService } from './tenant-context.service';
-
-export const REQUEST_ID_HEADER = 'x-request-id';
 
 /**
  * Opens a tenant context scope for the lifetime of every HTTP request.
@@ -17,8 +15,7 @@ export class TenantContextMiddleware implements NestMiddleware {
   constructor(private readonly tenantContext: TenantContextService) {}
 
   use(req: Request, res: Response, next: NextFunction): void {
-    const incoming = req.headers[REQUEST_ID_HEADER];
-    const requestId = typeof incoming === 'string' && incoming.length > 0 ? incoming : randomUUID();
+    const requestId = resolveRequestId(req.headers[REQUEST_ID_HEADER]);
 
     res.setHeader(REQUEST_ID_HEADER, requestId);
 

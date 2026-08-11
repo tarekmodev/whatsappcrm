@@ -14,6 +14,7 @@ import { hashAuthToken } from './auth-tokens';
 import { AuthRedisClient } from './auth-redis.client';
 import { InviteTokenInvalidError } from './identity.errors';
 import { InviteService } from './invite.service';
+import { LoginThrottleService } from './login-throttle.service';
 import { SessionCacheService } from './session-cache.service';
 import { hashSessionToken } from './session-token';
 import { PasswordService } from './password.service';
@@ -66,6 +67,7 @@ describe('the invite flow', () => {
   let invites: InviteService;
   let redis: AuthRedisClient;
   let cache: SessionCacheService;
+  let throttleConfig: ConfigService;
 
   function principalFor(tenantId: string, userId: string, role: TenantRole): SessionPrincipal {
     return {
@@ -121,6 +123,12 @@ describe('the invite flow', () => {
       get: (key: string) => (key === 'REDIS_URL' ? process.env.REDIS_URL : undefined),
     } as unknown as ConfigService);
     cache = new SessionCacheService(redis);
+    // The real throttle, so accepting an invite clears the per-email lockout
+    // against the same Redis this suite is already talking to. The client
+    // address window stays off — this suite supplies no address.
+    throttleConfig = {
+      get: () => undefined,
+    } as unknown as ConfigService;
 
     await removeFixture();
 
@@ -171,6 +179,12 @@ describe('the invite flow', () => {
       new AuditService(tenantContext),
       new PasswordService(),
       new SessionService(tenantPrisma, cache),
+      new LoginThrottleService(
+        tenantPrisma,
+        redis,
+        new AuditService(tenantContext),
+        throttleConfig,
+      ),
     );
   });
 
