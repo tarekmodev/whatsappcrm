@@ -36,8 +36,10 @@ change.
   (TAR-20e)
 - **Demo seed data** — `pnpm db:seed` loads two tenants (`northwind.app.localhost` and
   `southwind.app.localhost`) with agents across all three roles, teams, WhatsApp business
-  accounts and numbers, message templates, contacts, conversations, messages, tickets and a
-  subscription. Written through `TenantPrisma` as `whatsappcrm_app` under row-level
+  accounts and numbers, message templates, contacts, conversations, messages, an attachment
+  with the media object behind it, tickets and a subscription. Ticket events use
+  `TICKET_EVENT_TYPES`, so a seeded timeline reads the same as one the app wrote.
+  Written through `TenantPrisma` as `whatsappcrm_app` under row-level
   security, with tenants created by `TenantProvisioningService` rather than by hand, so a
   seed that finishes proves the application role can read and write the data. Re-runnable:
   it deletes its own two slugs and nothing else, and refuses to run under

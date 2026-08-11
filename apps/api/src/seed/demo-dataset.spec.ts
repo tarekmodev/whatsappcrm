@@ -1,3 +1,5 @@
+import { TICKET_EVENT_TYPES } from '@whatsappcrm/contracts';
+
 import {
   DEMO_PLANS,
   DEMO_SLUGS,
@@ -67,6 +69,7 @@ describe('demo dataset', () => {
         ...idsOf(tenant.contactTags),
         ...idsOf(tenant.conversations),
         ...idsOf(tenant.messages),
+        ...idsOf(tenant.mediaObjects),
         ...idsOf(tenant.attachments),
         ...idsOf(tenant.internalNotes),
         ...idsOf(tenant.tickets),
@@ -94,6 +97,7 @@ describe('demo dataset', () => {
     const whatsappAccounts = new Set(idsOf(tenant.whatsappAccounts));
     const tickets = new Set(idsOf(tenant.tickets));
     const messages = new Set(idsOf(tenant.messages));
+    const mediaObjects = new Set(idsOf(tenant.mediaObjects));
     const tags = new Set(idsOf(tenant.tags));
 
     // Composite `(tenant_id, <parent_id>)` foreign keys make each of these a
@@ -123,8 +127,18 @@ describe('demo dataset', () => {
       expect(conversations).toContain(message.conversationId);
       expectOptionalMember(message.senderUserId, users);
     }
+    for (const object of tenant.mediaObjects) {
+      expectOptionalMember(object.uploadedByUserId, users);
+    }
     for (const attachment of tenant.attachments) {
       expect(messages).toContain(attachment.messageId);
+      expectOptionalMember(attachment.mediaObjectId, mediaObjects);
+      // The path the inbox fetches is built from the media object's id. A
+      // mismatch here is a broken download link that nothing else would catch:
+      // both columns are free text as far as the database is concerned.
+      if (typeof attachment.mediaObjectId === 'string') {
+        expect(attachment.url).toBe(`/api/v1/media/${attachment.mediaObjectId}/content`);
+      }
     }
     for (const note of tenant.internalNotes) {
       expect(conversations).toContain(note.conversationId);
@@ -163,6 +177,18 @@ describe('demo dataset', () => {
       // describer skips it — so a second active ticket for one contact is a seed
       // that fails on insert with no schema-level warning first.
       expect(new Set(active).size).toBe(active.length);
+    }
+  });
+
+  it('records ticket events with types the contract knows', () => {
+    for (const tenant of dataset) {
+      for (const event of tenant.ticketEvents) {
+        // `ticket_events.type` is a text column, not an enum, so the database
+        // takes anything. TAR-73's timeline endpoint validates its response
+        // against this list, and a seeded event outside it fails there — on the
+        // next developer's clean clone, long after the seed merged green.
+        expect(TICKET_EVENT_TYPES).toContain(event.type);
+      }
     }
   });
 

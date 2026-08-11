@@ -1,3 +1,5 @@
+import type { TicketEventType } from '@whatsappcrm/contracts';
+
 import { AUDIT_ACTIONS } from '../audit/audit.actions';
 import type { Prisma } from '../generated/prisma/client';
 
@@ -113,10 +115,34 @@ export interface DemoTenant {
   readonly contactTags: readonly Scoped<Prisma.ContactTagCreateManyInput>[];
   readonly conversations: readonly Scoped<Prisma.ConversationCreateManyInput>[];
   readonly messages: readonly Scoped<Prisma.MessageCreateManyInput>[];
+  /**
+   * The stored binaries an attachment points at (TAR-20e). The rows exist; the
+   * bytes do not — the seed writes to the database and has no access to
+   * `MEDIA_STORAGE_ROOT`, so a download of a seeded object 404s at the storage
+   * layer. That is the same trade the placeholder URL made before this table
+   * existed, and it keeps the seed a database seed.
+   *
+   * `storageKey` is omitted as well as the tenant: it is derived from the
+   * tenant id, which provisioning assigns, and the seed builds it with
+   * `mediaObjectKey` rather than by hand so the two cannot diverge.
+   */
+  readonly mediaObjects: readonly Omit<
+    Prisma.MediaObjectCreateManyInput,
+    'tenantId' | 'storageKey'
+  >[];
   readonly attachments: readonly Scoped<Prisma.MessageAttachmentCreateManyInput>[];
   readonly internalNotes: readonly Scoped<Prisma.InternalNoteCreateManyInput>[];
   readonly tickets: readonly Scoped<Prisma.TicketCreateManyInput>[];
-  readonly ticketEvents: readonly Scoped<Prisma.TicketEventCreateManyInput>[];
+  /**
+   * `type` is narrowed to the contract's enum rather than left as Prisma's
+   * `string`. The column is text, so the database accepts any value and a
+   * seeded event with a vocabulary of its own would only surface when TAR-73's
+   * timeline endpoint validated its response and rejected every seeded ticket.
+   * Here it is a compile error instead.
+   */
+  readonly ticketEvents: readonly (Scoped<Prisma.TicketEventCreateManyInput> & {
+    readonly type: TicketEventType;
+  })[];
   /**
    * What `ticket_counters` is left holding. It must be one past the highest
    * seeded `tickets.number`, or TAR-73's allocator hands out a number that
@@ -240,6 +266,7 @@ const MISC_IDS = {
   southwindBranding: '0192f00c-0000-7000-8000-000000000c02',
   northwindSubscription: '0192f00c-0000-7000-8000-000000000c11',
   southwindSubscription: '0192f00c-0000-7000-8000-000000000c12',
+  invoiceMediaObject: '0192f00c-0000-7000-8000-000000000c20',
   invoiceAttachment: '0192f00c-0000-7000-8000-000000000c21',
   noteCardChange: '0192f00c-0000-7000-8000-000000000c31',
   noteActivation: '0192f00c-0000-7000-8000-000000000c32',
@@ -904,14 +931,35 @@ function northwind(now: Date): DemoTenant {
       },
     ],
 
+    mediaObjects: [
+      {
+        id: MISC_IDS.invoiceMediaObject,
+        kind: 'document',
+        // The agent attached it before sending, which is what `upload` means.
+        source: 'upload',
+        mimeType: 'application/pdf',
+        sizeBytes: 48_213,
+        fileName: 'invoice-NW-10021-07.pdf',
+        // Not the digest of a real PDF, because there is no PDF: it is the
+        // digest of the string above, so the column holds something of the right
+        // shape rather than 64 zeroes that read as a real checksum of nothing.
+        checksumSha256: '8c2901c8af4c6f7b29ba2013218acecde14972967d00c984a464e8f1064f94c9',
+        uploadedByUserId: USER_IDS.amina,
+        createdAt: ago(now, 171 * MINUTE_MS),
+      },
+    ],
+
     attachments: [
       {
         id: MISC_IDS.invoiceAttachment,
         messageId: MESSAGE_IDS.fatima3,
-        // Re-hosted rather than Meta's own URL, which expires. The host is a
-        // placeholder that resolves to nothing locally; the column's job here is
-        // to prove the thread renders an attachment, not to serve a file.
-        url: 'https://media.northwind.example/seed/invoice-NW-10021-07.pdf',
+        mediaObjectId: MISC_IDS.invoiceMediaObject,
+        kind: 'document',
+        // A path, not an absolute URL: the same row is served through a tenant's
+        // platform subdomain and through its custom domain, so the origin is the
+        // request's to supply (TAR-20e). The route resolves; the bytes behind it
+        // do not, for the reason `mediaObjects` records.
+        url: `/api/v1/media/${MISC_IDS.invoiceMediaObject}/content`,
         mimeType: 'application/pdf',
         sizeBytes: 48_213,
         filename: 'invoice-NW-10021-07.pdf',
@@ -976,15 +1024,17 @@ function northwind(now: Date): DemoTenant {
       {
         id: MISC_IDS.ticketEventInvoiceCreated,
         ticketId: TICKET_IDS.fatimaInvoice,
-        type: 'ticket.created',
+        type: 'created',
         // Null actor: the ticket was opened by the ingestion path, not a person.
-        data: { source: 'inbound_message' },
+        // `cause` matches what TAR-75's linker writes for the same event, so a
+        // seeded timeline and a real one read identically.
+        data: { conversationId: CONVERSATION_IDS.fatimaInvoice, cause: 'inbound_message' },
         createdAt: ago(now, 3 * HOUR_MS),
       },
       {
         id: MISC_IDS.ticketEventInvoiceAssigned,
         ticketId: TICKET_IDS.fatimaInvoice,
-        type: 'ticket.assigned',
+        type: 'assigned',
         actorUserId: USER_IDS.priya,
         data: { toUserId: USER_IDS.amina, toTeamId: TEAM_IDS.billing },
         createdAt: ago(now, 176 * MINUTE_MS),
@@ -992,7 +1042,7 @@ function northwind(now: Date): DemoTenant {
       {
         id: MISC_IDS.ticketEventInvoicePriority,
         ticketId: TICKET_IDS.fatimaInvoice,
-        type: 'ticket.priority_changed',
+        type: 'priority_changed',
         actorUserId: USER_IDS.priya,
         data: { from: 'normal', to: 'high' },
         createdAt: ago(now, 40 * MINUTE_MS),
@@ -1000,16 +1050,19 @@ function northwind(now: Date): DemoTenant {
       {
         id: MISC_IDS.ticketEventOptOutCreated,
         ticketId: TICKET_IDS.hectorOptOut,
-        type: 'ticket.created',
-        data: { source: 'inbound_message' },
+        type: 'created',
+        data: { conversationId: CONVERSATION_IDS.hectorOptOut, cause: 'inbound_message' },
         createdAt: ago(now, 6 * DAY_MS + HOUR_MS),
       },
       {
         id: MISC_IDS.ticketEventOptOutResolved,
         ticketId: TICKET_IDS.hectorOptOut,
-        type: 'ticket.resolved',
+        // A resolution is a status change, not an event type of its own — the
+        // contract has no `resolved`, and `tickets.status` is where the outcome
+        // lives. The `from`/`to` shape is the linker's.
+        type: 'status_changed',
         actorUserId: USER_IDS.priya,
-        data: { reason: 'contact_opted_out' },
+        data: { from: 'open', to: 'resolved', reason: 'contact_opted_out' },
         createdAt: ago(now, 6 * DAY_MS - 5 * MINUTE_MS),
       },
     ],
@@ -1236,6 +1289,7 @@ function southwind(now: Date): DemoTenant {
       },
     ],
 
+    mediaObjects: [],
     attachments: [],
     internalNotes: [],
     tickets: [],

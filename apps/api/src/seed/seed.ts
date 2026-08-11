@@ -4,6 +4,7 @@ import path from 'node:path';
 import { ConfigService } from '@nestjs/config';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Prisma, PrismaClient } from '../generated/prisma/client';
+import { mediaObjectKey } from '../media/media-object-key';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import { TenantProvisioningService } from '../tenancy/tenant-provisioning.service';
@@ -263,6 +264,17 @@ async function writeTenantData(
 
       await tx.conversation.createMany({ data: scope(tenant.conversations) });
       await tx.message.createMany({ data: scope(tenant.messages) });
+      // The storage key is derived rather than written into the dataset: it
+      // contains the tenant id, which provisioning assigns above, and building
+      // it with the same helper the upload path uses is what keeps a seeded
+      // object addressable by the same rules as a real one (TAR-20e).
+      await tx.mediaObject.createMany({
+        data: tenant.mediaObjects.map((object) => ({
+          ...object,
+          tenantId,
+          storageKey: mediaObjectKey(tenantId, object.kind, object.id as string),
+        })),
+      });
       await tx.messageAttachment.createMany({ data: scope(tenant.attachments) });
       await tx.internalNote.createMany({ data: scope(tenant.internalNotes) });
 
