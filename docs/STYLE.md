@@ -31,6 +31,7 @@ documentation in this repository yet; the product has no UI to describe.
 | `README.md`          | The doorway: what this is, how to run it, where to go next. Short                | Engineer |
 | `docs/adr/`          | Architecture decision records. Immutable once accepted; superseded, never edited | Engineer |
 | `docs/architecture/` | Cross-cutting design documents and their amendments                              | Engineer |
+| `docs/design/`       | The visual design language: what the tokens equal, and the layouts they build    | Engineer |
 | `docs/reference/`    | Exhaustive API, schema and contract reference. Complete over readable            | Engineer |
 | `docs/guides/`       | Task-oriented how-tos, one goal per file                                         | Either   |
 | `docs/concepts/`     | Explanation of the model and the why, where a reader cannot succeed without it   | Engineer |
@@ -118,7 +119,7 @@ an explicit decision in `docs/adr` or `docs/architecture`. Two rules follow:
 ## File naming
 
 `kebab-case.md`, named for the subject, no dates and no story ids: `admin-api.md`, not
-`tar-50-admin-api.md`. ADRs and architecture documents keep their numeric prefix
+`tar-50-admin-api.md`. ADRs, architecture and design documents keep their numeric prefix
 (`0002-architecture-and-api-contract.md`) because their order is part of the record.
 
 ## Templates

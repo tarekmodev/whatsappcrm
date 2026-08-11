@@ -92,7 +92,7 @@ describe('MobileMenu', () => {
     );
   });
 
-  it('renders the nested settings links from the same nav data as the desktop nav', () => {
+  it('renders the nested settings links from the same nav data as the rail', () => {
     render(<MobileMenu items={ITEMS} />);
 
     openMenu();

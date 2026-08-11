@@ -1,0 +1,121 @@
+.rail {
+  /* Below the layout breakpoint the drawer is the navigation, and the rail is
+     removed outright rather than hidden — its links must leave the tab order. */
+  display: none;
+}
+
+/*
+ * The one place the app's global focus ring is overridden, and the reason is
+ * the rail's whole premise: it is dark in both themes while the ring token
+ * flips with the theme, so the light-theme ring landed on navy below the 3:1
+ * WCAG 2.2 SC 1.4.11 asks of a focus indicator. Outside the media query on
+ * purpose — a focus style must not depend on a viewport width.
+ */
+.rail :focus-visible {
+  outline-color: var(--color-focus-ring-on-rail);
+}
+
+/*
+ * Restated, because the rule above outranks `base.css`'s forced-colours
+ * override on specificity and would otherwise reintroduce our colour where the
+ * system's must win.
+ */
+@media (forced-colors: active) {
+  .rail :focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+@media (min-width: 48rem) {
+  .rail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    /* Fixed beside the scrolling content: sticky rather than `position: fixed`,
+       so the grid column still reserves its width. */
+    position: sticky;
+    inset-block-start: 0;
+    block-size: 100dvh;
+    padding-block: var(--space-4);
+    padding-inline: var(--space-2);
+    padding-block-end: calc(var(--space-4) + env(safe-area-inset-bottom));
+    background: var(--color-rail);
+    border-inline-end: var(--border-hairline) solid var(--color-rail-border);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .brandRow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-block-size: var(--size-control-md);
+    padding-inline-start: var(--space-2);
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-inline-size: 0;
+    /* Wins the free space so the toggle sits at the inline end. */
+    flex: 1 1 auto;
+    color: var(--color-on-rail-strong);
+    font-size: var(--font-size-body);
+    font-weight: var(--font-weight-strong);
+    text-decoration: none;
+  }
+
+  .brandMark {
+    display: none;
+    flex: 0 0 auto;
+    place-items: center;
+    inline-size: var(--size-control-sm);
+    block-size: var(--size-control-sm);
+    background: var(--color-accent);
+    border-radius: var(--radius-md);
+    color: var(--color-on-accent);
+    font-size: var(--font-size-body-sm);
+  }
+
+  .brandName {
+    min-inline-size: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .nav {
+    min-inline-size: 0;
+  }
+
+  /* --- Collapsed --------------------------------------------------------- */
+  /*
+   * `data-rail` is set by `AppShell` on the frame around this component. An
+   * attribute rather than a class precisely so it can be read from here: it is
+   * a documented seam between the frame and the components inside it.
+   */
+  [data-rail='collapsed'] .brandRow {
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-inline: 0;
+  }
+
+  [data-rail='collapsed'] .brand {
+    flex: 0 0 auto;
+    justify-content: center;
+  }
+
+  [data-rail='collapsed'] .brandMark {
+    display: grid;
+  }
+
+  [data-rail='collapsed'] .brandName {
+    position: absolute;
+    inline-size: var(--border-hairline);
+    block-size: var(--border-hairline);
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}

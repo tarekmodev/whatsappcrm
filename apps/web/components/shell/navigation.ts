@@ -1,12 +1,13 @@
 import type { Permission } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { routes } from '@/lib/routes';
+import type { IconName } from '@/components/ui/Icon';
 import type { PermissionChecker } from '@/lib/session/permissions';
 
 /**
- * The single navigation data source. Desktop nav, mobile drawer and the settings
- * sub-nav all render from this — duplicating the markup for mobile is what makes
- * the two drift.
+ * The single navigation data source. The rail, the mobile drawer and the
+ * settings tabs all render from this — duplicating the markup for mobile is what
+ * makes the two drift.
  *
  * `requiresAny` is the whole of TAR-22's third acceptance criterion in the UI: an
  * entry is rendered only when the principal holds one of its permissions, so a
@@ -17,6 +18,13 @@ export interface NavItem {
   readonly id: string;
   readonly label: string;
   readonly href: string;
+  /**
+   * Shown beside the label in the rail, and alone once the rail is collapsed.
+   * A top-level entry without one is unreachable when collapsed, so the rail's
+   * own entries always carry it; a child entry, which never renders in the
+   * rail, may leave it out.
+   */
+  readonly icon?: IconName;
   /**
    * Rendered only if the principal holds at least one of these.
    *
@@ -35,6 +43,7 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     id: 'settings-people',
     label: content.nav.people,
     href: routes.settingsPeople(),
+    icon: 'people',
     // `user:read` alone is not enough: an agent holds it for @mentions and
     // assignee pickers, but managing people is a supervisor/admin surface.
     requiresAny: ['user:invite', 'user:update', 'team:write'],
@@ -43,12 +52,14 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     id: 'settings-assignment',
     label: content.nav.assignment,
     href: routes.settingsAssignment(),
+    icon: 'reports',
     requiresAny: ['report:read_all', 'assignment_rule:read'],
   },
   {
     id: 'settings-whatsapp',
     label: content.nav.whatsapp,
     href: routes.settingsWhatsApp(),
+    icon: 'conversation',
     // The same permission the endpoint behind it requires. A principal without it
     // never sees the entry, and the API refuses the call regardless (TAR-169).
     requiresAny: ['channel:manage'],
@@ -57,16 +68,24 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     id: 'settings-security',
     label: content.nav.security,
     href: routes.settingsSecurity(),
+    icon: 'security',
     // Everyone. See `requiresAny` above — an agent who cannot reach this page
     // has no way to change their own password.
   },
 ];
 
+/**
+ * The rail, in order. 0001 rules the destinations this console is heading for —
+ * Inbox, Contacts, Tickets, Reports, Settings — and each is added here, with its
+ * icon, by the story that builds the route behind it. An entry added ahead of
+ * its route is a nav link to a 404.
+ */
 export const NAV_ITEMS: readonly NavItem[] = [
   {
     id: 'inbox',
     label: content.nav.inbox,
     href: routes.inbox(),
+    icon: 'inbox',
     // Every role has this; the inbox is an agent's home.
     requiresAny: ['conversation:read'],
   },
@@ -74,6 +93,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     id: 'settings',
     label: content.nav.settings,
     href: routes.settings(),
+    icon: 'settings',
     // Derived from the children rather than restated, so a settings section added
     // later cannot forget to widen its parent.
     requiresAny: derivedRequirements(SETTINGS_CHILDREN),

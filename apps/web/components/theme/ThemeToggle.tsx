@@ -15,8 +15,8 @@ import { setThemeAction } from './theme.actions';
  *
  * The attribute is also flipped locally so the change is instant rather than
  * waiting for the round trip. Current theme is re-read from the document at click
- * time, because the header renders one instance for the drawer and one for the
- * desktop bar and they must not disagree after a resize.
+ * time, because the top bar renders one instance for the drawer and one for
+ * itself, and the two must not disagree after a resize.
  */
 export function ThemeToggle({ initialTheme }: { initialTheme: Theme }) {
   const content = useContent();

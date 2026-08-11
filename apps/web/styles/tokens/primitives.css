@@ -2,6 +2,10 @@
  * Primitive tokens — raw scales only. No component may reference these
  * directly; they exist so `semantic.css` has a vocabulary to map roles onto.
  * Swapping a brand means editing this file and `semantic.css`, nothing else.
+ *
+ * The values here are the ones ruled in `docs/design/0001-visual-design-language.md`.
+ * Change one and change that document in the same pull request — it is what every
+ * screen built after it is measured against.
  */
 
 :root {
@@ -21,12 +25,26 @@
   --palette-slate-900: #0f172a;
   --palette-slate-950: #020617;
 
-  /* WhatsApp-adjacent green, kept as a primitive so the brand can be replaced. */
-  --palette-green-100: #d7f2e3;
-  --palette-green-300: #7fd3a8;
-  --palette-green-500: #128c56;
-  --palette-green-600: #0e7346;
-  --palette-green-700: #0a5936;
+  /*
+   * The one accent family. WhatsApp-adjacent rather than WhatsApp's own green,
+   * and kept as a primitive so the brand can be replaced. Every step is picked
+   * for a contrast pair, not for looks — see 0001 for the table.
+   */
+  --palette-green-100: #d6f2e5;
+  --palette-green-300: #6fd2a6;
+  --palette-green-500: #069c68;
+  --palette-green-600: #067a52;
+  --palette-green-700: #05613f;
+
+  /*
+   * Sidebar navy. Its own family rather than a reuse of the slate scale: the
+   * sidebar is a fixed dark region in *both* themes, so its steps are chosen
+   * against white and light-grey text, and retuning it must not move body text.
+   */
+  --palette-navy-700: #2e4a63;
+  --palette-navy-800: #1f3448;
+  --palette-navy-900: #16283a;
+  --palette-navy-950: #0d1a26;
 
   --palette-amber-100: #fdf0d5;
   --palette-amber-500: #a16207;
@@ -41,7 +59,12 @@
   --palette-blue-500: #1d4ed8;
   --palette-blue-300: #a4bff2;
 
-  /* --- Spacing scale (4px base) ------------------------------------------- */
+  /*
+   * --- Spacing scale ------------------------------------------------------
+   * An 8px rhythm with 4px half-steps: every step from `space-2` up is a
+   * multiple of 8, and `space-1`/`space-3` are the half-steps a dense control
+   * needs. Nothing in the app spaces itself off-grid.
+   */
   --scale-space-0: 0;
   --scale-space-1: 0.25rem;
   --scale-space-2: 0.5rem;
@@ -68,19 +91,32 @@
   --scale-font-weight-medium: 500;
   --scale-font-weight-semibold: 600;
 
-  --scale-font-family-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /*
+   * `--font-sans` is the variable `next/font` puts on `<html>` for the
+   * self-hosted geometric sans (`app/layout.tsx`). The fallback inside `var()`
+   * is what renders while the face is still loading and if the file is ever
+   * missing — without it the whole declaration would be invalid and the browser
+   * would fall back to a serif.
+   */
+  --scale-font-family-sans:
+    var(--font-sans, ui-sans-serif), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    sans-serif;
   --scale-font-family-mono: ui-monospace, SFMono-Regular, 'Cascadia Mono', monospace;
 
   /* --- Radii -------------------------------------------------------------- */
   --scale-radius-sm: 0.25rem;
-  --scale-radius-md: 0.5rem;
-  --scale-radius-lg: 0.75rem;
+  --scale-radius-md: 0.375rem;
+  --scale-radius-lg: 0.5rem;
   --scale-radius-full: 9999px;
 
-  /* --- Elevation ---------------------------------------------------------- */
-  --scale-shadow-sm: 0 1px 2px rgb(2 6 23 / 8%);
-  --scale-shadow-md: 0 4px 12px rgb(2 6 23 / 10%);
-  --scale-shadow-lg: 0 16px 40px rgb(2 6 23 / 18%);
+  /*
+   * --- Elevation ----------------------------------------------------------
+   * Soft and low. A card is separated from the canvas by its border first and
+   * its shadow second; a shadow doing the whole job reads as a floating panel.
+   */
+  --scale-shadow-sm: 0 1px 2px rgb(13 26 38 / 6%);
+  --scale-shadow-md: 0 4px 12px rgb(13 26 38 / 10%);
+  --scale-shadow-lg: 0 16px 40px rgb(13 26 38 / 18%);
 
   /* --- Motion ------------------------------------------------------------- */
   --scale-duration-instant: 0ms;
@@ -111,6 +147,14 @@
   --scale-size-drawer: 20rem;
   --scale-size-border-hairline: 1px;
   --scale-size-focus-ring: 2px;
+  --scale-size-icon-sm: 1rem;
+  --scale-size-icon-md: 1.25rem;
+  /* The console frame: a fixed rail beside a fixed bar. */
+  --scale-size-rail: 15rem;
+  --scale-size-rail-collapsed: 4.25rem;
+  --scale-size-bar: 3.5rem;
+  /* The width the accent marker on a current nav entry occupies. */
+  --scale-size-marker: 3px;
 
   /* Panes and media, added for the shared inbox's two-column layout. */
   --scale-size-pane-sm: 20rem;

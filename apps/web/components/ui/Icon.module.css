@@ -1,0 +1,23 @@
+.icon {
+  /* Never shrinks in a flex row: a squashed icon reads as a different glyph. */
+  flex: 0 0 auto;
+  inline-size: var(--size-icon-md);
+  block-size: var(--size-icon-md);
+}
+
+.icon[data-size='sm'] {
+  inline-size: var(--size-icon-sm);
+  block-size: var(--size-icon-sm);
+}
+
+/* A "forward" chevron points the other way when the page reads right to left. */
+[dir='rtl'] .icon[data-directional='true'] {
+  scale: -1 1;
+}
+
+/* In forced colours the stroke must follow the system text colour, not ours. */
+@media (forced-colors: active) {
+  .icon {
+    stroke: currentColor;
+  }
+}

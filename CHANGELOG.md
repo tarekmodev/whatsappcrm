@@ -142,6 +142,20 @@ change.
 
 ### Added
 
+- **A ruled visual design language, and a console frame to match**
+  (TAR-202) — `docs/design/0001-visual-design-language.md` records what the design tokens
+  equal and what the recurring layouts are, the same way 0002 records the API contract. The
+  token layer gains the values behind it: a green accent whose every pair is measured
+  against WCAG AA in both themes, a navy family for the navigation rail, an 8px rhythm with
+  4px half-steps, 6–8px radii, softer shadows, and Figtree self-hosted through `next/font`.
+  The console's frame changes with it — the top nav bar becomes a fixed, collapsible
+  icon-and-label rail beside a top bar carrying identity and utilities, with the collapsed
+  width stored in `wac_rail` and read on the server so the frame is the right size in the
+  first HTML response. Three shared components carry the new patterns: `Icon`, `Tabs` (the
+  settings sub-navigation now uses it) and `FilterPills` (the inbox scope strip now uses
+  it). Below 48rem nothing changes for the user: the rail is removed outright and the
+  existing focus-trapped drawer is still the navigation, rendering from the same single nav
+  data source.
 - **The shared inbox has a screen: a live conversation list beside the thread, with its
   media, its notes and the claim** (TAR-71) — `/inbox` becomes master-detail. Scope, status
   filter and the open conversation all live in the URL, so a refresh, a copied link and the

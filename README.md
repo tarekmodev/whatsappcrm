@@ -59,23 +59,25 @@ the one that produced it.
 | `docker/postgres/initdb.d` | First-boot SQL for the local Postgres container               |
 | `docs/adr`                 | Architecture decision records                                 |
 | `docs/architecture`        | Cross-cutting design documents                                |
+| `docs/design`              | The visual design language every screen is built against      |
 | `docs/reference`           | Data model, admin API and tenant isolation reference          |
 
 ## Documentation
 
-| Document                                                                                     | What it answers                                                             |
-| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| [ADR 0001 — stack decision](docs/adr/0001-stack-decision.md)                                 | Why each piece of the stack, and what it costs                              |
-| [Architecture and API contract](docs/architecture/0002-architecture-and-api-contract.md)     | Module boundaries, tenant resolution, the endpoint surface, webhooks        |
-| [Data model reference](docs/reference/data-model.md)                                         | Every entity, which are tenant-scoped, which constraints and indexes matter |
-| [Tenant isolation contract](docs/reference/tenancy.md)                                       | Which Prisma client to inject, and what the database refuses                |
-| [Platform admin API](docs/reference/admin-api.md)                                            | Provisioning and deactivation: request, response, errors, retention         |
-| [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                      |
-| [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                      |
-| [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                    |
-| [Environments runbook](docs/runbooks/environments.md)                                        | Provisioning, secrets, health, alerting, rollback                           |
-| [Migrations runbook](docs/runbooks/migrations.md)                                            | How a migration reaches an environment, and how to undo one                 |
-| [Backups runbook](docs/runbooks/backups.md)                                                  | Backup coverage, restoring on Render, and the restore drill                 |
+| Document                                                                                     | What it answers                                                               |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [ADR 0001 — stack decision](docs/adr/0001-stack-decision.md)                                 | Why each piece of the stack, and what it costs                                |
+| [Architecture and API contract](docs/architecture/0002-architecture-and-api-contract.md)     | Module boundaries, tenant resolution, the endpoint surface, webhooks          |
+| [Visual design language](docs/design/0001-visual-design-language.md)                         | What the design tokens equal, the console frame, and the list/detail patterns |
+| [Data model reference](docs/reference/data-model.md)                                         | Every entity, which are tenant-scoped, which constraints and indexes matter   |
+| [Tenant isolation contract](docs/reference/tenancy.md)                                       | Which Prisma client to inject, and what the database refuses                  |
+| [Platform admin API](docs/reference/admin-api.md)                                            | Provisioning and deactivation: request, response, errors, retention           |
+| [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                        |
+| [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                        |
+| [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                      |
+| [Environments runbook](docs/runbooks/environments.md)                                        | Provisioning, secrets, health, alerting, rollback                             |
+| [Migrations runbook](docs/runbooks/migrations.md)                                            | How a migration reaches an environment, and how to undo one                   |
+| [Backups runbook](docs/runbooks/backups.md)                                                  | Backup coverage, restoring on Render, and the restore drill                   |
 
 ## Getting started
 
@@ -866,6 +868,10 @@ every permission decision happens where the session lives.
 
 ### Design tokens — every project is a theme
 
+**What the tokens equal, and the layouts they build, is
+[the visual design language](docs/design/0001-visual-design-language.md).** Read it before
+building a screen; this section is only the mechanism.
+
 Three layers, and the direction is one-way:
 
 | Layer     | File                           | Contains                                                               |
@@ -882,7 +888,8 @@ layer, by collapsing the duration tokens.
 
 The theme is resolved on the server from the `wac_theme` cookie and rendered into
 `<html data-theme>` in the first response — so a reload paints the right theme on the first
-frame with no flash and nothing to correct after hydration.
+frame with no flash and nothing to correct after hydration. The navigation rail's collapsed
+width works the same way, from `wac_rail`.
 
 Two contrast rules worth knowing: `--color-on-surface-muted` is the darkest muted role that
 clears WCAG AA (4.5:1) in both themes and is what secondary text uses;
@@ -963,10 +970,10 @@ The socket is disabled under `NEXT_PUBLIC_USE_MOCK_API`, which has no server beh
 
 `app/` holds two route groups, and neither changes a URL — `/inbox` is still `/inbox`.
 
-| Group        | Layout renders                                         | Session              |
-| ------------ | ------------------------------------------------------ | -------------------- |
-| `app/(app)`  | Skip link, `AppHeader` with the filtered nav, `<main>` | Required — see below |
-| `app/(auth)` | A centred card column with the wordmark and `<main>`   | None at all          |
+| Group        | Layout renders                                                  | Session              |
+| ------------ | --------------------------------------------------------------- | -------------------- |
+| `app/(app)`  | Skip link, then `AppShell` — the rail, the top bar and `<main>` | Required — see below |
+| `app/(auth)` | A centred card column with the wordmark and `<main>`            | None at all          |
 
 The split exists because password recovery is reachable by somebody who cannot sign in. A
 root layout that resolved the principal would answer 401 to a visitor following a reset

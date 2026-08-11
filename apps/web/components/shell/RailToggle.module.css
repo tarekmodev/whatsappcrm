@@ -1,0 +1,25 @@
+.toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  /* WCAG 2.2 target minimum, the same floor every other control in the app uses. */
+  min-inline-size: var(--size-touch-target);
+  min-block-size: var(--size-touch-target);
+  padding: var(--space-2);
+  background: transparent;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-on-rail);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .toggle:hover {
+    background: var(--color-rail-hover);
+    color: var(--color-on-rail-strong);
+  }
+}

@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
+import { Icon } from '@/components/ui/Icon';
 import { useContent } from '@/lib/content';
 import { useScrollLock } from '@/lib/hooks/useScrollLock';
 import { useFocusTrap } from '@/lib/hooks/useFocusTrap';
@@ -14,8 +15,9 @@ import styles from './MobileMenu.module.css';
  * The small-screen navigation drawer. Usage:
  * `<MobileMenu items={items}>{extraControls}</MobileMenu>`.
  *
- * Driven by the same `NavItem[]` as the desktop header — there is no second copy
- * of the nav markup, which is what keeps the two from drifting.
+ * Driven by the same `NavItem[]` as the rail — there is no second copy of the
+ * nav markup, which is what keeps the two from drifting. Below the layout
+ * breakpoint the rail is removed outright and this is the navigation.
  *
  * Behaviour it owns: `aria-expanded`/`aria-controls` on the trigger, focus moved
  * into the panel on open and restored to the trigger on close, a focus trap while
@@ -95,9 +97,7 @@ export function MobileMenu({
           setIsOpen((current) => !current);
         }}
       >
-        <span aria-hidden="true" className={styles.triggerIcon}>
-          {isOpen ? '✕' : '☰'}
-        </span>
+        <Icon name={isOpen ? 'close' : 'menu'} />
         {isOpen ? content.nav.closeMenu : content.nav.openMenu}
       </Button>
 
@@ -123,12 +123,12 @@ export function MobileMenu({
       >
         <nav aria-label={content.nav.primaryLabel} className={styles.nav}>
           <p className={styles.heading}>{content.nav.menuHeading}</p>
-          <NavLinkList items={items} orientation="vertical" />
+          <NavLinkList items={items} />
           {items.map((item) =>
             item.children === undefined || item.children.length === 0 ? null : (
               <div key={item.id} className={styles.subgroup}>
                 <p className={styles.subheading}>{item.label}</p>
-                <NavLinkList items={item.children} orientation="vertical" />
+                <NavLinkList items={item.children} />
               </div>
             ),
           )}
