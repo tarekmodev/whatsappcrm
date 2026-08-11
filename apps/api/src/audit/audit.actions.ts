@@ -29,6 +29,10 @@ export const AUDIT_ACTIONS = {
    * table an auditor reads.
    */
   authLockout: 'auth.lockout',
+  /** A forgotten password recovered through a reset link (TAR-57). */
+  passwordResetCompleted: 'password.reset_completed',
+  /** A signed-in user changing their own password (TAR-57). */
+  passwordChanged: 'password.changed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
@@ -39,8 +43,8 @@ export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
  * say why every session for one person died at 14:03 rather than only that they
  * did.
  *
- * The first four are somebody else acting on the account; the last three are
- * the account holder acting on their own.
+ * The first four are somebody else acting on the account; the rest are the
+ * account holder acting on their own.
  */
 export const SESSION_REVOCATION_REASONS = [
   'role_change',
@@ -50,6 +54,11 @@ export const SESSION_REVOCATION_REASONS = [
   'logout',
   'logout_all',
   'session_revoked',
+  /** A reset link redeemed. Every session dies — the person resetting may not be
+   *  the person holding the others, which is the case the reset exists for. */
+  'password_reset',
+  /** A signed-in change. Every session *except the caller's* dies. */
+  'password_change',
 ] as const;
 
 export type SessionRevocationReason = (typeof SESSION_REVOCATION_REASONS)[number];
