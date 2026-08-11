@@ -12,6 +12,9 @@ import { NAV_ITEMS, settingsNavItems, visibleNavItems } from './navigation';
  *
  * Asserted against the contract's own role→permission table via `checkerForRole`,
  * so a change to `rbac.ts` shows up here rather than silently widening the UI.
+ *
+ * The one entry every role reaches is Security (TAR-61): a password screen gated
+ * on a permission would be a password nobody without that permission can change.
  */
 
 function navIdsFor(role: TenantRole): string[] {
@@ -23,13 +26,22 @@ function flatten(items: ReturnType<typeof visibleNavItems>): string[] {
 }
 
 describe('navigation visibility by role', () => {
-  it('gives an agent the inbox and nothing under settings', () => {
+  it('gives an agent the inbox and no tenant-admin settings section', () => {
     const ids = navIdsFor('agent');
 
     expect(ids).toContain('inbox');
-    expect(ids).not.toContain('settings');
     expect(ids).not.toContain('settings-people');
     expect(ids).not.toContain('settings-assignment');
+  });
+
+  it('gives every role their own security section, and only that one for an agent', () => {
+    for (const role of TENANT_ROLES) {
+      expect(navIdsFor(role)).toContain('settings-security');
+    }
+
+    expect(settingsNavItems(checkerForRole('agent')).map((item) => item.id)).toEqual([
+      'settings-security',
+    ]);
   });
 
   it('gives a supervisor people management and the assignment report', () => {
@@ -49,9 +61,19 @@ describe('navigation visibility by role', () => {
   });
 
   it('drops a parent whose every child was filtered out', () => {
-    // The agent case above proves the behaviour; this pins the mechanism, so a
-    // future settings section cannot leave an empty "Settings" entry behind.
-    expect(settingsNavItems(checkerForRole('agent'))).toHaveLength(0);
+    // Pins the mechanism independently of the real table, so a future settings
+    // section cannot leave an empty "Settings" entry behind.
+    const parent = {
+      id: 'parent',
+      label: 'Parent',
+      href: '/parent',
+      requiresAny: ['user:invite'],
+      children: [
+        { id: 'child', label: 'Child', href: '/parent/child', requiresAny: ['user:invite'] },
+      ],
+    } as const;
+
+    expect(visibleNavItems([parent], checkerForRole('agent'))).toHaveLength(0);
   });
 
   it('never renders an entry the role lacks every permission for', () => {
@@ -59,7 +81,9 @@ describe('navigation visibility by role', () => {
       const checker = checkerForRole(role);
 
       for (const item of visibleNavItems(NAV_ITEMS, checker)) {
-        expect(checker.canAny(item.requiresAny)).toBe(true);
+        // `undefined` is "everyone", which is a decision made in the table rather
+        // than a permission to check — see `NavItem.requiresAny`.
+        expect(item.requiresAny === undefined || checker.canAny(item.requiresAny)).toBe(true);
       }
     }
   });

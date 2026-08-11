@@ -159,6 +159,7 @@
   --size-touch-target: var(--scale-size-touch-target);
   --size-control-sm: var(--scale-size-control-sm);
   --size-control-md: var(--scale-size-control-md);
+  --size-container-sm: var(--scale-size-container-sm);
   --size-container-md: var(--scale-size-container-md);
   --size-container-lg: var(--scale-size-container-lg);
   --size-container-xl: var(--scale-size-container-xl);

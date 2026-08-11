@@ -1,15 +1,14 @@
 import 'server-only';
 
 import { cache } from 'react';
-import { cookies } from 'next/headers';
 import {
-  SESSION_COOKIE_NAME,
   SessionResponseSchema,
   type Permission,
   type SessionPrincipal,
 } from '@whatsappcrm/contracts';
 import { webEnv } from '@/lib/config/env';
 import { apiRequest } from '@/lib/api/http';
+import { sessionCookieHeaders } from '@/lib/session/session-cookie';
 import { resolveStubPrincipal } from '@/lib/session/stub-principal';
 import { checkerForPrincipal, type PermissionChecker } from '@/lib/session/permissions';
 
@@ -51,23 +50,17 @@ export const resolveSession = cache(async (): Promise<ResolvedSession> => {
     return { principal, checker: checkerForPrincipal(principal), isStubbed: true };
   }
 
-  const cookieStore = await cookies();
-
   const response = await apiRequest({
     method: 'GET',
     path: SESSION_ENDPOINT,
     // The API authenticates by cookie; forward the one the browser sent us.
-    headers: forwardedSessionCookie(cookieStore.get(SESSION_COOKIE_NAME)?.value),
+    headers: await sessionCookieHeaders(),
   });
 
   const principal = SessionResponseSchema.parse(response).user;
 
   return { principal, checker: checkerForPrincipal(principal), isStubbed: false };
 });
-
-function forwardedSessionCookie(value: string | undefined): Record<string, string> {
-  return value === undefined ? {} : { cookie: `${SESSION_COOKIE_NAME}=${value}` };
-}
 
 /**
  * Server-side gate for a route. Returns the session when the principal holds the

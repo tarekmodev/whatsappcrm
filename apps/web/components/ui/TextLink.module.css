@@ -1,0 +1,11 @@
+.link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 44px, the WCAG 2.2 minimum, without a border that would read as a button. */
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-2);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  text-align: center;
+}

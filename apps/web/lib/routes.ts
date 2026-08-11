@@ -10,6 +10,22 @@ export const routes = {
   settings: () => '/settings',
   settingsPeople: (query?: PeopleQuery) => withQuery('/settings/people', peopleSearchParams(query)),
   settingsAssignment: () => '/settings/assignment',
+  settingsSecurity: () => '/settings/security',
+  /**
+   * ⚠️ The page behind this lands with **TAR-60**, which owns the login and
+   * invite-accept screens. The password screens link to it — a reset ends by
+   * sending the user to sign in — so the entry exists here first, and TAR-60
+   * fills it in without touching a single caller.
+   */
+  login: () => '/login',
+  forgotPassword: () => '/forgot-password',
+  /**
+   * The target of the link in a password-reset email. The path is fixed by the
+   * API's `RESET_PASSWORD_LINK_PATH` (`apps/api/src/identity/mailer/mailer.port.ts`),
+   * which is what the mailer puts in front of `#token=…`; `routes.test.ts` pins
+   * the spelling so the two cannot drift into a dead link.
+   */
+  resetPassword: () => '/reset-password',
   forbidden: () => '/forbidden',
 } as const;
 
