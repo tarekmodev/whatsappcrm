@@ -352,6 +352,58 @@ change.
 
 ### Fixed
 
+- **The browser's own API calls name their tenant too, and the naming is now provable**
+  (TAR-64) — the `/api/*` rewrite is where the browser path loses the tenant: Next's proxy
+  replaces `Host` with the API origin, and `rewrites()` cannot add a request header. So
+  `proxy.ts` now matches `/api/` — skipping the sign-in redirect for it, since answering an
+  XHR with an HTML page turns a clean 401 into a parse failure — and attaches the same pair
+  the server-side transport sends. Both headers are deleted and then `set`, never appended,
+  so a caller that names its own tenant is overwritten rather than spliced, and a pair that
+  arrived from the browser never travels on even when this tier has nothing to replace it
+  with. `x-edge-host` carries the tenant; `x-edge-auth` carries `TRUSTED_PROXY_SECRET`,
+  which is what makes the first believable — a forwarded host on its own is a tenant the
+  caller chose. **Both are private names, not `x-forwarded-*`** (TAR-148): the web tier
+  reaches the API over the public internet, through TLS-terminating proxies that populate
+  the standard forwarding headers as a matter of course and are entitled to rewrite them,
+  and an edge that did would leave every tenant route answering a uniform
+  `tenant_not_found` while both services still reported the feature enabled. The two names
+  live in `@whatsappcrm/contracts` beside the session cookie's, so the console and
+  `HostTenantGuard` read one definition and a rename cannot reach one side only; a contract
+  test pins both spellings, because changing them changes a deployed wire format. The
+  secret is server-only (never `NEXT_PUBLIC_`, which would hand it to every visitor) and
+  read at runtime rather than baked into the build, so rotating it is a restart. Verified
+  against the installed Next 16.3 on both paths, including that a forged pair from the
+  client is replaced and that the value appears in no browser asset — and `proxy.int-test.ts`
+  now keeps it verified: it runs a real `next build` and `next start`, points the `/api/*`
+  rewrite at a probe standing in for the API and asserts what the probe actually received,
+  since whether Next applies middleware-injected headers to a request it proxies to an
+  **external** origin is undocumented and has changed between versions. It is a separate
+  script (`pnpm --filter @whatsappcrm/web test:int`) rather than part of `pnpm test`,
+  because it overwrites `.next`, and it runs in CI alongside it.
+- **Server-side API calls now name the tenant they are for** (TAR-64) — every call made by
+  the Next process went out with no indication of the host it came in on, so
+  `HostTenantGuard` would resolve no tenant and answer `tenant_not_found` the moment the
+  mock transport is switched off: not one screen, but every server-rendered route in the
+  console, in every environment. `lib/api/tenant-host.ts` forwards the incoming host as
+  `x-forwarded-host`, and it is applied in `apiRequest` rather than per resource module, so
+  a new call site cannot forget it — including the unauthenticated ones, since sign-in and
+  password reset are tenant-scoped too. The pair is merged **after** the caller's own
+  headers rather than before, so a call site cannot replace it: every other header there is
+  a default worth overriding, and this one decides which tenant's data comes back. A
+  request that arrives with no host now fails loudly there instead of as an unrecognisable
+  404 three layers down, and one with no secret configured sends neither header rather than
+  a host with nothing to vouch for it. A forwarded host rather than `Host` because `Host`
+  cannot be set on either path, both verified against the versions in this repository:
+  Next's rewrite proxy hardcodes `changeOrigin: true` and replaces `Host` with the API
+  origin, and `fetch` derives `Host` from the URL and silently drops a caller-supplied one. **The API side is still to come**: `HostTenantGuard`
+  reads `Host` only, so both paths stay broken until it reads the forwarded host under the
+  secret gate. ADR 0005's sequence diagram, which assumed `Host` was preserved, carries the
+  correction and the trust decision.
+- **`API_BASE_URL` is declared for the web service in every environment** (TAR-64) — it was
+  missing from all three, and `next.config.mjs` reads it at _build_ time and freezes the
+  `/api/*` rewrite destination into `.next/routes-manifest.json`. Every deployed build
+  therefore proxied the browser to `http://localhost:3001/api`, and server-side calls went
+  to the same place, so the console could not reach the API at all regardless of tenancy.
 - **`SENTRY_DSN` can be set from the repository `.env`.** `instrument.ts` runs before
   `AppModule` exists — that is the point, the SDK has to instrument modules before they are
   imported — so it read `process.env` before `ConfigModule` had loaded the root `.env`, and

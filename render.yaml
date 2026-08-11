@@ -82,6 +82,21 @@ projects:
               # custom domain once white-labelling lands.
               - key: WEB_ORIGIN
                 sync: false
+              # The other half of the pair the web service holds (TAR-64). The two
+              # are declared together, and must be given the same value, because
+              # they only mean anything together: the web tier signs a forwarded
+              # tenant host with this, and `HostTenantGuard` honours the host only
+              # when it matches. Declared here before TAR-148 reads it, so landing
+              # the guard cannot deploy a web tier signing with a secret this
+              # service has no variable to hold — which would fall back to `Host`
+              # and answer `tenant_not_found` on every tenant route, everywhere.
+              # Generate per environment with `openssl rand -hex 32`.
+              #
+              # TAR-148 adds TRUSTED_PROXY_SECRET_PREVIOUS alongside it, accepted
+              # as well as the current value so the secret can be rotated without
+              # a synchronised two-service deploy. Rotate API first, then web.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
               - fromGroup: whatsappcrm-secrets-dev
 
           - type: web
@@ -101,6 +116,28 @@ projects:
                 value: production
               # NEXT_PUBLIC_* is inlined into the browser bundle. Never a secret.
               - key: NEXT_PUBLIC_API_BASE_URL
+                sync: false
+              # The API origin, used by server rendering and as the destination of
+              # the /api/* rewrite. Needed at BUILD time as well as at runtime:
+              # next.config.mjs reads it while building and freezes the rewrite
+              # destination into .next/routes-manifest.json. Without it, both the
+              # browser proxy and every server-side call go to localhost:3001 and
+              # the console cannot reach the API at all. Needs a scheme, which
+              # `fromService` cannot supply. Server-only — no NEXT_PUBLIC_ prefix.
+              - key: API_BASE_URL
+                sync: false
+              # Proves to the API that a forwarded tenant host came from this tier
+              # and not from an arbitrary caller (TAR-64). Must hold the SAME value
+              # as the API service's TRUSTED_PROXY_SECRET in this environment; when
+              # they disagree the API resolves no tenant and every tenant route
+              # answers tenant_not_found. Generate per environment with
+              # `openssl rand -hex 32`.
+              #
+              # Server-only, and it must stay that way: a NEXT_PUBLIC_ prefix would
+              # inline it into the browser bundle and hand it to every visitor.
+              # Read at runtime, not baked into the build, so rotating it is a
+              # restart rather than a rebuild.
+              - key: TRUSTED_PROXY_SECRET
                 sync: false
 
           - type: keyvalue
@@ -203,6 +240,10 @@ projects:
                 sync: false
               - key: WEB_ORIGIN
                 sync: false
+              # Same value as this environment's web service — see the development
+              # environment above for why the two are declared together.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
               - fromGroup: whatsappcrm-secrets-staging
 
           - type: web
@@ -221,6 +262,14 @@ projects:
               - key: NODE_ENV
                 value: production
               - key: NEXT_PUBLIC_API_BASE_URL
+                sync: false
+              # Read at build time as well as at runtime — see the development
+              # environment above for why omitting it breaks both API paths.
+              - key: API_BASE_URL
+                sync: false
+              # Same value as this environment's API service. See the development
+              # environment above for what happens when the two disagree.
+              - key: TRUSTED_PROXY_SECRET
                 sync: false
 
           - type: keyvalue
@@ -314,6 +363,10 @@ projects:
                 sync: false
               - key: WEB_ORIGIN
                 sync: false
+              # Same value as this environment's web service — see the development
+              # environment above for why the two are declared together.
+              - key: TRUSTED_PROXY_SECRET
+                sync: false
               - fromGroup: whatsappcrm-secrets-prod
 
           - type: web
@@ -332,6 +385,14 @@ projects:
               - key: NODE_ENV
                 value: production
               - key: NEXT_PUBLIC_API_BASE_URL
+                sync: false
+              # Read at build time as well as at runtime — see the development
+              # environment above for why omitting it breaks both API paths.
+              - key: API_BASE_URL
+                sync: false
+              # Same value as this environment's API service. See the development
+              # environment above for what happens when the two disagree.
+              - key: TRUSTED_PROXY_SECRET
                 sync: false
 
           - type: keyvalue

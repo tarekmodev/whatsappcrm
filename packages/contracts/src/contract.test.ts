@@ -19,7 +19,13 @@ import {
   roleHasPermission,
   TENANT_ROLES,
 } from './rbac';
-import { canTransitionTenant, TENANT_STATUSES, TENANT_STATUS_EFFECTS } from './tenant';
+import {
+  canTransitionTenant,
+  EDGE_AUTH_HEADER,
+  TENANT_HOST_HEADER,
+  TENANT_STATUSES,
+  TENANT_STATUS_EFFECTS,
+} from './tenant';
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
 import {
   AvailabilityUpdateInputSchema,
@@ -270,6 +276,35 @@ describe('tenant lifecycle', () => {
       inboundAccepted: true,
       outboundAllowed: true,
     });
+  });
+});
+
+/**
+ * The pair that tells the API which tenant a request is for (TAR-64, TAR-148).
+ *
+ * These are pinned to their literal spellings rather than merely imported,
+ * because the failure they guard against is silent and total: the web tier and
+ * `HostTenantGuard` read the same two constants, so a rename that reaches only
+ * one deployed service leaves every tenant route answering `tenant_not_found`
+ * while both sides still report the feature enabled. A wire format is a value,
+ * not an implementation detail, and changing one of these means changing a
+ * deployed contract — this is the test that says so out loud.
+ */
+describe('tenant routing headers (TAR-64)', () => {
+  it('names the tenant host on a private header, not a standard forwarding one', () => {
+    // Deliberately not `x-forwarded-host`: the web tier reaches the API over the
+    // public internet, through proxies that populate `x-forwarded-*` as a matter
+    // of course and are entitled to rewrite it.
+    expect(TENANT_HOST_HEADER).toBe('x-edge-host');
+    expect(TENANT_HOST_HEADER).not.toBe('x-forwarded-host');
+  });
+
+  it('carries the proof on a header of its own', () => {
+    expect(EDGE_AUTH_HEADER).toBe('x-edge-auth');
+  });
+
+  it('keeps the two distinct, since one authenticates the other', () => {
+    expect(TENANT_HOST_HEADER).not.toBe(EDGE_AUTH_HEADER);
   });
 });
 
