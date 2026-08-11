@@ -417,6 +417,30 @@ and none should start.** If one must, `$queryRaw` with a true row comparison is 
 sanctioned escape, on the same footing decision 1 already grants reporting: raw SQL is
 safe here because isolation is enforced by the database, not by the query that forgot it.
 
+**Every keyset sort column is `NOT NULL`**, and that is a rule about the schema, not a
+detail of the predicate. Three-valued logic makes both sides return `NULL` for a `NULL`
+row — `lastMessageAt <= $1` is `NULL`, which is not true — so the row is filtered out of
+every page after the first. It appears on page one, where there is no cursor and therefore
+no predicate, and never again. That is the same silent-truncation class as comparing only
+the leading column: no error, a row that simply stops appearing.
+
+`conversations.last_message_at` was the one column in the schema that broke this rule, and
+it is the inbox's own sort key. It is `NOT NULL` now, defaulted to the row's creation
+time: a conversation with no messages sorts by when it was created, which is where an
+operator would look for it anyway. `ConversationResponse.lastMessageAt` is non-nullable
+with it — `lastMessagePreview` keeps its own nullability, being no part of any sort. The
+reasoning is recorded because the constraint is not self-evident from the column: left
+nullable, the defect would have presented twice over, since Postgres sorts `NULL` first
+under `DESC` — a message-less conversation pinned above every active thread on page one of
+the inbox, and gone from every page after it.
+
+If a column genuinely cannot be `NOT NULL`, it cannot be a keyset sort column either —
+sort on a `NOT NULL` surrogate instead. `NULLS LAST` with a two-mode predicate, one for
+the non-null region and one for the `NULL` block with the cursor encoding which mode it is
+resuming in, does work, and needs the index declared `NULLS LAST` to match. That is a
+standing cost in every list implementation, and it is not worth paying for a column that
+could have been `NOT NULL`.
+
 Whichever form, verify with `EXPLAIN` that the plan shows an index scan with the predicate
 as an index condition rather than a filter, and no sort node. No plan is asserted here.
 
