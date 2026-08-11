@@ -69,12 +69,54 @@ describe('MessageBubble', () => {
     expect(screen.getByText(content.messageStatuses.read)).toBeInTheDocument();
   });
 
-  it('says an outbound message with no sender was sent automatically', () => {
+  it('says a message the bot sent was sent automatically', () => {
     render(
-      <MessageBubble message={{ ...BASE, direction: 'outbound', body: 'Hi!' }} senderName={null} />,
+      <MessageBubble
+        message={{ ...BASE, direction: 'outbound', body: 'Hi!', sentByAutomation: true }}
+        senderName={null}
+      />,
     );
 
     expect(screen.getByText(content.thread.sentByAutomation)).toBeInTheDocument();
+  });
+
+  it('does not attribute a human’s reply to automation when their name is unresolved', () => {
+    // The directory read is one page of users, so an agent past it resolves to
+    // no name. Reading that as "a bot wrote this" misattributes a colleague's
+    // words — `sentByAutomation` is the contract's answer and is asked first.
+    render(
+      <MessageBubble
+        message={{
+          ...BASE,
+          direction: 'outbound',
+          body: 'Looking into it now.',
+          sentByUserId: '0192f001-0000-7000-8000-000000000199',
+          sentByAutomation: false,
+        }}
+        senderName={null}
+      />,
+    );
+
+    expect(screen.getByText(content.thread.sentByTeammate)).toBeInTheDocument();
+    expect(screen.queryByText(content.thread.sentByAutomation)).not.toBeInTheDocument();
+  });
+
+  it('trusts sentByAutomation over a name that happens to resolve', () => {
+    render(
+      <MessageBubble
+        message={{
+          ...BASE,
+          direction: 'outbound',
+          body: 'Auto-reply.',
+          sentByUserId: '0192f001-0000-7000-8000-000000000101',
+          sentByAutomation: true,
+        }}
+        senderName="Amina Haddad"
+      />,
+    );
+
+    expect(screen.getByText(content.thread.sentByAutomation)).toBeInTheDocument();
+    expect(screen.queryByText(content.thread.sentBy('Amina Haddad'))).not.toBeInTheDocument();
   });
 
   it('reports a failed send with the provider’s reason, not just a colour', () => {
@@ -97,7 +139,10 @@ describe('MessageBubble', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders an image with its caption as the accessible name', () => {
+  it('does not repeat a visible caption as the image’s accessible name', () => {
+    // The caption is rendered as a paragraph below the picture, so using it as
+    // the alt made a screen reader read it twice — once as the image and once as
+    // text. Saying what the picture *is* leaves the caption to be read once.
     render(
       <MessageBubble
         message={{
@@ -110,7 +155,9 @@ describe('MessageBubble', () => {
       />,
     );
 
-    expect(screen.getByRole('img', { name: 'The error screen I get' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: content.thread.imageFromCustomer })).toBeInTheDocument();
+    expect(screen.getByText('The error screen I get')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'The error screen I get' })).toBeNull();
   });
 
   it('describes an uncaptioned image rather than leaving it nameless', () => {
@@ -197,6 +244,42 @@ describe('MessageBubble', () => {
     );
 
     expect(screen.getByText(content.thread.attachmentDownloading)).toBeInTheDocument();
+  });
+
+  it('reserves a player, not a photo, for a voice note that is still downloading', () => {
+    // One 4:3 box for every kind produced exactly the layout shift the reserved
+    // box exists to prevent: a pending audio collapsed to a thin player when it
+    // landed.
+    const { container } = render(
+      <MessageBubble
+        message={{
+          ...BASE,
+          type: 'audio',
+          attachments: [attachment({ kind: 'audio', downloadState: 'pending' })],
+        }}
+        senderName={null}
+      />,
+    );
+
+    expect(screen.getByText(content.thread.attachmentDownloading)).toBeInTheDocument();
+    expect(container.querySelector('[class*="audioPlaceholder"]')).not.toBeNull();
+    expect(container.querySelector('[class*="frame"]')).toBeNull();
+  });
+
+  it('reserves a link row for a document that is still downloading', () => {
+    const { container } = render(
+      <MessageBubble
+        message={{
+          ...BASE,
+          type: 'document',
+          attachments: [attachment({ kind: 'document', downloadState: 'pending' })],
+        }}
+        senderName={null}
+      />,
+    );
+
+    expect(container.querySelector('[class*="document"]')).not.toBeNull();
+    expect(container.querySelector('[class*="frame"]')).toBeNull();
   });
 
   it('says an attachment failed rather than leaving a gap where it was', () => {

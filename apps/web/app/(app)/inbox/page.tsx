@@ -67,7 +67,10 @@ export default async function InboxPage({
             <SectionErrorBoundary>
               {/* Keyed on the filters so changing one shows the skeleton again
                   rather than leaving the previous scope's rows on screen. */}
-              <Suspense key={`${scope}:${status ?? ''}`} fallback={<InboxSectionSkeleton />}>
+              <Suspense
+                key={`${scope}:${status ?? ''}`}
+                fallback={<InboxSectionSkeleton hasClaim={checker.can('conversation:assign')} />}
+              >
                 <InboxSection
                   query={{ scope, status }}
                   selectedId={conversationId}

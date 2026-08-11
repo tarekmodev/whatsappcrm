@@ -46,7 +46,17 @@ export function ConversationBadges({
         <Badge tone="info">{content.inbox.unreadCount(conversation.unreadCount)}</Badge>
       ) : null}
 
-      {assigneeName === null ? null : <Badge>{content.inbox.assignedTo(assigneeName)}</Badge>}
+      {/* Keyed on the *id*, not on the name. The directory read is one page, so a
+          tenant past it resolves no name — and dropping the badge for that made a
+          thread somebody is holding look unheld, which is the state this row
+          exists to report. */}
+      {conversation.assignedUserId === null ? null : (
+        <Badge>
+          {assigneeName === null
+            ? content.inbox.assignedToUnresolved
+            : content.inbox.assignedTo(assigneeName)}
+        </Badge>
+      )}
       {teamName === null ? null : <Badge>{content.inbox.assignedToTeam(teamName)}</Badge>}
       {isUnclaimed ? <Badge tone="warning">{content.inbox.unclaimed}</Badge> : null}
 

@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { ConversationResponse } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
+import { ToastProvider } from '@/components/ui/ToastProvider';
 import { ConversationList, ConversationListSkeleton } from './ConversationList';
+
+vi.mock('@/features/inbox/inbox.actions', () => ({
+  claimConversationAction: () => Promise.resolve({ status: 'success', data: {} }),
+  releaseConversationAction: () => Promise.resolve({ status: 'success', data: {} }),
+}));
 
 /**
  * TAR-20's first acceptance criterion in the list: a conversation nobody has
@@ -49,21 +55,39 @@ function conversation(overrides: Partial<ConversationResponse>): ConversationRes
   };
 }
 
+const LIANG_ID = '0192f001-0000-7000-8000-000000000104';
 const NAMES = new Map([[AMINA_ID, 'Amina Haddad']]);
 const TEAMS = new Map([[BILLING_ID, 'Billing']]);
 const QUERY = { scope: 'all', status: 'open' } as const;
 
-describe('ConversationList', () => {
-  it('opens each conversation through a link that carries the current filters', () => {
-    render(
+function renderList({
+  conversations,
+  claim = null,
+  selectedId = null,
+  query = QUERY,
+}: {
+  conversations: readonly ConversationResponse[];
+  claim?: { currentUserId: string } | null;
+  selectedId?: string | null;
+  query?: { scope: 'assigned' | 'unassigned' | 'all'; status: 'open' | undefined };
+}) {
+  return render(
+    <ToastProvider>
       <ConversationList
-        conversations={[conversation({})]}
+        conversations={conversations}
         userNames={NAMES}
         teamNames={TEAMS}
-        query={QUERY}
-        selectedId={null}
-      />,
-    );
+        query={query}
+        selectedId={selectedId}
+        claim={claim}
+      />
+    </ToastProvider>,
+  );
+}
+
+describe('ConversationList', () => {
+  it('opens each conversation through a link that carries the current filters', () => {
+    renderList({ conversations: [conversation({})] });
 
     const link = screen.getByRole('link', {
       name: content.inbox.openConversation('Fatima Al-Zahra'),
@@ -76,15 +100,10 @@ describe('ConversationList', () => {
   });
 
   it('marks the open conversation for assistive technology, not only in colour', () => {
-    render(
-      <ConversationList
-        conversations={[conversation({}), conversation({ id: UNCLAIMED_ID })]}
-        userNames={NAMES}
-        teamNames={TEAMS}
-        query={QUERY}
-        selectedId={ASSIGNED_ID}
-      />,
-    );
+    renderList({
+      conversations: [conversation({}), conversation({ id: UNCLAIMED_ID })],
+      selectedId: ASSIGNED_ID,
+    });
 
     const links = screen.getAllByRole('link');
 
@@ -93,31 +112,17 @@ describe('ConversationList', () => {
   });
 
   it('says which conversations nobody has claimed', () => {
-    render(
-      <ConversationList
-        conversations={[conversation({})]}
-        userNames={NAMES}
-        teamNames={TEAMS}
-        query={QUERY}
-        selectedId={null}
-      />,
-    );
+    renderList({ conversations: [conversation({})] });
 
     expect(screen.getByText(content.inbox.unclaimed)).toBeInTheDocument();
   });
 
   it('resolves the assignee and the routed team rather than rendering raw ids', () => {
-    render(
-      <ConversationList
-        conversations={[
-          conversation({ assignedUserId: AMINA_ID, assignedTeamId: BILLING_ID, unreadCount: 2 }),
-        ]}
-        userNames={NAMES}
-        teamNames={TEAMS}
-        query={QUERY}
-        selectedId={null}
-      />,
-    );
+    renderList({
+      conversations: [
+        conversation({ assignedUserId: AMINA_ID, assignedTeamId: BILLING_ID, unreadCount: 2 }),
+      ],
+    });
 
     expect(screen.getByText(content.inbox.assignedTo('Amina Haddad'))).toBeInTheDocument();
     expect(screen.getByText(content.inbox.assignedToTeam('Billing'))).toBeInTheDocument();
@@ -126,19 +131,80 @@ describe('ConversationList', () => {
     expect(screen.queryByText(content.inbox.unclaimed)).not.toBeInTheDocument();
   });
 
+  it('still reports a hold whose holder the directory could not name', () => {
+    // The directory read is one page of users. Dropping the badge made a thread
+    // somebody is working look like one nobody had touched.
+    renderList({ conversations: [conversation({ assignedUserId: LIANG_ID })] });
+
+    expect(screen.getByText(content.inbox.assignedToUnresolved)).toBeInTheDocument();
+    expect(screen.queryByText(content.inbox.unclaimed)).not.toBeInTheDocument();
+    expect(screen.queryByText(LIANG_ID)).not.toBeInTheDocument();
+  });
+
   it('explains an empty list rather than rendering a blank panel', () => {
-    render(
-      <ConversationList
-        conversations={[]}
-        userNames={NAMES}
-        teamNames={TEAMS}
-        query={{ scope: 'assigned', status: undefined }}
-        selectedId={null}
-      />,
-    );
+    renderList({ conversations: [], query: { scope: 'assigned', status: undefined } });
 
     expect(screen.getByText(content.inbox.emptyHeading)).toBeInTheDocument();
     expect(screen.getByText(content.inbox.emptyBody)).toBeInTheDocument();
+  });
+});
+
+/**
+ * TAR-71's scope puts the claim on the list as well as the thread, so picking
+ * work out of the shared pool does not cost one thread-open per conversation.
+ */
+describe('ConversationList — claiming from the list', () => {
+  it('offers no control at all to a principal without conversation:assign', () => {
+    renderList({ conversations: [conversation({})], claim: null });
+
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('offers a claim on an unclaimed row', () => {
+    renderList({ conversations: [conversation({})], claim: { currentUserId: AMINA_ID } });
+
+    expect(
+      screen.getByRole('button', { name: content.inbox.claimAria('Fatima Al-Zahra') }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers a release on a row the reader already holds', () => {
+    renderList({
+      conversations: [conversation({ assignedUserId: AMINA_ID })],
+      claim: { currentUserId: AMINA_ID },
+    });
+
+    expect(
+      screen.getByRole('button', { name: content.inbox.releaseAria('Fatima Al-Zahra') }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers a take-over, never a claim, on a row somebody else holds', () => {
+    renderList({
+      conversations: [conversation({ assignedUserId: LIANG_ID })],
+      claim: { currentUserId: AMINA_ID },
+    });
+
+    expect(
+      screen.getByRole('button', {
+        name: content.inbox.takeOverAria('Fatima Al-Zahra', content.inbox.unresolvedHolder),
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: content.inbox.claimAria('Fatima Al-Zahra') }),
+    ).toBeNull();
+  });
+
+  it('keeps the claim control out of the row’s link, so a click on it does not navigate', () => {
+    renderList({ conversations: [conversation({})], claim: { currentUserId: AMINA_ID } });
+
+    const button = screen.getByRole('button', {
+      name: content.inbox.claimAria('Fatima Al-Zahra'),
+    });
+
+    // A button inside an anchor is invalid and behaves differently in every
+    // browser; the stretched-link pattern keeps them siblings.
+    expect(button.closest('a')).toBeNull();
   });
 });
 

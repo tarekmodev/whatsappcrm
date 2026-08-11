@@ -166,6 +166,12 @@ export const content = {
     emptyAllBody: 'Nothing in the workspace matches this filter.',
     unreadCount: (count: number) => `${count} unread`,
     assignedTo: (name: string) => `Assigned to ${name}`,
+    /**
+     * Somebody holds this thread and the console could not resolve who — the
+     * directory read is one page. Saying "assigned" without a name is the honest
+     * answer; dropping the badge would make a claimed thread look unheld.
+     */
+    assignedToUnresolved: 'Assigned to another agent',
     assignedToTeam: (name: string) => `Team ${name}`,
     scopeNarrowedNotice:
       'Your role sees only the conversations assigned to you or your teams, so this list is narrowed.',
@@ -186,6 +192,23 @@ export const content = {
     release: 'Release',
     releaseAria: (name: string) => `Release the conversation with ${name}`,
     releaseSuccess: (name: string) => `${name} is back in the shared pool`,
+
+    /**
+     * Taking a thread off the colleague working it. A different verb from
+     * "Claim" and a different confirmation, because it is a different act: the
+     * shared pool is nobody's, and this one is somebody's.
+     */
+    takeOver: 'Take over',
+    takeOverAria: (contact: string, holder: string) =>
+      `Take over the conversation with ${contact} from ${holder}`,
+    takeOverTitle: 'Take this conversation over?',
+    takeOverBody: (contact: string, holder: string) =>
+      `${holder} is handling ${contact} right now. Taking it over assigns it to you — they keep the thread on screen and are not told, so tell them yourself.`,
+    takeOverConfirm: 'Take over',
+    takeOverSuccess: (contact: string, holder: string) =>
+      `You are handling ${contact}, taken over from ${holder}`,
+    /** Stands in for a holder whose name this page could not resolve. */
+    unresolvedHolder: 'Another agent',
     /**
      * Said plainly rather than left as a missing button. ADR 0002 amendment 4
      * opens an unclaimed thread to every agent and rules that taking it still
@@ -199,6 +222,15 @@ export const content = {
     backToList: 'Back to conversations',
     noThreadHeading: 'No conversation open',
     noThreadBody: 'Pick a conversation from the list to read it and reply.',
+    /**
+     * The API answers `not_found` for a thread the reader may not see — never
+     * `forbidden`, so nothing can be enumerated. A shared supervisor link opened
+     * by an agent lands here, as does a thread claimed out from under a reader.
+     * Explaining it beats a generic error card with a retry that cannot work.
+     */
+    threadUnavailableHeading: 'This conversation is not available to you',
+    threadUnavailableBody:
+      'It may have been claimed by someone else, or it may be outside what your role can see. Pick another conversation from the list.',
     scopeNarrowedAllNotice:
       'You are seeing your own and your teams’ conversations plus everything nobody has claimed — not the whole workspace.',
   },
@@ -215,6 +247,12 @@ export const content = {
     outbound: 'From your team',
     sentBy: (name: string) => `Sent by ${name}`,
     sentByAutomation: 'Sent automatically',
+    /**
+     * A person sent it and this page could not resolve which one. Distinct from
+     * `sentByAutomation` on purpose: attributing a colleague's words to a bot is
+     * a lie about the one thing this product is a record of.
+     */
+    sentByTeammate: 'Sent by a teammate',
     sentAt: 'Sent',
     failureReason: (reason: string) => `Not delivered: ${reason}`,
 

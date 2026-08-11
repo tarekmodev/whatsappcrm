@@ -2,6 +2,7 @@ import { SectionCard } from '@/components/ui/SectionCard';
 import { Stack } from '@/components/layout/Stack';
 import { Notice } from '@/components/ui/Notice';
 import { content } from '@/content/en';
+import { verifySession } from '@/lib/session/session';
 import { loadInbox, type InboxQuery } from '@/features/inbox/inbox.data';
 import { ConversationList, ConversationListSkeleton } from './ConversationList';
 
@@ -19,7 +20,15 @@ export interface InboxSectionProps {
 }
 
 export async function InboxSection({ query, selectedId, isScopeNarrowed }: InboxSectionProps) {
-  const { conversations, userNames, teamNames } = await loadInbox(query);
+  const [session, { conversations, userNames, teamNames }] = await Promise.all([
+    verifySession(),
+    loadInbox(query),
+  ]);
+  // Request-cached, so this costs no extra round trip on top of the page's own
+  // session check.
+  const claim = session.checker.can('conversation:assign')
+    ? { currentUserId: session.principal.userId }
+    : null;
 
   return (
     <SectionCard id="conversations" title={content.inbox.conversationsHeading}>
@@ -36,17 +45,23 @@ export async function InboxSection({ query, selectedId, isScopeNarrowed }: Inbox
           teamNames={teamNames}
           query={{ scope: query.scope, status: query.status }}
           selectedId={selectedId}
+          claim={claim}
         />
       </Stack>
     </SectionCard>
   );
 }
 
-/** Mirrors `InboxSection`'s frame, with the list's own skeleton inside it. */
-export function InboxSectionSkeleton() {
+/**
+ * Mirrors `InboxSection`'s frame, with the list's own skeleton inside it.
+ *
+ * `hasClaim` matches what the principal's real rows will carry, so a supervisor's
+ * taller badge row is reserved rather than appearing when the data lands.
+ */
+export function InboxSectionSkeleton({ hasClaim = false }: { hasClaim?: boolean }) {
   return (
     <SectionCard id="conversations" title={content.inbox.conversationsHeading}>
-      <ConversationListSkeleton />
+      <ConversationListSkeleton hasClaim={hasClaim} />
     </SectionCard>
   );
 }

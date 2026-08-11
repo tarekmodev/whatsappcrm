@@ -171,6 +171,7 @@
   --size-scroll-region: var(--scale-size-viewport-tall);
   --size-media-thumb: var(--scale-size-media-sm);
   --size-media-inline: var(--scale-size-media-md);
+  --size-media-player: var(--scale-size-player);
   --measure-body: var(--scale-measure-body);
   --aspect-media: var(--scale-aspect-media);
   --aspect-media-square: var(--scale-aspect-square);

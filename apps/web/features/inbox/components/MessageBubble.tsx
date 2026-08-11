@@ -49,7 +49,6 @@ export function MessageBubble({ message, senderName }: MessageBubbleProps) {
                 key={attachment.id}
                 attachment={attachment}
                 direction={message.direction}
-                caption={message.body}
               />
             ))}
           </div>
@@ -75,7 +74,9 @@ function MessageMeta({ message, senderName }: MessageBubbleProps) {
 
   return (
     <p className={styles.meta}>
-      {message.direction === 'outbound' ? <OutboundAuthor senderName={senderName} /> : null}
+      {message.direction === 'outbound' ? (
+        <OutboundAuthor message={message} senderName={senderName} />
+      ) : null}
       <RelativeTime isoTimestamp={message.sentAt} label={content.thread.sentAt} />
       {message.direction === 'outbound' ? (
         <span className={styles.status} data-status={message.status}>
@@ -91,16 +92,30 @@ function MessageMeta({ message, senderName }: MessageBubbleProps) {
   );
 }
 
-function OutboundAuthor({ senderName }: { senderName: string | null }) {
+/**
+ * Who sent an outbound message, in the order the answers are trustworthy.
+ *
+ * `sentByAutomation` is the contract's answer to "was a human involved", and it
+ * is asked **first** — because a missing name is not evidence of a bot. The
+ * directory that resolves `sentByUserId` is one page of users, so in a tenant
+ * with more than a page of them a real agent's reply resolved to no name and was
+ * captioned "Sent automatically": a lie about the one thing this product is a
+ * record of. An unresolved human is now said to be an unresolved human.
+ */
+function OutboundAuthor({ message, senderName }: MessageBubbleProps) {
   const content = useContent();
+
+  if (message.sentByAutomation) {
+    // The chatbot (TAR-28) or a workflow (TAR-27). Worth saying: an agent should
+    // not have to wonder who replied on their behalf.
+    return <span>{content.thread.sentByAutomation}</span>;
+  }
 
   if (senderName !== null) {
     return <span>{content.thread.sentBy(senderName)}</span>;
   }
 
-  // No sender and outbound means the chatbot or a workflow produced it, which is
-  // worth saying: an agent should not have to wonder who replied on their behalf.
-  return <span>{content.thread.sentByAutomation}</span>;
+  return <span>{content.thread.sentByTeammate}</span>;
 }
 
 /**

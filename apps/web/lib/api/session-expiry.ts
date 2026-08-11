@@ -1,4 +1,8 @@
-import { ApiRequestError } from '@/lib/api/http';
+// From `error.ts`, not from `http.ts` — the same class either way, but `http.ts`
+// is `server-only` (it reaches the fixture transport), and this predicate is
+// wanted in the browser too: the realtime hook has to tell "the API refused my
+// ticket because I am signed out" apart from "the API is having a bad minute".
+import { ApiRequestError } from '@/lib/api/error';
 
 /**
  * The one definition of "this caller no longer has a session", so every surface

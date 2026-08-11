@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MAIN_CONTENT_ID } from '@/components/shell/main-content';
 import { Modal } from './Modal';
@@ -10,19 +10,13 @@ vi.mock('next/navigation', () => ({
 }));
 
 /**
- * jsdom implements `<dialog>` but not `showModal`'s focus behaviour, so these cases
- * cover the parts `Modal` owns itself: opening the element, focusing the first form
- * control rather than the close button, and restoring focus to the invoker when the
- * dialog unmounts on dismissal.
+ * jsdom implements `<dialog>` but not `showModal`'s focus behaviour. The
+ * `showModal`/`close` stubs live in `vitest.setup.ts`, because every test that
+ * renders a dialog needs them; these cases cover the parts `Modal` owns itself:
+ * opening the element, focusing the first form control rather than the close
+ * button, and restoring focus to the invoker when the dialog unmounts on
+ * dismissal.
  */
-beforeAll(() => {
-  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-    this.open = true;
-  };
-  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
-    this.open = false;
-  };
-});
 
 /**
  * `fireEvent.click` does not move focus, but a real click or Enter does — and the

@@ -4,6 +4,7 @@ import { content } from '@/content/en';
 import { verifySession } from '@/lib/session/session';
 import { loadConversationThread } from '@/features/inbox/thread.data';
 import { nameFor } from '@/features/inbox/directory.data';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { InternalNotesPanel, InternalNotesPanelSkeleton } from './InternalNotesPanel';
 import { MessageList, MessageListSkeleton } from './MessageList';
 import { ThreadHeader, ThreadHeaderSkeleton, type ThreadQuery } from './ThreadHeader';
@@ -25,9 +26,16 @@ export interface ThreadSectionProps {
 }
 
 export async function ThreadSection({ conversationId, query }: ThreadSectionProps) {
-  const session = await verifySession();
-  const { conversation, messages, hasOlderMessages, notes, userNames, teamNames } =
-    await loadConversationThread(conversationId);
+  const [session, result] = await Promise.all([
+    verifySession(),
+    loadConversationThread(conversationId),
+  ]);
+
+  if (result.outcome === 'unavailable') {
+    return <ThreadUnavailable />;
+  }
+
+  const { conversation, messages, hasOlderMessages, notes, userNames, teamNames } = result.thread;
 
   return (
     <Stack gap="4">
@@ -58,6 +66,25 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
         />
       </SectionCard>
     </Stack>
+  );
+}
+
+/**
+ * What the thread pane shows for an id this reader may not open — a shared
+ * supervisor link, or a thread claimed by somebody else since it was listed.
+ *
+ * The same card frame the real thread uses, and no Retry: the answer will not
+ * change on a second attempt, so offering one would be a button that cannot work.
+ * The list beside it is untouched.
+ */
+function ThreadUnavailable() {
+  return (
+    <SectionCard id="conversation" title={content.inbox.threadHeading}>
+      <EmptyState
+        heading={content.inbox.threadUnavailableHeading}
+        body={content.inbox.threadUnavailableBody}
+      />
+    </SectionCard>
   );
 }
 

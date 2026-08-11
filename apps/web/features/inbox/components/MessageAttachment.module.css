@@ -52,13 +52,23 @@
   text-align: center;
 }
 
-.audio {
+.audio,
+.audioPlaceholder {
   /* Definite, for the reason `.frame` is: the platform's own player has no
      intrinsic width worth speaking of, and a percentage inside a shrink-to-fit
-     bubble renders it as a pair of stranded icons. */
+     bubble renders it as a pair of stranded icons. The block size is pinned too,
+     so the placeholder below reserves exactly what the player will take — the
+     native control's own height varies by platform. */
+  display: block;
   inline-size: var(--size-media-inline);
   max-inline-size: 100%;
-  display: block;
+  block-size: var(--size-media-player);
+}
+
+.audioPlaceholder {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
 }
 
 .document {

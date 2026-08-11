@@ -8,6 +8,7 @@ import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
 import { useContent } from '@/lib/content';
 import { routes, type ConversationStatusFilter, type InboxScope } from '@/lib/routes';
+import { conversationHold } from '@/features/inbox/conversation-hold';
 import { ClaimButton } from './ClaimButton';
 import { ConversationBadges } from './ConversationBadges';
 import styles from './ThreadHeader.module.css';
@@ -68,7 +69,7 @@ export function ThreadHeader({
           <ClaimButton
             conversationId={conversation.id}
             contactName={conversation.contact.displayName}
-            isMine={conversation.assignedUserId === currentUserId}
+            hold={conversationHold(conversation.assignedUserId, currentUserId, assigneeName)}
           />
         ) : null}
       </Cluster>

@@ -1,15 +1,15 @@
 'use client';
 
-import type { MessageAttachment, MessageDirection } from '@whatsappcrm/contracts';
+import type { MediaKind, MessageAttachment, MessageDirection } from '@whatsappcrm/contracts';
 import { Notice } from '@/components/ui/Notice';
-import { SkeletonBlock } from '@/components/ui/Skeleton';
+import { SkeletonBlock, SkeletonLine } from '@/components/ui/Skeleton';
 import { useContent } from '@/lib/content';
 import { formatFileSize } from '@/lib/format/file-size';
 import styles from './MessageAttachment.module.css';
 
 /**
  * One attachment on a message, rendered as the kind of thing it is. Usage:
- * `<MessageAttachmentView attachment={…} direction="inbound" caption={body} />`.
+ * `<MessageAttachmentView attachment={…} direction="inbound" />`.
  *
  * The renderer is picked from `kind`, never from `mimeType`, because the two do
  * not agree: `image/webp` is a sticker and `image/png` is a photo, and they do
@@ -18,11 +18,12 @@ import styles from './MessageAttachment.module.css';
  * ## Three states, not one
  *
  * An inbound download runs off the ingest path, so a message can exist before
- * its picture does. `pending` renders a placeholder **in the same reserved box**
- * the image will occupy, so nothing moves when the bytes land; `failed` says so,
- * because the customer did send something and a silent gap would say otherwise.
- * `url: null` in any other state is treated as failed rather than rendered as a
- * broken element.
+ * its picture does. `pending` renders a placeholder in the box the real thing
+ * will occupy — **shaped by kind**, so a voice note reserves a player's worth of
+ * space rather than a photo's, and nothing moves when the bytes land. `failed`
+ * says so, because the customer did send something and a silent gap would say
+ * otherwise. `url: null` in any other state is treated as failed rather than
+ * rendered as a broken element.
  *
  * ## Why not `next/image`
  *
@@ -37,24 +38,13 @@ import styles from './MessageAttachment.module.css';
 export interface MessageAttachmentViewProps {
   attachment: MessageAttachment;
   direction: MessageDirection;
-  /** The message body, which WhatsApp uses as the caption for a media message. */
-  caption: string | null;
 }
 
-export function MessageAttachmentView({
-  attachment,
-  direction,
-  caption,
-}: MessageAttachmentViewProps) {
+export function MessageAttachmentView({ attachment, direction }: MessageAttachmentViewProps) {
   const content = useContent();
 
   if (attachment.downloadState === 'pending') {
-    return (
-      <div className={styles.frame} data-kind={attachment.kind}>
-        <SkeletonBlock height="100%" />
-        <p className={styles.state}>{content.thread.attachmentDownloading}</p>
-      </div>
-    );
+    return <PendingAttachment kind={attachment.kind} />;
   }
 
   if (attachment.downloadState === 'failed' || attachment.url === null) {
@@ -72,7 +62,7 @@ export function MessageAttachmentView({
           <img
             className={styles.media}
             src={attachment.url}
-            alt={imageAlt(attachment, direction, caption, content)}
+            alt={imageAlt(attachment.kind, direction, content)}
             loading="lazy"
             decoding="async"
           />
@@ -100,6 +90,43 @@ export function MessageAttachmentView({
     case 'document':
       return <DocumentLink attachment={attachment} url={attachment.url} />;
   }
+}
+
+/**
+ * The placeholder an inbound attachment occupies while its bytes are fetched,
+ * in the shape of the thing that is coming.
+ *
+ * One 4:3 box for every kind was wrong for two of them: a voice note and a
+ * document collapse to a player and a link row, so the reserved box produced
+ * exactly the layout shift it exists to prevent.
+ */
+function PendingAttachment({ kind }: { kind: MediaKind }) {
+  const content = useContent();
+
+  if (kind === 'audio') {
+    return (
+      <div className={styles.audioPlaceholder}>
+        <SkeletonBlock height="100%" />
+        <p className={styles.state}>{content.thread.attachmentDownloading}</p>
+      </div>
+    );
+  }
+
+  if (kind === 'document') {
+    return (
+      <div className={styles.document} aria-hidden="true">
+        <SkeletonLine width="12rem" />
+        <p className={styles.documentMeta}>{content.thread.attachmentDownloading}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.frame} data-kind={kind}>
+      <SkeletonBlock height="100%" />
+      <p className={styles.state}>{content.thread.attachmentDownloading}</p>
+    </div>
+  );
 }
 
 function DocumentLink({
@@ -138,21 +165,20 @@ function fileSizeLabel(sizeBytes: number, content: ReturnType<typeof useContent>
 }
 
 /**
- * The caption when there is one — it is what the customer wrote about the
- * picture — and a direction-aware description otherwise. Never empty: an image
- * with no accessible name is invisible to a screen reader.
+ * A direction-aware description, never the caption.
+ *
+ * The caption was the alt text, and `MessageBubble` renders that same body as a
+ * paragraph directly below — so a screen reader read it twice, once as the
+ * picture and once as text. Saying what the picture *is* leaves the caption to
+ * be read once, as what it is. Never empty: an image with no accessible name is
+ * invisible.
  */
 function imageAlt(
-  attachment: MessageAttachment,
+  kind: MediaKind,
   direction: MessageDirection,
-  caption: string | null,
   content: ReturnType<typeof useContent>,
 ): string {
-  if (caption !== null && caption.trim() !== '') {
-    return caption;
-  }
-
-  if (attachment.kind === 'sticker') {
+  if (kind === 'sticker') {
     return direction === 'inbound'
       ? content.thread.stickerFromCustomer
       : content.thread.stickerFromTeam;

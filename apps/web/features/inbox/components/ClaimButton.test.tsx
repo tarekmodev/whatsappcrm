@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
+import type { ConversationHold } from '@/features/inbox/conversation-hold';
 import { ClaimButton } from './ClaimButton';
 
 /**
- * TAR-20's second acceptance criterion at the control level: claiming a
- * conversation is one deliberate action, and releasing it is the same control
- * pointing the other way.
+ * TAR-20's second acceptance criterion at the control level, and the finding
+ * that came out of reviewing it: taking a thread off the colleague working it is
+ * not the same act as picking one out of the shared pool, and must not look like
+ * it. The server writes the assignment unconditionally, so the UI is the only
+ * place that difference exists until TAR-186 closes the race.
  */
 
 const claimConversationAction = vi.fn();
@@ -21,10 +24,10 @@ vi.mock('@/features/inbox/inbox.actions', () => ({
 const CONVERSATION_ID = '0192f004-0000-7000-8000-000000000404';
 const CONTACT = 'Fatima Al-Zahra';
 
-function renderButton(isMine: boolean) {
+function renderButton(hold: ConversationHold) {
   return render(
     <ToastProvider>
-      <ClaimButton conversationId={CONVERSATION_ID} contactName={CONTACT} isMine={isMine} />
+      <ClaimButton conversationId={CONVERSATION_ID} contactName={CONTACT} hold={hold} />
     </ToastProvider>,
   );
 }
@@ -42,17 +45,17 @@ beforeEach(() => {
   });
 });
 
-describe('ClaimButton', () => {
+describe('ClaimButton — unclaimed', () => {
   it('names the conversation it acts on, so a list of "Claim" is not ambiguous', () => {
-    renderButton(false);
+    renderButton({ state: 'unclaimed' });
 
     expect(
       screen.getByRole('button', { name: content.inbox.claimAria(CONTACT) }),
     ).toBeInTheDocument();
   });
 
-  it('claims an unheld conversation and confirms which one', async () => {
-    renderButton(false);
+  it('claims straight away — nobody is holding it, so there is nothing to confirm', async () => {
+    renderButton({ state: 'unclaimed' });
 
     fireEvent.click(screen.getByRole('button', { name: content.inbox.claimAria(CONTACT) }));
 
@@ -61,34 +64,6 @@ describe('ClaimButton', () => {
     });
     expect(await screen.findByText(content.inbox.claimSuccess(CONTACT))).toBeInTheDocument();
     expect(releaseConversationAction).not.toHaveBeenCalled();
-  });
-
-  it('releases one the signed-in user already holds', async () => {
-    renderButton(true);
-
-    fireEvent.click(screen.getByRole('button', { name: content.inbox.releaseAria(CONTACT) }));
-
-    await waitFor(() => {
-      expect(releaseConversationAction).toHaveBeenCalledWith(CONVERSATION_ID);
-    });
-    expect(await screen.findByText(content.inbox.releaseSuccess(CONTACT))).toBeInTheDocument();
-    expect(claimConversationAction).not.toHaveBeenCalled();
-  });
-
-  it('reports a refusal inline rather than only as a toast that disappears', async () => {
-    claimConversationAction.mockResolvedValue({
-      status: 'error',
-      message: 'Your role does not include conversation:assign.',
-      requestId: 'req-1',
-    });
-
-    renderButton(false);
-
-    fireEvent.click(screen.getByRole('button', { name: content.inbox.claimAria(CONTACT) }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Your role does not include conversation:assign.',
-    );
   });
 
   it('does not fire twice when it is double-clicked', async () => {
@@ -100,7 +75,7 @@ describe('ClaimButton', () => {
       }),
     );
 
-    renderButton(false);
+    renderButton({ state: 'unclaimed' });
 
     const button = screen.getByRole('button', { name: content.inbox.claimAria(CONTACT) });
 
@@ -113,5 +88,117 @@ describe('ClaimButton', () => {
     await waitFor(() => {
       expect(button).not.toHaveAttribute('aria-disabled');
     });
+  });
+
+  it('reports a refusal inline rather than only as a toast that disappears', async () => {
+    claimConversationAction.mockResolvedValue({
+      status: 'error',
+      message: 'Your role does not include conversation:assign.',
+      requestId: 'req-1',
+    });
+
+    renderButton({ state: 'unclaimed' });
+
+    fireEvent.click(screen.getByRole('button', { name: content.inbox.claimAria(CONTACT) }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Your role does not include conversation:assign.',
+    );
+  });
+});
+
+describe('ClaimButton — mine', () => {
+  it('releases one the signed-in user already holds, with no confirmation', async () => {
+    renderButton({ state: 'mine' });
+
+    fireEvent.click(screen.getByRole('button', { name: content.inbox.releaseAria(CONTACT) }));
+
+    await waitFor(() => {
+      expect(releaseConversationAction).toHaveBeenCalledWith(CONVERSATION_ID);
+    });
+    expect(await screen.findByText(content.inbox.releaseSuccess(CONTACT))).toBeInTheDocument();
+    expect(claimConversationAction).not.toHaveBeenCalled();
+  });
+});
+
+describe('ClaimButton — held by somebody else', () => {
+  const HELD: ConversationHold = { state: 'theirs', holderName: 'Liang Wei' };
+
+  it('offers a take-over, not a claim, and names who it is taken from', () => {
+    renderButton(HELD);
+
+    expect(
+      screen.getByRole('button', { name: content.inbox.takeOverAria(CONTACT, 'Liang Wei') }),
+    ).toBeInTheDocument();
+    // The word matters: "Claim" is what the shared pool gets.
+    expect(screen.queryByRole('button', { name: content.inbox.claimAria(CONTACT) })).toBeNull();
+  });
+
+  it('writes nothing on the first click — the confirmation comes first', async () => {
+    renderButton(HELD);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: content.inbox.takeOverAria(CONTACT, 'Liang Wei') }),
+    );
+
+    // The dialog is a lazy chunk; wait for it rather than for a fixed tick.
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(claimConversationAction).not.toHaveBeenCalled();
+  });
+
+  it('says who holds it and that they will not be told', async () => {
+    renderButton(HELD);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: content.inbox.takeOverAria(CONTACT, 'Liang Wei') }),
+    );
+    await screen.findByRole('dialog');
+
+    expect(screen.getByText(content.inbox.takeOverBody(CONTACT, 'Liang Wei'))).toBeInTheDocument();
+  });
+
+  it('takes it over once confirmed, and says who it came from', async () => {
+    renderButton(HELD);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: content.inbox.takeOverAria(CONTACT, 'Liang Wei') }),
+    );
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: content.inbox.takeOverConfirm }));
+
+    await waitFor(() => {
+      expect(claimConversationAction).toHaveBeenCalledWith(CONVERSATION_ID);
+    });
+    expect(
+      await screen.findByText(content.inbox.takeOverSuccess(CONTACT, 'Liang Wei')),
+    ).toBeInTheDocument();
+  });
+
+  it('cancels without writing anything', async () => {
+    renderButton(HELD);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: content.inbox.takeOverAria(CONTACT, 'Liang Wei') }),
+    );
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: content.common.cancel }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(claimConversationAction).not.toHaveBeenCalled();
+  });
+
+  it('still names a holder whose id the directory could not resolve', async () => {
+    renderButton({ state: 'theirs', holderName: null });
+
+    const label = content.inbox.takeOverAria(CONTACT, content.inbox.unresolvedHolder);
+
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    await screen.findByRole('dialog');
+
+    expect(
+      screen.getByText(content.inbox.takeOverBody(CONTACT, content.inbox.unresolvedHolder)),
+    ).toBeInTheDocument();
   });
 });

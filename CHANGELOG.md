@@ -157,8 +157,17 @@ change.
   hole in the conversation. Internal notes get their own panel that says, above the list and
   again on the field, that the customer never sees them; the guarantee is structural (a note
   is a separate entity and no send path can reach one) but it is invisible to the person
-  typing. Realtime is TAR-69's socket, and the console's rule is that **an event is a signal
-  to refetch, never state to apply**: `router.refresh()` re-runs the same visibility checks
+  typing. Claiming is three states, not two: the shared pool gets a **Claim**, a thread you
+  hold gets a **Release**, and one a colleague holds gets **Take over** behind a
+  confirmation that names them and says plainly that they are not told — because the API
+  writes the assignment unconditionally (no compare-and-set until TAR-186) and emits nothing
+  to the previous holder, so presenting a takeover as a claim quietly moved work off the
+  person doing it. Outbound authorship reads `MessageResponse.sentByAutomation` rather than
+  a failed name lookup, so an agent whose name falls outside the directory's single page is
+  "sent by a teammate" and never "sent automatically" — misattributing a colleague's words
+  to a bot is a lie about the one thing this product is a record of. Realtime is TAR-69's
+  socket, and the console's rule is that **an event is a signal to refetch, never state to
+  apply**: `router.refresh()` re-runs the same visibility checks
   the API enforces, so a thread that changes hands cannot leave a stale copy on screen and a
   reconnect recovers full state with no replay to miss. Socket.IO's own reconnection is off
   because the handshake ticket is single-use and it would replay a spent one for ever;

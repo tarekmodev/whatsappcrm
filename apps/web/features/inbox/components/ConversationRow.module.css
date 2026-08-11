@@ -3,15 +3,33 @@
  * `.row`, so the row, its skeleton and the selected state share one outline.
  */
 
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* The positioning context the stretched link resolves against. */
+  position: relative;
+  padding: var(--space-4);
+}
+
 .link {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  /* Padding on the link rather than the list item: the whole card is the target,
-     which is what makes it comfortably larger than the 44px minimum. */
-  padding: var(--space-4);
   color: inherit;
   text-decoration: none;
+}
+
+/*
+ * Stretches the link's hit area over the whole card, so the target is far
+ * larger than the 44px minimum while the claim button stays a sibling rather
+ * than a nested interactive element.
+ */
+.link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
 }
 
 .contact {
@@ -28,4 +46,19 @@
   -webkit-line-clamp: 2;
   overflow: hidden;
   overflow-wrap: anywhere;
+}
+
+.footer {
+  min-inline-size: 0;
+}
+
+/*
+ * Above the stretched link, so a click here claims rather than navigates. A
+ * stacking context of its own rather than a bare `z-index`, so nothing inside
+ * the card can escape it.
+ */
+.action {
+  position: relative;
+  z-index: var(--z-sticky);
+  flex: 0 0 auto;
 }

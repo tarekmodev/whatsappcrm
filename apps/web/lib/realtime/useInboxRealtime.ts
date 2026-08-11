@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { REALTIME_PATH } from '@whatsappcrm/contracts';
 import type { Socket } from 'socket.io-client';
 import { requestRealtimeTicket } from '@/lib/api/auth-browser';
+import { isSessionExpiredError } from '@/lib/api/session-expiry';
 import { INBOX_SERVER_EVENTS, inboxEffectOf } from '@/lib/realtime/inbox-events';
 import { reconnectDelayMs } from '@/lib/realtime/reconnect-delay';
 
@@ -176,6 +177,18 @@ export function useInboxRealtime({ isEnabled, conversationId }: UseInboxRealtime
           scheduleReconnect();
         });
       } catch (error: unknown) {
+        if (isSessionExpiredError(error)) {
+          // The same rule the `session.revoked` branch states, applied to the
+          // case that event cannot cover: a session revoked *while the socket
+          // was down* is never announced, so the ticket request is the first
+          // thing to learn of it. Retrying would be a 401 every thirty seconds
+          // for ever, on an inbox that has silently stopped updating.
+          isCancelled = true;
+          teardownSocket();
+          router.refresh();
+          return;
+        }
+
         // Never swallowed: a ticket the API refuses and a chunk that will not
         // load look identical on screen — a console that quietly stops updating.
         console.error('Realtime connection failed; retrying', error);

@@ -25,6 +25,13 @@ export interface ConversationListProps {
   query: { scope: InboxScope; status: ConversationStatusFilter | undefined };
   /** The open thread, or `null` for the list-only view. */
   selectedId: string | null;
+  /**
+   * Who is looking, when they hold `conversation:assign` — `null` for a
+   * principal who gets no claim control at all. TAR-71's scope puts the claim on
+   * the list as well as the thread, so picking work out of the shared pool does
+   * not cost one thread-open per conversation.
+   */
+  claim: { currentUserId: string } | null;
 }
 
 export function ConversationList({
@@ -33,6 +40,7 @@ export function ConversationList({
   teamNames,
   query,
   selectedId,
+  claim,
 }: ConversationListProps) {
   const content = useContent();
 
@@ -63,6 +71,7 @@ export function ConversationList({
           }
           isSelected={conversation.id === selectedId}
           query={query}
+          claim={claim}
         />
       ))}
     </ul>
@@ -73,7 +82,7 @@ export function ConversationList({
  * Mirrors `ConversationList`: the same scrolling list holding a full page of
  * row skeletons, so the swap to real conversations moves nothing.
  */
-export function ConversationListSkeleton() {
+export function ConversationListSkeleton({ hasClaim = false }: { hasClaim?: boolean }) {
   const content = useContent();
 
   return (
@@ -81,7 +90,7 @@ export function ConversationListSkeleton() {
       <LoadingAnnouncement label={content.inbox.loadingConversations} />
       <ul className={styles.list} aria-hidden="true">
         {Array.from({ length: CONVERSATIONS_PAGE_SIZE }, (_unused, index) => (
-          <ConversationRowSkeleton key={index} />
+          <ConversationRowSkeleton key={index} hasClaim={hasClaim} />
         ))}
       </ul>
     </>

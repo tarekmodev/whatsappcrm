@@ -117,6 +117,8 @@
   --scale-size-pane-md: 22rem;
   --scale-size-media-sm: 8rem;
   --scale-size-media-md: 18rem;
+  /* A native audio control's own height, pinned so a placeholder can match it. */
+  --scale-size-player: 3.375rem;
   /* `dvh`, never `vh`: mobile browser chrome makes the two differ by a toolbar. */
   --scale-size-viewport-tall: 62dvh;
 
