@@ -939,6 +939,33 @@ gap. Spinners are allowed only for a button's own pending state (`<Button isPend
 - Empty and error use the shared `EmptyState` / `ErrorState`, sized like the content they
   replace.
 
+### Realtime: the console refetches, it never patches
+
+The shared inbox stays current over TAR-69's Socket.IO gateway, and the rule is one line:
+**an event is a signal to refetch, never state to apply.** `lib/realtime/inbox-events.ts`
+maps a `ServerEvent` onto `refetch`, `signed-out` or `ignore`, and a `refetch` is a
+debounced `router.refresh()` — a server render that re-runs the same visibility rules the
+API enforces. So a thread that changes hands cannot leave a stale copy on screen, and a
+missed event is recovered by the next refetch rather than by a replay the protocol does not
+offer. Every reconnect refetches first, which is the whole of the "no stale or missing
+messages after a dropped socket" guarantee.
+
+Three things about the connection are deliberate and easy to undo by accident:
+
+- **The handshake credential is a single-use ticket**, fetched from
+  `POST /api/v1/auth/realtime-ticket` immediately before connecting, because the session
+  cookie is third-party to the realtime origin under a white-label domain and would be
+  dropped. It lives about a minute.
+- **Socket.IO's own reconnection is off** (`reconnection: false`). It would replay a spent
+  ticket and be refused for ever, looking like a socket that is retrying while it can never
+  succeed. `lib/realtime/useInboxRealtime.ts` mints a fresh ticket per attempt, on the
+  capped backoff with jitter in `reconnect-delay.ts`.
+- **`socket.io-client` is imported dynamically**, so it lands in its own chunk and never
+  enters a route's initial JavaScript. The page is server-rendered and fully usable before
+  it loads.
+
+The socket is disabled under `NEXT_PUBLIC_USE_MOCK_API`, which has no server behind it.
+
 ### Route groups: signed in and signed out
 
 `app/` holds two route groups, and neither changes a URL — `/inbox` is still `/inbox`.

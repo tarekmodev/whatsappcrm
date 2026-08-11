@@ -50,6 +50,13 @@ export const routes = {
 export const searchParamKeys = {
   inboxScope: 'scope',
   inboxStatus: 'status',
+  /**
+   * Which thread the inbox has open. A query parameter rather than a nested
+   * route because the list and the thread share one screen and one set of
+   * filters, and a Next layout receives no `searchParams` to render the list
+   * from (TAR-71).
+   */
+  inboxConversation: 'conversation',
   peopleTab: 'tab',
   peopleRole: 'role',
   peopleQuery: 'q',
@@ -105,6 +112,28 @@ export function parseRedirectPath(value: string | undefined, fallback: string): 
 }
 
 export type InboxScope = ConversationListQuery['scope'];
+
+/**
+ * The scope tabs the inbox offers, in the order it offers them — the same three
+ * for every role.
+ *
+ * An agent used to be capped at `assigned`. ADR 0002 amendment 4 rules that an
+ * unclaimed conversation is visible to every agent on the tenant, because a
+ * conversation is created by a customer writing in rather than by an agent, so a
+ * thread nobody has claimed would otherwise be visible to nobody. The API's
+ * `inboxScopeFilter` opens `unassigned` to every principal accordingly, and a
+ * console that hid the tab would leave arriving customers unanswered.
+ *
+ * `all` is offered to everyone for the reason the API does not reject it: it
+ * narrows to "mine ∪ my teams' ∪ unclaimed" rather than erroring. What that
+ * narrowing looks like in the UI is `isConversationScopeNarrowed`'s job.
+ */
+export const INBOX_SCOPES = [
+  'assigned',
+  'unassigned',
+  'all',
+] as const satisfies readonly InboxScope[];
+
 export type ConversationStatusFilter = NonNullable<ConversationListQuery['status']>;
 export const PEOPLE_TABS = ['agents', 'teams'] as const;
 export type PeopleTab = (typeof PEOPLE_TABS)[number];
@@ -112,6 +141,8 @@ export type PeopleTab = (typeof PEOPLE_TABS)[number];
 export interface InboxQuery {
   scope?: InboxScope;
   status?: ConversationStatusFilter;
+  /** The open thread. Omitted for the list-only view. */
+  conversationId?: string;
 }
 
 export interface PeopleQuery {
@@ -124,6 +155,7 @@ function inboxSearchParams(query: InboxQuery | undefined): Record<string, string
   return {
     [searchParamKeys.inboxScope]: query?.scope,
     [searchParamKeys.inboxStatus]: query?.status,
+    [searchParamKeys.inboxConversation]: query?.conversationId,
   };
 }
 

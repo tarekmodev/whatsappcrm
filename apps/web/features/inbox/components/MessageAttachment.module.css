@@ -1,0 +1,104 @@
+/*
+ * The reserved box every visual attachment renders into.
+ *
+ * A fixed aspect ratio rather than the media's own dimensions, which the
+ * contract does not publish: the box is the same size before the bytes arrive,
+ * while they are downloading and after they land, so nothing in the thread moves
+ * when a picture appears.
+ */
+
+.frame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /*
+   * A definite width, not `100%`. The bubble around this shrinks to fit its
+   * content, so a percentage resolves against a box that has not been sized yet
+   * and the frame collapses to the min-content of the caption — which is how a
+   * photo ends up rendered as a sliver. `max-inline-size` is what keeps it
+   * inside the column on a phone.
+   */
+  inline-size: var(--size-media-inline);
+  max-inline-size: 100%;
+  aspect-ratio: var(--aspect-media);
+  overflow: hidden;
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-md);
+}
+
+/* A sticker is small and square; giving it a photo's box would blow it up. */
+.frame[data-kind='sticker'] {
+  inline-size: var(--size-media-thumb);
+  aspect-ratio: var(--aspect-media-square);
+  background: none;
+}
+
+.media {
+  inline-size: 100%;
+  block-size: 100%;
+  /* `contain`, not `cover`: cropping somebody's screenshot loses the part they
+     were pointing at. */
+  object-fit: contain;
+}
+
+/* Sits over the placeholder while the bytes are still being fetched. */
+.state {
+  position: absolute;
+  inset-inline: var(--space-2);
+  inset-block-end: var(--space-2);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  text-align: center;
+}
+
+.audio,
+.audioPlaceholder {
+  /* Definite, for the reason `.frame` is: the platform's own player has no
+     intrinsic width worth speaking of, and a percentage inside a shrink-to-fit
+     bubble renders it as a pair of stranded icons. The block size is pinned too,
+     so the placeholder below reserves exactly what the player will take — the
+     native control's own height varies by platform. */
+  display: block;
+  inline-size: var(--size-media-inline);
+  max-inline-size: 100%;
+  block-size: var(--size-media-player);
+}
+
+.audioPlaceholder {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+
+.document {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-block-size: var(--size-touch-target);
+  justify-content: center;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface);
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .document:hover {
+    background: var(--color-surface-hover);
+  }
+}
+
+.documentName {
+  font-weight: var(--font-weight-medium);
+  /* A 200-character file name must not stretch the bubble off the screen. */
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+}
+
+.documentMeta {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}

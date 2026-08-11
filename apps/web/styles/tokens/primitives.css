@@ -155,4 +155,20 @@
   --scale-size-bar: 3.5rem;
   /* The width the accent marker on a current nav entry occupies. */
   --scale-size-marker: 3px;
+
+  /* Panes and media, added for the shared inbox's two-column layout. */
+  --scale-size-pane-sm: 20rem;
+  --scale-size-pane-md: 22rem;
+  --scale-size-media-sm: 8rem;
+  --scale-size-media-md: 18rem;
+  /* A native audio control's own height, pinned so a placeholder can match it. */
+  --scale-size-player: 3.375rem;
+  /* `dvh`, never `vh`: mobile browser chrome makes the two differ by a toolbar. */
+  --scale-size-viewport-tall: 62dvh;
+
+  /* --- Measure and aspect ratios ------------------------------------------ */
+  /* Comfortable line length for running text; longer is measurably harder to read. */
+  --scale-measure-body: 60ch;
+  --scale-aspect-media: 4 / 3;
+  --scale-aspect-square: 1 / 1;
 }

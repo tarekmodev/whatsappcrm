@@ -1,0 +1,83 @@
+.row {
+  display: flex;
+  /* Logical, so the thread mirrors correctly under `dir="rtl"` with no JS. */
+  justify-content: flex-start;
+}
+
+.row[data-direction='outbound'] {
+  justify-content: flex-end;
+}
+
+.bubble {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Never wider than the column, and never wider than a comfortable measure. */
+  max-inline-size: min(100%, var(--measure-body));
+  min-inline-size: 0;
+  padding: var(--space-3);
+  background: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  /* One corner squared off, pointing at the side the message came from. */
+  border-start-start-radius: var(--radius-sm);
+}
+
+.bubble[data-direction='outbound'] {
+  background: var(--color-accent-subtle);
+  border-color: var(--color-accent-subtle);
+  color: var(--color-on-accent-subtle);
+  border-start-start-radius: var(--radius-md);
+  border-start-end-radius: var(--radius-sm);
+}
+
+.body {
+  /* WhatsApp messages carry their own line breaks; collapsing them rewrites
+     what the customer wrote. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.attachments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.placeholderKind {
+  color: var(--color-on-surface);
+  font-weight: var(--font-weight-medium);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+.bubble[data-direction='outbound'] .meta {
+  /* Inherits the accent-subtle surface, so the muted role would drop below AA. */
+  color: var(--color-on-accent-subtle);
+}
+
+.status {
+  font-weight: var(--font-weight-medium);
+}
+
+/* Failure is never colour alone — the word "Not delivered" carries it too. */
+.status[data-status='failed'],
+.failure {
+  color: var(--color-danger);
+  font-weight: var(--font-weight-medium);
+}

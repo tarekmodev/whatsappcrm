@@ -46,6 +46,23 @@ import { TicketResponseSchema } from './tickets';
  * longer the audience for a message on a thread that *has* been claimed.
  */
 
+/**
+ * Where the Socket.IO server sits on the API's own origin.
+ *
+ * Not Socket.IO's default `/socket.io`, and under `/realtime` rather than
+ * `/api`: everything below `/api` is versioned by URI, and a transport endpoint
+ * that is not a REST resource has no business inheriting a resource version. It
+ * also keeps the WebSocket upgrade outside the prefix ADR 0002 decision 3 routes
+ * through the Next.js rewrite — the socket connects to the `realtimeUrl` that
+ * `POST /api/v1/auth/realtime-ticket` hands back, which is the whole reason the
+ * handshake carries a ticket instead of a cookie.
+ *
+ * Published here rather than in the API because three places have to agree: the
+ * gateway, the adapter that builds the server, and the console client that
+ * connects to it — and the console cannot import from `apps/api`.
+ */
+export const REALTIME_PATH = '/realtime';
+
 /** Every socket in the tenant. The audience for a conversation nobody has claimed. */
 export function tenantRoom(tenantId: string): string {
   return `tenant:${tenantId}`;
