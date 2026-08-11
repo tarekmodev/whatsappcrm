@@ -7,12 +7,15 @@ import { UsersService } from '../people/users.service';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import { SessionRevocationService } from '../rbac/session-revocation.service';
+import { AuthRedisClient } from './auth-redis.client';
 import { AuthService } from './auth.service';
 import {
   AccountLockedError,
   InvalidCredentialsError,
   SessionNotFoundError,
+  TooManyAttemptsError,
 } from './identity.errors';
+import { LoginThrottleService } from './login-throttle.service';
 import { PasswordService } from './password.service';
 import { SessionCacheService } from './session-cache.service';
 import { SessionService } from './session.service';
@@ -66,10 +69,12 @@ describe('the session lifecycle, end to end', () => {
   let systemPrisma: PrismaClient;
   let tenantBase: PrismaClient;
   let tenantPrisma: TenantPrisma;
+  let redis: AuthRedisClient;
   let cache: SessionCacheService;
   let sessions: SessionService;
   let auth: AuthService;
   let users: UsersService;
+  let throttle: LoginThrottleService;
 
   function asTenant<T>(tenantId: string, work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
@@ -94,6 +99,29 @@ describe('the session lifecycle, end to end', () => {
           permissions: [...permissionsForRole('admin')],
           teamIds: [],
           sessionId: '56999999-9999-7999-8999-9999999999f0',
+          expiresAt: '2026-12-31T23:59:59.000Z',
+        },
+      },
+      async () => await work(),
+    );
+  }
+
+  /** The same, as the fixture agent — who holds `user:read` and not `user:update`. */
+  function asAgent<T>(work: () => Promise<T>): Promise<T> {
+    return tenantContext.run(
+      {
+        requestId: REQUEST_ID,
+        tenantId: TENANT_A,
+        userId: AGENT_A,
+        principal: {
+          userId: AGENT_A,
+          tenantId: TENANT_A,
+          email: SHARED_EMAIL,
+          displayName: 'Ada in A',
+          role: 'agent',
+          permissions: [...permissionsForRole('agent')],
+          teamIds: [TEAM_A],
+          sessionId: '56999999-9999-7999-8999-9999999999f1',
           expiresAt: '2026-12-31T23:59:59.000Z',
         },
       },
@@ -174,20 +202,32 @@ describe('the session lifecycle, end to end', () => {
     tenantPrisma = withTenantScope(tenantBase, tenantContext);
 
     const config = {
-      get: (key: string) => (key === 'REDIS_URL' ? process.env.REDIS_URL : undefined),
+      get: (key: string) => {
+        if (key === 'REDIS_URL') {
+          return process.env.REDIS_URL;
+        }
+
+        // Enforced here regardless of the deployment default: this suite drives
+        // the service directly and supplies the address itself, so it is
+        // genuinely per-client.
+        return key === 'LOGIN_IP_THROTTLE_ENABLED' ? true : undefined;
+      },
     } as unknown as ConfigService;
 
-    cache = new SessionCacheService(config);
+    redis = new AuthRedisClient(config);
+    cache = new SessionCacheService(redis);
     sessions = new SessionService(tenantPrisma, cache);
 
     const audit = new AuditService(tenantContext);
 
-    auth = new AuthService(tenantPrisma, tenantContext, passwords, sessions, audit);
+    throttle = new LoginThrottleService(tenantPrisma, redis, audit, config);
+    auth = new AuthService(tenantPrisma, tenantContext, passwords, sessions, throttle);
     users = new UsersService(
       tenantPrisma,
       tenantContext,
       audit,
       new SessionRevocationService(audit, sessions),
+      throttle,
     );
 
     await removeFixture();
@@ -196,20 +236,31 @@ describe('the session lifecycle, end to end', () => {
 
   afterAll(async () => {
     await removeFixture();
-    await cache.onApplicationShutdown();
+    await redis.onApplicationShutdown();
     await Promise.all([systemPrisma.$disconnect(), tenantBase.$disconnect()]);
   });
 
   beforeEach(async () => {
-    // Every test starts from a clean session table and clean lockout counters,
-    // so they pass in any order.
+    // Every test starts from a clean session table, a clean audit trail and
+    // clean lockout counters, so they pass in any order.
     await systemPrisma.session.deleteMany({ where: { tenantId: { in: [TENANT_A, TENANT_B] } } });
+    await systemPrisma.auditLog.deleteMany({ where: { tenantId: { in: [TENANT_A, TENANT_B] } } });
     await systemPrisma.user.updateMany({
       where: { id: { in: [AGENT_A, AGENT_B] } },
       data: { failedLoginAttempts: 0, lockedUntil: null, status: 'active' },
     });
     await cache.purgeUser(TENANT_A, AGENT_A, true);
     await cache.purgeUser(TENANT_B, AGENT_B, true);
+    // And a clean address window, so a re-run does not inherit the last one's
+    // failures — the window outlives the fixture rows by design.
+    await redis.run('int-spec cleanup', async (client) => {
+      const keys = await client.keys(`wac:auth:authfail:${TENANT_A}:*`);
+      const others = await client.keys(`wac:auth:authfail:${TENANT_B}:*`);
+
+      if (keys.length + others.length > 0) {
+        await client.del(...keys, ...others);
+      }
+    });
   });
 
   describe('login resolves the tenant from scope, never from the request', () => {
@@ -416,15 +467,7 @@ describe('the session lifecycle, end to end', () => {
 
   describe('lockout', () => {
     it('locks the account on the threshold and answers 429 rather than confirming it exists', async () => {
-      for (let attempt = 0; attempt < AUTH_POLICY.loginFailureThreshold; attempt += 1) {
-        await expect(
-          asTenant(
-            TENANT_A,
-            async () =>
-              await auth.login({ email: SHARED_EMAIL, password: WRONG_PASSWORD }, blankContext()),
-          ),
-        ).rejects.toBeInstanceOf(InvalidCredentialsError);
-      }
+      await lockOutAgentA();
 
       // The correct password now, which is the point: a locked account is
       // locked, not merely rate limited on wrong guesses.
@@ -454,6 +497,45 @@ describe('the session lifecycle, end to end', () => {
       expect(neighbour).toEqual({ failedLoginAttempts: 0, lockedUntil: null });
     }, 120_000);
 
+    it('lets an admin clear a lockout before the window elapses', async () => {
+      await lockOutAgentA();
+
+      const unlocked = await asAdmin(async () => await users.unlock(AGENT_A));
+
+      // The state an admin reads back, and the reason the columns are durable
+      // rather than a Redis counter: this is what makes the lockout observable.
+      expect(unlocked.security).toEqual({ lockedUntil: null, failedLoginAttempts: 0 });
+
+      // And the account can actually sign in again, which is the point.
+      await expect(signIn(TENANT_A)).resolves.toEqual(expect.any(String));
+
+      const trail = await systemPrisma.auditLog.findMany({
+        where: {
+          tenantId: TENANT_A,
+          targetId: AGENT_A,
+          action: { in: ['auth.lockout', 'auth.unlock'] },
+        },
+        select: { action: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      expect(trail.map((entry) => entry.action)).toEqual(['auth.lockout', 'auth.unlock']);
+    }, 120_000);
+
+    it('hides the lockout from an agent and shows it to an admin', async () => {
+      await lockOutAgentA();
+
+      const asSeenByAdmin = await asAdmin(async () => await users.list({ limit: 20 }));
+      const asSeenByAgent = await asAgent(async () => await users.list({ limit: 20 }));
+
+      expect(
+        asSeenByAdmin.items.find((user) => user.id === AGENT_A)?.security?.failedLoginAttempts,
+      ).toBe(AUTH_POLICY.loginFailureThreshold);
+      // `user:read` is an agent permission; the lockout is not an agent's
+      // business, and a flat field would report a colleague's every failure.
+      expect(asSeenByAgent.items.find((user) => user.id === AGENT_A)?.security).toBeNull();
+    }, 120_000);
+
     it('resets the counter on a successful sign-in', async () => {
       await expect(
         asTenant(
@@ -475,6 +557,75 @@ describe('the session lifecycle, end to end', () => {
       expect(after.lastLoginAt).not.toBeNull();
     }, 60_000);
   });
+
+  describe('the per-address window', () => {
+    /**
+     * Runs against the real Redis when one is configured. Without it the window
+     * fails open by design, so the suite says so rather than asserting nothing.
+     */
+    const withRedis = process.env.REDIS_URL === undefined ? it.skip : it;
+
+    withRedis(
+      'stops an address spraying addresses that have no account here',
+      async () => {
+        const address = '198.51.100.77';
+
+        // Every attempt names an address that does not exist in this tenant, so
+        // there is no per-account counter to trip — only the window can see this.
+        for (let attempt = 0; attempt < AUTH_POLICY.ipFailureThreshold; attempt += 1) {
+          await expect(
+            asTenant(
+              TENANT_A,
+              async () =>
+                await auth.login(
+                  { email: `tar59-nobody-${attempt}@example.invalid`, password: WRONG_PASSWORD },
+                  { ipAddress: address, userAgent: 'int-spec' },
+                ),
+            ),
+          ).rejects.toBeInstanceOf(InvalidCredentialsError);
+        }
+
+        const error = await asTenant(
+          TENANT_A,
+          async () =>
+            await auth.login(
+              { email: SHARED_EMAIL, password: PASSWORD },
+              { ipAddress: address, userAgent: 'int-spec' },
+            ),
+        ).catch((thrown: unknown) => thrown);
+
+        expect(error).toBeInstanceOf(TooManyAttemptsError);
+        expect((error as TooManyAttemptsError).retryAfterSeconds).toBeGreaterThan(0);
+
+        // The same address against the other tenant is untouched: the key carries
+        // the tenant, so one tenant's attacker cannot deny service to another's.
+        await expect(
+          asTenant(
+            TENANT_B,
+            async () =>
+              await auth.login(
+                { email: SHARED_EMAIL, password: PASSWORD },
+                { ipAddress: address, userAgent: 'int-spec' },
+              ),
+          ),
+        ).resolves.toBeDefined();
+      },
+      120_000,
+    );
+  });
+
+  /** Ten wrong passwords against the fixture agent, which is what locks them out. */
+  async function lockOutAgentA(): Promise<void> {
+    for (let attempt = 0; attempt < AUTH_POLICY.loginFailureThreshold; attempt += 1) {
+      await expect(
+        asTenant(
+          TENANT_A,
+          async () =>
+            await auth.login({ email: SHARED_EMAIL, password: WRONG_PASSWORD }, blankContext()),
+        ),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    }
+  }
 
   /** The single fixture session, read unscoped so the assertion sees revoked rows too. */
   async function sessionRow(): Promise<{

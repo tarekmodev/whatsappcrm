@@ -62,14 +62,22 @@ export class SessionRevocationService {
    * request repopulates the principal cache from the row it is about to revoke,
    * so a caller that skips the second half keeps a revoked session answering for
    * up to `sessionCacheTtlMs`. It has already been forgotten once.
+   *
+   * `keepSessionId` spares exactly one session, for the single case that needs
+   * it: a signed-in password change (TAR-57), where killing every *other*
+   * session is the useful action after a suspected compromise and signing the
+   * caller out of the tab they are typing in is not. Every other caller revokes
+   * the lot, which is why it is opt-in rather than a parameter each one has to
+   * think about.
    */
   async revokeFor(
     tx: Prisma.TransactionClient,
     tenantId: string,
     userId: string,
     reason: SessionRevocationReason,
+    keepSessionId?: string,
   ): Promise<number> {
-    const count = await this.sessions.revokeAllForUser(tx, tenantId, userId, reason);
+    const count = await this.sessions.revokeAllForUser(tx, tenantId, userId, reason, keepSessionId);
 
     if (count === 0) {
       // Nothing was revoked, so there is nothing to record. An audit row per

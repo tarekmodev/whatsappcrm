@@ -61,6 +61,19 @@ const envShape = z.object({
   PLATFORM_DOMAIN: z.string().min(1).default('app.localhost'),
 
   /**
+   * The scheme put in front of a tenant's hostname when an email has to carry an
+   * absolute link back into the product — the invite and password-reset links
+   * (TAR-53, link shapes).
+   *
+   * Configuration rather than a branch on the environment name: `https` is the
+   * only correct answer anywhere the platform is deployed, and `http` is needed
+   * only on a local machine where nothing is serving TLS. A service that decided
+   * this by reading `DEPLOY_ENV` would be one `if` away from mailing a plaintext
+   * link into production.
+   */
+  APP_LINK_SCHEME: z.enum(['http', 'https']).default('https'),
+
+  /**
    * Bearer credential for `/api/v1/admin/*`. Optional here and **absent means
    * the whole admin surface refuses every request** — an environment that has
    * not been given a token cannot provision tenants, which is the safe default
@@ -123,6 +136,24 @@ const envShape = z.object({
    * the two spellings is in play.
    */
   SESSION_COOKIE_SECURE: z.stringbool().default(true),
+
+  /**
+   * Whether `request.ip` is the address of the **client**, which is what
+   * decides whether the per-address login failure window (TAR-59) is enforced.
+   *
+   * Off by default, and that default is the safe one rather than the timid one.
+   * Express `trust proxy` is deliberately not set — `HostTenantGuard` depends on
+   * `Host` being unforgeable — so behind a load balancer `request.ip` is the
+   * *proxy's* address and every agent in a tenant shares one window. Twenty
+   * failed sign-ins would then lock the whole tenant out of logging in for
+   * fifteen minutes, which is a denial of service dressed as a control.
+   *
+   * Turn it on where the API terminates connections from clients directly, or
+   * once the forwarded-address question `HostTenantGuard` defers has been
+   * decided. Nothing else changes: the durable per-account lockout is
+   * unconditional and is the layer that protects an individual account.
+   */
+  LOGIN_IP_THROTTLE_ENABLED: z.stringbool().default(false),
 
   // ---------------------------------------------------------------------------
   // WhatsApp webhook ingestion (TAR-20)

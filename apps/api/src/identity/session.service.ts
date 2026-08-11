@@ -340,12 +340,22 @@ export class SessionService {
    * before it is half the story; `purgeCacheFor` after the commit is the other
    * half, and the caller owns that call because only the caller knows when its
    * transaction landed.
+   *
+   * `keepSessionId` spares exactly one session, for the single case that needs
+   * it: a signed-in password change (TAR-57), where killing every *other*
+   * session is the useful action after a suspected compromise and signing the
+   * caller out of the tab they are typing in is not. Every other caller revokes
+   * the lot, which is why it is opt-in rather than a parameter each one has to
+   * think about. The spared session's cache entry is purged along with the
+   * rest — it costs that one request a Postgres read and keeps the purge a
+   * single unconditional statement rather than a set the caller assembles.
    */
   async revokeAllForUser(
     tx: RawClient,
     tenantId: string,
     userId: string,
     reason: SessionRevocationReason,
+    keepSessionId?: string,
   ): Promise<number> {
     // Before the commit, so the common case is already cold when it lands.
     await this.cache.purgeUser(tenantId, userId);
@@ -356,6 +366,7 @@ export class SessionService {
        WHERE tenant_id = ${tenantId}::uuid
          AND user_id = ${userId}::uuid
          AND revoked_at IS NULL
+         AND (${keepSessionId ?? null}::uuid IS NULL OR id <> ${keepSessionId ?? null}::uuid)
       RETURNING token_hash
     `;
 

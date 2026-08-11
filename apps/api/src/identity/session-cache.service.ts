@@ -1,7 +1,6 @@
-import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable } from '@nestjs/common';
 import { AUTH_POLICY, SessionPrincipalSchema, type SessionPrincipal } from '@whatsappcrm/contracts';
-import { Redis } from 'ioredis';
+import { AUTH_KEY_PREFIX, AuthRedisClient } from './auth-redis.client';
 
 /**
  * The session lookup cache, and the revocation index that makes it safe to have
@@ -30,44 +29,19 @@ import { Redis } from 'ioredis';
  * cost latency, never authentication. The one direction that would be unsafe —
  * treating a cache miss as "revoked" — is impossible, because a miss returns
  * `null` and `null` means "ask the database".
- */
-
-/** Keeps session keys clear of BullMQ's, which use their own prefix. */
-const KEY_PREFIX = 'wac:auth';
-
-/**
- * Cap on how long a cache command may wait.
  *
- * Every authenticated request goes through this, so an unresponsive Redis must
- * degrade to the Postgres path quickly rather than parking commands in
- * ioredis's offline queue — which would turn "the cache is slow" into "the API
- * is down". Tight, because the fallback is one indexed read.
+ * The connection, its timeouts and the swallowing of failures live in
+ * `AuthRedisClient`, shared with TAR-59's failure window.
  */
-const COMMAND_TIMEOUT_MS = 500;
 
 @Injectable()
-export class SessionCacheService implements OnApplicationShutdown {
-  private readonly logger = new Logger(SessionCacheService.name);
-  private readonly redisUrl: string | null;
-  private client: Redis | null = null;
-
-  constructor(config: ConfigService) {
-    const url = config.get<string>('REDIS_URL');
-
-    this.redisUrl = url === undefined || url.length === 0 ? null : url;
-
-    if (this.redisUrl === null) {
-      this.logger.warn(
-        'REDIS_URL is not set: every session lookup reads Postgres. Correct, and one extra ' +
-          'query per authenticated request.',
-      );
-    }
-  }
+export class SessionCacheService {
+  constructor(private readonly redis: AuthRedisClient) {}
 
   /** The cached principal, or `null` for a miss, a bad shape, or no Redis. */
   async read(tokenHash: string): Promise<SessionPrincipal | null> {
-    const cached = await this.run(
-      'read',
+    const cached = await this.redis.run(
+      'session cache read',
       async (client) => await client.get(sessionKey(tokenHash)),
     );
 
@@ -96,7 +70,7 @@ export class SessionCacheService implements OnApplicationShutdown {
       return;
     }
 
-    await this.run('write', async (client) => {
+    await this.redis.run('session cache write', async (client) => {
       await client.set(sessionKey(tokenHash), JSON.stringify(principal), 'PX', ttlMs);
     });
   }
@@ -110,7 +84,7 @@ export class SessionCacheService implements OnApplicationShutdown {
    * costs one wasted `DEL` on the next purge.
    */
   async track(tenantId: string, userId: string, tokenHash: string): Promise<void> {
-    await this.run('track', async (client) => {
+    await this.redis.run('session cache track', async (client) => {
       const key = userSessionsKey(tenantId, userId);
 
       await client.sadd(key, tokenHash);
@@ -120,7 +94,7 @@ export class SessionCacheService implements OnApplicationShutdown {
 
   /** Drops one session's cache entry and its place in the user's index. */
   async forget(tenantId: string, userId: string, tokenHash: string): Promise<void> {
-    await this.run('forget', async (client) => {
+    await this.redis.run('session cache forget', async (client) => {
       await client.del(sessionKey(tokenHash));
       await client.srem(userSessionsKey(tenantId, userId), tokenHash);
     });
@@ -141,7 +115,7 @@ export class SessionCacheService implements OnApplicationShutdown {
    * place for the second pass to read.
    */
   async purgeUser(tenantId: string, userId: string, dropIndex = false): Promise<void> {
-    await this.run('purge', async (client) => {
+    await this.redis.run('session cache purge', async (client) => {
       const key = userSessionsKey(tenantId, userId);
       const hashes = await client.smembers(key);
 
@@ -154,84 +128,14 @@ export class SessionCacheService implements OnApplicationShutdown {
       }
     });
   }
-
-  async onApplicationShutdown(): Promise<void> {
-    if (this.client === null) {
-      return;
-    }
-
-    // `quit` drains; `disconnect` tears down a reconnect timer a `quit` against
-    // an unreachable Redis would leave armed, which would hold the process past
-    // its termination grace period during exactly the incident where a clean
-    // exit matters most.
-    await this.client.quit().catch(() => undefined);
-    this.client.disconnect();
-    this.client = null;
-  }
-
-  /**
-   * Runs one cache operation, or reports that it could not.
-   *
-   * The single place failure is swallowed, so no call site has to remember to —
-   * and so "the cache is down" is one `warn` per operation naming what was
-   * attempted rather than a stack trace that looks like an outage.
-   */
-  private async run<T>(operation: string, work: (client: Redis) => Promise<T>): Promise<T | null> {
-    const client = this.connect();
-
-    if (client === null) {
-      return null;
-    }
-
-    try {
-      return await work(client);
-    } catch (error: unknown) {
-      this.logger.warn(
-        `Session cache ${operation} failed; falling back to Postgres: ${describe(error)}`,
-      );
-      return null;
-    }
-  }
-
-  private connect(): Redis | null {
-    if (this.redisUrl === null) {
-      return null;
-    }
-
-    this.client ??= this.open(this.redisUrl);
-
-    return this.client;
-  }
-
-  private open(url: string): Redis {
-    const client = new Redis(url, {
-      // Nothing connects until the first command, so a process that never
-      // resolves a session never opens a socket.
-      lazyConnect: true,
-      commandTimeout: COMMAND_TIMEOUT_MS,
-      // One retry, then fail to the Postgres path. The default keeps retrying
-      // inside a single command, which is latency spent on a fallback that is
-      // already correct.
-      maxRetriesPerRequest: 1,
-    });
-
-    // Without a listener Node treats a connection `error` as unhandled and
-    // takes the process down — which would turn a Redis restart into an API
-    // outage, the opposite of what this cache degrading gracefully is for.
-    client.on('error', (error: Error) => {
-      this.logger.warn(`Session cache connection reported: ${error.message}`);
-    });
-
-    return client;
-  }
 }
 
 function sessionKey(tokenHash: string): string {
-  return `${KEY_PREFIX}:sess:${tokenHash}`;
+  return `${AUTH_KEY_PREFIX}:sess:${tokenHash}`;
 }
 
 function userSessionsKey(tenantId: string, userId: string): string {
-  return `${KEY_PREFIX}:tenant:${tenantId}:user:${userId}:sessions`;
+  return `${AUTH_KEY_PREFIX}:tenant:${tenantId}:user:${userId}:sessions`;
 }
 
 function safeJsonParse(value: string): unknown {
@@ -240,8 +144,4 @@ function safeJsonParse(value: string): unknown {
   } catch {
     return null;
   }
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

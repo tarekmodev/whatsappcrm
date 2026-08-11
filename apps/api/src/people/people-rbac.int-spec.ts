@@ -369,7 +369,7 @@ describe('agent, team and role management API', () => {
   });
 
   describe('an admin holds the whole tenant scope', () => {
-    it('invites an agent, creating the account and its team memberships', async () => {
+    it('invites an agent, reserving the account and parking its teams', async () => {
       const response = await call(HOST_A, 'admin')
         .post('/api/v1/users/invites')
         .send({ email: 'newhire@tar81-a.invalid', role: 'agent', teamIds: [TEAM_A] });
@@ -382,7 +382,13 @@ describe('agent, team and role management API', () => {
       });
 
       expect(invited).toMatchObject({ status: 'invited', passwordHash: null });
-      expect(invited?.teamMemberships).toEqual([{ teamId: TEAM_A }]);
+      // The teams wait on `invite_teams` until the invitation is accepted
+      // (TAR-55), so somebody who never accepts never widens a team's
+      // membership — and therefore never widens what its members can see.
+      expect(invited?.teamMemberships).toEqual([]);
+      expect(
+        await systemPrisma.inviteTeam.count({ where: { tenantId: TENANT_A, teamId: TEAM_A } }),
+      ).toBe(1);
     });
 
     it('stores only a hash of the invite token, never the token', async () => {
@@ -580,6 +586,100 @@ describe('agent, team and role management API', () => {
 
       expect(response.status).toBe(201);
       await systemPrisma.team.deleteMany({ where: { tenantId: TENANT_B, name: 'Support' } });
+    });
+  });
+
+  describe('TAR-59 — a lockout is visible to whoever may clear it', () => {
+    const lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
+
+    /**
+     * Written straight to the columns: what *causes* a lockout is TAR-56's
+     * login flow, covered in `session-lifecycle.int-spec.ts`. `status` comes
+     * back with it because an earlier case in this file removes the agent, and
+     * a block that depends on where the one above it left the fixture is a
+     * block that fails when somebody reorders them.
+     */
+    async function lockAgentA(): Promise<void> {
+      await systemPrisma.user.update({
+        where: { id: AGENT_A },
+        data: { lockedUntil, failedLoginAttempts: 10, status: 'active' },
+      });
+    }
+
+    beforeEach(lockAgentA);
+
+    it('shows an admin the lockout on the people list', async () => {
+      const response = await call(HOST_A, 'admin').get('/api/v1/users?limit=100');
+
+      expect(usersPageOf(response).items.find((user) => user.id === AGENT_A)?.security).toEqual({
+        lockedUntil: lockedUntil.toISOString(),
+        failedLoginAttempts: 10,
+      });
+    });
+
+    it('tells an agent nothing, though the same route serves them', async () => {
+      const response = await call(HOST_A, 'agent').get('/api/v1/users?limit=100');
+
+      // `user:read` is an agent permission. Without the gate, every agent could
+      // watch a named colleague's failed attempts climb.
+      expect(usersPageOf(response).items.every((user) => user.security === null)).toBe(true);
+    });
+
+    it('refuses to let an agent unlock anybody', async () => {
+      const response = await call(HOST_A, 'agent').post(`/api/v1/users/${AGENT_A}/unlock`);
+
+      expect(response.status).toBe(403);
+      expect(errorCodeOf(response)).toBe('forbidden');
+    });
+
+    it('lets an admin clear it, and answers with the cleared state', async () => {
+      const response = await call(HOST_A, 'admin').post(`/api/v1/users/${AGENT_A}/unlock`);
+
+      expect(response.status).toBe(200);
+      expect(userOf(response).security).toEqual({ lockedUntil: null, failedLoginAttempts: 0 });
+      expect(
+        await systemPrisma.user.findUnique({
+          where: { id: AGENT_A },
+          select: { lockedUntil: true, failedLoginAttempts: true },
+        }),
+      ).toEqual({ lockedUntil: null, failedLoginAttempts: 0 });
+    });
+
+    it('lets a supervisor clear it too, because they may administer the same people', async () => {
+      const response = await call(HOST_A, 'supervisor').post(`/api/v1/users/${AGENT_A}/unlock`);
+
+      expect(response.status).toBe(200);
+    });
+
+    it('is a no-op the second time, and audits only the first', async () => {
+      await call(HOST_A, 'admin').post(`/api/v1/users/${AGENT_A}/unlock`);
+      const second = await call(HOST_A, 'admin').post(`/api/v1/users/${AGENT_A}/unlock`);
+
+      expect(second.status).toBe(200);
+      expect(
+        await systemPrisma.auditLog.count({
+          where: { tenantId: TENANT_A, targetId: AGENT_A, action: 'auth.unlock' },
+        }),
+      ).toBe(1);
+    });
+
+    it('answers not_found for another tenant’s locked account', async () => {
+      await systemPrisma.user.update({
+        where: { id: AGENT_B },
+        data: { lockedUntil, failedLoginAttempts: 10 },
+      });
+
+      const response = await call(HOST_A, 'admin').post(`/api/v1/users/${AGENT_B}/unlock`);
+
+      expect(response.status).toBe(404);
+      expect(errorCodeOf(response)).toBe('not_found');
+      // And genuinely untouched: a 404 that still wrote would be worse than a 200.
+      expect(
+        await systemPrisma.user.findUnique({
+          where: { id: AGENT_B },
+          select: { failedLoginAttempts: true },
+        }),
+      ).toEqual({ failedLoginAttempts: 10 });
     });
   });
 

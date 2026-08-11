@@ -37,6 +37,23 @@ change.
 
 ### Added
 
+- **Brute-force protection an admin can see and clear** (TAR-59) — the lockout TAR-56
+  writes is now readable and reversible. `UserResponse` carries a `security` object
+  (`lockedUntil`, `failedLoginAttempts`) for callers holding `user:update`, and `null` for
+  everyone else, so an admin or supervisor can see who is locked out while an agent — who
+  also holds `user:read` — cannot watch a colleague's failures climb.
+  `POST /api/v1/users/{id}/unlock` clears it, is idempotent, and audits `auth.unlock` only
+  when it actually cleared something. Alongside the per-account counter, a per-address
+  sliding window in Redis (`AUTH_POLICY.ipFailureThreshold` failures per
+  `ipFailureWindowMs`, keyed by tenant **and** address) catches credential stuffing sprayed
+  at addresses that have no account here and so trip no per-account counter; it is checked
+  before the user lookup, so a blocked address never reaches an Argon2id verify. Both
+  layers answer `rate_limited` with `Retry-After` and the same message as each other, so
+  neither confirms an address exists. New: `LOGIN_IP_THROTTLE_ENABLED`, off by default —
+  `trust proxy` is deliberately unset, so behind a load balancer `request.ip` is the proxy
+  and one shared window would lock a whole tenant out. The per-account lockout does not
+  depend on it.
+
 - **Login and the session lifecycle** — `POST /api/v1/auth/login` authenticates an email
   and password against the tenant the request `Host` resolves to and issues an opaque
   256-bit session in a `__Host-wac_session` cookie; `GET /api/v1/auth/session` reads the
@@ -52,6 +69,39 @@ change.
   resolve through a shared Redis cache with a 60-second TTL and fall back to Postgres when
   it is absent. New: `SESSION_COOKIE_SECURE` (the API refuses to boot with it off under
   `NODE_ENV=production`). (TAR-56)
+- **Password reset and password change** — `POST /api/v1/auth/password-reset` issues a
+  single-use, 60-minute link and answers 204 unconditionally, so it cannot be used to ask
+  whether an address has an account; `POST /api/v1/auth/password-reset/confirm` redeems it
+  once, sets the new password and revokes **every** session for that account;
+  `POST /api/v1/auth/password` changes a known password and revokes every session
+  **except the caller's own**. A dead link answers `token_invalid` (410) with the reason,
+  so the reset screen can offer a new one rather than a 404. Single-use is a conditional
+  `UPDATE … RETURNING` and every expiry is judged by the database's `now()`, so two
+  simultaneous redemptions cannot both win and a skewed node clock cannot revive a spent
+  link. Both flows hash through the same `PasswordService` login uses; the token itself is
+  never stored, only its SHA-256. `IdentityModule` also carries the `MAILER` seam —
+  `ConsoleMailer` renders the link to the log outside production, and a deployed
+  environment gets `UndeliverableMailer` until TAR-41 wires a provider. New optional
+  `APP_LINK_SCHEME` (default `https`) fixes the scheme on emailed links. (TAR-57)
+- **Invitations, and the account they create** — an admin invites an address with a role
+  (`POST /api/v1/users/invites`, `user:invite`), can list, resend and withdraw those
+  invitations, and the invitee redeems the emailed link at `POST /api/v1/invites/accept`
+  after previewing it at `POST /api/v1/invites/lookup`. Acceptance sets a password, turns
+  the reserved `invited` row into an active account **inside the inviting tenant with the
+  role the admin assigned**, joins the teams the invitation parked, and issues the session
+  cookie. Nothing about the tenant or the role comes from the request body. Tokens are 32
+  random bytes, stored only as a SHA-256 digest, valid for seven days, and single-use
+  because redemption is a conditional `UPDATE … RETURNING` rather than a read-then-write —
+  an expired, withdrawn or already-used link answers `token_invalid` (410) naming which.
+  Re-inviting an address is an upsert on the partial unique index, so a lapsed invitation
+  can never make an address un-invitable: `201` when a row was written, `200` when one was
+  refreshed. `DELETE /api/v1/users/{id}` now withdraws any outstanding invitation for that
+  address in the same transaction, so removing somebody who never accepted cannot be undone
+  by whoever still holds their emailed link. Passwords go through the same
+  `PasswordService` login uses, and acceptance issues its session through `SessionService`
+  rather than a second minting path. Mail goes through a `MailerPort` with a console
+  adapter outside production, because no provider has been chosen yet (ADR 0005, open
+  question 2). (TAR-55)
 - **Backup coverage and a restore drill** — `docs/runbooks/backups.md` records what
   Render's continuous backup and point-in-time recovery actually cover per
   environment, how to restore, and the cadence for proving it. `pnpm db:restore-drill`
@@ -155,6 +205,13 @@ change.
   that can say _why_ every session for one person died at 14:03, and a device list that
   stops showing a session that is gone. Revoked and expired rows are not yet swept — see
   the follow-up note in TAR-53's failure-modes table. (TAR-56)
+- **An invitation's teams wait on the invitation.** `POST /api/v1/users/invites` moved from
+  `PeopleModule` to `IdentityModule` and now writes the requested teams to `invite_teams`
+  instead of joining them immediately; acceptance is what turns them into `team_members`.
+  Somebody who never accepts therefore never widens a team's membership — and so never
+  widens what its members can see. The address is still reserved as an `invited` account, so
+  the people list and seat accounting are unchanged. `InviteResponse` gains `teamIds` and
+  `revokedAt`, and `invitedByUserId` becomes nullable to match the column. (TAR-55)
 - **`conversations.last_message_at` is `NOT NULL`, defaulting to the row's insert time.**
   It leads all three inbox keyset indexes, and PostgreSQL orders NULLs first under `DESC`,
   so a message-less conversation pinned itself to page one and the resume predicate

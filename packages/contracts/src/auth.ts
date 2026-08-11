@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { IdSchema, TimestampSchema } from './common';
+import { CursorPageQuerySchema } from './pagination';
 import { PermissionSchema, TenantRoleSchema } from './rbac';
 
 /**
@@ -236,10 +237,49 @@ export const InviteResponseSchema = z.object({
   id: IdSchema,
   email: z.email(),
   role: TenantRoleSchema,
-  invitedByUserId: IdSchema,
+  /**
+   * Nullable because `invites.invited_by_user_id` is: the platform-issued
+   * bootstrap invite that gives a freshly provisioned tenant its first admin has
+   * no inviting user inside the tenant to name.
+   */
+  invitedByUserId: IdSchema.nullable(),
+  /** The teams the invitee joins on acceptance. Empty until an admin names some. */
+  teamIds: z.array(IdSchema),
   expiresAt: TimestampSchema,
   acceptedAt: TimestampSchema.nullable(),
+  /**
+   * Set by `DELETE /api/v1/users/invites/{id}` — an admin withdrawing a link
+   * before it is used — and by `DELETE /api/v1/users/{id}`, which withdraws any
+   * outstanding invitation for that address as part of removing the account, so
+   * the emailed link cannot reinstate somebody who has just been removed.
+   *
+   * Published because the list would otherwise be unable to tell "waiting on the
+   * invitee" from "cancelled", and those are the two states an admin acts on
+   * differently.
+   */
+  revokedAt: TimestampSchema.nullable(),
   createdAt: TimestampSchema,
+});
+
+/**
+ * `GET /api/v1/users/invites` — outstanding invitations, so an admin can see who
+ * has not accepted yet, resend, or withdraw.
+ *
+ * `status` is derived rather than stored: `pending` is un-accepted, un-revoked
+ * and still in date, which is exactly the set whose link still works. An expired
+ * invite is therefore neither `pending` nor `revoked`, and asking for `expired`
+ * is how an admin finds the ones worth resending.
+ */
+export const INVITE_LIST_STATUSES = ['pending', 'accepted', 'revoked', 'expired'] as const;
+export const InviteListStatusSchema = z.enum(INVITE_LIST_STATUSES);
+
+export const InviteListQuerySchema = CursorPageQuerySchema.extend({
+  status: InviteListStatusSchema.optional(),
+});
+
+/** Identifies one invite on `POST /users/invites/{id}/resend` and `DELETE /users/invites/{id}`. */
+export const InviteParamsSchema = z.object({
+  id: IdSchema,
 });
 
 export const InviteAcceptInputSchema = z.object({
@@ -371,6 +411,9 @@ export type PasswordResetConfirmInput = z.infer<typeof PasswordResetConfirmInput
 export type PasswordChangeInput = z.infer<typeof PasswordChangeInputSchema>;
 export type InviteCreateInput = z.infer<typeof InviteCreateInputSchema>;
 export type InviteResponse = z.infer<typeof InviteResponseSchema>;
+export type InviteListStatus = z.infer<typeof InviteListStatusSchema>;
+export type InviteListQuery = z.infer<typeof InviteListQuerySchema>;
+export type InviteParams = z.infer<typeof InviteParamsSchema>;
 export type InviteAcceptInput = z.infer<typeof InviteAcceptInputSchema>;
 export type InviteLookupInput = z.infer<typeof InviteLookupInputSchema>;
 export type InvitePreviewResponse = z.infer<typeof InvitePreviewResponseSchema>;
