@@ -14,6 +14,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
 import { RbacModule } from './rbac/rbac.module';
 import { TenancyModule } from './tenancy/tenancy.module';
+import { TicketsModule } from './tickets/tickets.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
@@ -54,6 +55,7 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     TenancyModule,
     PeopleModule,
     WhatsAppModule,
+    TicketsModule,
     WebhooksModule,
   ],
 })

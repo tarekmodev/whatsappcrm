@@ -20,6 +20,13 @@ change.
 - **Template list endpoint** — `GET /api/v1/message-templates`, approved templates only,
   keyset-paginated, with the `(tenant_id, status, name, language, id)` index that serves
   it. (TAR-20a)
+- **Ticket auto-create/attach service** — `TicketsModule`, providing the `TICKET_LINKER`
+  implementation of TAR-73's contract. An inbound message from a contact with no active
+  ticket opens one; every later message attaches to that ticket, reopening it if the
+  customer was replying to a `pending` one. Concurrent messages resolve to a single ticket
+  through `tickets_one_active_per_contact` rather than an application check, and the losing
+  call attaches to the winner instead of reporting a conflict. Nothing calls it on
+  production traffic yet — TAR-77 wires it to the inbound pipeline. (TAR-75)
 - **Ticket auto-linking contract** — `docs/architecture/0003-ticket-auto-linking-contract.md`
   and `packages/contracts/src/ticket-linking.ts`. (TAR-73)
 - **RBAC permission matrix** — `docs/architecture/0004-rbac-permission-matrix.md`, fixing
