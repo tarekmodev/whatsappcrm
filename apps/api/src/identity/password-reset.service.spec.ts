@@ -82,6 +82,8 @@ interface Recorded {
   userUpdates: Record<string, unknown>[];
   audits: string[];
   revocations: { userId: string; reason: string; keptSessionId?: string }[];
+  /** The after-commit cache purges — the other half of "revoked immediately". */
+  purges: string[];
   emails: OutboundEmail[];
 }
 
@@ -97,6 +99,7 @@ function build(overrides: Partial<FakeState> = {}): {
     userUpdates: [],
     audits: [],
     revocations: [],
+    purges: [],
     emails: [],
   };
 
@@ -154,6 +157,10 @@ function build(overrides: Partial<FakeState> = {}): {
     ) => {
       recorded.revocations.push({ userId, reason, keptSessionId });
       return Promise.resolve(2);
+    },
+    purgeCacheFor: (_tenantId: string, userId: string) => {
+      recorded.purges.push(userId);
+      return Promise.resolve();
     },
   } as unknown as SessionRevocationService;
 
@@ -277,6 +284,9 @@ describe('PasswordResetService.confirm', () => {
     expect(recorded.revocations).toEqual([
       { userId: USER, reason: 'password_reset', keptSessionId: undefined },
     ]);
+    // Without this the sessions it just revoked keep answering from Redis for
+    // up to a minute, which is exactly the window a reset exists to close.
+    expect(recorded.purges).toEqual([USER]);
   });
 
   it('clears the lockout, so a forgotten password is actually a way back in', async () => {
