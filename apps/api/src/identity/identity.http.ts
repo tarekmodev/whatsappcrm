@@ -8,6 +8,7 @@ import {
   InviteNotPendingError,
   InviteTokenInvalidError,
   RateLimitedError,
+  RealtimeTicketUnavailableError,
   ResetTokenInvalidError,
   SessionNotFoundError,
 } from './identity.errors';
@@ -35,6 +36,12 @@ import {
  * which needs to be distinguishable from a page that never existed. It leaks
  * nothing — the token is 256 bits of uniform entropy, so anybody able to ask
  * already holds it.
+ *
+ * The one that is not about the caller at all is `upstream_unavailable` (502)
+ * for a realtime ticket that could not be stored: the session is fine and the
+ * request was correct, and reporting a Redis outage as anything in the 4xx range
+ * would send a client off re-authenticating against a problem authentication
+ * cannot fix.
  *
  * `reason` travels as a detail entry rather than as the `{ kind, reason }`
  * object TAR-53 and ADR 0005 describe, because TAR-38 fixed `details` as an
@@ -83,6 +90,10 @@ export function translateIdentityFailure(error: unknown): never {
 
   if (error instanceof InviteNotPendingError) {
     throw new ApiException('conflict', error.message);
+  }
+
+  if (error instanceof RealtimeTicketUnavailableError) {
+    throw new ApiException('upstream_unavailable', error.message);
   }
 
   if (error instanceof TenantNotActiveError) {

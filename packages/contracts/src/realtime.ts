@@ -86,8 +86,13 @@ export const ClientEventSchema = z.discriminatedUnion('event', [
 export type ClientEvent = z.infer<typeof ClientEventSchema>;
 
 /**
- * Handshake payload. The ticket comes from `GET /api/v1/auth/realtime-ticket`
+ * Handshake payload. The ticket comes from `POST /api/v1/auth/realtime-ticket`
  * and is single-use — see `auth.ts` for why a cookie cannot be used here.
+ *
+ * The verb was written here as `GET` until TAR-180 built the route. Both ADR
+ * 0002 and ADR 0005 publish it as a `POST` and always have, and that is the one
+ * that is right: each call mints and stores a new credential, which is not
+ * something a safe method may do or an intermediary may replay.
  */
 export const RealtimeHandshakeSchema = z.object({
   ticket: z.string().min(1),
