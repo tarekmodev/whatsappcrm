@@ -5,6 +5,8 @@ import {
   type ApiError,
   type ConnectedWhatsAppBusinessAccountResponse,
   type CursorPage,
+  type MessageResponse,
+  type MessageTemplateResponse,
   type TeamResponse,
   type TenantRole,
   type UserResponse,
@@ -467,6 +469,182 @@ describe('membership stays consistent across both sides of the relation', () => 
 
     expect(conversation).toBeDefined();
     expect(conversation?.assignedUserId).toBeNull();
+  });
+});
+
+describe('sending (TAR-20g)', () => {
+  const KEY = '0192f0aa-0000-7000-8000-0000000000a1';
+  const OTHER_KEY = '0192f0aa-0000-7000-8000-0000000000a2';
+
+  function send(
+    conversationId: string,
+    body: unknown,
+    idempotencyKey: string | null = KEY,
+  ): Promise<unknown> {
+    return handleMockRequest({
+      method: 'POST',
+      path: `/v1/conversations/${conversationId}/messages`,
+      body,
+      headers: idempotencyKey === null ? {} : { 'Idempotency-Key': idempotencyKey },
+    });
+  }
+
+  const TEXT = { type: 'text', body: 'On its way.' };
+
+  it('queues an outbound message inside the service window', async () => {
+    const message = (await send(MOCK_IDS.conversations.assignedToAmina, TEXT)) as MessageResponse;
+
+    expect(message).toMatchObject({
+      direction: 'outbound',
+      type: 'text',
+      // The row is committed and the provider call is queued behind it.
+      status: 'queued',
+      body: 'On its way.',
+    });
+  });
+
+  it('replays the original message when the same key arrives with the same body', async () => {
+    const first = (await send(MOCK_IDS.conversations.assignedToAmina, TEXT)) as MessageResponse;
+    const second = (await send(MOCK_IDS.conversations.assignedToAmina, TEXT)) as MessageResponse;
+
+    // The guarantee the Send button's double-click protection rests on.
+    expect(second.id).toBe(first.id);
+
+    const thread = (await handleMockRequest({
+      method: 'GET',
+      path: `/v1/conversations/${MOCK_IDS.conversations.assignedToAmina}/messages?limit=100`,
+    })) as CursorPage<MessageResponse>;
+
+    expect(thread.items.filter((item) => item.id === first.id)).toHaveLength(1);
+  });
+
+  it('refuses a key already spent on a different body', async () => {
+    await send(MOCK_IDS.conversations.assignedToAmina, TEXT);
+
+    await expect(
+      send(MOCK_IDS.conversations.assignedToAmina, { type: 'text', body: 'Something else.' }),
+    ).rejects.toMatchObject({ code: 'idempotency_key_reused' });
+  });
+
+  it('sends again under a new key, which is what an edited draft gets', async () => {
+    const first = (await send(MOCK_IDS.conversations.assignedToAmina, TEXT)) as MessageResponse;
+    const second = (await send(
+      MOCK_IDS.conversations.assignedToAmina,
+      { type: 'text', body: 'Something else.' },
+      OTHER_KEY,
+    )) as MessageResponse;
+
+    expect(second.id).not.toBe(first.id);
+  });
+
+  it.each([
+    ['missing', null],
+    ['not a UUID', 'not-a-uuid'],
+  ])('refuses a send whose Idempotency-Key is %s', async (_case, key) => {
+    await expect(send(MOCK_IDS.conversations.assignedToAmina, TEXT, key)).rejects.toMatchObject({
+      code: 'validation_failed',
+    });
+  });
+
+  it('refuses a free-form send outside the 24-hour window', async () => {
+    // `assignedToLiang` has no window at all, which means the same thing as one
+    // that has expired.
+    await expect(send(MOCK_IDS.conversations.assignedToLiang, TEXT)).rejects.toMatchObject({
+      code: 'whatsapp_window_expired',
+    });
+  });
+
+  it('lets a template through the closed window, with its variables substituted', async () => {
+    const message = (await send(MOCK_IDS.conversations.assignedToLiang, {
+      type: 'template',
+      templateName: 'appointment_reminder',
+      languageCode: 'en_US',
+      variables: ['Mei', 'Thursday'],
+    })) as MessageResponse;
+
+    expect(message.type).toBe('template');
+    expect(message.body).toBe('Hello Mei, this is a reminder of your appointment on Thursday.');
+  });
+
+  it('refuses a template supplied the wrong number of values', async () => {
+    await expect(
+      send(MOCK_IDS.conversations.assignedToLiang, {
+        type: 'template',
+        templateName: 'appointment_reminder',
+        languageCode: 'en_US',
+        variables: ['Mei'],
+      }),
+    ).rejects.toMatchObject({ code: 'whatsapp_template_invalid' });
+  });
+
+  it('refuses a template whose approved header was not supplied', async () => {
+    await expect(
+      send(MOCK_IDS.conversations.assignedToLiang, {
+        type: 'template',
+        templateName: 'invoice_ready',
+        languageCode: 'en_US',
+        variables: ['INV-9'],
+      }),
+    ).rejects.toMatchObject({ code: 'whatsapp_template_invalid' });
+  });
+
+  it('attributes the message to the principal, never to a body field', async () => {
+    // An agent holds `conversation:send`, so this is the ordinary path. The
+    // sender is the session's own principal: a client that could name the
+    // speaker would make the whole record worthless.
+    asRole('agent');
+
+    const message = (await send(MOCK_IDS.conversations.assignedToAmina, {
+      ...TEXT,
+      sentByUserId: MOCK_IDS.users.priya,
+    })) as MessageResponse;
+
+    expect(message.sentByUserId).toBe(MOCK_IDS.users.amina);
+    expect(message.sentByAutomation).toBe(false);
+  });
+});
+
+describe('message templates (TAR-20a)', () => {
+  function listTemplates(query = ''): Promise<CursorPage<MessageTemplateResponse>> {
+    return handleMockRequest({
+      method: 'GET',
+      path: `/v1/message-templates?limit=100${query}`,
+    }) as Promise<CursorPage<MessageTemplateResponse>>;
+  }
+
+  it('returns this tenant’s approved templates, ordered by name', async () => {
+    const page = await listTemplates();
+
+    expect(page.items.map((item) => item.name)).toEqual([
+      'appointment_reminder',
+      'invoice_ready',
+      'order_update',
+    ]);
+  });
+
+  it('never returns another tenant’s templates', async () => {
+    const page = await listTemplates();
+
+    expect(page.items.map((item) => item.id)).not.toContain(MOCK_IDS.templates.otherTenant);
+  });
+
+  it('matches `q` on the start of the name, not anywhere in it', async () => {
+    expect((await listTemplates('&q=order')).items.map((item) => item.name)).toEqual([
+      'order_update',
+    ]);
+    expect((await listTemplates('&q=update')).items).toEqual([]);
+  });
+
+  it('filters by the conversation’s own number', async () => {
+    const page = await listTemplates(`&whatsappAccountId=${MOCK_IDS.whatsappAccount}`);
+
+    expect(page.items).not.toHaveLength(0);
+  });
+
+  it('refuses a number it does not know, as the real endpoint does', async () => {
+    await expect(
+      listTemplates(`&whatsappAccountId=${MOCK_IDS.conversations.otherTenant}`),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
   });
 });
 

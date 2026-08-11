@@ -3,6 +3,7 @@ import type {
   InternalNoteResponse,
   MessageAttachment,
   MessageResponse,
+  MessageTemplateResponse,
   TeamResponse,
   TenantRole,
   UserResponse,
@@ -61,6 +62,23 @@ const CONVERSATION_IDS = {
 } as const;
 
 const WHATSAPP_ACCOUNT_ID = '0192f005-0000-7000-8000-000000000501';
+const WHATSAPP_BUSINESS_ACCOUNT_ID = '0192f005-0000-7000-8000-000000000502';
+
+/**
+ * A window that stays open, so the composer's free-form half is reachable.
+ *
+ * Every other timestamp in this file is a literal moment in the fixtures' own
+ * story, and stays one. This one cannot be, and no value is right: the service
+ * window is *relative to now* by definition, so a literal is either near enough
+ * to expire — leaving mock mode able to render only the outside-the-window
+ * state — or far enough not to, which is this. It has to stay a literal, because
+ * a generated timestamp would make server and client render different markup.
+ *
+ * ⚠️ The consequence is visible and is **not a bug in the countdown**: the
+ * composer's banner reads "Free replies close in 26,440 days" in mock mode. A
+ * real window is under 24 hours and reads in hours or minutes.
+ */
+const OPEN_SERVICE_WINDOW = '2099-01-01T00:00:00.000Z';
 
 /** A record is only ever read through a handler that filters on this field. */
 export interface TenantScoped {
@@ -225,7 +243,9 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     assignedTeamId: TEAM_IDS.billing,
     ticketId: null,
     unreadCount: 2,
-    serviceWindowExpiresAt: '2026-08-11T09:00:00.000Z',
+    // The one open window in the set; every other thread here is outside it, so
+    // both halves of the composer can be walked without editing a fixture.
+    serviceWindowExpiresAt: OPEN_SERVICE_WINDOW,
     botHandling: false,
     lastMessagePreview: 'Could you resend the July invoice?',
     lastMessageAt: '2026-08-10T08:45:00.000Z',
@@ -553,10 +573,86 @@ export const MOCK_INTERNAL_NOTES: readonly MockInternalNote[] = [
   },
 ];
 
+// --- Templates (TAR-20a) ---------------------------------------------------
+//
+// One per shape the composer has to fill: no header, a `text` header with its
+// own placeholder, and a media header. A set that was all plain-body templates
+// would leave the header fields — the part 0002 amendment 1 exists for —
+// unreachable in mock mode.
+
+const TEMPLATE_IDS = {
+  orderUpdate: '0192f009-0000-7000-8000-000000000901',
+  appointmentReminder: '0192f009-0000-7000-8000-000000000902',
+  invoiceReady: '0192f009-0000-7000-8000-000000000903',
+  otherTenant: '0192f009-0000-7000-8000-000000000999',
+} as const;
+
+export type MockMessageTemplate = MessageTemplateResponse & TenantScoped;
+
+function template(
+  overrides: Partial<MockMessageTemplate> & Pick<MockMessageTemplate, 'id' | 'name' | 'bodyText'>,
+): MockMessageTemplate {
+  return {
+    tenantId: MOCK_TENANT_ID,
+    whatsappBusinessAccountId: WHATSAPP_BUSINESS_ACCOUNT_ID,
+    language: 'en_US',
+    category: 'UTILITY',
+    // The endpoint returns approved templates only; there is no other value a
+    // fixture reachable through it may hold.
+    status: 'approved',
+    components: null,
+    parameterCount: 0,
+    headerFormat: null,
+    headerParameterCount: 0,
+    // Always false on this endpoint: templates whose buttons take a parameter
+    // are excluded from it entirely.
+    requiresButtonParameters: false,
+    providerTemplateId: null,
+    createdAt: '2026-07-10T09:00:00.000Z',
+    updatedAt: '2026-07-10T09:00:00.000Z',
+    ...overrides,
+  };
+}
+
+export const MOCK_MESSAGE_TEMPLATES: readonly MockMessageTemplate[] = [
+  template({
+    id: TEMPLATE_IDS.appointmentReminder,
+    name: 'appointment_reminder',
+    bodyText: 'Hello {{1}}, this is a reminder of your appointment on {{2}}.',
+    parameterCount: 2,
+  }),
+  template({
+    id: TEMPLATE_IDS.invoiceReady,
+    name: 'invoice_ready',
+    bodyText: 'Your invoice {{1}} is ready.',
+    parameterCount: 1,
+    // A media header: nothing may be sent for this one without an upload.
+    headerFormat: 'document',
+  }),
+  template({
+    id: TEMPLATE_IDS.orderUpdate,
+    name: 'order_update',
+    bodyText: 'Hi {{1}} — order {{2}} is now {{3}}.',
+    parameterCount: 3,
+    // A `text` header with a placeholder of its own, counted separately.
+    headerFormat: 'text',
+    headerParameterCount: 1,
+  }),
+  template({
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: TEMPLATE_IDS.otherTenant,
+    name: 'rival_tenant_template',
+    bodyText: 'This must never appear in another tenant’s composer.',
+  }),
+];
+
 export const MOCK_IDS = {
   teams: TEAM_IDS,
   users: USER_IDS,
   conversations: CONVERSATION_IDS,
   messages: MESSAGE_IDS,
   notes: NOTE_IDS,
+  templates: TEMPLATE_IDS,
+  whatsappAccount: WHATSAPP_ACCOUNT_ID,
 } as const;

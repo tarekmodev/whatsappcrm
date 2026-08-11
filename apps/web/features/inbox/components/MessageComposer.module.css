@@ -1,0 +1,30 @@
+.composer {
+  /* Separated from the thread it appends to, without a margin on a sibling —
+     the same seam the notes form uses below it. */
+  padding-block-start: var(--space-3);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}
+
+.bannerHeading {
+  font-weight: var(--font-weight-medium);
+}
+
+.bannerSkeleton {
+  /* The notice's own frame is not drawn while it is a placeholder, so the box
+     stands in for its padding too and the swap does not nudge the form. */
+  border-radius: var(--radius-md);
+}
+
+.attachmentStatus {
+  /* Reserved whether or not there is a file, so picking one does not push the
+     Send button down the screen under the cursor already heading for it. */
+  min-block-size: var(--size-control-sm);
+  font-size: var(--font-size-body-sm);
+  color: var(--color-on-surface-muted);
+}
+
+.attachmentName {
+  /* A file name is arbitrary and often long; it wraps rather than widening the
+     composer past its column. */
+  overflow-wrap: anywhere;
+}

@@ -4,18 +4,22 @@ import {
   ConversationAssignInputSchema,
   ConversationListQuerySchema,
   CursorPageQuerySchema,
+  IdSchema,
   InternalNoteCreateInputSchema,
   InviteCreateInputSchema,
   MessageListQuerySchema,
+  MessageTemplateListQuerySchema,
   PasswordChangeInputSchema,
   PasswordResetConfirmInputSchema,
   PasswordResetRequestInputSchema,
+  SendMessageInputSchema,
   TeamCreateInputSchema,
   TeamUpdateInputSchema,
   UserListQuerySchema,
   UserUpdateInputSchema,
   WhatsAppEmbeddedSignupInputSchema,
   isRoleWithin,
+  renderTemplateBody,
   roleHasPermission,
   whatsAppSignupFailureDetails,
   type ApiError,
@@ -24,7 +28,9 @@ import {
   type CursorPage,
   type InternalNoteResponse,
   type MessageResponse,
+  type MessageTemplateResponse,
   type Permission,
+  type SendMessageInput,
   type SessionPrincipal,
   type SessionResponse,
   type TeamResponse,
@@ -32,10 +38,12 @@ import {
 } from '@whatsappcrm/contracts';
 import { ApiRequestError, type ApiRequest } from '@/lib/api/http';
 import { mockState, nextMockId } from '@/lib/api/mock/store';
+import { MOCK_IDS } from '@/lib/api/mock/fixtures';
 import type {
   MockConversation,
   MockInternalNote,
   MockMessage,
+  MockMessageTemplate,
   MockTeam,
   MockUser,
   TenantScoped,
@@ -71,11 +79,20 @@ interface RouteContext {
   readonly params: readonly string[];
   readonly query: URLSearchParams;
   readonly body: unknown;
+  /**
+   * As the caller set them, lower-cased keys. Only the send route reads one, and
+   * it has to: `Idempotency-Key` is where the double-send guard lives, and a
+   * transport that ignored it could not exercise the guard at all.
+   */
+  readonly headers: Readonly<Record<string, string>>;
 }
 
 export async function handleMockRequest(request: ApiRequest): Promise<unknown> {
   const principal = await resolveStubPrincipal();
   const [pathname = '', rawQuery = ''] = request.path.split('?');
+  const headers = Object.fromEntries(
+    Object.entries(request.headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]),
+  );
 
   for (const route of ROUTES) {
     if (route.method !== request.method) {
@@ -97,6 +114,7 @@ export async function handleMockRequest(request: ApiRequest): Promise<unknown> {
       params: match.slice(1).map((value) => value ?? ''),
       query: new URLSearchParams(rawQuery),
       body: request.body,
+      headers,
     });
   }
 
@@ -116,6 +134,8 @@ const HTTP_GONE = 410;
 const HTTP_UNPROCESSABLE = 422;
 const MOCK_REQUEST_ID = 'mock-request';
 const UUID_SEGMENT = '([0-9a-fA-F-]{36})';
+/** Lower-cased: `handleMockRequest` normalises the request's header names. */
+const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
 
 const ROUTES: readonly Route[] = [
   {
@@ -189,6 +209,18 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/notes$`),
     permission: 'conversation:note',
     handle: createInternalNote,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/messages$`),
+    permission: 'conversation:send',
+    handle: sendMessage,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/message-templates$/,
+    permission: 'conversation:send',
+    handle: listMessageTemplates,
   },
   {
     method: 'POST',
@@ -825,6 +857,198 @@ function assignConversation({ principal, params, body }: RouteContext): Conversa
   return toConversationResponse(updated);
 }
 
+// --- Sending, and the templates that survive a closed window (TAR-20g) ------
+
+/**
+ * `POST /v1/conversations/{id}/messages`.
+ *
+ * The three refusals the composer is built around, all of them reachable here so
+ * the console's branches can be walked without an API:
+ *
+ *   * a missing or malformed `Idempotency-Key` — `validation_failed`;
+ *   * a key already spent on a *different* body — `idempotency_key_reused`,
+ *     which is what an agent editing a draft and retrying with a stale key would
+ *     hit if the composer did not mint a new one;
+ *   * a free-form send outside the 24-hour window — `whatsapp_window_expired`.
+ *
+ * Replaying the same key with the same body returns the original message rather
+ * than sending again. That is the guarantee the Send button's double-click
+ * protection rests on, so it is modelled rather than assumed.
+ */
+function sendMessage({ principal, params, body, headers }: RouteContext): MessageResponse {
+  const conversation = findConversationInTenant(principal, params[0]);
+  const idempotencyKey = headers[IDEMPOTENCY_KEY_HEADER];
+
+  if (idempotencyKey === undefined || !IdSchema.safeParse(idempotencyKey).success) {
+    throw validationFailed();
+  }
+
+  const parsed = SendMessageInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const input = parsed.data;
+  const payload = JSON.stringify(input);
+  const state = mockState();
+  const spent = state.sentByIdempotencyKey.get(idempotencyKey);
+
+  if (spent !== undefined) {
+    if (spent.payload !== payload) {
+      throw refused(
+        'idempotency_key_reused',
+        'That idempotency key was already used for a different message.',
+        HTTP_UNPROCESSABLE,
+      );
+    }
+
+    return toMessageResponse(spent.message);
+  }
+
+  if (input.type !== 'template' && !isServiceWindowOpen(conversation)) {
+    throw refused(
+      'whatsapp_window_expired',
+      'This conversation is outside its 24-hour window. Send an approved template instead.',
+      HTTP_UNPROCESSABLE,
+    );
+  }
+
+  const sentAt = new Date().toISOString();
+  const created: MockMessage = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    conversationId: conversation.id,
+    direction: 'outbound',
+    type: input.type,
+    // Every send starts here: the row is committed and the Cloud API call is
+    // queued behind it. In the real system the ladder that follows arrives over
+    // the socket; nothing in mock mode advances it, and that is honest — there
+    // is no Meta to report a delivery.
+    status: 'queued',
+    body: sentBody(principal, input),
+    // No media object store here, so an outbound attachment cannot be
+    // reconstructed. The thread renders the labelled placeholder for its type
+    // rather than a broken image.
+    attachments: [],
+    sentByUserId: principal.userId,
+    sentByAutomation: false,
+    providerMessageId: null,
+    failureReason: null,
+    sentAt,
+    createdAt: sentAt,
+  };
+
+  state.messages.set(created.id, created);
+  state.sentByIdempotencyKey.set(idempotencyKey, { payload, message: created });
+  state.conversations.set(conversation.id, {
+    ...conversation,
+    lastMessageAt: sentAt,
+    lastMessagePreview: created.body,
+    updatedAt: sentAt,
+  });
+
+  return toMessageResponse(created);
+}
+
+/**
+ * What the thread will show for this send.
+ *
+ * A template's body is the approved copy with the variables substituted in,
+ * through the contract's own renderer — the same one the real send path stores,
+ * so the mock thread and the real one cannot disagree about what was said.
+ */
+function sentBody(principal: SessionPrincipal, input: SendMessageInput): string | null {
+  if (input.type === 'text') {
+    return input.body;
+  }
+
+  if (input.type !== 'template') {
+    return input.caption ?? null;
+  }
+
+  const found = tenantTemplates(principal).find(
+    (candidate) =>
+      candidate.name === input.templateName && candidate.language === input.languageCode,
+  );
+
+  if (found === undefined) {
+    throw refused(
+      'whatsapp_template_invalid',
+      'That template is not approved for this number.',
+      HTTP_BAD_REQUEST,
+    );
+  }
+
+  if (input.variables.length !== found.parameterCount) {
+    throw refused(
+      'whatsapp_template_invalid',
+      `That template takes ${String(found.parameterCount)} value(s) and ${String(input.variables.length)} were supplied.`,
+      HTTP_BAD_REQUEST,
+    );
+  }
+
+  // The rule 0002 amendment 1 states: a header exactly when the template
+  // publishes one, and the two formats must agree.
+  if ((input.header?.format ?? null) !== found.headerFormat) {
+    throw refused(
+      'whatsapp_template_invalid',
+      'That template’s header does not match the one supplied.',
+      HTTP_BAD_REQUEST,
+    );
+  }
+
+  return renderTemplateBody(found.bodyText, input.variables);
+}
+
+/**
+ * `GET /v1/message-templates` — approved and sendable only, ordered by name then
+ * language, exactly as the endpoint documents.
+ *
+ * `whatsappAccountId` is a phone number and the server resolves its WABA. The
+ * fixtures hold one number and one business account, so filtering by it can only
+ * narrow to nothing or to everything — it is still validated, because a caller
+ * naming an unknown number gets `validation_failed` from the real endpoint and
+ * the console must not be surprised by that.
+ */
+function listMessageTemplates({
+  principal,
+  query,
+}: RouteContext): CursorPage<MessageTemplateResponse> {
+  const parsed = MessageTemplateListQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { whatsappAccountId, q, limit } = parsed.data;
+
+  if (whatsappAccountId !== undefined && whatsappAccountId !== MOCK_IDS.whatsappAccount) {
+    throw refused('validation_failed', 'Unknown WhatsApp number.', HTTP_UNPROCESSABLE);
+  }
+
+  const prefix = q?.trim().toLowerCase();
+
+  const items = tenantTemplates(principal)
+    .filter((item) => prefix === undefined || item.name.toLowerCase().startsWith(prefix))
+    .sort(
+      (left, right) =>
+        left.name.localeCompare(right.name) || left.language.localeCompare(right.language),
+    )
+    .slice(0, limit)
+    .map(toMessageTemplateResponse);
+
+  return { items, nextCursor: null };
+}
+
+/** Mirrors the API's window rule: `null` is closed, and the boundary is exclusive. */
+function isServiceWindowOpen(conversation: MockConversation): boolean {
+  return (
+    conversation.serviceWindowExpiresAt !== null &&
+    Date.parse(conversation.serviceWindowExpiresAt) > Date.now()
+  );
+}
+
 function isUnclaimed(conversation: MockConversation): boolean {
   return conversation.assignedUserId === null && conversation.assignedTeamId === null;
 }
@@ -894,6 +1118,12 @@ function tenantMessages(principal: SessionPrincipal): MockMessage[] {
 function tenantNotes(principal: SessionPrincipal): MockInternalNote[] {
   return [...mockState().internalNotes.values()].filter(
     (note) => note.tenantId === principal.tenantId,
+  );
+}
+
+function tenantTemplates(principal: SessionPrincipal): MockMessageTemplate[] {
+  return [...mockState().messageTemplates.values()].filter(
+    (item) => item.tenantId === principal.tenantId,
   );
 }
 
@@ -1020,6 +1250,10 @@ function toMessageResponse(message: MockMessage): MessageResponse {
 
 function toInternalNoteResponse(note: MockInternalNote): InternalNoteResponse {
   return stripTenant(note);
+}
+
+function toMessageTemplateResponse(item: MockMessageTemplate): MessageTemplateResponse {
+  return stripTenant(item);
 }
 
 // --- Helpers ---------------------------------------------------------------

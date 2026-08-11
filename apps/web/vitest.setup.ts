@@ -1,6 +1,19 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
+
+/**
+ * Testing Library's async helpers default to one second, which is a fine budget
+ * for a state update and a poor one for the thing several of these tests are
+ * actually waiting on: a `next/dynamic` boundary resolving its chunk, which in
+ * Vitest means transforming and evaluating that module graph for the first time.
+ *
+ * On an unloaded machine it lands in a few hundred milliseconds; with the whole
+ * suite running in parallel it does not, and the failure is a timeout on
+ * `findByRole('dialog')` that says nothing about the component under test. Five
+ * seconds is still short enough that a genuinely stuck assertion fails fast.
+ */
+configure({ asyncUtilTimeout: 5_000 });
 
 /**
  * jsdom ships `<dialog>` but not `showModal`/`close`, so any test that renders a
