@@ -81,7 +81,7 @@ describe('tenant deactivation, end to end', () => {
     systemPrisma = createPrismaClient('system', requireEnv('SYSTEM_DATABASE_URL'));
     tenantBase = createPrismaClient('tenant', requireEnv('APP_DATABASE_URL'));
     tenantPrisma = withTenantScope(tenantBase, tenantContext);
-    deactivation = new TenantDeactivationService(systemPrisma);
+    deactivation = new TenantDeactivationService(systemPrisma, tenantContext);
 
     await removeFixture();
 

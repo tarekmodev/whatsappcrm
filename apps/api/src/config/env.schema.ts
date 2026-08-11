@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parsePlatformAdminCredentials } from '../common/security/platform-admin-credentials';
 
 /**
  * Every environment variable the API reads, in one place. The process refuses to
@@ -88,21 +89,57 @@ const envShape = z.object({
   APP_LINK_SCHEME: z.enum(['http', 'https']).default('https'),
 
   /**
-   * Bearer credential for `/api/v1/admin/*`. Optional here and **absent means
-   * the whole admin surface refuses every request** — an environment that has
-   * not been given a token cannot provision tenants, which is the safe default
-   * for a route that creates them.
+   * Named bearer credentials for `/api/v1/admin/*`, as comma-separated
+   * `label:secret` entries (TAR-166):
    *
-   * 32 characters is the floor for something compared against by an
-   * unauthenticated caller. Generate with `openssl rand -base64 48`; it is a
-   * secret and belongs in the platform's secret store.
+   *     ops-alice:<secret>,ci-provisioner:<secret>
    *
-   * Placeholder by design: it authenticates *the platform operator*, who is not
-   * a tenant user and therefore outside the session and RBAC model TAR-35 and
-   * TAR-22 build. Replace it with a real platform-admin identity when one
-   * exists — the guard is the only thing that has to change.
+   * One entry per operator or automation. The label is not a secret — it is
+   * written to `audit_logs.actor_label` so the trail can say *which* operator
+   * connected a WhatsApp Business Account or deactivated a tenant — and the
+   * secret half never leaves the process. Revoking one operator is deleting one
+   * entry rather than rotating everybody.
+   *
+   * **The unlabelled form is refused, with no transitional dual-accept.** A bare
+   * secret still authenticates a request but writes an audit row that cannot
+   * name who acted, and that is the gap this change exists to close. Every
+   * environment holding this variable is updated in the same release — see the
+   * deploy note in `.env.example`.
+   *
+   * Optional here and **absent means the whole admin surface refuses every
+   * request** — an environment that has not been given a token cannot provision
+   * tenants, which is the safe default for a route that creates them. Malformed
+   * is different: it fails the boot, because it is a mistake rather than a
+   * decision.
+   *
+   * 32 characters is the floor for a secret compared against by an
+   * unauthenticated caller. Generate each with `openssl rand -base64 48`; they
+   * belong in the platform's secret store.
+   *
+   * Still a placeholder in one respect: every entry is authorised for every
+   * tenant, because the operator is not a tenant user and sits outside the
+   * session and RBAC model TAR-35 and TAR-22 build.
    */
-  PLATFORM_ADMIN_TOKEN: z.string().min(32).optional(),
+  PLATFORM_ADMIN_TOKEN: z
+    .string()
+    .min(1)
+    .optional()
+    .superRefine((value, ctx) => {
+      if (value === undefined) {
+        return;
+      }
+
+      try {
+        parsePlatformAdminCredentials(value);
+      } catch (error) {
+        ctx.addIssue({
+          code: 'custom',
+          // The parser's messages never quote a secret, which is what makes
+          // them safe to put in a boot failure a deploy log will keep.
+          message: error instanceof Error ? error.message : 'is malformed',
+        });
+      }
+    }),
 
   // ---------------------------------------------------------------------------
   // The edge trust boundary (TAR-148)

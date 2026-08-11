@@ -49,6 +49,20 @@ export const AUDIT_ACTIONS = {
   passwordResetCompleted: 'password.reset_completed',
   /** A signed-in user changing their own password (TAR-57). */
   passwordChanged: 'password.changed',
+  /**
+   * A WhatsApp Business Account attached to a tenant (TAR-166), by an operator
+   * pasting a token or — from TAR-168 — by a tenant admin completing Meta's
+   * Embedded Signup. Connecting one hands the platform a credential that can
+   * message a business's customers in its name, which is why it is audited at
+   * all.
+   *
+   * The string is **exactly** what `business-account-connection.service.ts`
+   * declared locally before this constant existed. Rows carrying it are already
+   * written, and an auditor filtering the history of a connection made last
+   * month still has to find them — so this moves where the value is spelled, not
+   * what it says.
+   */
+  whatsappBusinessAccountConnected: 'whatsapp.business_account.connected',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

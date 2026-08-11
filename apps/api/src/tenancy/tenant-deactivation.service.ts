@@ -1,4 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { resolveAuditActor, type AuditActor } from '../audit/audit-actor';
+import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { $Enums, Prisma } from '../generated/prisma/client';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 import { TenantNotFoundError } from './tenant-deactivation.errors';
@@ -111,7 +113,10 @@ const TENANT_PROJECTION = {
 export class TenantDeactivationService {
   private readonly logger = new Logger(TenantDeactivationService.name);
 
-  constructor(@Inject(SYSTEM_PRISMA) private readonly systemPrisma: SystemPrisma) {}
+  constructor(
+    @Inject(SYSTEM_PRISMA) private readonly systemPrisma: SystemPrisma,
+    private readonly tenantContext: TenantContextService,
+  ) {}
 
   async deactivate(command: DeactivateTenantCommand): Promise<DeactivateTenantResult> {
     const result = await this.systemPrisma.$transaction(
@@ -138,7 +143,19 @@ export class TenantDeactivationService {
 
         return ALREADY_INACCESSIBLE.includes(existing.status)
           ? { tenant: existing, deactivated: false }
-          : { tenant: await suspendTenant(tx, existing.id, command.reason), deactivated: true };
+          : {
+              tenant: await suspendTenant(
+                tx,
+                existing.id,
+                command.reason,
+                // Read here rather than inside `suspendTenant`, so the actor is
+                // resolved from the request scope in one place and cannot be
+                // assembled by hand into a combination
+                // `audit_logs_actor_attribution` rejects.
+                resolveAuditActor(this.tenantContext),
+              ),
+              deactivated: true,
+            };
       },
       { timeout: TRANSACTION_TIMEOUT_MS },
     );
@@ -160,10 +177,17 @@ export class TenantDeactivationService {
  * statements that usually both succeed.
  *
  * `actorUserId` stays null: the actor is the platform operator, who is not a
- * user inside this tenant. When a real platform-admin identity exists (TAR-35,
- * TAR-22) it belongs in `metadata` alongside the reason — the column is a
- * foreign key into this tenant's `users`, and the platform will never be a row
- * there.
+ * user inside this tenant — the column is a foreign key into this tenant's
+ * `users`, and the platform will never be a row there. Since TAR-166 that no
+ * longer means the row is anonymous: `actor_type` says `platform_operator` and
+ * `actor_label` names the credential that authenticated the request, so "who
+ * shut this tenant off" has an answer without a foreign key that cannot exist.
+ *
+ * Written directly rather than through `AuditService` because this row is not
+ * the audit of a tenant-scoped change: it runs under `SystemPrisma` against a
+ * tenant nobody is in the scope of, and it carries the transaction's `now()`.
+ * The actor still comes from the request scope — the rule that matters — via
+ * `resolveAuditActor`, which is the same value `AuditService` would have used.
  *
  * Both timestamps come from the **database** clock, read once as `now()` —
  * transaction start — and written to both rows. Two API instances a few seconds
@@ -182,6 +206,7 @@ async function suspendTenant(
   tx: Prisma.TransactionClient,
   tenantId: string,
   reason: string | undefined,
+  actor: AuditActor,
 ): Promise<DeactivatedTenant> {
   const [{ now }] = await tx.$queryRaw<[{ now: Date }]>`SELECT now() AS now`;
 
@@ -194,8 +219,9 @@ async function suspendTenant(
   await tx.auditLog.create({
     data: {
       tenantId: tenant.id,
-      // Never a user in this tenant: this is the platform acting on it.
-      actorUserId: null,
+      // Never a user in this tenant: this is the platform acting on it, and
+      // `actor_label` is what names which operator credential did.
+      ...actor,
       action: TENANT_DEACTIVATED_ACTION,
       targetType: 'tenant',
       targetId: tenant.id,

@@ -354,9 +354,13 @@ Tenants are admin-provisioned; there is no self-signup. Both operations are one 
 authenticated by `PLATFORM_ADMIN_TOKEN` rather than by a session, and both are idempotent on
 the tenant's slug.
 
+`PLATFORM_ADMIN_TOKEN` holds `label:secret` entries, one per operator. What a caller
+presents is the **secret** half; the label is what the audit trail records. The examples
+below use `$PLATFORM_ADMIN_SECRET` for that half.
+
 ```bash
 curl -X POST http://localhost:3001/api/v1/admin/tenants \
-  -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+  -H "Authorization: Bearer $PLATFORM_ADMIN_SECRET" \
   -H 'Content-Type: application/json' \
   -d '{"slug":"acme","name":"Acme Ltd","timezone":"Europe/London","locale":"en-GB"}'
 
@@ -366,7 +370,7 @@ curl -X POST http://localhost:3001/api/v1/admin/tenants \
 #  "settings":{"timezone":"Europe/London","locale":"en-GB"},"createdAt":"…"}
 
 curl -X POST http://localhost:3001/api/v1/admin/tenants/acme/deactivate \
-  -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+  -H "Authorization: Bearer $PLATFORM_ADMIN_SECRET" \
   -H 'Content-Type: application/json' \
   -d '{"reason":"Non-payment, ticket OPS-412"}'
 
@@ -804,7 +808,12 @@ required.
 `PLATFORM_ADMIN_TOKEN` is optional in a different sense: leaving it unset does not disable
 validation, it disables the whole platform admin surface. Every request to
 `/api/v1/admin/*` is refused, which is the safe default for routes that create tenants.
-Generate one with `openssl rand -base64 48` and keep it in the secret store.
+It holds comma-separated `label:secret` entries — one per operator or automation — so the
+audit trail can name which credential acted; generate each secret with
+`openssl rand -base64 48` and keep them in the secret store. A **malformed** value is not
+optional in either sense: an unlabelled entry, a short secret or a repeated label fails the
+boot, so upgrading past TAR-166 means updating every environment holding this variable in
+the same release.
 
 `WHATSAPP_APP_SECRET` and `WHATSAPP_WEBHOOK_VERIFY_TOKEN` are optional in exactly the same
 sense, and for a sharper reason: the webhook route is public and unauthenticated, so an

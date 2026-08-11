@@ -1,12 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Prisma } from '../generated/prisma/client';
+import { resolveAuditActor } from './audit-actor';
 import type { AuditAction } from './audit.actions';
 
 /** What changed, in a shape an auditor can read six months later. */
 export interface AuditEntry {
   action: AuditAction;
-  targetType: 'user' | 'team' | 'invite';
+  targetType: 'user' | 'team' | 'invite' | 'whatsapp_business_account';
   targetId: string;
   /**
    * A redacted before/after at most. **Never a secret, a password hash, a token
@@ -28,6 +29,11 @@ export interface AuditEntry {
  * `tenantId` and the actor come from the request scope, not from the caller's
  * arguments, so a service cannot accidentally attribute a change to the wrong
  * person or file it under the wrong tenant.
+ *
+ * Since TAR-166 the actor is three columns, not one: `actor_type` says which
+ * kind of principal acted, and `actor_label` names the operator credential when
+ * it was a platform operator. All three are written explicitly on every call —
+ * `actor_type` has a database default, and nothing here leans on it.
  */
 @Injectable()
 export class AuditService {
@@ -37,14 +43,13 @@ export class AuditService {
     await tx.auditLog.create({
       data: {
         tenantId: this.tenantContext.requireTenantId(),
-        // Null when the platform acted rather than a user in this tenant —
-        // the column is nullable for exactly that case.
-        actorUserId: this.tenantContext.userId,
+        ...resolveAuditActor(this.tenantContext),
         action: entry.action,
         targetType: entry.targetType,
         targetId: entry.targetId,
         ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
       },
+      select: { id: true },
     });
   }
 }

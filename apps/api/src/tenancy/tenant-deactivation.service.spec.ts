@@ -1,3 +1,4 @@
+import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Prisma } from '../generated/prisma/client';
 import type { SystemPrisma } from '../prisma/prisma.tokens';
 import { TenantNotFoundError } from './tenant-deactivation.errors';
@@ -41,6 +42,7 @@ describe('TenantDeactivationService', () => {
   let createAuditLog: jest.Mock;
   let executeRaw: jest.Mock;
   let queryRaw: jest.Mock;
+  let tenantContext: TenantContextService;
   let service: TenantDeactivationService;
 
   beforeEach(() => {
@@ -67,8 +69,21 @@ describe('TenantDeactivationService', () => {
       $transaction: (work: (tx: Prisma.TransactionClient) => Promise<unknown>) => work(tx),
     } as unknown as SystemPrisma;
 
-    service = new TenantDeactivationService(systemPrisma);
+    tenantContext = new TenantContextService();
+    service = new TenantDeactivationService(systemPrisma, tenantContext);
   });
+
+  /** Runs `work` as if `PlatformAdminGuard` had authenticated `label`. */
+  function asOperator<T>(label: string, work: () => Promise<T>): Promise<T> {
+    return tenantContext.run(
+      { requestId: 'req_deactivation', tenantId: null, userId: null, principal: null },
+      async () => {
+        tenantContext.setPlatformActor(label);
+
+        return await work();
+      },
+    );
+  }
 
   describe('deactivating a running tenant', () => {
     it('suspends it and stamps when access was revoked', async () => {
@@ -102,13 +117,19 @@ describe('TenantDeactivationService', () => {
     });
 
     it('records who lost access and why, in the same transaction as the write', async () => {
-      await service.deactivate({ slug: SLUG, reason: 'Non-payment, ticket OPS-412' });
+      await asOperator('ops-alice', () =>
+        service.deactivate({ slug: SLUG, reason: 'Non-payment, ticket OPS-412' }),
+      );
 
       expect(createAuditLog).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             tenantId: TENANT_ID,
+            // The operator credential that authenticated the request (TAR-166),
+            // not a user: the platform is never a row in this tenant's `users`.
+            actorType: 'platform_operator',
             actorUserId: null,
+            actorLabel: 'ops-alice',
             action: TENANT_DEACTIVATED_ACTION,
             targetType: 'tenant',
             targetId: TENANT_ID,

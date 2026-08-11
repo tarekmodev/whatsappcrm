@@ -117,6 +117,62 @@ describe('environment validation', () => {
     });
   });
 
+  describe('named platform-admin credentials (TAR-166)', () => {
+    const SECRET = 'a-platform-admin-secret-of-at-least-32-chars';
+
+    it('is optional, and absent disables the admin surface rather than the boot', () => {
+      expect(validateEnv({ ...REQUIRED, PLATFORM_ADMIN_TOKEN: '' }).PLATFORM_ADMIN_TOKEN).toBe(
+        undefined,
+      );
+    });
+
+    it('accepts several named entries', () => {
+      const configured = `ops-alice:${SECRET},ci-provisioner:${SECRET}x`;
+
+      expect(
+        validateEnv({ ...REQUIRED, PLATFORM_ADMIN_TOKEN: configured }).PLATFORM_ADMIN_TOKEN,
+      ).toBe(configured);
+    });
+
+    it('refuses to boot on the old unlabelled form', () => {
+      // Deliberately not a transitional dual-accept. A bare secret authenticates
+      // fine and writes an audit row that cannot say which operator acted, which
+      // is the gap this release closes — so it fails the deploy rather than
+      // passing silently.
+      expect(() => validateEnv({ ...REQUIRED, PLATFORM_ADMIN_TOKEN: SECRET })).toThrow(
+        /PLATFORM_ADMIN_TOKEN/,
+      );
+    });
+
+    it('refuses a short secret, a bad label and a repeated label', () => {
+      for (const configured of [
+        'ops-alice:short',
+        `Ops Alice:${SECRET}`,
+        `ops-alice:${SECRET},ops-alice:${SECRET}x`,
+      ]) {
+        expect(() => validateEnv({ ...REQUIRED, PLATFORM_ADMIN_TOKEN: configured })).toThrow(
+          /PLATFORM_ADMIN_TOKEN/,
+        );
+      }
+    });
+
+    it('tolerates a trailing separator, which a hand-edited value collects', () => {
+      expect(() =>
+        validateEnv({ ...REQUIRED, PLATFORM_ADMIN_TOKEN: `ops-alice:${SECRET},` }),
+      ).not.toThrow();
+    });
+
+    it('never puts the secret in the failure it reports', () => {
+      // This message reaches a deploy log, which is not a secret store.
+      try {
+        validateEnv({ ...REQUIRED, PLATFORM_ADMIN_TOKEN: SECRET });
+        throw new Error('expected validation to fail');
+      } catch (error) {
+        expect((error as Error).message).not.toContain(SECRET);
+      }
+    });
+  });
+
   describe('embedded signup configuration (TAR-161)', () => {
     const CONFIGURED = { META_APP_ID: '1234567890', META_EMBEDDED_SIGNUP_CONFIG_ID: '9876543210' };
 

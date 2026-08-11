@@ -43,7 +43,10 @@ import { AdminWhatsAppController } from './admin-whatsapp.controller';
  * services are stubbed; their behaviour is covered by their own specs.
  */
 
+/** The secret half of a `PLATFORM_ADMIN_TOKEN` entry — what a caller presents. */
 const TOKEN = 'a-platform-admin-token-of-at-least-32-chars';
+/** What the environment holds: the same secret, named (TAR-166). */
+const CONFIGURED = `ops-alice:${TOKEN}`;
 const TENANT_ID = '50444444-4444-7444-8444-4444444444c1';
 const WABA_ROW_ID = '60444444-4444-7444-8444-444444444401';
 const WABA_ID = '102290129340398';
@@ -115,7 +118,9 @@ describe('the platform-admin WhatsApp routes', () => {
         { provide: MessageTemplateSyncService, useValue: { syncByWabaId } },
         {
           provide: ConfigService,
-          useValue: { get: (key: string) => (key === 'PLATFORM_ADMIN_TOKEN' ? TOKEN : undefined) },
+          useValue: {
+            get: (key: string) => (key === 'PLATFORM_ADMIN_TOKEN' ? CONFIGURED : undefined),
+          },
         },
       ],
     }).compile();

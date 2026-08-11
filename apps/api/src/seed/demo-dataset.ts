@@ -1077,9 +1077,14 @@ function northwind(now: Date): DemoTenant {
       { id: MISC_IDS.usageConversations, metric: 'conversations', value: 5n },
     ],
 
+    // Every row here is a tenant admin acting, so all three carry
+    // `actorType: 'user'` explicitly (TAR-166). The column has a database
+    // default of `unattributed`, which belongs to history the application never
+    // recorded — not to demo history it is reproducing on purpose.
     auditLogs: [
       {
         id: MISC_IDS.auditBillingTeam,
+        actorType: 'user',
         actorUserId: USER_IDS.omar,
         action: AUDIT_ACTIONS.teamCreated,
         targetType: 'team',
@@ -1089,6 +1094,7 @@ function northwind(now: Date): DemoTenant {
       },
       {
         id: MISC_IDS.auditPriyaRole,
+        actorType: 'user',
         actorUserId: USER_IDS.omar,
         action: AUDIT_ACTIONS.userRoleChanged,
         targetType: 'user',
@@ -1098,6 +1104,7 @@ function northwind(now: Date): DemoTenant {
       },
       {
         id: MISC_IDS.auditInviteNoor,
+        actorType: 'user',
         actorUserId: USER_IDS.omar,
         action: AUDIT_ACTIONS.userInvited,
         targetType: 'user',

@@ -3,15 +3,14 @@ import type {
   WhatsAppBusinessVerificationStatus,
   WhatsAppQualityRating,
 } from '@whatsappcrm/contracts';
+import { AUDIT_ACTIONS } from '../audit/audit.actions';
+import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { isUniqueViolationOn } from '../prisma/unique-violation';
 import { WhatsAppAccessTokenCipher } from './access-token.cipher';
 import { WhatsAppIdentityTakenError } from './whatsapp.errors';
-
-/** The audit action, spelled once. Read by support tooling and by any later compliance review. */
-export const WHATSAPP_BUSINESS_ACCOUNT_CONNECTED_ACTION = 'whatsapp.business_account.connected';
 
 /**
  * Long enough for a WABA and a handful of numbers on a slow database, short
@@ -119,6 +118,7 @@ export class WhatsAppBusinessAccountConnectionService {
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly tenantContext: TenantContextService,
     private readonly cipher: WhatsAppAccessTokenCipher,
+    private readonly audit: AuditService,
   ) {}
 
   async connect(command: ConnectBusinessAccountCommand): Promise<ConnectBusinessAccountResult> {
@@ -150,7 +150,7 @@ export class WhatsAppBusinessAccountConnectionService {
             command.phoneNumbers,
           );
 
-          await recordAudit(tx, tenantId, businessAccount.id, command);
+          await this.recordAudit(tx, businessAccount.id, command);
 
           return {
             businessAccount: { ...businessAccount, accounts },
@@ -167,6 +167,38 @@ export class WhatsAppBusinessAccountConnectionService {
     );
 
     return result;
+  }
+
+  /**
+   * Connecting a WABA hands the platform a credential that can message a
+   * business's customers in its name, so it is audited like any other
+   * security-relevant change (TAR-39, security).
+   *
+   * Through `AuditService` rather than `tx.auditLog.create` (TAR-166). The write
+   * is identical in every respect that reaches a row except one: the actor is
+   * resolved from the request scope instead of being assumed. That is what makes
+   * the operator path record *which* operator connected it, and what will make
+   * the tenant-facing route record the tenant admin who did — without this
+   * method learning that either path exists.
+   *
+   * The metadata records which WABA and which numbers, and — stated because it
+   * is the point — **never the token, encrypted or not**, and never the Embedded
+   * Signup code that a later path exchanges for one.
+   */
+  private async recordAudit(
+    tx: Prisma.TransactionClient,
+    whatsappBusinessAccountId: string,
+    command: ConnectBusinessAccountCommand,
+  ): Promise<void> {
+    await this.audit.record(tx, {
+      action: AUDIT_ACTIONS.whatsappBusinessAccountConnected,
+      targetType: 'whatsapp_business_account',
+      targetId: whatsappBusinessAccountId,
+      metadata: {
+        wabaId: command.wabaId,
+        phoneNumberIds: command.phoneNumbers.map((number) => number.phoneNumberId),
+      },
+    });
   }
 }
 
@@ -272,37 +304,6 @@ async function connectPhoneNumbers(
   }
 
   return connected;
-}
-
-/**
- * Connecting a WABA hands the platform a credential that can message a
- * business's customers in its name, so it is audited like any other
- * security-relevant change (TAR-39, security).
- *
- * `actorUserId` stays null: the actor is the platform operator, who is not a row
- * in this tenant's `users`. The metadata records which WABA and which numbers,
- * and — stated because it is the point — **never the token, encrypted or not**.
- */
-async function recordAudit(
-  tx: Prisma.TransactionClient,
-  tenantId: string,
-  whatsappBusinessAccountId: string,
-  command: ConnectBusinessAccountCommand,
-) {
-  await tx.auditLog.create({
-    data: {
-      tenantId,
-      actorUserId: null,
-      action: WHATSAPP_BUSINESS_ACCOUNT_CONNECTED_ACTION,
-      targetType: 'whatsapp_business_account',
-      targetId: whatsappBusinessAccountId,
-      metadata: {
-        wabaId: command.wabaId,
-        phoneNumberIds: command.phoneNumbers.map((number) => number.phoneNumberId),
-      },
-    },
-    select: { id: true },
-  });
 }
 
 /**

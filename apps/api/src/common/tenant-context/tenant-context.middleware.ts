@@ -19,8 +19,11 @@ export class TenantContextMiddleware implements NestMiddleware {
 
     res.setHeader(REQUEST_ID_HEADER, requestId);
 
-    this.tenantContext.run({ requestId, tenantId: null, userId: null, principal: null }, () => {
-      next();
-    });
+    this.tenantContext.run(
+      { requestId, tenantId: null, userId: null, principal: null, platformActorLabel: null },
+      () => {
+        next();
+      },
+    );
   }
 }
