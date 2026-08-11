@@ -1,0 +1,383 @@
+# Render Blueprint — the whole hosted platform, defined in the repository.
+#
+# Three environments, each with its own database, its own Key Value instance and
+# its own credentials. Nothing is shared between them: a development WhatsApp
+# token cannot reach the production database, because they are different rows in
+# different secret groups pointing at different services.
+#
+# Syncing this blueprint creates or updates every resource below. Render prompts
+# once per `sync: false` variable, per environment, and those values live only in
+# Render — never in this file, never in a layer, never in a log.
+#
+# Deployment target and its rationale: docs/adr/0001-stack-decision.md (decision 9).
+# Provisioning walkthrough and the uptime alerting it cannot express:
+# docs/runbooks/environments.md.
+
+previews:
+  # A preview environment would need its own database and its own WhatsApp
+  # credentials to be worth anything, and would otherwise quietly point at a real
+  # one. Turned on deliberately or not at all.
+  generation: 'off'
+
+projects:
+  - name: whatsappcrm
+    environments:
+      # -----------------------------------------------------------------------
+      # Development — the integration environment. Deploys on every commit to
+      # `main`, so a merge is visible somewhere real within minutes.
+      # -----------------------------------------------------------------------
+      - name: development
+        services:
+          - type: web
+            name: whatsappcrm-api-dev
+            runtime: node
+            plan: starter
+            region: frankfurt
+            branch: main
+            rootDir: .
+            autoDeployTrigger: commit
+            buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/api...
+            # Schema changes land before the code that depends on them, from the
+            # same build that produced that code. A failed pre-deploy aborts the
+            # deploy, so a broken migration never reaches a running instance.
+            preDeployCommand: pnpm db:migrate:deploy && pnpm --filter @whatsappcrm/api db:provision-roles
+            # "exec node", never "pnpm start" — this applies to every service below.
+            # Verified: with pnpm in between, SIGTERM kills the process without Nest's
+            # shutdown hooks ever running, so in-flight requests are cut, pools are left
+            # dangling and buffered error-tracker events are lost on every deploy.
+            # "exec" makes node PID 1, so the signal reaches its handler. Do not "tidy"
+            # this back into a pnpm script.
+            #
+            # RENDER_GIT_COMMIT is injected by the platform; passing it through as
+            # APP_VERSION keeps the application itself free of vendor variables.
+            startCommand: exec env APP_VERSION=$RENDER_GIT_COMMIT node apps/api/dist/main.js
+            healthCheckPath: /api/health/ready
+            envVars:
+              - key: NODE_ENV
+                value: production
+              - key: DEPLOY_ENV
+                value: development
+              - key: LOG_LEVEL
+                value: debug
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: whatsappcrm-db-dev
+                  property: connectionString
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: whatsappcrm-kv-dev
+                  property: connectionString
+              # The two roles the running API connects as (TAR-48/TAR-49). Not
+              # `fromDatabase`: that property yields the migration *owner*, which on
+              # a managed instance is a superuser and so skips row-level security
+              # entirely — every tenant would see every row. These are built from
+              # the same host as DATABASE_URL but with the app role's own
+              # credentials, which the pre-deploy hook sets from the passwords below.
+              - key: APP_DATABASE_URL
+                sync: false
+              - key: SYSTEM_DATABASE_URL
+                sync: false
+              # Needs a scheme, which `fromService` cannot supply, and becomes a
+              # custom domain once white-labelling lands.
+              - key: WEB_ORIGIN
+                sync: false
+              - fromGroup: whatsappcrm-secrets-dev
+
+          - type: web
+            name: whatsappcrm-web-dev
+            runtime: node
+            plan: starter
+            region: frankfurt
+            branch: main
+            rootDir: .
+            autoDeployTrigger: commit
+            buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/web...
+            # Next's real entrypoint, not node_modules/.bin/next — that is a shell
+            # wrapper and node cannot execute it. "exec" for the same reason as the API.
+            startCommand: cd apps/web && exec node node_modules/next/dist/bin/next start
+            envVars:
+              - key: NODE_ENV
+                value: production
+              # NEXT_PUBLIC_* is inlined into the browser bundle. Never a secret.
+              - key: NEXT_PUBLIC_API_BASE_URL
+                sync: false
+
+          - type: keyvalue
+            name: whatsappcrm-kv-dev
+            plan: starter
+            region: frankfurt
+            # Empty allow-list: reachable only over Render's private network.
+            ipAllowList: []
+            # The queue holds work, not cache. Evicting a job under memory pressure
+            # loses it silently.
+            maxmemoryPolicy: noeviction
+
+        databases:
+          - name: whatsappcrm-db-dev
+            databaseName: whatsappcrm
+            user: whatsappcrm
+            # Paid, deliberately: free Postgres has no backups and no
+            # point-in-time recovery, which TAR-43 depends on.
+            plan: basic-256mb
+            region: frankfurt
+            postgresMajorVersion: '16'
+            ipAllowList: []
+
+        envVarGroups:
+          - name: whatsappcrm-secrets-dev
+            envVars:
+              # Read by the pre-deploy hook, which creates the two application
+              # roles and sets these as their passwords. Generate one per role per
+              # environment (`openssl rand -hex 32`) and use the same value inside
+              # the matching *_DATABASE_URL above — they must agree, and nothing
+              # checks that for you until the API fails to authenticate.
+              #
+              # Not `generateValue: true`, tempting as it is: a generated value is
+              # never shown in a form the operator can copy into the URL.
+              - key: APP_DATABASE_PASSWORD
+                sync: false
+              - key: SYSTEM_DATABASE_PASSWORD
+                sync: false
+              - key: SENTRY_DSN
+                sync: false
+              # Owned by TAR-35 and TAR-37; declared here so each environment gets
+              # its own provider credentials from day one rather than sharing one
+              # set and discovering the coupling in production. Use the provider's
+              # *test* credentials in development and staging.
+              - key: WHATSAPP_APP_SECRET
+                sync: false
+              - key: WHATSAPP_ACCESS_TOKEN
+                sync: false
+              - key: WHATSAPP_PHONE_NUMBER_ID
+                sync: false
+              - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+                sync: false
+              - key: POLAR_ACCESS_TOKEN
+                sync: false
+              - key: POLAR_WEBHOOK_SECRET
+                sync: false
+
+      # -----------------------------------------------------------------------
+      # Staging — the rehearsal. Same code path, same schema version, real
+      # provider sandbox credentials. Deploys only once CI is green.
+      # -----------------------------------------------------------------------
+      - name: staging
+        services:
+          - type: web
+            name: whatsappcrm-api-staging
+            runtime: node
+            plan: starter
+            region: frankfurt
+            branch: main
+            rootDir: .
+            autoDeployTrigger: checksPass
+            buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/api...
+            preDeployCommand: pnpm db:migrate:deploy && pnpm --filter @whatsappcrm/api db:provision-roles
+            startCommand: exec env APP_VERSION=$RENDER_GIT_COMMIT node apps/api/dist/main.js
+            healthCheckPath: /api/health/ready
+            envVars:
+              - key: NODE_ENV
+                value: production
+              - key: DEPLOY_ENV
+                value: staging
+              - key: LOG_LEVEL
+                value: info
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: whatsappcrm-db-staging
+                  property: connectionString
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: whatsappcrm-kv-staging
+                  property: connectionString
+              # The two roles the running API connects as (TAR-48/TAR-49). Not
+              # `fromDatabase`: that property yields the migration *owner*, which on
+              # a managed instance is a superuser and so skips row-level security
+              # entirely. Built from the same host as DATABASE_URL but with the app
+              # role's own credentials, which the pre-deploy hook sets.
+              - key: APP_DATABASE_URL
+                sync: false
+              - key: SYSTEM_DATABASE_URL
+                sync: false
+              - key: WEB_ORIGIN
+                sync: false
+              - fromGroup: whatsappcrm-secrets-staging
+
+          - type: web
+            name: whatsappcrm-web-staging
+            runtime: node
+            plan: starter
+            region: frankfurt
+            branch: main
+            rootDir: .
+            autoDeployTrigger: checksPass
+            buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/web...
+            # Next's real entrypoint, not node_modules/.bin/next — that is a shell
+            # wrapper and node cannot execute it. "exec" for the same reason as the API.
+            startCommand: cd apps/web && exec node node_modules/next/dist/bin/next start
+            envVars:
+              - key: NODE_ENV
+                value: production
+              - key: NEXT_PUBLIC_API_BASE_URL
+                sync: false
+
+          - type: keyvalue
+            name: whatsappcrm-kv-staging
+            plan: starter
+            region: frankfurt
+            ipAllowList: []
+            maxmemoryPolicy: noeviction
+
+        databases:
+          - name: whatsappcrm-db-staging
+            databaseName: whatsappcrm
+            user: whatsappcrm
+            plan: basic-256mb
+            region: frankfurt
+            postgresMajorVersion: '16'
+            ipAllowList: []
+
+        envVarGroups:
+          - name: whatsappcrm-secrets-staging
+            envVars:
+              # Read by the pre-deploy hook, which creates the two application
+              # roles and sets these as their passwords. Generate one per role per
+              # environment (`openssl rand -hex 32`) and use the same value inside
+              # the matching *_DATABASE_URL above — they must agree, and nothing
+              # checks that for you until the API fails to authenticate.
+              #
+              # Not `generateValue: true`, tempting as it is: a generated value is
+              # never shown in a form the operator can copy into the URL.
+              - key: APP_DATABASE_PASSWORD
+                sync: false
+              - key: SYSTEM_DATABASE_PASSWORD
+                sync: false
+              - key: SENTRY_DSN
+                sync: false
+              - key: WHATSAPP_APP_SECRET
+                sync: false
+              - key: WHATSAPP_ACCESS_TOKEN
+                sync: false
+              - key: WHATSAPP_PHONE_NUMBER_ID
+                sync: false
+              - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+                sync: false
+              - key: POLAR_ACCESS_TOKEN
+                sync: false
+              - key: POLAR_WEBHOOK_SECRET
+                sync: false
+
+      # -----------------------------------------------------------------------
+      # Production — holds real tenant data. Never deploys itself: the commit that
+      # came through staging is promoted here deliberately.
+      # -----------------------------------------------------------------------
+      - name: production
+        services:
+          - type: web
+            name: whatsappcrm-api-prod
+            runtime: node
+            plan: standard
+            region: frankfurt
+            branch: main
+            autoDeployTrigger: 'off'
+            rootDir: .
+            buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/api...
+            preDeployCommand: pnpm db:migrate:deploy && pnpm --filter @whatsappcrm/api db:provision-roles
+            startCommand: exec env APP_VERSION=$RENDER_GIT_COMMIT node apps/api/dist/main.js
+            healthCheckPath: /api/health/ready
+            envVars:
+              - key: NODE_ENV
+                value: production
+              - key: DEPLOY_ENV
+                value: production
+              - key: LOG_LEVEL
+                value: info
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: whatsappcrm-db-prod
+                  property: connectionString
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: whatsappcrm-kv-prod
+                  property: connectionString
+              # The two roles the running API connects as (TAR-48/TAR-49). Not
+              # `fromDatabase`: that property yields the migration *owner*, which on
+              # a managed instance is a superuser and so skips row-level security
+              # entirely. Built from the same host as DATABASE_URL but with the app
+              # role's own credentials, which the pre-deploy hook sets.
+              - key: APP_DATABASE_URL
+                sync: false
+              - key: SYSTEM_DATABASE_URL
+                sync: false
+              - key: WEB_ORIGIN
+                sync: false
+              - fromGroup: whatsappcrm-secrets-prod
+
+          - type: web
+            name: whatsappcrm-web-prod
+            runtime: node
+            plan: standard
+            region: frankfurt
+            branch: main
+            autoDeployTrigger: 'off'
+            rootDir: .
+            buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm turbo run build --filter=@whatsappcrm/web...
+            # Next's real entrypoint, not node_modules/.bin/next — that is a shell
+            # wrapper and node cannot execute it. "exec" for the same reason as the API.
+            startCommand: cd apps/web && exec node node_modules/next/dist/bin/next start
+            envVars:
+              - key: NODE_ENV
+                value: production
+              - key: NEXT_PUBLIC_API_BASE_URL
+                sync: false
+
+          - type: keyvalue
+            name: whatsappcrm-kv-prod
+            plan: standard
+            region: frankfurt
+            ipAllowList: []
+            maxmemoryPolicy: noeviction
+
+        databases:
+          - name: whatsappcrm-db-prod
+            databaseName: whatsappcrm
+            user: whatsappcrm
+            plan: basic-1gb
+            region: frankfurt
+            postgresMajorVersion: '16'
+            ipAllowList: []
+
+        envVarGroups:
+          - name: whatsappcrm-secrets-prod
+            envVars:
+              # Read by the pre-deploy hook, which creates the two application
+              # roles and sets these as their passwords. Generate one per role per
+              # environment (`openssl rand -hex 32`) and use the same value inside
+              # the matching *_DATABASE_URL above — they must agree, and nothing
+              # checks that for you until the API fails to authenticate.
+              #
+              # Not `generateValue: true`, tempting as it is: a generated value is
+              # never shown in a form the operator can copy into the URL.
+              - key: APP_DATABASE_PASSWORD
+                sync: false
+              - key: SYSTEM_DATABASE_PASSWORD
+                sync: false
+              - key: SENTRY_DSN
+                sync: false
+              # Production takes the provider's *live* credentials, entered
+              # deliberately. Never copied down from another environment.
+              - key: WHATSAPP_APP_SECRET
+                sync: false
+              - key: WHATSAPP_ACCESS_TOKEN
+                sync: false
+              - key: WHATSAPP_PHONE_NUMBER_ID
+                sync: false
+              - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+                sync: false
+              - key: POLAR_ACCESS_TOKEN
+                sync: false
+              - key: POLAR_WEBHOOK_SECRET
+                sync: false

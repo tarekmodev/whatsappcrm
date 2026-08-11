@@ -1,8 +1,13 @@
+// Must stay the first import: the error tracker instruments modules as they load,
+// so anything imported before it is invisible to it.
+import './instrument';
+
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { configureApp } from './bootstrap';
+import type { Env } from './config/env.schema';
 
 async function bootstrap(): Promise<void> {
   // `rawBody` keeps the exact bytes of each request alongside the parsed body.
@@ -11,11 +16,14 @@ async function bootstrap(): Promise<void> {
   // genuine delivery, and the failure reads as a wrong app secret rather than as
   // a missing option (TAR-39, signature check). `apps/api/src/webhooks` is the
   // only reader; the cost is one retained buffer per request.
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  //
+  // `bufferLogs` holds boot output until `configureApp` installs the real logger,
+  // so it is structured too rather than arriving in Nest's default console format.
+  const app = await NestFactory.create(AppModule, { rawBody: true, bufferLogs: true });
 
   configureApp(app);
 
-  const port = app.get(ConfigService).get<number>('PORT') ?? 3001;
+  const port = app.get<ConfigService<Env, true>>(ConfigService).get('PORT', { infer: true });
   await app.listen(port, '0.0.0.0');
 
   Logger.log(`API listening on http://0.0.0.0:${port}/api`, 'Bootstrap');

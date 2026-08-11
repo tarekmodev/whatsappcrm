@@ -1,8 +1,9 @@
 import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue, Worker, type ConnectionOptions, type Job, type JobsOptions } from 'bullmq';
+import { describeFailure } from '../common/describe-failure';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
-import { QUEUE_KEY_PREFIX } from './queue.constants';
+import { QUEUE_KEY_PREFIX, WEBHOOKS_QUEUE } from './queue.constants';
 
 /**
  * Every job payload carries the tenant it is for. A queue is process-wide and
@@ -126,6 +127,47 @@ export class QueueService implements OnApplicationShutdown {
   /** False when no Redis is configured. Callers degrade rather than fail. */
   get isEnabled(): boolean {
     return this.redisUrl !== null;
+  }
+
+  /**
+   * Measures Redis for the readiness endpoint (TAR-41), which this module's
+   * owner was invited to add here rather than open a second connection —
+   * connections are budgeted, and a probe on its own connection cannot observe
+   * the pool that actually serves work being exhausted.
+   *
+   * Goes through a real queue's client, so what it reports is the reachability
+   * of the connection the ingest path uses. `isEnabled === false` is a
+   * *configuration* answer, not a health answer: it is reported as down, because
+   * an API that cannot queue is not ready to serve, and saying so is the point of
+   * the endpoint.
+   */
+  async checkHealth(): Promise<{ reachable: boolean; detail?: string }> {
+    if (this.redisUrl === null) {
+      return { reachable: false, detail: 'REDIS_URL is not configured' };
+    }
+
+    const queue = this.queue(WEBHOOKS_QUEUE);
+
+    if (queue === null) {
+      return { reachable: false, detail: 'queue is unavailable' };
+    }
+
+    try {
+      // A real round-trip through the public API rather than reaching for the
+      // underlying client: BullMQ 6 hides the connection behind a backend, and a
+      // probe that reads queue internals breaks on a minor upgrade.
+      await queue.getJobCounts('waiting');
+
+      return { reachable: true };
+    } catch (error) {
+      const detail = describeFailure(error);
+
+      // ioredis raises a bare `Error` when `commandTimeout` fires, so the name
+      // carries nothing. Say what happened instead of reporting "Error" to
+      // whoever is reading the readiness body at three in the morning; a real
+      // socket failure still comes through as ECONNREFUSED or ETIMEDOUT.
+      return { reachable: false, detail: detail === 'Error' ? 'command did not complete' : detail };
+    }
   }
 
   /**

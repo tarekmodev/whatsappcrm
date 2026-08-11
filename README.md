@@ -57,15 +57,18 @@ not yet installed and arrives with the realtime gateway.
 
 ## Documentation
 
-| Document                                                                                 | What it answers                                                             |
-| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| [ADR 0001 — stack decision](docs/adr/0001-stack-decision.md)                             | Why each piece of the stack, and what it costs                              |
-| [Architecture and API contract](docs/architecture/0002-architecture-and-api-contract.md) | Module boundaries, tenant resolution, the endpoint surface, webhooks        |
-| [Data model reference](docs/reference/data-model.md)                                     | Every entity, which are tenant-scoped, which constraints and indexes matter |
-| [Tenant isolation contract](docs/reference/tenancy.md)                                   | Which Prisma client to inject, and what the database refuses                |
-| [Platform admin API](docs/reference/admin-api.md)                                        | Provisioning and deactivation: request, response, errors, retention         |
-| [Documentation style guide](docs/STYLE.md)                                               | How to write the above                                                      |
-| [Changelog](CHANGELOG.md)                                                                | What has landed so far                                                      |
+| Document                                                                                     | What it answers                                                             |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| [ADR 0001 — stack decision](docs/adr/0001-stack-decision.md)                                 | Why each piece of the stack, and what it costs                              |
+| [Architecture and API contract](docs/architecture/0002-architecture-and-api-contract.md)     | Module boundaries, tenant resolution, the endpoint surface, webhooks        |
+| [Data model reference](docs/reference/data-model.md)                                         | Every entity, which are tenant-scoped, which constraints and indexes matter |
+| [Tenant isolation contract](docs/reference/tenancy.md)                                       | Which Prisma client to inject, and what the database refuses                |
+| [Platform admin API](docs/reference/admin-api.md)                                            | Provisioning and deactivation: request, response, errors, retention         |
+| [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                      |
+| [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                      |
+| [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                    |
+| [Environments runbook](docs/runbooks/environments.md)                                        | Provisioning, secrets, health, alerting, rollback                           |
+| [Migrations runbook](docs/runbooks/migrations.md)                                            | How a migration reaches an environment, and how to undo one                 |
 
 ## Getting started
 
@@ -113,9 +116,15 @@ pnpm test:db
 #                     uniqueness constraint
 ```
 
-The `checks` object is empty on purpose: the endpoint reports process liveness only and
-must never claim dependency health it has not measured. Real database and queue probes
-arrive with TAR-41.
+Once the database and Redis are up, readiness reports them:
+
+```bash
+curl http://localhost:3001/api/health/ready
+# {"status":"ok",...,"checks":{"database":{"status":"ok"},"queue":{"status":"ok"}}}
+```
+
+`/api/health` stays a liveness probe and deliberately measures nothing — a liveness check
+that fails when the database blinks restarts a healthy process.
 
 **The database has tables but no rows — that is the expected state.** Seeding is TAR-46.
 Provision a tenant to get one (see
@@ -416,16 +425,24 @@ migration that drops a column or a table **destroys the data in it**. Where that
 unacceptable, the answer is not a better `down.sql`; it is the expand → migrate → contract
 sequence, so the destructive step lands in its own separately deployable migration.
 
-To apply one against the local database:
+To apply one, against local or any other target:
 
 ```bash
-docker compose exec -T postgres psql -U whatsappcrm -d whatsappcrm \
-  < apps/api/prisma/migrations/<timestamp>_<name>/down.sql
+pnpm --filter @whatsappcrm/api db:rollback            # prints the plan, changes nothing
+pnpm --filter @whatsappcrm/api db:rollback --confirm  # runs it
 ```
 
-Prisma does not know you did this, so delete the corresponding row from
-`_prisma_migrations` afterwards or `migrate status` will keep reporting the migration as
-applied. Locally, `pnpm db:reset` is usually the faster path.
+That undoes the single most recently applied migration: it takes a Postgres advisory
+lock so two runners cannot collide, runs that migration's `down.sql`, **and deletes its
+row from `_prisma_migrations`** — the step that is easy to forget by hand and that
+`migrate deploy` needs in order to re-apply the migration afterwards. `DATABASE_URL`
+decides which database is affected, so export it explicitly and read it back before
+adding `--confirm`. Locally, `pnpm db:reset` is often the faster path.
+
+The convention is enforced, not just documented: `pnpm --filter @whatsappcrm/api
+db:check-migrations` fails when a migration directory has no `down.sql`, and CI runs it
+on every pull request. A convention nothing checks is a convention that lasts until the
+first busy afternoon.
 
 The shadow database (`whatsappcrm_shadow`, created on the container's first boot) exists
 only for the `migrate diff` above. Prisma wipes it on every use.
@@ -507,6 +524,36 @@ older than five minutes is the condition worth alerting on.
 
 Without `REDIS_URL` the API still boots and still accepts and stores deliveries — it logs
 a warning at startup and nothing processes them until a worker exists.
+
+## Environments
+
+Three hosted environments — development, staging and production — each with its own
+database, its own Key Value instance and its own WhatsApp and Polar credentials. They are
+defined as a Render blueprint in [`render.yaml`](render.yaml); provisioning them, the
+secrets you are prompted for, and the alerting wired to them are in
+[`docs/runbooks/environments.md`](docs/runbooks/environments.md).
+
+Health, deliberately split:
+
+| Endpoint            | Answers                           |
+| ------------------- | --------------------------------- |
+| `/api/health`       | is the process alive              |
+| `/api/health/ready` | can it serve — database and queue |
+
+`/api/health/ready` answers `503` when a dependency is down and still returns the full
+body, so an alert names the failing dependency rather than only saying something is wrong.
+It is the health check path on every deployed API service. Both are `VERSION_NEUTRAL`.
+
+**Migrations apply automatically.** Each environment runs `pnpm db:migrate:deploy` as a
+pre-deploy hook, followed by `db:provision-roles` — the deployed equivalent of
+`pnpm db:roles`, which only reaches a local container. Both run from the same build that
+produced the code, before the new instance serves traffic; a failure aborts the deploy and
+the previous instance keeps serving.
+
+Services start with `exec node <entrypoint>`, never a package script. That is
+load-bearing: `exec` makes node PID 1 so `SIGTERM` reaches the shutdown hooks. Through
+`pnpm start` the signal is swallowed and the process is killed outright, cutting in-flight
+requests and discarding buffered error-tracker events on every deploy.
 
 ## Continuous integration
 
