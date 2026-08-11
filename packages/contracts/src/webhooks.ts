@@ -25,6 +25,8 @@ export const WebhookVerifyQuerySchema = z.object({
   'hub.challenge': z.string().min(1),
 });
 
+export type WebhookVerifyQuery = z.infer<typeof WebhookVerifyQuerySchema>;
+
 /**
  * The envelope, modelled only as deeply as routing requires.
  *

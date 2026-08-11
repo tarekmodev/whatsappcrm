@@ -11,11 +11,29 @@ import {
 import { IanaTimezoneSchema, PhoneE164Schema } from './common';
 import { API_ERROR_CODES, API_ERROR_STATUS, httpStatusForErrorCode } from './error-codes';
 import { isMessageStatusAdvance, SendMessageInputSchema } from './messages';
-import { permissionsForRole, ROLE_PERMISSIONS, roleHasPermission, TENANT_ROLES } from './rbac';
+import {
+  isRoleWithin,
+  permissionsForRole,
+  PERMISSIONS,
+  ROLE_PERMISSIONS,
+  roleHasPermission,
+  TENANT_ROLES,
+} from './rbac';
 import { canTransitionTenant, TENANT_STATUSES, TENANT_STATUS_EFFECTS } from './tenant';
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
-import { ASSIGNABLE_USER_STATUSES, USER_STATUSES, UserUpdateInputSchema } from './users';
-import { MessageTemplateResponseSchema, WhatsAppBusinessAccountResponseSchema } from './whatsapp';
+import {
+  AvailabilityUpdateInputSchema,
+  USER_STATUSES,
+  UserResponseSchema,
+  UserUpdateInputSchema,
+} from './users';
+import {
+  ConnectedWhatsAppBusinessAccountResponseSchema,
+  ConnectWhatsAppBusinessAccountInputSchema,
+  MessageTemplateListQuerySchema,
+  MessageTemplateResponseSchema,
+  WhatsAppBusinessAccountResponseSchema,
+} from './whatsapp';
 
 describe('error taxonomy', () => {
   it('maps every code to an HTTP status', () => {
@@ -51,26 +69,72 @@ describe('role permissions', () => {
     expect(roleHasPermission('agent', 'billing:manage')).toBe(false);
     expect(roleHasPermission('supervisor', 'billing:manage')).toBe(false);
   });
-});
 
-describe('tenant lifecycle', () => {
-  it('treats deleted as terminal', () => {
-    for (const status of TENANT_STATUSES) {
-      expect(canTransitionTenant('deleted', status), status).toBe(false);
+  // TAR-79, delta 1. The escalation path this closes was live in the shipped
+  // table: a supervisor holding `user:invite` could invite an admin, and one
+  // holding `user:update` could promote themselves.
+  it('keeps role assignment admin-only, separately from user administration', () => {
+    expect(roleHasPermission('supervisor', 'user:update')).toBe(true);
+    expect(roleHasPermission('supervisor', 'user:set_role')).toBe(false);
+    expect(roleHasPermission('agent', 'user:update')).toBe(false);
+    expect(roleHasPermission('admin', 'user:set_role')).toBe(true);
+  });
+
+  // TAR-79, delta 2. Suspension covers "cut their access now"; deletion is
+  // irreversible and changes seat billing, so it stays with admin.
+  it('lets a supervisor suspend but not remove', () => {
+    expect(roleHasPermission('supervisor', 'user:update')).toBe(true);
+    expect(roleHasPermission('supervisor', 'user:remove')).toBe(false);
+    expect(roleHasPermission('admin', 'user:remove')).toBe(true);
+  });
+
+  it('gives an admin every permission, so a new one never needs a second edit', () => {
+    for (const permission of PERMISSIONS) {
+      expect(roleHasPermission('admin', permission), permission).toBe(true);
     }
   });
 
-  it('keeps accepting inbound while suspended, but blocks replies', () => {
-    expect(TENANT_STATUS_EFFECTS.suspended.inboundAccepted).toBe(true);
-    expect(TENANT_STATUS_EFFECTS.suspended.outboundAllowed).toBe(false);
+  // The failure mode from TAR-79's operations table: a permission granted to
+  // nobody makes its endpoint unreachable except by admin, silently.
+  it('leaves no permission unreachable by every role', () => {
+    for (const permission of PERMISSIONS) {
+      const holders = TENANT_ROLES.filter((role) => roleHasPermission(role, permission));
+
+      expect(holders.length, permission).toBeGreaterThan(0);
+    }
   });
 
-  it('leaves a past_due tenant fully operational', () => {
-    expect(TENANT_STATUS_EFFECTS.past_due).toEqual({
-      apiAccess: true,
-      inboundAccepted: true,
-      outboundAllowed: true,
-    });
+  it('orders roles so nobody can grant above their own', () => {
+    expect(isRoleWithin('agent', 'supervisor')).toBe(true);
+    expect(isRoleWithin('supervisor', 'supervisor')).toBe(true);
+    expect(isRoleWithin('admin', 'supervisor')).toBe(false);
+    expect(isRoleWithin('admin', 'admin')).toBe(true);
+  });
+});
+
+describe('user lifecycle statuses', () => {
+  // The drift TAR-80 closed on `user_role` by deleting `owner`, in the other
+  // direction: `removed` exists in the column and had no contract spelling, so
+  // a removed user would have failed response validation and answered 500.
+  it('publishes every status the column can hold', () => {
+    expect(USER_STATUSES).toEqual(['invited', 'active', 'suspended', 'removed']);
+  });
+
+  it('refuses to let a PATCH set the two statuses that are operations', () => {
+    // `invited` belongs to the invite flow, `removed` to admin-only
+    // `DELETE /users/{id}`. Accepting either here would let a supervisor
+    // holding `user:update` remove somebody through the side door.
+    expect(UserUpdateInputSchema.parse({ status: 'suspended' }).status).toBe('suspended');
+    expect(() => UserUpdateInputSchema.parse({ status: 'removed' })).toThrow();
+    expect(() => UserUpdateInputSchema.parse({ status: 'invited' })).toThrow();
+  });
+
+  it('strips a client-supplied role from an availability update', () => {
+    // The one route with no permission attached. A body that could smuggle a
+    // role into it would be the cheapest escalation in the API.
+    const parsed = AvailabilityUpdateInputSchema.parse({ availability: 'away', role: 'admin' });
+
+    expect(parsed).not.toHaveProperty('role');
   });
 });
 
@@ -135,6 +199,12 @@ describe('session cookie (TAR-53)', () => {
     expect(SESSION_COOKIE_ATTRIBUTES.httpOnly).toBe(true);
     expect(SESSION_COOKIE_ATTRIBUTES.sameSite).toBe('lax');
   });
+
+  it('tells the browser to drop the cookie exactly when the server would', () => {
+    // maxAge is seconds, sessionAbsoluteMs is milliseconds. Two hand-maintained
+    // numbers is how a cookie outlives the session it names.
+    expect(SESSION_COOKIE_ATTRIBUTES.maxAge * 1000).toBe(AUTH_POLICY.sessionAbsoluteMs);
+  });
 });
 
 describe('password change (TAR-53)', () => {
@@ -147,16 +217,59 @@ describe('password change (TAR-53)', () => {
   });
 });
 
-describe('user statuses (TAR-53)', () => {
-  it('carries removed, because removing a user is a status change not a delete', () => {
-    expect(USER_STATUSES).toContain('removed');
+describe('lockout visibility (TAR-53)', () => {
+  const baseUser = {
+    id: '018f3a5c-0000-7000-8000-000000000001',
+    email: 'agent@acme.test',
+    displayName: 'Agent',
+    avatarUrl: null,
+    role: 'agent',
+    status: 'active',
+    availability: 'available',
+    teamIds: [],
+    occupiesSeat: true,
+    lastSeenAt: null,
+    createdAt: '2026-08-10T00:00:00.000Z',
+  };
+
+  it('lets the serializer withhold lockout state as a whole', () => {
+    // `user:read` is an agent permission, so a flat `failedLoginAttempts` would
+    // give every agent a live readout of how close a colleague is to lockout.
+    expect(UserResponseSchema.parse({ ...baseUser, security: null }).security).toBeNull();
   });
 
-  it('does not let an admin PATCH someone back into invited', () => {
-    // That would produce a user who can never sign in and has no live invite.
-    expect(ASSIGNABLE_USER_STATUSES).not.toContain('invited');
-    expect(() => UserUpdateInputSchema.parse({ status: 'invited' })).toThrow();
-    expect(UserUpdateInputSchema.parse({ status: 'suspended' }).status).toBe('suspended');
+  it('keeps the two fields together, so neither can be exposed on its own', () => {
+    expect(() =>
+      UserResponseSchema.parse({ ...baseUser, security: { lockedUntil: null } }),
+    ).toThrow();
+
+    const visible = UserResponseSchema.parse({
+      ...baseUser,
+      security: { lockedUntil: null, failedLoginAttempts: 3 },
+    });
+
+    expect(visible.security?.failedLoginAttempts).toBe(3);
+  });
+});
+
+describe('tenant lifecycle', () => {
+  it('treats deleted as terminal', () => {
+    for (const status of TENANT_STATUSES) {
+      expect(canTransitionTenant('deleted', status), status).toBe(false);
+    }
+  });
+
+  it('keeps accepting inbound while suspended, but blocks replies', () => {
+    expect(TENANT_STATUS_EFFECTS.suspended.inboundAccepted).toBe(true);
+    expect(TENANT_STATUS_EFFECTS.suspended.outboundAllowed).toBe(false);
+  });
+
+  it('leaves a past_due tenant fully operational', () => {
+    expect(TENANT_STATUS_EFFECTS.past_due).toEqual({
+      apiAccess: true,
+      inboundAccepted: true,
+      outboundAllowed: true,
+    });
   });
 });
 
@@ -184,6 +297,45 @@ describe('send message input', () => {
 
   it('requires a template name for a template send', () => {
     expect(() => SendMessageInputSchema.parse({ type: 'template', languageCode: 'en' })).toThrow();
+  });
+
+  describe('a template header', () => {
+    const send = { type: 'template', templateName: 'order_update', languageCode: 'en_US' };
+
+    it('carries the media a media-header template needs', () => {
+      // Without a slot for it, an approved IMAGE-header template passes the
+      // picker and the arity check and still fails at Meta.
+      const parsed = SendMessageInputSchema.parse({
+        ...send,
+        header: { format: 'image', mediaId: '90444444-4444-7444-8444-444444444401' },
+      });
+
+      expect(parsed).toMatchObject({ header: { format: 'image' } });
+    });
+
+    it('carries the variables a text-header template needs, apart from the body ones', () => {
+      const parsed = SendMessageInputSchema.parse({
+        ...send,
+        variables: ['A', 'B'],
+        header: { format: 'text', variables: ['C'] },
+      });
+
+      expect(parsed).toMatchObject({ variables: ['A', 'B'], header: { variables: ['C'] } });
+    });
+
+    it('stays optional, because most templates have no header', () => {
+      expect(SendMessageInputSchema.parse(send)).not.toHaveProperty('header');
+    });
+
+    it.each([
+      ['a media header with no media', { format: 'image' }],
+      ['a text header with no variables', { format: 'text', variables: [] }],
+      ['a media id that is not an id', { format: 'image', mediaId: 'nope' }],
+      ['a format outside the published set', { format: 'carousel', mediaId: 'x' }],
+      ['coordinates outside the globe', { format: 'location', latitude: 200, longitude: 0 }],
+    ])('rejects %s', (_case, header) => {
+      expect(() => SendMessageInputSchema.parse({ ...send, header })).toThrow();
+    });
   });
 });
 
@@ -283,6 +435,154 @@ describe('whatsapp business account', () => {
 
   it('keys a template to its WABA, not to the tenant', () => {
     expect(Object.keys(MessageTemplateResponseSchema.shape)).toContain('whatsappBusinessAccountId');
+  });
+});
+
+describe('connecting a whatsapp business account', () => {
+  const valid = {
+    wabaId: '102290129340398',
+    accessToken: 'EAAG-a-real-looking-meta-access-token',
+    phoneNumbers: [{ phoneNumberId: '15550001111', displayPhoneNumber: '+15550001111' }],
+  };
+
+  it('accepts the minimum an operator has to supply', () => {
+    expect(ConnectWhatsAppBusinessAccountInputSchema.parse(valid)).toMatchObject({
+      wabaId: valid.wabaId,
+    });
+  });
+
+  it('requires at least one number, because a WABA without one cannot send or receive', () => {
+    expect(() =>
+      ConnectWhatsAppBusinessAccountInputSchema.parse({ ...valid, phoneNumbers: [] }),
+    ).toThrow();
+  });
+
+  it('rejects the same phone number twice in one request', () => {
+    expect(() =>
+      ConnectWhatsAppBusinessAccountInputSchema.parse({
+        ...valid,
+        phoneNumbers: [...valid.phoneNumbers, ...valid.phoneNumbers],
+      }),
+    ).toThrow();
+  });
+
+  it('rejects an id that is not a Meta Graph id', () => {
+    // Meta's ids exceed Number.MAX_SAFE_INTEGER, so they stay strings — but
+    // they are still digits, and an arbitrary string here becomes an index key.
+    for (const wabaId of ['not-an-id', '10229 0129', '', '1'.repeat(33)]) {
+      expect(
+        () => ConnectWhatsAppBusinessAccountInputSchema.parse({ ...valid, wabaId }),
+        wabaId,
+      ).toThrow();
+    }
+  });
+
+  it('rejects a display number that is not E.164', () => {
+    expect(() =>
+      ConnectWhatsAppBusinessAccountInputSchema.parse({
+        ...valid,
+        phoneNumbers: [{ phoneNumberId: '15550001111', displayPhoneNumber: '555-0001' }],
+      }),
+    ).toThrow();
+  });
+
+  it('strips a caller-supplied tenant id rather than honouring it', () => {
+    // The tenant comes from the path and the platform-admin guard. A body field
+    // that could redirect the connection to another tenant must not survive.
+    const parsed = ConnectWhatsAppBusinessAccountInputSchema.parse({
+      ...valid,
+      tenantId: '50444444-4444-7444-8444-4444444444c1',
+    });
+
+    expect(parsed).not.toHaveProperty('tenantId');
+  });
+
+  it('never publishes a token on the way back out', () => {
+    const parsed = ConnectedWhatsAppBusinessAccountResponseSchema.parse({
+      id: '01890a5d-ac96-774b-bcce-b302099a8057',
+      wabaId: valid.wabaId,
+      name: null,
+      verificationStatus: 'pending',
+      createdAt: '2026-08-10T09:30:24Z',
+      updatedAt: '2026-08-10T09:30:24Z',
+      accessTokenEncrypted: 'v1.leaked',
+      accounts: [],
+    });
+
+    expect(parsed).not.toHaveProperty('accessTokenEncrypted');
+  });
+});
+
+describe('the message template list', () => {
+  const WHATSAPP_ACCOUNT_ID = '70444444-4444-7444-8444-444444444401';
+  const WABA_ID = '60444444-4444-7444-8444-444444444401';
+
+  it('paginates by cursor with a documented default and cap', () => {
+    expect(MessageTemplateListQuerySchema.parse({})).toMatchObject({ limit: 25 });
+    expect(() => MessageTemplateListQuerySchema.parse({ limit: 1000 })).toThrow();
+  });
+
+  it('offers no way to ask for an unapproved template', () => {
+    // Meta refuses a send on anything but an approved template, so a `status`
+    // parameter would only make a failed send reachable from the picker.
+    const parsed = MessageTemplateListQuerySchema.parse({ status: 'rejected' });
+
+    expect(parsed).not.toHaveProperty('status');
+  });
+
+  it('filters by the phone number the composer actually holds', () => {
+    // `ConversationResponse` publishes `whatsappAccountId` and nothing maps one
+    // to a WABA, so a WABA-only filter would leave the composer listing
+    // unfiltered — offering templates that cannot be sent on that number.
+    expect(
+      MessageTemplateListQuerySchema.parse({ whatsappAccountId: WHATSAPP_ACCOUNT_ID }),
+    ).toMatchObject({ whatsappAccountId: WHATSAPP_ACCOUNT_ID });
+  });
+
+  it('refuses a number and a business account at once, which name two scopes', () => {
+    expect(() =>
+      MessageTemplateListQuerySchema.parse({
+        whatsappAccountId: WHATSAPP_ACCOUNT_ID,
+        whatsappBusinessAccountId: WABA_ID,
+      }),
+    ).toThrow();
+  });
+});
+
+describe('a listed message template', () => {
+  const template = {
+    id: '80444444-4444-7444-8444-444444444401',
+    whatsappBusinessAccountId: '60444444-4444-7444-8444-444444444401',
+    name: 'order_update',
+    language: 'en_US',
+    category: 'UTILITY',
+    status: 'approved',
+    components: [{ type: 'BODY', text: 'Order {{1}}' }],
+    bodyText: 'Order {{1}}',
+    parameterCount: 1,
+    headerFormat: null,
+    headerParameterCount: 0,
+    requiresButtonParameters: false,
+    providerTemplateId: '1001',
+    createdAt: '2026-08-10T09:00:00.000Z',
+    updatedAt: '2026-08-10T09:00:00.000Z',
+  };
+
+  it('publishes the arity a send has to match, alongside the raw tree', () => {
+    // `SendTemplateInput.variables` is positional: without this every consumer
+    // parses Meta's component tree itself, and the send path cannot check the
+    // length before calling Meta.
+    expect(MessageTemplateResponseSchema.parse(template)).toMatchObject({
+      bodyText: 'Order {{1}}',
+      parameterCount: 1,
+      headerFormat: null,
+    });
+  });
+
+  it('refuses a header format outside the published set', () => {
+    expect(() =>
+      MessageTemplateResponseSchema.parse({ ...template, headerFormat: 'carousel' }),
+    ).toThrow();
   });
 });
 

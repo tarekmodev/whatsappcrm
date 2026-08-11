@@ -3,6 +3,12 @@
 Status: proposed · Supersedes nothing · **Amends** `0002-architecture-and-api-contract.md` (TAR-39)
 in the three places marked **Amendment** below.
 
+Revision 2 folds in the review on PR #17: the `tenant_mismatch` security event moves out of
+`audit_logs` (Decision 2), invite creation becomes an upsert so a lapsed invite cannot make
+an address un-invitable (`Changed: invites`), lockout state moves behind a permission gate,
+and the `owner` and `last_admin_required` items are reconciled against what TAR-79 and
+TAR-80 landed on `main` in the meantime.
+
 ## Context and Problem
 
 TAR-39 fixed the platform baseline: opaque server-side session cookies, tenant scoping by
@@ -233,11 +239,39 @@ and the alert never fires.
 
 - **Chosen — classify the rejection with a probe, never with an access path.** On a
   zero-row result _only_, run one `SystemPrisma` read:
-  `SELECT tenant_id FROM sessions WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()`.
-  A row means a live session for another tenant → answer `tenant_mismatch` (401), write an
-  `audit_logs` row against the _session's_ tenant, and emit the security event. No row →
-  `unauthenticated`. The probe returns one uuid column, grants nothing, and runs only on a
-  path that has already decided to reject.
+  `SELECT id, tenant_id, user_id FROM sessions WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()`.
+  A row means a live session for another tenant → answer `tenant_mismatch` (401) and emit
+  the security event. No row → `unauthenticated`. The probe returns three uuid columns,
+  none of them a credential, grants nothing, and runs only on a path that has already
+  decided to reject.
+
+**The security event is a log line and a metric, not an `audit_logs` row.** This is a
+correction: an earlier draft of this decision said "write an `audit_logs` row against the
+session's tenant", and that is not implementable under the RLS this same document mandates.
+At that moment the ALS scope holds the _host's_ tenant (B) while the row would have to
+carry the _session's_ tenant (A), and `audit_logs` carries
+`FORCE ROW LEVEL SECURITY` with `WITH CHECK (tenant_id = current_setting('app.tenant_id'))`
+(`20260810140000_tenant_isolation_rls`). The insert is refused, the rejection path throws,
+the 401 becomes a 500, and the alert this decision exists to preserve never fires.
+
+Two ways out; the second is chosen.
+
+- **Rejected — widen Amendment 2 to allow one audit-only `SystemPrisma` insert.** It keeps
+  the row. Rejected because this path is reachable by any unauthenticated caller presenting
+  any cookie value, so it would hand an anonymous attacker a write primitive against a
+  tenant-scoped table they cannot otherwise touch — unbounded row growth in the table
+  auditors read, driven from outside the tenant. Amendment 2's "read-only" bar exists for
+  exactly this case.
+- **Chosen — emit out-of-band.** A structured log line at `warn`
+  (`{ requestId, event: 'auth.tenant_mismatch', hostTenantId, sessionTenantId, sessionId, userId, ip }`)
+  plus a counter `auth_tenant_mismatch_total`, carrying no tenant label so an attacker
+  cannot inflate metric cardinality. TAR-41 wires the alert to the counter. Nothing about
+  this weakens the signal: an `audit_logs` row pages nobody, and a replay attempt by an
+  unauthenticated third party is platform security telemetry, not a record of something a
+  principal inside tenant A did.
+
+The token and its hash never appear in either. TAR-58 implements this; it is decided here
+rather than discovered there.
 
 - **Rejected — read the session under `SystemPrisma` and compare tenants in code.** One
   query instead of two, and the mismatch check is explicit. Rejected because it makes the
@@ -253,8 +287,9 @@ and the alert never fires.
 **Amendment 2 to TAR-39 — the `SystemPrisma` call-site list.** It becomes: tenant
 provisioning, host→tenant resolution, webhook ingest, the sweeper, platform reporting, and
 this classification probe. "Login" leaves the list (Amendment 1); the probe joins it. TAR-44
-should hold new entries to the same bar: read-only, no rows returned to a caller, and
-written down here first.
+should hold new entries to the same bar: **read-only**, no rows returned to a caller, and
+written down here first. The bar is unchanged by this decision — which is precisely why the
+audit row above had to go somewhere else.
 
 ### Decision 3 — Durable lockout state, not a Redis counter
 
@@ -334,8 +369,26 @@ per the schema's composite-FK convention.
 | `+ @@unique([tenantId, id])`                                                                 | Referenced by `invite_teams`                                                                                |
 | `+ partial unique index (tenant_id, email) WHERE accepted_at IS NULL AND revoked_at IS NULL` | Two live invites for one address means two accounts. Raw SQL — Prisma cannot express a partial unique index |
 
-Resend reuses the row: new `token_hash`, new `expires_at`. That invalidates the previous
-link, which is the correct and expected behaviour of "resend".
+**The index predicate has no expiry term, and cannot have one.** An expired invite is still
+`accepted_at IS NULL AND revoked_at IS NULL`, so it still occupies the index — and
+`AND expires_at > now()` is not available as a fix, because Postgres requires an index
+predicate to be `IMMUTABLE`. Left there, that is a trap: an admin invites `bob@acme.com`,
+nobody accepts, the invite lapses after seven days, and the admin's next attempt to invite
+Bob passes the service-level check (there is no _live_ invite) and then violates the index.
+Bob becomes un-invitable by any self-service path until someone finds and revokes a dead
+row they cannot see.
+
+So **invite creation reuses an existing unaccepted, unrevoked row rather than inserting
+beside it** — expired or not, it is the same path resend already takes: new `token_hash`,
+new `expires_at`, and `role`/`invite_teams` updated to what the admin just asked for, since
+that is their current intent. `201` when a row was created, `200` when one was reused,
+matching the convention `POST /admin/tenants` already set for an idempotent create.
+
+The consequence is that `conflict` is **never** returned for an existing invite, live or
+expired — only for an address that already has an `active` user. Re-inviting is always
+something an admin can do, which is the only behaviour that does not require them to
+diagnose invisible state. Resend keeps its own endpoint because it carries no role or team
+changes and reads as a different intent in the audit log.
 
 ### Changed: `users`
 
@@ -344,7 +397,7 @@ link, which is the correct and expected behaviour of "resend".
 | `+ failed_login_attempts int NOT NULL DEFAULT 0`                                 | Lockout counter, Decision 3                                          |
 | `+ last_failed_login_at timestamptz NULL`                                        | Shown to admins; distinguishes "locked now" from "locked last March" |
 | `+ locked_until timestamptz NULL`                                                | The lockout itself                                                   |
-| `- role: 'owner'` from the `user_role` enum                                      | See "Role vocabulary" below                                          |
+| ~~`- role: 'owner'` from the `user_role` enum~~                                  | **Already landed by TAR-80.** See "Role vocabulary" below            |
 | `+ @@index([tenantId, lockedUntil])` (partial, `WHERE locked_until IS NOT NULL`) | So the admin list can surface locked accounts without a seq scan     |
 
 ### Changed: `sessions`
@@ -358,11 +411,17 @@ link, which is the correct and expected behaviour of "resend".
 `token_hash`, `revoked_at`, `last_seen_at`, `ip_address`, `user_agent` and the
 `(tenant_id, user_id)` index already exist and are exactly right.
 
-### Role vocabulary — resolving the drift TAR-47 shipped
+### Role vocabulary — resolved on `main` while this was in review
 
-`schema.prisma` has `user_role = owner | admin | supervisor | agent`.
-`packages/contracts/src/rbac.ts` has `TENANT_ROLES = agent | supervisor | admin`. They have
-been out of step since TAR-47, and TAR-53's own acceptance criterion names three roles.
+> **Landed.** TAR-80 (`f99ba45`, #25) shipped `enum UserRole { admin supervisor agent }`.
+> The type swap below is **done and out of TAR-54's scope**; Open Question 3 is closed, and
+> so is the escalation asking Tarek whether a distinct owner concept was wanted — `main`
+> answered it the way this section argued for. The reasoning is kept because the invariant
+> that replaces the role is still TAR-55's and TAR-58's to enforce.
+
+When this was written, `schema.prisma` had `user_role = owner | admin | supervisor | agent`
+while `packages/contracts/src/rbac.ts` had `TENANT_ROLES = agent | supervisor | admin`. They
+had been out of step since TAR-47, and TAR-53's own acceptance criterion names three roles.
 
 **Decision: three roles. `owner` is dropped from the enum.**
 
@@ -376,24 +435,26 @@ So instead:
 
 > **Invariant, enforced in `UserService`:** a tenant must always retain at least one `admin`
 > whose `status` is `active`. A role change, status change or removal that would violate it
-> is rejected with `conflict`. The check runs inside the same transaction as the change,
-> against `TenantPrisma`, so two concurrent demotions cannot both pass it.
+> is rejected with `last_admin_required` — TAR-79 added that code for exactly this, so it is
+> no longer the `conflict` this document originally specified. The check runs inside the
+> same transaction as the change, against `TenantPrisma`, so two concurrent demotions cannot
+> both pass it.
 
-Dropping a Postgres enum value needs a type swap (`CREATE TYPE user_role_new`, `ALTER TABLE
-… USING`, `DROP TYPE`, rename). It is cheap now — no `owner` rows exist anywhere, and
-`users.role` defaults to `agent` — and expensive the moment TAR-55 starts creating
-accounts. TAR-54 does it in the same migration or not at all.
+Dropping a Postgres enum value needed a type swap (`CREATE TYPE user_role_new`, `ALTER TABLE
+… USING`, `DROP TYPE`, rename), cheap only while no `owner` rows existed. TAR-80 took that
+window. TAR-54 has nothing to do here.
 
-If Tarek wants a distinct owner concept later, the additive path is a nullable
+If a distinct owner concept is ever wanted, the additive path is a nullable
 `tenants.owner_user_id`, which carries the meaning without touching the permission model.
 
 ### Other contract drift TAR-54 and TAR-55 must know about
 
-| Item               | `schema.prisma`                             | `packages/contracts`                       | Resolution                                                                                                                                                                           |
-| ------------------ | ------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Display name       | `users.name`                                | `displayName` on every DTO                 | **Keep both.** Column stays `name`; the DTO stays `displayName`. Mapped in the service layer. Renaming either breaks the other for no gain — but it is a trap, so it is written here |
-| User status        | `invited \| active \| suspended \| removed` | `invited \| active \| suspended`           | **Contract gains `removed`.** The schema is right: removal is a status change, not a delete (schema convention 4)                                                                    |
-| Status transitions | —                                           | `UserUpdateInputSchema.status` accepts any | **Narrowed.** An admin may set `active`, `suspended` or `removed`. `invited` is reachable only by creating an invite                                                                 |
+| Item               | `schema.prisma`                             | `packages/contracts`                       | Resolution                                                                                                                                                                                                                                                                        |
+| ------------------ | ------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Display name       | `users.name`                                | `displayName` on every DTO                 | **Keep both.** Column stays `name`; the DTO stays `displayName`. Mapped in the service layer. Renaming either breaks the other for no gain — but it is a trap, so it is written here                                                                                              |
+| User status        | `invited \| active \| suspended \| removed` | `invited \| active \| suspended`           | **Closed by TAR-79 on `main`**, the same way this document proposed: the contract gained `removed`, because removal is a status change, not a delete (schema convention 4)                                                                                                        |
+| Status transitions | —                                           | `UserUpdateInputSchema.status` accepts any | **Closed by TAR-79**, and narrower than proposed here: `USER_WRITABLE_STATUSES` is `active \| suspended` only. `removed` belongs to admin-only `DELETE /users/{id}`, so a supervisor holding `user:update` cannot remove an account through a `PATCH` body. TAR-79's version wins |
+| Lockout visibility | —                                           | flat fields on `UserResponse`              | **Changed after review.** `lockedUntil` and `failedLoginAttempts` moved into a nullable `security` object, so one check gates both. `user:read` is an agent permission — flat fields would show every agent how close a named colleague is to lockout                             |
 
 ### 2FA readiness
 
@@ -543,16 +604,16 @@ a holder that theirs is expired reveals nothing they did not already have.
 
 Existing codes carry the rest, with no additions:
 
-| Condition                                      | Code                           | Note                                                          |
-| ---------------------------------------------- | ------------------------------ | ------------------------------------------------------------- |
-| Wrong password, unknown email, inactive user   | `invalid_credentials`          | Identical response and timing for all three                   |
-| Account locked, or IP window exceeded          | `rate_limited` + `Retry-After` | No `account_locked` code: it would confirm the account exists |
-| No cookie, expired, revoked                    | `unauthenticated`              |                                                               |
-| Live session belonging to another tenant       | `tenant_mismatch`              | Also an `audit_logs` row and a paging alert                   |
-| Host resolves to no tenant, or a `pending` one | `tenant_not_found`             |                                                               |
-| Host resolves to a suspended/cancelled tenant  | `subscription_inactive`        |                                                               |
-| Last active admin would be demoted or removed  | `conflict`                     |                                                               |
-| A live invite already exists for that email    | `conflict`                     |                                                               |
+| Condition                                      | Code                           | Note                                                           |
+| ---------------------------------------------- | ------------------------------ | -------------------------------------------------------------- |
+| Wrong password, unknown email, inactive user   | `invalid_credentials`          | Identical response and timing for all three                    |
+| Account locked, or IP window exceeded          | `rate_limited` + `Retry-After` | No `account_locked` code: it would confirm the account exists  |
+| No cookie, expired, revoked                    | `unauthenticated`              |                                                                |
+| Live session belonging to another tenant       | `tenant_mismatch`              | Log line + counter, no `audit_logs` row — see Decision 2       |
+| Host resolves to no tenant, or a `pending` one | `tenant_not_found`             |                                                                |
+| Host resolves to a suspended/cancelled tenant  | `subscription_inactive`        |                                                                |
+| Last active admin would be demoted or removed  | `last_admin_required`          | TAR-79 added the code after this document was first written    |
+| An `active` user already exists for that email | `conflict`                     | An existing invite is reused, never a conflict — see `invites` |
 
 ### Flow contracts
 
@@ -568,8 +629,12 @@ Existing codes carry the rest, with no additions:
    verification is performed.
 5. Verify. On failure: `failed_login_attempts += 1`, `last_failed_login_at = now()`; if the
    new count is a positive multiple of `loginFailureThreshold`, set
-   `locked_until = now() + loginLockoutMs` and write an `auth.lockout` audit row. Increment
-   the IP window. Answer `invalid_credentials`.
+   `locked_until = now() + loginLockoutMs`, write an `auth.lockout` audit row, and send the
+   `account_locked` email. Increment the IP window. Answer `invalid_credentials`.
+   **The email fires on the transition into lockout, not on each failed attempt** — that is
+   what bounds an unauthenticated caller to at most one message per `loginLockoutMs` per
+   address, and it is also the only moment the notification carries information the account
+   holder can act on. This is the sole producer of the `account_locked` template.
 6. On success, in one `$tenantTransaction`: reset `failed_login_attempts = 0`,
    `locked_until = NULL`, set `last_login_at`, insert the session row. Then populate the
    Redis cache and `SADD user:{id}:sessions`. Answer `SessionResponse` + `Set-Cookie`.
@@ -585,9 +650,25 @@ plaintext token is returned to **nobody** — not in the response body, not in t
 exists only inside the email. `InviteResponse` deliberately has no token field, which is
 why TAR-39's schema does not have one.
 
+Written as an upsert on the partial unique key, in one `$tenantTransaction`, so the row the
+index protects and the row the service writes cannot disagree under concurrency:
+
+```sql
+INSERT INTO invites (…) VALUES (…)
+ON CONFLICT (tenant_id, email) WHERE accepted_at IS NULL AND revoked_at IS NULL
+DO UPDATE SET token_hash = EXCLUDED.token_hash,
+              expires_at = EXCLUDED.expires_at,
+              role       = EXCLUDED.role
+RETURNING *, (xmax = 0) AS inserted;   -- `inserted` picks 201 vs 200
+```
+
+`invite_teams` is then replaced wholesale for that invite, matching the "membership is not
+a delta" rule teams already follow.
+
 Inviting an address that already has an `active` user → `conflict`. An address with a
 `removed` user → allowed; acceptance reactivates that row rather than creating a second,
-preserving the audit trail and the `(tenant_id, email)` unique constraint.
+preserving the audit trail and the `(tenant_id, email)` unique constraint. An address with
+any existing unaccepted invite, live or lapsed → the upsert above, never an error.
 
 **Invite accept** — `POST /api/v1/invites/accept`
 
@@ -819,16 +900,16 @@ Everything in TAR-39's security section still applies. What this document adds:
 
 Maps onto the sub-issues that already exist under TAR-35. No new issues are created here.
 
-| Order | Issue            | Delivers from this contract                                                                                                                                                                   | Unblocks         |
-| ----- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| 1     | **TAR-54**       | `password_reset_tokens`, `invite_teams`, the `users`/`sessions`/`invites` deltas, the `user_role` type swap, RLS policies on both new tables, the partial unique index, reversible `down.sql` | everything below |
-| 2     | **TAR-56**       | `SessionService`, `PasswordService`, login/logout/session/refresh, the Redis cache and the double purge                                                                                       | TAR-58, TAR-57   |
-| 2     | **TAR-55**       | `InviteService`, `MailerPort` + `ConsoleMailer`, invite create/resend/revoke/lookup/accept                                                                                                    | TAR-60           |
-| 3     | **TAR-58**       | Global `AuthGuard`, `HostTenantGuard` amendment, `tenant_mismatch` probe and its audit row                                                                                                    | TAR-22, TAR-62   |
-| 3     | **TAR-57**       | Reset request/confirm, password change, session invalidation on both                                                                                                                          | TAR-61           |
-| 3     | **TAR-59**       | Lockout counters, IP window, `POST /users/{id}/unlock`, `lockedUntil` on `UserResponse`                                                                                                       | —                |
-| 4     | **TAR-60/61/62** | Themeable screens and route guards against the contract above                                                                                                                                 | —                |
-| ∥     | **TAR-63**       | Test plan, written from this document in parallel with the above                                                                                                                              | TAR-65           |
+| Order | Issue            | Delivers from this contract                                                                                                                                                                                          | Unblocks         |
+| ----- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| 1     | **TAR-54**       | `password_reset_tokens`, `invite_teams`, the `users`/`sessions`/`invites` deltas, RLS policies on both new tables, the partial unique index, reversible `down.sql`. **Not** the `user_role` swap — TAR-80 shipped it | everything below |
+| 2     | **TAR-56**       | `SessionService`, `PasswordService`, login/logout/session/refresh, the Redis cache and the double purge                                                                                                              | TAR-58, TAR-57   |
+| 2     | **TAR-55**       | `InviteService`, `MailerPort` + `ConsoleMailer`, invite create (as an upsert) / resend / revoke / lookup / accept                                                                                                    | TAR-60           |
+| 3     | **TAR-58**       | Global `AuthGuard`, `HostTenantGuard` amendment, `tenant_mismatch` probe and its log-plus-counter event                                                                                                              | TAR-22, TAR-62   |
+| 3     | **TAR-57**       | Reset request/confirm, password change, session invalidation on both                                                                                                                                                 | TAR-61           |
+| 3     | **TAR-59**       | Lockout counters, IP window, `POST /users/{id}/unlock`, the `security` object on `UserResponse` gated on `user:update`                                                                                               | —                |
+| 4     | **TAR-60/61/62** | Themeable screens and route guards against the contract above                                                                                                                                                        | —                |
+| ∥     | **TAR-63**       | Test plan, written from this document in parallel with the above                                                                                                                                                     | TAR-65           |
 
 Two ordering constraints that matter:
 
@@ -843,13 +924,14 @@ every task above builds against types rather than against prose.
 
 ## Open Questions and Risks
 
-| #   | Item                                                                                                                                                 | Severity | Resolution                                                                                                                                                                                           |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **argon2id parameters are unmeasured.** `m=19456, t=2, p=1` is a documented minimum, not a measurement on our instance size. No benchmark is claimed | Medium   | **TAR-56** measures verify latency on the target instance and tunes for roughly 100–250 ms, raising `m` first. Parameters live in `AUTH_POLICY`, and the PHC string makes an in-place upgrade free   |
-| 2   | **No email provider is chosen anywhere in the repository.** Invite and reset are undeliverable in any deployed environment until one exists          | High     | `MailerPort` + `ConsoleMailer` unblocks TAR-55/57 immediately. **TAR-41** picks and wires the adapter before TAR-65 can sign off — this is the one dependency outside TAR-35 that can block sign-off |
-| 3   | **Dropping `owner` from `user_role`** is a type swap. Free today, expensive once accounts exist                                                      | Medium   | **TAR-54**, in the same migration as everything else, or the option closes. Flagged for Tarek: if a distinct owner concept is wanted, say so now and it becomes `tenants.owner_user_id` instead      |
-| 4   | **The `tenant_mismatch` probe adds a sixth `SystemPrisma` call site**                                                                                | Low      | Justified in Decision 2 and named here so **TAR-44** reviews it as a recorded decision rather than drift                                                                                             |
-| 5   | **Token-in-fragment requires client-rendered invite and reset pages**, and the reset page must clear the fragment after reading it                   | Low      | **TAR-60/61** implement it; **TAR-63** asserts the token never appears in a server log line                                                                                                          |
-| 6   | **No breached-password check.** A 12-character minimum does not stop `Password1234`                                                                  | Low      | Fast-follow. A k-anonymity range query against a breach corpus fits behind `PasswordService` with no contract change                                                                                 |
-| 7   | **No account-recovery path that does not go through email.** If a tenant's only admin loses their mailbox, the tenant is locked out                  | Medium   | Today the answer is the platform-admin bootstrap invite (`POST /admin/tenants/{id}/invites`), which is a manual operator action. Adequate at this scale; revisit when tenant count makes it a queue  |
-| 8   | **Session absolute cap of 30 days is a guess** at what agents will tolerate                                                                          | Low      | One constant in `AUTH_POLICY`. Revisit after the first real deployment                                                                                                                               |
+| #   | Item                                                                                                                                                 | Severity | Resolution                                                                                                                                                                                                  |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **argon2id parameters are unmeasured.** `m=19456, t=2, p=1` is a documented minimum, not a measurement on our instance size. No benchmark is claimed | Medium   | **TAR-56** measures verify latency on the target instance and tunes for roughly 100–250 ms, raising `m` first. Parameters live in `AUTH_POLICY`, and the PHC string makes an in-place upgrade free          |
+| 2   | **No email provider is chosen anywhere in the repository.** Invite and reset are undeliverable in any deployed environment until one exists          | High     | `MailerPort` + `ConsoleMailer` unblocks TAR-55/57 immediately. **TAR-41** picks and wires the adapter before TAR-65 can sign off — this is the one dependency outside TAR-35 that can block sign-off        |
+| 3   | ~~**Dropping `owner` from `user_role`** is a type swap. Free today, expensive once accounts exist~~                                                  | Closed   | **Done by TAR-80** (`f99ba45`, #25) while this document was in review — three roles, exactly as argued. Out of TAR-54's scope                                                                               |
+| 4   | **The `tenant_mismatch` probe adds a sixth `SystemPrisma` call site**                                                                                | Low      | Justified in Decision 2 and named here so **TAR-44** reviews it as a recorded decision rather than drift                                                                                                    |
+| 5   | **Token-in-fragment requires client-rendered invite and reset pages**, and the reset page must clear the fragment after reading it                   | Low      | **TAR-60/61** implement it; **TAR-63** asserts the token never appears in a server log line                                                                                                                 |
+| 6   | **No breached-password check.** A 12-character minimum does not stop `Password1234`                                                                  | Low      | Fast-follow. A k-anonymity range query against a breach corpus fits behind `PasswordService` with no contract change                                                                                        |
+| 7   | **No account-recovery path that does not go through email.** If a tenant's only admin loses their mailbox, the tenant is locked out                  | Medium   | Today the answer is the platform-admin bootstrap invite (`POST /admin/tenants/{id}/invites`), which is a manual operator action. Adequate at this scale; revisit when tenant count makes it a queue         |
+| 8   | **Session absolute cap of 30 days is a guess** at what agents will tolerate                                                                          | Low      | One constant in `AUTH_POLICY`. Revisit after the first real deployment                                                                                                                                      |
+| 9   | **The lockout email is reachable by an unauthenticated caller.** Ten failed attempts against a known address sends its owner a message               | Low      | Bounded to one per `loginLockoutMs` per account by firing on the lockout transition rather than per attempt. If it becomes a nuisance vector, the answer is to drop the template, not to soften the lockout |

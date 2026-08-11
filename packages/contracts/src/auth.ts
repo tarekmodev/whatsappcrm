@@ -13,7 +13,7 @@ import { PermissionSchema, TenantRoleSchema } from './rbac';
  * TAR-39 fixed the mechanism and the endpoint list. TAR-53 fixes everything that
  * was left auth-specific — lifetimes, thresholds, token design, the cookie name
  * and the flows themselves — in
- * `docs/architecture/0003-auth-session-and-invite-contract.md`. Read that before
+ * `docs/architecture/0005-auth-session-and-invite-contract.md`. Read that before
  * changing a number in this file: each one has a recorded reason.
  */
 
@@ -42,20 +42,6 @@ export const SESSION_COOKIE_NAME = 'wac_session';
 export function sessionCookieName(secure: boolean): string {
   return secure ? SESSION_COOKIE_NAME_SECURE : SESSION_COOKIE_NAME;
 }
-
-/**
- * Everything except `secure`, which follows the environment. Notably there is no
- * `domain`: a cookie scoped to the platform's parent domain would be sent to
- * every tenant subdomain underneath it.
- *
- * `SameSite=Lax` is also the CSRF defence — it keeps the cookie off cross-site
- * form POSTs — which is why no CSRF-token endpoint exists.
- */
-export const SESSION_COOKIE_ATTRIBUTES = {
-  httpOnly: true,
-  sameSite: 'lax',
-  path: '/',
-} as const;
 
 /**
  * Every auth lifetime and threshold, in one frozen object.
@@ -111,6 +97,27 @@ export const AUTH_POLICY = {
 } as const;
 
 export type AuthPolicy = typeof AUTH_POLICY;
+
+/**
+ * Everything except `secure`, which follows the environment. Notably there is no
+ * `domain`: a cookie scoped to the platform's parent domain would be sent to
+ * every tenant subdomain underneath it.
+ *
+ * `SameSite=Lax` is also the CSRF defence — it keeps the cookie off cross-site
+ * form POSTs — which is why no CSRF-token endpoint exists.
+ *
+ * `maxAge` is in **seconds**, per the `Set-Cookie` grammar, and is derived from
+ * `sessionAbsoluteMs` rather than restated: the browser should drop a cookie the
+ * server would reject anyway, and two independently-maintained numbers is how
+ * that stops being true. Declared after `AUTH_POLICY` for that reason — a `const`
+ * read before its initialiser is a module-load crash, not a type error.
+ */
+export const SESSION_COOKIE_ATTRIBUTES = {
+  httpOnly: true,
+  sameSite: 'lax',
+  path: '/',
+  maxAge: AUTH_POLICY.sessionAbsoluteMs / 1000,
+} as const;
 
 /**
  * Everything a guard needs about the caller, resolved once per request and
@@ -280,6 +287,15 @@ export const SessionListResponseSchema = z.array(SessionSummarySchema);
  */
 export interface OutboundEmail {
   to: string;
+  /**
+   * Each member has exactly one producer, named in the TAR-53 document so none
+   * of them is a template TAR-55 implements and nothing ever triggers:
+   * `invite` from invite create and resend, `password_reset` from the reset
+   * request, `password_changed` from reset-confirm and password-change, and
+   * `account_locked` from the login failure that *crosses* the lockout
+   * threshold — once per lockout, not once per failed attempt, which is what
+   * bounds it as an unauthenticated caller's ability to send mail.
+   */
   template: 'invite' | 'password_reset' | 'password_changed' | 'account_locked';
   tenantId: string;
   /**

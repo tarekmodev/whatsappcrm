@@ -53,6 +53,14 @@ export const API_ERROR_CODES = [
   'conflict',
   /** An `Idempotency-Key` was replayed with a different request body. */
   'idempotency_key_reused',
+  /**
+   * The write would leave the tenant with no active admin — a demotion,
+   * suspension or removal of the last one (TAR-79, delta 3). Distinct from
+   * `conflict` because it is the one refusal a client can act on by naming a
+   * replacement admin first, and because it is worth counting separately: a
+   * tenant that reaches zero admins can only be recovered by platform support.
+   */
+  'last_admin_required',
   /** Payload exceeds the documented size cap. */
   'payload_too_large',
   /** Too many requests for this tenant or principal in the current window. */
@@ -105,6 +113,7 @@ export const API_ERROR_STATUS: Record<ApiErrorCode, number> = {
   not_found: 404,
   conflict: 409,
   idempotency_key_reused: 409,
+  last_admin_required: 409,
   payload_too_large: 413,
   rate_limited: 429,
 

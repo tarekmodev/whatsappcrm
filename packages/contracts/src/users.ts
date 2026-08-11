@@ -12,22 +12,36 @@ import { TenantRoleSchema } from './rbac';
  */
 
 /**
- * `removed` is here because removing a user is a **status change, not a row
- * delete** — a deleted user would take their audit trail, ticket history and
- * message authorship with them, and the schema's composite foreign keys cannot
- * express `SET NULL` on a partial key anyway. TAR-53 reconciles this set with
- * the `user_status` enum TAR-47 landed, which has had `removed` since day one.
+ * The account lifecycle, and the exact vocabulary of the `user_status` column.
+ *
+ * `removed` was in the schema and missing here — the same drift TAR-80 closed on
+ * `user_role` by deleting `owner`, in the other direction. A row holding it
+ * would fail `UserResponseSchema` and answer 500, so it is added rather than
+ * dropped: unlike `owner`, this one has a job. `DELETE /users/{id}` sets it,
+ * because a user cannot be hard-deleted without either destroying the record of
+ * what they did or leaving a foreign key dangling — see the delete path in the
+ * API for the whole argument.
+ *
+ * ```
+ *   invited ──accept──▶ active ◀──restore──▶ suspended
+ *      │                  │                     │
+ *      └──────────────────┴──────remove─────────┴──▶ removed
+ * ```
  */
 export const USER_STATUSES = ['invited', 'active', 'suspended', 'removed'] as const;
 export const UserStatusSchema = z.enum(USER_STATUSES);
 
 /**
- * What an admin may *set*. `invited` is missing on purpose: it is reachable only
- * by creating an invite, and letting a `PATCH` write it would produce a user who
- * can never sign in and has no live invite to accept.
+ * The statuses a `PATCH /users/{id}` may set, which is deliberately narrower.
+ *
+ * `invited` is written by the invite flow and unset by acceptance; `removed` is
+ * written by `DELETE /users/{id}`, which is gated on admin-only `user:remove`.
+ * Allowing either here would let a supervisor holding `user:update` remove an
+ * account through the side door — the permission split of TAR-79's delta 2 is
+ * only real if the field cannot express the operation it excludes.
  */
-export const ASSIGNABLE_USER_STATUSES = ['active', 'suspended', 'removed'] as const;
-export const AssignableUserStatusSchema = z.enum(ASSIGNABLE_USER_STATUSES);
+export const USER_WRITABLE_STATUSES = ['active', 'suspended'] as const;
+export const UserWritableStatusSchema = z.enum(USER_WRITABLE_STATUSES);
 
 /**
  * Availability drives auto-assignment (TAR-23): an `away` or `offline` agent is
@@ -37,6 +51,24 @@ export const AssignableUserStatusSchema = z.enum(ASSIGNABLE_USER_STATUSES);
  */
 export const AGENT_AVAILABILITY = ['available', 'away', 'offline'] as const;
 export const AgentAvailabilitySchema = z.enum(AGENT_AVAILABILITY);
+
+/**
+ * Brute-force state for one account (TAR-53's lockout policy, TAR-59's
+ * enforcement).
+ *
+ * Split into its own object rather than flattened onto `UserResponse` so the
+ * whole thing can be gated with one nullable check. `GET /api/v1/users` is
+ * `user:read`, which every agent holds — flat fields would give any agent a live
+ * readout of how close a named colleague is to being locked out, and
+ * confirmation when it lands. TAR-35 asks for a lockout observable to a tenant
+ * *admin*, not to the tenant.
+ */
+export const UserSecurityStateSchema = z.object({
+  /** Non-null while the account is locked. Cleared by `POST /api/v1/users/{id}/unlock`. */
+  lockedUntil: TimestampSchema.nullable(),
+  /** Consecutive failures since the last success or admin unlock. */
+  failedLoginAttempts: z.int().min(0),
+});
 
 export const UserResponseSchema = z.object({
   id: IdSchema,
@@ -51,18 +83,22 @@ export const UserResponseSchema = z.object({
   occupiesSeat: z.boolean(),
   lastSeenAt: TimestampSchema.nullable(),
   /**
-   * Non-null while the account is locked out after repeated failed logins
-   * (TAR-53's lockout policy, TAR-59's enforcement). Surfaced on the user list
-   * because TAR-35 requires a lockout to be *observable to a tenant admin* — a
-   * counter that lives only in Redis and never reaches an API response cannot
-   * satisfy that. Cleared by `POST /api/v1/users/{id}/unlock`.
+   * `null` for a caller without `user:update` — the serializer omits it rather
+   * than the handler branching, so a new endpoint returning a `UserResponse`
+   * cannot leak it by forgetting to. Never null for a caller who does hold the
+   * permission: an admin reading `null` here could not tell "not locked" from
+   * "not allowed to know".
    */
-  lockedUntil: TimestampSchema.nullable(),
-  /** Consecutive failures since the last success or admin unlock. */
-  failedLoginAttempts: z.int().min(0),
+  security: UserSecurityStateSchema.nullable(),
   createdAt: TimestampSchema,
 });
 
+/**
+ * `status` is a filter, not a default: the list excludes `removed` accounts
+ * unless one is asked for by name, so a soft delete is actually absent from
+ * every screen rather than merely marked. Filtering a soft delete in some
+ * queries and not others is how a "deleted" record reappears in a picker.
+ */
 export const UserListQuerySchema = CursorPageQuerySchema.extend({
   role: TenantRoleSchema.optional(),
   status: UserStatusSchema.optional(),
@@ -71,17 +107,25 @@ export const UserListQuerySchema = CursorPageQuerySchema.extend({
 });
 
 /**
- * Setting `status` to anything other than `active` is the **deactivation** path
- * of TAR-35: it revokes every session for that user in the same transaction, so
- * access ends immediately rather than at the next expiry. A change to `role` or
- * `status` that would leave the tenant with no active admin is rejected with
- * `conflict`.
+ * Identifies one person on `PATCH`/`DELETE /api/v1/users/{id}`. A schema rather
+ * than a bare string so a malformed id is a `validation_failed` at the edge
+ * instead of a database error two layers in.
+ */
+export const UserParamsSchema = z.object({
+  id: IdSchema,
+});
+
+/**
+ * `role` is separated from the rest at *enforcement* time, not here: a body
+ * carrying it additionally requires `user:set_role` (TAR-79, delta 1), and a
+ * caller without it is refused rather than having the field quietly dropped —
+ * a privilege change that appears to succeed is worse than a refusal.
  */
 export const UserUpdateInputSchema = z.object({
   displayName: z.string().min(1).max(120).optional(),
   role: TenantRoleSchema.optional(),
   teamIds: z.array(IdSchema).optional(),
-  status: AssignableUserStatusSchema.optional(),
+  status: UserWritableStatusSchema.optional(),
 });
 
 export const AvailabilityUpdateInputSchema = z.object({
@@ -102,14 +146,38 @@ export const TeamCreateInputSchema = z.object({
   memberUserIds: z.array(IdSchema).default([]),
 });
 
+/**
+ * `memberUserIds` is the whole membership, not a delta: sending it replaces the
+ * team's members, and omitting it leaves them alone. A delta shape (`add`,
+ * `remove`) reads better in isolation but loses to concurrent edits — two
+ * supervisors each removing one person would each succeed against a membership
+ * neither of them last saw.
+ */
 export const TeamUpdateInputSchema = TeamCreateInputSchema.partial();
 
+export const TeamParamsSchema = z.object({
+  id: IdSchema,
+});
+
+/**
+ * Teams are few per tenant — tens, not thousands — but the list still paginates,
+ * because "few today" is not a property the API can promise a client.
+ */
+export const TeamListQuerySchema = CursorPageQuerySchema.extend({
+  q: z.string().min(1).max(80).optional(),
+});
+
 export type UserStatus = z.infer<typeof UserStatusSchema>;
-export type AssignableUserStatus = z.infer<typeof AssignableUserStatusSchema>;
+export type UserWritableStatus = z.infer<typeof UserWritableStatusSchema>;
 export type AgentAvailability = z.infer<typeof AgentAvailabilitySchema>;
+export type UserSecurityState = z.infer<typeof UserSecurityStateSchema>;
 export type UserResponse = z.infer<typeof UserResponseSchema>;
 export type UserListQuery = z.infer<typeof UserListQuerySchema>;
+export type UserParams = z.infer<typeof UserParamsSchema>;
 export type UserUpdateInput = z.infer<typeof UserUpdateInputSchema>;
+export type AvailabilityUpdateInput = z.infer<typeof AvailabilityUpdateInputSchema>;
 export type TeamResponse = z.infer<typeof TeamResponseSchema>;
 export type TeamCreateInput = z.infer<typeof TeamCreateInputSchema>;
 export type TeamUpdateInput = z.infer<typeof TeamUpdateInputSchema>;
+export type TeamParams = z.infer<typeof TeamParamsSchema>;
+export type TeamListQuery = z.infer<typeof TeamListQuerySchema>;

@@ -1,6 +1,6 @@
 # Architecture and API contract (TAR-39)
 
-Status: proposed · Supersedes nothing · Builds on [ADR 0001 — stack decision](../adr/0001-stack-decision.md)
+Status: proposed · Supersedes nothing · Builds on [ADR 0001 — stack decision](../adr/0001-stack-decision.md) · [Amendments](#amendments): 1
 
 ## Context and Problem
 
@@ -127,6 +127,11 @@ Two event buses, chosen by durability:
 Emit-side rule: a handler that must not be lost publishes to BullMQ, inside the same
 transaction as the state change that caused it.
 
+The first application of this rule is worked through in
+[0003 — ticket auto-linking contract](./0003-ticket-auto-linking-contract.md):
+`ConversationsModule` and `TicketsModule` are both L3, so auto-ticket creation crosses that
+boundary as a BullMQ job whose payload lives in `packages/contracts`, not as an import.
+
 ---
 
 ## Technology Choices
@@ -182,6 +187,19 @@ Everything in ADR 0001 is inherited unchanged. Only decisions this document adds
   one round trip **needs verification** against Prisma 7 with the chosen driver adapter
   before TAR-19 commits to it. If it turns out to be two, the fallback is a connection
   checked out per unit of work with the GUC set once — more code, same guarantee.
+
+  > **What landed, in TAR-48, TAR-49 and TAR-51.** Three differences from the two
+  > paragraphs above, each deliberate. **The extension does not inject `tenantId` into
+  > `where`/`data`** — a generic injection has to get nested writes, `connect`, `upsert` and
+  > relation filters right or it silently drops rows, and RLS already filters correctly
+  > using the same index. RLS is the only layer, not the backstop to a second one. **The
+  > policy predicate is `NULLIF(current_setting('app.tenant_id', true), '')::uuid`** — a GUC
+  > that was set and has since been reset reads back as the empty string rather than NULL,
+  > and without the `NULLIF` it reaches the cast and fails the query instead of returning
+  > zero rows. **The GUC is set through TAR-51's gate**,
+  > `set_config('app.tenant_id', public.assert_tenant_active($1), true)`, so a deactivated
+  > tenant never sets it. The round-trip question is answered in Open Questions, row 1. Full
+  > contract: [`docs/reference/tenancy.md`](../reference/tenancy.md).
 
 - **Rejected — application-level filtering only.** Cheapest and simplest, and what the
   extension alone would give us. Rejected because it is exactly the "promise every
@@ -265,44 +283,51 @@ client, but is not load-bearing for the product.
 
 ## Data Model
 
-Entities, with the tenant-scoping and indexing decisions that matter. Prisma models land
-in TAR-19's migration; `apps/api/prisma/schema.prisma` is deliberately empty until then.
+Entities, with the tenant-scoping and indexing decisions that matter.
+
+> **Landed in TAR-47, corrected in TAR-52, extended by TAR-80 and TAR-92.**
+> `apps/api/prisma/schema.prisma` now holds all of this. The table below stays the
+> specification and the reasoning; for what the database actually contains — every
+> constraint, every enum, and the places the shipped schema differs from this table — read
+> [`docs/reference/data-model.md`](../reference/data-model.md).
 
 **Scoped** = carries `tenant_id`, RLS-protected.
 
-| Entity                              | Scoped   | Key fields and constraints                                                                                 | Story     |
-| ----------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- | --------- |
-| `tenants`                           | —        | `slug` unique; `status`; `trial_ends_at`                                                                   | TAR-19    |
-| `tenant_domains`                    | ✓        | `hostname` **globally** unique; `kind`; `verified_at`                                                      | TAR-19/29 |
-| `tenant_branding`                   | ✓        | one row per tenant                                                                                         | TAR-29    |
-| `users`                             | ✓        | `UNIQUE (tenant_id, email)` on `citext`; `role`; `status`; `password_hash`                                 | TAR-35    |
-| `sessions`                          | ✓        | `token_hash` unique; `expires_at`; index `(user_id)` for bulk revoke                                       | TAR-35    |
-| `invites`                           | ✓        | `token_hash` unique; `expires_at`; `accepted_at`                                                           | TAR-35    |
-| `teams`, `team_members`             | ✓        | `UNIQUE (tenant_id, name)`; `(team_id, user_id)`                                                           | TAR-22    |
-| `whatsapp_business_accounts`        | ✓        | `waba_id` globally unique; encrypted access token; verification status                                     | TAR-52    |
-| `whatsapp_accounts`                 | ✓        | One phone number, child of a WABA. `phone_number_id` **globally** unique — the routing key; quality rating | TAR-52    |
-| `message_templates`                 | ✓        | `UNIQUE (tenant_id, whatsapp_business_account_id, name, language)`; approval status — scoped to the WABA   | TAR-52    |
-| `contacts`                          | ✓        | `UNIQUE (tenant_id, phone_e164)`; `custom_fields JSONB`; `opted_out_at`                                    | TAR-33    |
-| `tags`, `contact_tags`              | ✓        | `UNIQUE (tenant_id, name)`                                                                                 | TAR-33    |
-| `custom_field_defs`                 | ✓        | `UNIQUE (tenant_id, key)`                                                                                  | TAR-33    |
-| `conversations`                     | ✓        | `UNIQUE (tenant_id, whatsapp_account_id, contact_id)`; `service_window_expires_at`                         | TAR-20    |
-| `messages`                          | ✓        | `UNIQUE (tenant_id, provider_message_id)`; `sent_at`; `status`                                             | TAR-20    |
-| `message_attachments`               | ✓        | `message_id`; re-hosted `url`                                                                              | TAR-20    |
-| `internal_notes`                    | ✓        | `conversation_id`; `mentioned_user_ids`                                                                    | TAR-20    |
-| `tickets`                           | ✓        | `UNIQUE (tenant_id, number)`; `status`; `priority`; `conversation_id`                                      | TAR-21/25 |
-| `ticket_events`                     | ✓        | append-only; `(tenant_id, ticket_id, created_at)`                                                          | TAR-21/32 |
-| `assignment_rules`                  | ✓        | ordered by `position`; `conditions JSONB`                                                                  | TAR-24    |
-| `assignment_state`                  | ✓        | round-robin cursor per team                                                                                | TAR-23    |
-| `sla_policies`, `sla_timers`        | ✓        | `due_at`; partial index on unresolved timers                                                               | TAR-26    |
-| `workflows`, `workflow_runs`        | ✓        | `definition JSONB`                                                                                         | TAR-27    |
-| `ai_configs`, `knowledge_documents` | ✓        | per-tenant KB                                                                                              | TAR-28    |
-| `canned_responses`                  | ✓        | `UNIQUE (tenant_id, shortcut)`                                                                             | TAR-31    |
-| `plans`                             | —        | `key` unique; `entitlements JSONB` — platform-wide, not per tenant                                         | TAR-37    |
-| `subscriptions`                     | ✓        | one per tenant; opaque `provider_*` ids; `current_period_*`                                                | TAR-37    |
-| `usage_counters`                    | ✓        | `UNIQUE (tenant_id, metric, period_start)`                                                                 | TAR-37    |
-| `webhook_events`                    | nullable | `UNIQUE (provider, provider_event_id)`; `status`; **not** RLS-protected — see below                        | TAR-20    |
-| `idempotency_keys`                  | ✓        | `UNIQUE (tenant_id, key)`; `request_hash`; `response_body`                                                 | TAR-20    |
-| `audit_logs`                        | ✓        | actor, action, target, `(tenant_id, created_at)`                                                           | TAR-22    |
+| Entity                              | Scoped   | Key fields and constraints                                                                                                                            | Story     |
+| ----------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `tenants`                           | —        | `slug` unique; `status`; `trial_ends_at`                                                                                                              | TAR-19    |
+| `tenant_domains`                    | ✓        | `hostname` **globally** unique; `kind`; `verified_at`                                                                                                 | TAR-19/29 |
+| `tenant_branding`                   | ✓        | one row per tenant                                                                                                                                    | TAR-29    |
+| `tenant_settings`                   | ✓        | one row per tenant; `timezone`, `locale`, `business_hours JSONB` — seeded at provisioning                                                             | TAR-19    |
+| `users`                             | ✓        | `UNIQUE (tenant_id, email)` on `citext`; `role`; `status`; `password_hash`                                                                            | TAR-35    |
+| `sessions`                          | ✓        | `token_hash` unique; `expires_at`; index `(user_id)` for bulk revoke                                                                                  | TAR-35    |
+| `invites`                           | ✓        | `token_hash` unique; `expires_at`; `accepted_at`                                                                                                      | TAR-35    |
+| `teams`, `team_members`             | ✓        | `UNIQUE (tenant_id, name)`; `(team_id, user_id)`                                                                                                      | TAR-22    |
+| `whatsapp_business_accounts`        | ✓        | `waba_id` globally unique; encrypted access token; verification status                                                                                | TAR-52    |
+| `whatsapp_accounts`                 | ✓        | One phone number, child of a WABA. `phone_number_id` **globally** unique — the routing key; quality rating                                            | TAR-52    |
+| `message_templates`                 | ✓        | `UNIQUE (tenant_id, whatsapp_business_account_id, name, language)`; approval status — scoped to the WABA                                              | TAR-52    |
+| `contacts`                          | ✓        | `UNIQUE (tenant_id, phone_e164)`; `custom_fields JSONB`; `opted_out_at`                                                                               | TAR-33    |
+| `tags`, `contact_tags`              | ✓        | `UNIQUE (tenant_id, name)`                                                                                                                            | TAR-33    |
+| `custom_field_defs`                 | ✓        | `UNIQUE (tenant_id, key)`                                                                                                                             | TAR-33    |
+| `conversations`                     | ✓        | `UNIQUE (tenant_id, whatsapp_account_id, contact_id)`; `service_window_expires_at`                                                                    | TAR-20    |
+| `messages`                          | ✓        | `UNIQUE (tenant_id, provider_message_id)`; `sent_at`; `status`                                                                                        | TAR-20    |
+| `message_attachments`               | ✓        | `message_id`; re-hosted `url`                                                                                                                         | TAR-20    |
+| `internal_notes`                    | ✓        | `conversation_id`; `mentioned_user_ids`                                                                                                               | TAR-20    |
+| `tickets`                           | ✓        | `UNIQUE (tenant_id, number)`; `status`; `priority`; `conversation_id`; one active ticket per contact — [0003](./0003-ticket-auto-linking-contract.md) | TAR-21/25 |
+| `ticket_counters`                   | ✓        | one row per tenant; the ticket-number allocator — [0003](./0003-ticket-auto-linking-contract.md)                                                      | TAR-21    |
+| `ticket_events`                     | ✓        | append-only; `(tenant_id, ticket_id, created_at)`                                                                                                     | TAR-21/32 |
+| `assignment_rules`                  | ✓        | ordered by `position`; `conditions JSONB`                                                                                                             | TAR-24    |
+| `assignment_state`                  | ✓        | round-robin cursor per team                                                                                                                           | TAR-23    |
+| `sla_policies`, `sla_timers`        | ✓        | `due_at`; partial index on unresolved timers                                                                                                          | TAR-26    |
+| `workflows`, `workflow_runs`        | ✓        | `definition JSONB`                                                                                                                                    | TAR-27    |
+| `ai_configs`, `knowledge_documents` | ✓        | per-tenant KB                                                                                                                                         | TAR-28    |
+| `canned_responses`                  | ✓        | `UNIQUE (tenant_id, shortcut)`                                                                                                                        | TAR-31    |
+| `plans`                             | —        | `key` unique; `entitlements JSONB` — platform-wide, not per tenant                                                                                    | TAR-37    |
+| `subscriptions`                     | ✓        | one per tenant; opaque `provider_*` ids; `current_period_*`                                                                                           | TAR-37    |
+| `usage_counters`                    | ✓        | `UNIQUE (tenant_id, metric, period_start)`                                                                                                            | TAR-37    |
+| `webhook_events`                    | nullable | `UNIQUE (provider, provider_event_id)`; `status`; **not** RLS-protected — see below                                                                   | TAR-20    |
+| `idempotency_keys`                  | ✓        | `UNIQUE (tenant_id, key)`; `request_hash`; `response_body`                                                                                            | TAR-20    |
+| `audit_logs`                        | ✓        | actor, action, target, `(tenant_id, created_at)`                                                                                                      | TAR-22    |
 
 **`webhook_events` is the deliberate exception.** It is written _before_ the tenant is
 known — that is the whole point of storing first and routing later — so it cannot carry
@@ -312,21 +337,88 @@ tenant-facing code. `tenant_id` is filled in during processing, for forensics.
 
 **Indexes that are load-bearing, and why**
 
-| Index                                                              | Serves                                  |
-| ------------------------------------------------------------------ | --------------------------------------- |
-| `messages (tenant_id, conversation_id, sent_at DESC, id DESC)`     | Thread view + keyset pagination         |
-| `conversations (tenant_id, status, last_message_at DESC, id DESC)` | The inbox list, the hottest query       |
-| `conversations (tenant_id, assigned_user_id, status)`              | An agent's default view                 |
-| `tickets (tenant_id, status, priority, created_at DESC)`           | Ticket queues and supervisor dashboards |
-| `sla_timers (tenant_id, due_at) WHERE state = 'running'`           | Partial index — the timer sweep         |
-| `contacts (tenant_id, phone_e164)` unique                          | Inbound message → contact, per message  |
+| Index                                                                       | Serves                                                                                                                                                                                 |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `messages (tenant_id, conversation_id, sent_at DESC, id DESC)`              | Thread view + keyset pagination                                                                                                                                                        |
+| `conversations (tenant_id, status, last_message_at DESC, id DESC)`          | The inbox list, the hottest query                                                                                                                                                      |
+| `conversations (tenant_id, assigned_user_id, status)`                       | An agent's default view                                                                                                                                                                |
+| `tickets (tenant_id, status, priority, created_at DESC)`                    | Ticket queues and supervisor dashboards                                                                                                                                                |
+| `tickets (tenant_id, contact_id) WHERE status IN ('open','pending')` unique | Partial index — the one-active-ticket-per-contact invariant, and the "has this contact an open ticket?" read on every inbound message ([0003](./0003-ticket-auto-linking-contract.md)) |
+| `sla_timers (tenant_id, due_at) WHERE state = 'running'`                    | Partial index — the timer sweep                                                                                                                                                        |
+| `contacts (tenant_id, phone_e164)` unique                                   | Inbound message → contact, per message                                                                                                                                                 |
 
 Sort keys are `(timestamp DESC, id DESC)` throughout, which is what makes UUIDv7 ids
 worth having: the id is a stable tie-breaker for two rows in the same millisecond.
 
-**Cursor encoding.** `base64url(JSON.stringify({ v: 1, k: <sortValue>, id: <uuid> }))`,
+> **One of these did not land as written.** The SLA sweep shipped as
+> `sla_timers (tenant_id, state, due_at)`, not as the partial index above: Prisma cannot
+> express a `WHERE` on an index, and one created outside the schema shows up as drift that
+> the next `migrate dev` proposes to drop. Equality on `state` then a range scan on `due_at`
+> gives the sweep the same access path, at the cost of also indexing finished timers.
+> Revisit as a partial index once timer volume makes the size matter; the query does not
+> have to change. The indexes as they actually exist are in
+> [`docs/reference/data-model.md`](../reference/data-model.md).
+
+**Cursor encoding.** `base64url(JSON.stringify({ v: 1, k: [<sortValue>, ...], id: <uuid> }))`,
 opaque to clients. Keyset, never `OFFSET` — an offset page duplicates and skips rows in
 a feed that is being appended to while it is read.
+
+`k` is **always an array**, one entry per sort column in declared order, with `id` as the
+final tie-breaker — `k: [lastMessageAt]` for the inbox, `k: [name, language]` for a
+two-column sort. It is an array even at length one, so that adding a second sort column to
+a list later is not a cursor format change. Comparison is tuple order: left to right, each
+column deciding only when every column before it is equal.
+
+Postgres expresses that resume predicate directly as a row comparison —
+`(name, language, id) > ($1, $2, $3)` — which a btree index leading with those columns
+serves as a **start condition**: the scan begins at the cursor and reads forward `LIMIT`
+rows. Prisma's query API has no row comparison, and the obvious translation is a nested
+disjunction:
+
+```sql
+-- Correct, and the wrong shape. Do not write this.
+name > $1 OR (name = $1 AND (language > $2 OR (language = $2 AND id > $3)))
+```
+
+It returns the right rows and loses the property the rule exists for. A planner cannot
+turn a nested OR into one index start condition: it either scans the index from the
+beginning of the range and applies the disjunction as a filter, or bitmaps the branches
+together and sorts the result to restore `ORDER BY`. Either way the work grows with how
+far into the list the cursor sits, which is the `OFFSET` cost profile keyset pagination
+was chosen to avoid — on `messages` and `conversations`, the two hottest queries in this
+document.
+
+**The form to write** puts an inclusive bound on the leading column, which _is_ a start
+condition, and subtracts the part of that column's tie group already returned:
+
+```sql
+-- (sentAt DESC, id DESC)
+sentAt <= $1 AND NOT (sentAt = $1 AND id >= $2)
+
+-- (name ASC, language ASC, id ASC)
+name >= $1 AND NOT (name = $1 AND (language < $2 OR (language = $2 AND id <= $3)))
+```
+
+Both are expressible in Prisma's fluent API — `NOT` takes a nested `where` — so the typed
+client is kept.
+
+**Its breaking point, because it has one.** The rows the `NOT` discards are exactly those
+sharing the cursor's leading value and already returned, so the extra work per page is the
+size of that one tie group. For a timestamp or a template name that group holds one row or
+a handful. For a low-cardinality leading column — a status, a boolean — the group is the
+whole partition, the bound rewinds to the start of it on every page, and the form degrades
+to precisely the scan it was meant to replace. **No list in this document sorts that way,
+and none should start.** If one must, `$queryRaw` with a true row comparison is the
+sanctioned escape, on the same footing decision 1 already grants reporting: raw SQL is
+safe here because isolation is enforced by the database, not by the query that forgot it.
+
+Whichever form, verify with `EXPLAIN` that the plan shows an index scan with the predicate
+as an index condition rather than a filter, and no sort node. No plan is asserted here.
+
+What is **not** a correct predicate in any form is comparing only the leading column and
+the id — `(name, id) > ($1, $3)` — which drops every row sharing a `name` with the page
+boundary whose id sorts before it. That failure is silent: no error, a row simply never
+appears.
 
 ---
 
@@ -380,10 +472,26 @@ Order is not arbitrary — each stage depends on the last:
 `@Public()` opts an endpoint out of 3–6: login, password reset, webhooks,
 `GET /tenant/public`, health.
 
+`/api/v1/admin/*` skips stages 2–6. Stage 1 still runs, and must: `TenantContextMiddleware`
+is registered at `{*path}` and opens the scope that carries `requestId`, which the error
+filter reads to correlate a failure. An admin route exempted from it would still work and
+would lose every correlation id it emits. What admin skips is tenant resolution and the
+guards above it. It is the **platform-operator** surface — us, not a customer inside a
+tenant — and it is authenticated by
+`PlatformAdminGuard` (TAR-19, hardened in TAR-51): a fail-closed, timing-safe shared
+bearer token, deliberately not a session, because the operator is not a user in any tenant
+and provisioning has to work before the first user exists. Stages 2–6 have nothing to
+resolve for such a caller. The trade the guard's own comment states plainly: a shared
+secret has no per-operator identity, no revocation and no audit trail beyond "someone with
+the token" — right-sized for provisioning, and the thing to replace when a platform-admin
+identity exists.
+
 ### Endpoint surface
 
 Stage-1 stories build against exactly this. Later stories add their own, following the
-same conventions.
+same conventions — and when one does, it is ruled on here rather than left to emerge from
+an implementation. See [Amendment 1](#amendment-1--message-templates-tar-20a) for the
+first such addition.
 
 ```
 # Auth and session                                                        TAR-35
@@ -428,6 +536,9 @@ POST   /api/v1/conversations/{id}/messages   → MessageResponse        conversa
 GET    /api/v1/conversations/{id}/notes      → CursorPage<InternalNoteResponse>
 POST   /api/v1/conversations/{id}/notes      → InternalNoteResponse   conversation:note
 POST   /api/v1/media                         → { mediaId }            multipart
+GET    /api/v1/message-templates             → CursorPage<MessageTemplateResponse>
+                                                                      conversation:send
+                                                                      added by amendment 1
 
 # Tickets                                                                 TAR-21/25/32
 GET    /api/v1/tickets                       → CursorPage<TicketResponse>  ticket:read
@@ -441,6 +552,11 @@ GET    /api/v1/billing/subscription          → BillingSummaryResponse     bill
 GET    /api/v1/billing/usage                 → UsageSummaryResponse       billing:read
 POST   /api/v1/billing/checkout              → HostedSession              billing:manage
 POST   /api/v1/billing/portal                → HostedSession              billing:manage
+
+# Platform operator — PlatformAdminGuard bearer token, never a session   TAR-19/51
+# Shapes, errors, idempotency and retention: docs/reference/admin-api.md
+POST   /api/v1/admin/tenants                 → ProvisionedTenantResponse   201 new · 200 existing
+POST   /api/v1/admin/tenants/{slug}/deactivate → DeactivatedTenantResponse 200
 
 # Webhooks — public, signature-verified, never cookie-authenticated
 GET    /api/webhooks/whatsapp                → hub.challenge echo
@@ -616,20 +732,20 @@ steps, in order: read replicas for reporting, then partition `messages` by
 TAR-18 already carries the story breakdown, so this section maps the contract onto those
 stories rather than creating new ones. **No sub-issues are created by this issue.**
 
-| Order | Story                       | Delivers from this contract                                                                    | Unblocks      |
-| ----- | --------------------------- | ---------------------------------------------------------------------------------------------- | ------------- |
-| 1     | **TAR-19**                  | Prisma models, RLS migration, `TenantPrisma`/`SystemPrisma`, host→tenant guard, isolation test | everything    |
-| 1a    | TAR-47 ✅                   | Prisma models and the initial migration — landed on `main`                                     | TAR-48/49     |
-| 1b    | **TAR-48**                  | RLS policies, `FORCE ROW LEVEL SECURITY`, the non-`BYPASSRLS` app role, isolation test         | the guarantee |
-| 1c    | **TAR-49**                  | `TenantPrisma`/`SystemPrisma` split and the client extension that sets the GUC                 | every query   |
-| 1d    | TAR-50/51                   | Tenant provisioning and deactivation flows                                                     | TAR-36        |
-| 2     | TAR-35                      | Sessions, login, invites, `AuthGuard`, `setTenant()`                                           | TAR-20/22     |
-| 2     | TAR-22                      | Roles, teams, `PermissionGuard`                                                                | TAR-23/24     |
-| 3     | TAR-20                      | WhatsApp accounts, ingest + processors, inbox, realtime                                        | TAR-21/28     |
-| 3     | TAR-46                      | Seed data against the entities above                                                           | TAR-45        |
-| 4     | TAR-21/25/26/32             | Tickets, status, SLA, event log                                                                | TAR-30        |
-| 4     | TAR-37                      | `PolarBillingProvider`, plans, entitlements, usage counters                                    | TAR-36        |
-| 5     | TAR-23/24/27/28/29/30/31/33 | Feature modules against fixed boundaries                                                       | —             |
+| Order | Story                       | Delivers from this contract                                                                        | Unblocks      |
+| ----- | --------------------------- | -------------------------------------------------------------------------------------------------- | ------------- |
+| 1     | **TAR-19**                  | Prisma models, RLS migration, `TenantPrisma`/`SystemPrisma`, host→tenant guard, isolation test     | everything    |
+| 1a    | TAR-47 ✅                   | Prisma models and the initial migration — landed on `main`                                         | TAR-48/49     |
+| 1b    | **TAR-48**                  | RLS policies, `FORCE ROW LEVEL SECURITY`, the non-`BYPASSRLS` app role, isolation test             | the guarantee |
+| 1c    | **TAR-49**                  | `TenantPrisma`/`SystemPrisma` split and the client extension that sets the GUC                     | every query   |
+| 1d    | TAR-50/51                   | Tenant provisioning and deactivation flows                                                         | TAR-36        |
+| 2     | TAR-35                      | Sessions, login, invites, `AuthGuard`, `setTenant()`                                               | TAR-20/22     |
+| 2     | TAR-22                      | Roles, teams, `PermissionGuard`                                                                    | TAR-23/24     |
+| 3     | TAR-20                      | WhatsApp accounts, ingest + processors, inbox, realtime                                            | TAR-21/28     |
+| 3     | TAR-46                      | Seed data against the entities above                                                               | TAR-45        |
+| 4     | TAR-21/25/26/32             | Tickets, status, SLA, event log — contract fixed by [0003](./0003-ticket-auto-linking-contract.md) | TAR-30        |
+| 4     | TAR-37                      | `PolarBillingProvider`, plans, entitlements, usage counters                                        | TAR-36        |
+| 5     | TAR-23/24/27/28/29/30/31/33 | Feature modules against fixed boundaries                                                           | —             |
 
 The ordering constraint that matters: **TAR-19 is a hard prerequisite for everything
 else**, because it lands the schema and the scoping mechanism every other story writes
@@ -731,3 +847,191 @@ needed.
 _Trigger to revisit:_ the first real request for one login across two tenants. The
 migration is additive — keep `users` as the tenant-scoped membership row, add a global
 `identities` table, and join — so this is a change of shape, not a rewrite.
+
+## Amendments
+
+Endpoints added after publication are ruled on here. The point of the rule is that an
+endpoint every later story consumes should be a decision somebody made, not a shape that
+emerged from whichever implementation happened to need it first.
+
+### Amendment 1 — message templates (TAR-20a)
+
+_Revised twice, both times before anything shipped against it. Round one: the send contract
+could not carry the header this amendment publishes, the ruled sort key did not fit the
+published cursor, and the text claimed the platform-operator surface did not exist when it
+is shipped on `main`. Round two: the resume predicate the cursor rule reached for was
+correct but not index-served, a static text header was forced to send an empty header
+object, `filename` broke the repo's `fileName` spelling, and the button exclusion named no
+derivation rule while every other exclusion here has one. Revised in place rather than
+superseded — one canonical statement of this contract is worth more than a trail._
+
+The published surface has no way to list templates, and TAR-72's composer cannot work
+without one: the moment the 24-hour service window closes, a template is the only thing an
+agent can send, and the picker has to be populated from somewhere. TAR-66 proposed the
+endpoint; this amendment rules on its shape.
+
+```
+GET /api/v1/message-templates   → CursorPage<MessageTemplateResponse>   conversation:send
+```
+
+Query — `MessageTemplateListQuerySchema`, extending `CursorPageQuerySchema`:
+
+| Parameter                   | Type               | Notes                                                |
+| --------------------------- | ------------------ | ---------------------------------------------------- |
+| `whatsappAccountId`         | id, optional       | A **phone number**. The server resolves its WABA     |
+| `whatsappBusinessAccountId` | id, optional       | Cross-number administrative read. Excludes the above |
+| `q`                         | string 1–120, opt. | Name prefix                                          |
+
+At most one of the two ids; both together is `validation_failed`.
+
+Ordering is `name ASC, language ASC, id ASC`, served by
+`message_templates (tenant_id, status, name, language, id)`. An agent scans this picker
+looking for `order_update`, not for whatever Meta approved most recently, and a
+name-leading index makes `q` a range scan rather than a filter over an already-fetched
+page. _Rejected:_ `created_at DESC` with an `order` parameter — no consumer has a basis to
+choose, and a parameter nobody should vary is a decision left lying on the floor.
+
+**Approved templates only, and deliberately not a filter.** Meta refuses a send on a
+`pending`, `rejected`, `paused` or `disabled` template, so offering one produces a failed
+send and a confused agent. There is no `status` parameter, because one would make that
+state reachable by accident. Template _administration_, which does need to show the
+rejected ones, is a separate surface under `channel:manage` — never a widening of this
+route.
+
+**`conversation:send`, and no new permission.** `rbac.ts` grows no `template:*`: a new
+permission costs TAR-22 a matrix change and buys no separation, since anyone who may read
+this list may already send from it.
+
+`MessageTemplateResponseSchema` carries these fields, derived server-side from Meta's
+component tree in one pass, alongside the verbatim `components` passthrough:
+
+| Field                      | Type                                                     | Why                                                                    |
+| -------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `bodyText`                 | string \| null                                           | The BODY text with `{{n}}` placeholders intact, for the preview        |
+| `parameterCount`           | int ≥ 0                                                  | Exactly the length `SendTemplateInput.variables` must have — BODY only |
+| `headerFormat`             | `text`\|`image`\|`video`\|`document`\|`location` \| null | What the header expects, if anything                                   |
+| `headerParameterCount`     | int ≥ 0                                                  | Placeholders in a `text` header; `0` for every other format            |
+| `requiresButtonParameters` | boolean                                                  | Any button needs a send-time parameter — the v1 exclusion predicate    |
+
+`SendTemplateInputSchema.variables` is a _positional_ array. With `components` as the only
+source, every consumer — the composer, the AI chatbot, the workflow builder — walks Meta's
+tree itself to learn how many inputs to render, in an unversioned client-side parser; and
+the send path cannot check arity, so a wrong `variables.length` surfaces as an opaque
+provider error instead of a `validation_failed` before the call. Derived in the response
+mapper rather than stored: pages are capped at 100 rows, so this needs no migration and
+leaves nothing to drift. `components` itself stays unvalidated — its shape is Meta's to
+change, and a schema that guessed at it would reject valid templates the first time Meta
+added a field.
+
+**Publishing `headerFormat` obliges the send contract to carry a header.**
+`SendTemplateInputSchema` is `{ type, templateName, languageCode, variables }` — one flat
+positional array, with nowhere to put the image an `image`-header template requires. Left
+there, an approved template with an IMAGE header and two BODY placeholders passes the
+approved-only filter, renders two inputs, satisfies the arity check, and fails at Meta:
+the opaque provider error `parameterCount` was added to prevent, reached through the field
+added to prevent it. `SendTemplateInput` therefore gains an optional header slot,
+discriminated on the same `headerFormat` vocabulary:
+
+```ts
+header:
+  | { format: 'text'; variables: string[] }                                  // headerParameterCount long
+  | { format: 'image' | 'video' | 'document'; mediaId: Id; fileName?: string } // fileName: documents only
+  | { format: 'location'; latitude: number; longitude: number; name?: string; address?: string }
+```
+
+Required when the header takes a parameter — `image`, `video`, `document` and `location`
+always do, `text` only when `headerParameterCount > 0` — forbidden otherwise, and its
+`format` must equal the template's. A static text header is approved with its text fixed,
+so it needs nothing at send time; requiring an empty `header` for it would invite a mapper
+to emit an empty Meta `header` component, which is not what a static header expects. All
+three rules are checkable server-side before the Cloud API call, which is the whole point.
+`parameterCount` keeps its published meaning: BODY placeholders, matching
+`variables`. Header placeholders are counted separately in `headerParameterCount` rather
+than folded into one total, because they are supplied through a different slot and a
+single number could not say which.
+
+_Rejected:_ scoping header templates out of v1 and filtering them from the list. It is the
+smaller change, but it means a tenant whose approved templates all carry a logo header
+opens the picker and finds it empty, with nothing in the product explaining why. The send
+endpoint that would have to grow the slot is TAR-68, unbuilt — this is as cheap as it will
+ever be.
+
+**Buttons that take a send-time parameter are out of scope for v1**, and the list excludes
+them. They need composer UX that nothing in TAR-20 designs, and unlike headers there is no
+confirmed demand to design it against. Excluded rather than listed-and-unsendable, for the
+same reason unapproved templates are.
+
+The predicate is `requiresButtonParameters`, and it is stated as an invariant rather than
+as a list of Meta's button types: **a template is excluded when any button in its `BUTTONS`
+component requires a parameter in the send call.** A button whose behaviour is fixed at
+approval — a static URL, a phone number — changes nothing about what the send path must
+supply and does not exclude anything. Nothing else about a `BUTTONS` component matters.
+
+Both ways of getting this wrong fail silently, so the derivation **fails closed**: a button
+type it does not recognise counts as requiring a parameter. The two errors are not
+symmetric. Too narrow and an unsendable template reaches the picker — the exact failure
+approved-only exists to prevent, surfacing as a send that fails at Meta. Too broad and a
+sendable template goes missing, which is visible to the tenant, explainable on the
+administration surface, and fixed by widening the predicate. When Meta adds a button type,
+the second is the one to be holding.
+
+_Needs verification at implementation time,_ against Meta's current documentation and not
+asserted here: exactly which button types require a send-time parameter. A dynamic URL
+suffix does — identifiable by the `example` Meta attaches to that button — and a static URL
+or phone number does not. **Quick replies are the one to check first**, because the answer
+decides whether this exclusion is a rare edge or a common hole: quick-reply templates are
+one of the most common utility shapes, and excluding all of them would drop far more from
+the picker than this ruling intends. Because the predicate is the invariant and not a type
+list, whatever verification finds is a change to the derivation, not to this contract.
+
+The cost is the one just rejected for headers, accepted here only because the case is
+expected to be rarer: such a template is missing from the picker with no in-product
+explanation. `requiresButtonParameters` is published rather than kept internal so the
+mitigation can work — the template-administration surface under `channel:manage` shows
+every template and is where "approved by Meta, not yet sendable from this product"
+belongs, and it cannot say that about a template it cannot identify. On this list the field
+is `false` for every row by construction. _Triggers to revisit:_ the first tenant with a
+dynamic URL button, or verification finding that quick replies fall inside the predicate.
+
+**Cursor.** `(name, language, id)` is the contract's first multi-column sort, and the
+worked example under [Cursor encoding](#data-model): `k: [name, language]`, `id` last,
+resumed with the inclusive-bound form given there. Comparing `name` and `id` alone silently
+drops one language of a two-language template at a page boundary, which is the normal case
+here — `UNIQUE (tenant_id, whatsapp_business_account_id, name, language)` exists precisely
+so one name spans languages. Templates sharing a name are few, so the tie group the
+predicate rescans is small; that is the condition the form depends on, and it holds here.
+
+The filter takes a phone number rather than a business account because
+`ConversationResponse` publishes `whatsappAccountId` and nothing maps one to the other.
+The composer holds a number; asking it for a WABA would make it either call unfiltered —
+offering templates unsendable on that number, the exact failure the approved-only rule
+exists to prevent — or block on a lookup that does not exist. _Rejected:_ adding
+`whatsappBusinessAccountId` to `ConversationResponse`, which puts Meta's account hierarchy
+into every inbox row to serve one consumer, and contradicts the principle the send path
+already follows: the server resolves the WABA, the caller does not name it.
+
+_Still open:_ TAR-66 also introduces `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts`
+and its `template-sync` sibling. The platform-operator surface those follow is real and
+shipped — `PlatformAdminGuard`, `admin.ts`, `admin-tenants.controller.ts`, from TAR-19 and
+TAR-51 — and this revision records it in the endpoint surface and the request pipeline,
+where it had been omitted. TAR-66 is following that convention, not proposing one.
+
+What is open is narrower: whether a tenant may connect its own WABA, which is a product
+call pending with Tarek on TAR-20. It decides the path, not the guard — a tenant-facing
+route is `POST /api/v1/whatsapp/business-accounts` under `channel:manage`, because a
+tenant-facing route never names its own tenant in the path (decision 2). Operator-only is
+close to zero marginal work: the principal, the guard and the path convention all exist.
+Adding the tenant-facing route later is additive either way.
+
+One caveat that is not a reason to answer differently, but is a reason to add something:
+what flows through this endpoint is a WABA access token, the most sensitive credential in
+the system, and `PlatformAdminGuard` is a shared secret with no per-operator identity and
+no audit trail. Provisioning a tenant under that guard is one thing; writing a customer's
+Meta credential under it is another. Whichever way the product call goes, the operator
+path needs an audit record of who connected what and when.
+
+Also unruled and independent of the product call: `0002` records Embedded Signup as the
+onboarding path, which returns a code the server exchanges for a token, while TAR-66's
+endpoint accepts a pasted `accessToken`. There is no code-exchange endpoint in the
+contract. Amendment 2 covers the path shape, the audit record and the code exchange
+together once Tarek answers.
