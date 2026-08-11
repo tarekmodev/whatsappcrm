@@ -45,6 +45,13 @@ change.
   it deletes its own two slugs and nothing else, and refuses to run under
   `NODE_ENV=production` without `--force`. The second tenant exists so that a dropped
   tenant predicate is visible rather than theoretical. The Database CI job runs it. (TAR-46)
+- **Auth schema and tenant-scoped migrations** — `password_reset_tokens` (single-use,
+  60-minute, hashed) and `invite_teams`, both with `FORCE ROW LEVEL SECURITY` and a
+  `tenant_isolation` policy; durable lockout columns on `users`; `absolute_expires_at` and
+  `revoked_reason` on `sessions`; `revoked_at` on `invites` and a partial unique index that
+  makes two live invites for one address impossible. No credential is stored in a form
+  anything can reverse — every token is a SHA-256 hash, and passwords stay Argon2id.
+  Reversible: `down.sql` restores the previous schema exactly. (TAR-54)
 - **WhatsApp Business Account connection** — `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts`
   and `.../{wabaId}/template-sync`, behind the same platform admin guard, plus the Meta
   Cloud API client, the credential resolver and the sender service. (TAR-66)
