@@ -387,20 +387,31 @@ refused by a layer no admin can see would not be an unlock, and a reset that sti
 a 429 would not be a way back in. The IP window is cleared by none of them: it belongs to
 whoever was guessing rather than to the account they were guessing at.
 
-**What this does not yet close, and why the word is "narrowed" rather than "closed"
-(TAR-154).** The two counters lock on the same attempt, for the same duration, through the
-same reset paths — but they **forget on different clocks**. The email key carries
-`loginLockoutMs` as its TTL; `failed_login_attempts` carries none and only ever returns to
-zero through one of the five paths above. Nine failures, a sixteen-minute pause and two
-more attempts therefore put them out of step: the email counter has expired and is back at
-one, the durable counter reaches ten and locks, and attempt eleven answers 429 for a real
-address and 401 for one with no account. That is the oracle again, at the cost of one wait,
-and cheaper still against an address whose durable count is already warm from its owner's
-own typos. The layer closes the eleven-request version outright, which is why it ships, but
-the honest claim is that a paced attacker can still tell the two apart. TAR-154 windows the
-durable count inside the statement that already writes `last_failed_login_at`, making the
-retention identical by construction rather than by two numbers somebody has to keep equal —
-which is the principle the threshold and the duration already follow.
+**Amendment (TAR-154) — the durable counter decays on the same clock.** Reusing the
+threshold and the duration is not sufficient on its own, because the two counters also have
+to _forget_ together. The email counter's key expires `loginLockoutMs` after the last
+failure; `failed_login_attempts` accumulated until one of the reset paths wrote a zero. Nine
+wrong passwords, a sixteen-minute pause, and they are out of step: the tenth attempt locks a
+real account off a durable counter still at nine while the Redis counter has restarted at 1,
+so the eleventh answers 429 for an address with an account and 401 for one without. Eleven
+requests and one pause reopen the oracle this decision closed — and one request does it
+against any address whose counter is already warm from its owner's own typos.
+
+`failed_login_attempts` is therefore **windowed**, not cumulative: a failure that arrives
+more than `loginLockoutMs` after the previous one restarts the run at 1. The test is on
+`last_failed_login_at`, which the same statement already writes, so the window is one
+`CASE` in the existing `UPDATE` — no extra key, no extra round trip, no schema change, and
+one expression read by both the new count and the lock decision rather than two copies that
+can be edited apart. Threshold, duration and retention are then all the same numbers by
+construction, which is the property this layer needs and the one a future edit is least
+likely to preserve by hand.
+
+It costs nothing in protection. The cumulative counter locked again on every positive
+multiple of the threshold, so a patient attacker already had ten guesses per lockout period;
+what it also did was leave an agent who fumbled nine times across a year one attacker
+request short of a lockout. The `failedLoginAttempts` an admin reads on
+`UserResponse.security` now means "failures in the current window" rather than an all-time
+total — `last_failed_login_at` beside it says which window that is.
 
 ---
 
@@ -477,13 +488,13 @@ changes and reads as a different intent in the audit log.
 
 ### Changed: `users`
 
-| Change                                                                           | Why                                                                  |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `+ failed_login_attempts int NOT NULL DEFAULT 0`                                 | Lockout counter, Decision 3                                          |
-| `+ last_failed_login_at timestamptz NULL`                                        | Shown to admins; distinguishes "locked now" from "locked last March" |
-| `+ locked_until timestamptz NULL`                                                | The lockout itself                                                   |
-| ~~`- role: 'owner'` from the `user_role` enum~~                                  | **Already landed by TAR-80.** See "Role vocabulary" below            |
-| `+ @@index([tenantId, lockedUntil])` (partial, `WHERE locked_until IS NOT NULL`) | So the admin list can surface locked accounts without a seq scan     |
+| Change                                                                           | Why                                                                                                                           |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `+ failed_login_attempts int NOT NULL DEFAULT 0`                                 | Lockout counter, Decision 3. Failures in the current window, not all-time                                                     |
+| `+ last_failed_login_at timestamptz NULL`                                        | Shown to admins; distinguishes "locked now" from "locked last March"; also the window the counter above decays over (TAR-154) |
+| `+ locked_until timestamptz NULL`                                                | The lockout itself                                                                                                            |
+| ~~`- role: 'owner'` from the `user_role` enum~~                                  | **Already landed by TAR-80.** See "Role vocabulary" below                                                                     |
+| `+ @@index([tenantId, lockedUntil])` (partial, `WHERE locked_until IS NOT NULL`) | So the admin list can surface locked accounts without a seq scan                                                              |
 
 ### Changed: `sessions`
 
@@ -715,12 +726,14 @@ Existing codes carry the rest, with no additions:
    and the endpoint becomes a user-enumeration oracle.
 5. If `locked_until > now()`: 429 with `Retry-After` = seconds remaining. No password
    verification is performed.
-6. Verify. On failure: `failed_login_attempts += 1`, `last_failed_login_at = now()`; if the
-   new count is a positive multiple of `loginFailureThreshold`, set
-   `locked_until = now() + loginLockoutMs`, write an `auth.lockout` audit row, and send the
-   `account_locked` email. Increment the IP window **and the email counter** — the latter
-   for every rejection, including step 4's, which is the case no per-account counter can
-   see. Answer `invalid_credentials`.
+6. Verify. On failure: `last_failed_login_at = now()` and `failed_login_attempts` either
+   `+= 1` or **restarts at 1**, when the previous failure was more than `loginLockoutMs`
+   ago — the same period after which the email counter's key expires, per the TAR-154
+   amendment under decision 3. If the new count is a positive multiple of
+   `loginFailureThreshold`, set `locked_until = now() + loginLockoutMs`, write an
+   `auth.lockout` audit row, and send the `account_locked` email. Increment the IP window
+   **and the email counter** — the latter for every rejection, including step 4's, which is
+   the case no per-account counter can see. Answer `invalid_credentials`.
    **The email fires on the transition into lockout, not on each failed attempt** — that is
    what bounds an unauthenticated caller to at most one message per `loginLockoutMs` per
    address, and it is also the only moment the notification carries information the account
@@ -983,10 +996,12 @@ Everything in TAR-39's security section still applies. What this document adds:
   existence.
 - **Enumeration:** no endpoint distinguishes "no such user" from "wrong password"; the
   lockout answers 429 rather than a code that would confirm the account exists; and an
-  address with **no** account reaches that same 429, on the same attempt and for the same
-  duration, so the status is not the answer the body refuses to give. The last part is the
-  per-email lockout added by the TAR-64 review — without it the 429 was itself the oracle,
-  because only a real account could produce one.
+  address with **no** account reaches that same 429, on the same attempt, for the same
+  duration and after the same period of quiet, so the status is not the answer the body
+  refuses to give. The last part is the per-email lockout added by the TAR-64 review —
+  without it the 429 was itself the oracle, because only a real account could produce one —
+  together with the windowed durable counter from TAR-154, without which a pause between
+  attempts put the two counters out of step and produced it again.
 - **The tenant is never client-supplied.** It comes from the `Host` and is cross-checked
   against the session. There is no tenant id in any auth request body, header or query
   parameter — including for the platform-admin bootstrap invite, where it is a path

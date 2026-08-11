@@ -254,19 +254,7 @@ describe('the session lifecycle, end to end', () => {
     // And clean Redis counters, so a re-run does not inherit the last test's
     // failures — all three of them outlive the fixture rows by design, and the
     // email lock outlives them for a full fifteen minutes.
-    await redis.run('int-spec cleanup', async (client) => {
-      const patterns = ['authfail', 'emailfail', 'emaillock'].flatMap((kind) =>
-        [TENANT_A, TENANT_B].map((tenantId) => `wac:auth:${kind}:${tenantId}:*`),
-      );
-
-      const keys = (await Promise.all(patterns.map(async (pattern) => await client.keys(pattern))))
-        .flat()
-        .filter((key) => key.length > 0);
-
-      if (keys.length > 0) {
-        await client.del(...keys);
-      }
-    });
+    await dropRedisCounters(['authfail', 'emailfail', 'emaillock'], [TENANT_A, TENANT_B]);
   });
 
   describe('login resolves the tenant from scope, never from the request', () => {
@@ -548,6 +536,39 @@ describe('the session lifecycle, end to end', () => {
       expect(asSeenByAgent.items.find((user) => user.id === AGENT_A)?.security).toBeNull();
     }, 120_000);
 
+    it('forgets a run of failures older than the lockout period, as the Redis counter does', async () => {
+      await failLoginAsAgentA(AUTH_POLICY.loginFailureThreshold - 1);
+
+      // The pause an attacker takes, without waiting fifteen minutes for it: the
+      // Redis counter's key expires here, and the durable counter has to forget
+      // at the same moment or the two are out of step (TAR-154). Before the fix
+      // the durable counter was still at nine, so the attempt below locked the
+      // account and the one after it answered 429 — while the same eleven
+      // attempts against an address with no account answered 401 throughout.
+      // That difference is the account-existence oracle, reopened by one pause.
+      await systemPrisma.user.update({
+        where: { id: AGENT_A },
+        data: { lastFailedLoginAt: new Date(Date.now() - AUTH_POLICY.loginLockoutMs - 60_000) },
+      });
+      await dropRedisCounters(['emailfail', 'emaillock'], [TENANT_A]);
+
+      await failLoginAsAgentA(1);
+
+      const after = await systemPrisma.user.findUniqueOrThrow({
+        where: { id: AGENT_A },
+        select: { failedLoginAttempts: true, lockedUntil: true },
+      });
+
+      // The run restarted rather than reaching the threshold.
+      expect(after).toEqual({ failedLoginAttempts: 1, lockedUntil: null });
+
+      // And the next attempt is refused on its credentials, which is the answer
+      // an address with no account here gives. `InvalidCredentialsError` rather
+      // than `RateLimitedError` is the whole assertion: a 429 at this point is
+      // reachable only for an account that exists.
+      await failLoginAsAgentA(1);
+    }, 120_000);
+
     it('resets the counter on a successful sign-in', async () => {
       await expect(
         asTenant(
@@ -628,7 +649,12 @@ describe('the session lifecycle, end to end', () => {
 
   /** Ten wrong passwords against the fixture agent, which is what locks them out. */
   async function lockOutAgentA(): Promise<void> {
-    for (let attempt = 0; attempt < AUTH_POLICY.loginFailureThreshold; attempt += 1) {
+    await failLoginAsAgentA(AUTH_POLICY.loginFailureThreshold);
+  }
+
+  /** `times` wrong passwords, each of which must be refused on its credentials. */
+  async function failLoginAsAgentA(times: number): Promise<void> {
+    for (let attempt = 0; attempt < times; attempt += 1) {
       await expect(
         asTenant(
           TENANT_A,
@@ -637,6 +663,23 @@ describe('the session lifecycle, end to end', () => {
         ),
       ).rejects.toBeInstanceOf(InvalidCredentialsError);
     }
+  }
+
+  /** Deletes login counters, which is what their TTL does fifteen minutes later. */
+  async function dropRedisCounters(kinds: string[], tenantIds: string[]): Promise<void> {
+    await redis.run('int-spec cleanup', async (client) => {
+      const patterns = kinds.flatMap((kind) =>
+        tenantIds.map((tenantId) => `wac:auth:${kind}:${tenantId}:*`),
+      );
+
+      const keys = (await Promise.all(patterns.map(async (pattern) => await client.keys(pattern))))
+        .flat()
+        .filter((key) => key.length > 0);
+
+      if (keys.length > 0) {
+        await client.del(...keys);
+      }
+    });
   }
 
   /** The single fixture session, read unscoped so the assertion sees revoked rows too. */

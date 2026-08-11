@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { AUTH_POLICY } from '@whatsappcrm/contracts';
 import { AuditService } from '../audit/audit.service';
-import type { Prisma } from '../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import type { AuthRedisClient } from './auth-redis.client';
 import { TooManyAttemptsError } from './identity.errors';
@@ -188,8 +188,12 @@ function buildHarness(options: { redisDown?: boolean; addressWindow?: boolean } 
   } as unknown as AuthRedisClient;
 
   const tx = {
-    $queryRaw: (strings: TemplateStringsArray): Promise<unknown[]> => {
-      statements.push(strings.join(' ? '));
+    $queryRaw: (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown[]> => {
+      // Flattened the way Prisma flattens it, so a nested `Prisma.sql` fragment
+      // is spliced into the statement rather than reduced to a placeholder. The
+      // windowing lives in one such fragment precisely so it cannot be written
+      // twice, and a reader of `strings` alone would not see it at all.
+      statements.push(new Prisma.Sql(strings, values).sql);
 
       const locked = attempts % AUTH_POLICY.loginFailureThreshold === 0;
 
@@ -421,10 +425,52 @@ describe('the per-account counter', () => {
 
     const [statement] = harness.statements;
 
-    expect(statement).toContain('failed_login_attempts = failed_login_attempts + 1');
+    expect(statement).toContain('ELSE users.failed_login_attempts + 1');
     // The lock decision is inside the same statement as the increment, so two
     // concurrent failures cannot both read "nine" and both write "ten".
     expect(statement).toContain('locked_until = CASE');
+  });
+
+  it('windows the count on the period the Redis counter expires after', async () => {
+    const harness = buildHarness();
+
+    await harness.throttle.recordFailure({
+      tenantId: TENANT_A,
+      userId: USER,
+      email: EMAIL,
+      ipAddress: ADDRESS,
+    });
+
+    const [statement] = harness.statements;
+
+    // A run of failures restarts at 1 once it is older than the lockout period,
+    // rather than accumulating until something writes a zero. The Redis counter
+    // forgets at exactly that moment because its key expires; a durable counter
+    // that never forgot would put the two out of step for anybody willing to
+    // pause, and the eleventh-attempt answer would separate a real address from
+    // one with no account again (TAR-154).
+    expect(statement).toContain('users.last_failed_login_at < now() - make_interval');
+    expect(statement).toContain('THEN 1');
+  });
+
+  it('decides the count and the lock from one copy of the window', async () => {
+    const harness = buildHarness();
+
+    await harness.throttle.recordFailure({
+      tenantId: TENANT_A,
+      userId: USER,
+      email: EMAIL,
+      ipAddress: ADDRESS,
+    });
+
+    const [statement] = harness.statements;
+    const windows = statement?.match(/users\.last_failed_login_at IS NULL/g) ?? [];
+
+    // Twice in the text, once in the source: the count and the lock read the
+    // same `Prisma.sql` fragment. Two hand-written copies would be the same
+    // defect one layer down — an edit to one of them and the account locks on
+    // an attempt its own counter does not agree happened.
+    expect(windows).toHaveLength(2);
   });
 
   it('audits the transition into lockout, and only the transition', async () => {
