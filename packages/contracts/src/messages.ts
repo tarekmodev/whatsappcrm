@@ -138,6 +138,24 @@ export const SendMediaInputSchema = z.object({
  * rather than variables: Meta renders the map from the values supplied at send
  * time, and the approved template fixes nothing about it.
  */
+/**
+ * The bounds `SendTemplateHeaderSchema` enforces, named so the composer can
+ * enforce them too.
+ *
+ * The console fills these fields, and it has to keep what it collects inside the
+ * schema before it submits — a file name taken from the agent's operating system
+ * is not something they typed, and bouncing a send for it would be a refusal
+ * about a value nobody chose. Read from here rather than restated there, so the
+ * two cannot drift.
+ */
+export const SEND_TEMPLATE_HEADER_LIMITS = {
+  fileNameMaxLength: 255,
+  latitudeLimit: 90,
+  longitudeLimit: 180,
+  locationNameMaxLength: 200,
+  locationAddressMaxLength: 500,
+} as const;
+
 export const SendTemplateHeaderSchema = z.discriminatedUnion('format', [
   z.object({
     format: z.literal('text'),
@@ -149,14 +167,20 @@ export const SendTemplateHeaderSchema = z.discriminatedUnion('format', [
     /** Id returned by `POST /api/v1/media`; the API re-hosts before sending. */
     mediaId: IdSchema,
     /** `document` only; what the recipient sees as the file name. */
-    fileName: z.string().min(1).max(255).optional(),
+    fileName: z.string().min(1).max(SEND_TEMPLATE_HEADER_LIMITS.fileNameMaxLength).optional(),
   }),
   z.object({
     format: z.literal('location'),
-    latitude: z.number().min(-90).max(90),
-    longitude: z.number().min(-180).max(180),
-    name: z.string().min(1).max(200).optional(),
-    address: z.string().min(1).max(500).optional(),
+    latitude: z
+      .number()
+      .min(-SEND_TEMPLATE_HEADER_LIMITS.latitudeLimit)
+      .max(SEND_TEMPLATE_HEADER_LIMITS.latitudeLimit),
+    longitude: z
+      .number()
+      .min(-SEND_TEMPLATE_HEADER_LIMITS.longitudeLimit)
+      .max(SEND_TEMPLATE_HEADER_LIMITS.longitudeLimit),
+    name: z.string().min(1).max(SEND_TEMPLATE_HEADER_LIMITS.locationNameMaxLength).optional(),
+    address: z.string().min(1).max(SEND_TEMPLATE_HEADER_LIMITS.locationAddressMaxLength).optional(),
   }),
 ]);
 

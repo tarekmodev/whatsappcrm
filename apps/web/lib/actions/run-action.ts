@@ -41,8 +41,17 @@ export interface RunActionOptions<Input, Output> {
   parser: InputParser<Input> | null;
   input: unknown;
   perform: (parsed: Input) => Promise<Output>;
-  /** Path re-rendered on success. Paths only; a query string is not a route. */
-  revalidate: string;
+  /**
+   * Path re-rendered on success. Paths only; a query string is not a route.
+   *
+   * `null` for an action that only *reads* — the composer's template picker
+   * fetches on open, from a client component with no server render of its own to
+   * hang the read off. It is still an action, and still wants the assert,
+   * validate and error-mapping sequence; it simply has nothing to invalidate,
+   * and revalidating the route it was called from would re-render the whole
+   * inbox behind an open dialog for no reason.
+   */
+  revalidate: string | null;
   /** Names the surface in the server log line for an unexpected failure. */
   label: string;
 }
@@ -70,7 +79,9 @@ export async function runAction<Input, Output>({
     const data = await perform(parsed.data);
 
     // These surfaces render on the server, so a mutation invalidates them.
-    revalidatePath(revalidate);
+    if (revalidate !== null) {
+      revalidatePath(revalidate);
+    }
 
     return { status: 'success', data };
   } catch (error) {
@@ -125,9 +136,22 @@ function toErrorResult<T>(error: unknown, label: string): ActionResult<T> {
   return { status: 'error', message: content.form.genericSubmitError, requestId: null };
 }
 
+/**
+ * Codes whose API message is shown to the user verbatim, because it names
+ * something they can do something about. Everything else gets the generic line —
+ * an internal message is not user-facing text.
+ *
+ * The two WhatsApp entries earn their place the same way: `whatsapp_window_expired`
+ * means "that thread has gone quiet for 24 hours, send a template instead" and
+ * `whatsapp_template_invalid` names the template or the variable that does not
+ * match what Meta approved. Flattened into "we could not save that", both would
+ * leave an agent re-pressing Send on a message that can never go.
+ */
 const ACTIONABLE_ERROR_CODES = new Set([
   'conflict',
   'validation_failed',
   'plan_limit_exceeded',
   'forbidden',
+  'whatsapp_window_expired',
+  'whatsapp_template_invalid',
 ]);

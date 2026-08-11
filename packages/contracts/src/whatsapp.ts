@@ -174,6 +174,39 @@ export const MessageTemplateResponseSchema = z.object({
   updatedAt: TimestampSchema,
 });
 
+/**
+ * A template's approved body with its positional placeholders filled in.
+ *
+ * Two callers have to agree on this and cannot be allowed to drift: the send
+ * path stores the result on the message row as `body`, so the thread shows what
+ * was actually sent, and the composer renders the same string as a preview
+ * *before* the send. A second implementation in the console would mean an agent
+ * approving one sentence and the customer receiving another.
+ *
+ * Neither is the source of truth. Meta renders the real thing from its own
+ * approved copy; this is a local reproduction, and if the two ever disagree,
+ * Meta's is what the customer saw.
+ *
+ * `null` when the template publishes no body text, which leaves the thread
+ * showing a template message with no preview rather than an invented one.
+ */
+export function renderTemplateBody(
+  bodyText: string | null,
+  variables: readonly string[],
+): string | null {
+  if (bodyText === null) {
+    return null;
+  }
+
+  // `{{1}}` is the first variable. A placeholder with no matching variable is
+  // left as it is rather than blanked: the send path's arity check has already
+  // made that unreachable, and silently swallowing the marker would hide a
+  // future regression in it.
+  return bodyText.replaceAll(/\{\{\s*(\d+)\s*\}\}/g, (marker, index: string) => {
+    return variables[Number(index) - 1] ?? marker;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Connecting a WABA — the admin surface (TAR-20a)
 // ---------------------------------------------------------------------------

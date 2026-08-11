@@ -161,6 +161,16 @@ export const MediaDownloadStateSchema = z.enum(MEDIA_DOWNLOAD_STATES);
 export type MediaDownloadState = (typeof MEDIA_DOWNLOAD_STATES)[number];
 
 /**
+ * The multipart field `POST /api/v1/media` reads the file from.
+ *
+ * Published rather than kept in the API, because it is half of a wire contract
+ * whose other half is the composer's `FormData`: a field name the two disagree
+ * on is an upload that arrives with no file at all, and the answer is a
+ * `validation_failed` naming a field nobody typed.
+ */
+export const MEDIA_UPLOAD_FIELD = 'file';
+
+/**
  * What `POST /api/v1/media` returns.
  *
  * Just the id: the caller already knows what it uploaded, and the row carries

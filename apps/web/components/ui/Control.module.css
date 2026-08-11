@@ -43,3 +43,44 @@
      native — a custom one is one more thing to get wrong in forced-colors mode. */
   padding-inline-end: var(--space-6);
 }
+
+.file {
+  /* The padding above is for typed text; a file input's own button sits inside
+     the box, so it needs less around it or the control grows past a control's
+     height for no reason. */
+  padding-block: var(--space-1);
+  line-height: var(--line-height-body);
+  cursor: pointer;
+}
+
+/*
+ * The browser's own "Choose file" button, styled to match the app's secondary
+ * button rather than replaced.
+ *
+ * Every alternative — a hidden input behind a real `<button>`, a drop zone with
+ * a click handler — loses something the native control has for free: the file
+ * name announced on change, the platform picker on mobile, and a label that
+ * activates it. `::file-selector-button` is the supported way to restyle it
+ * while keeping all three.
+ */
+.file::file-selector-button {
+  margin-inline-end: var(--space-3);
+  min-block-size: var(--size-control-sm);
+  padding-inline: var(--space-3);
+  background: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-on-surface);
+  font: inherit;
+  font-size: var(--font-size-body-sm);
+  cursor: pointer;
+}
+
+.file:disabled,
+.file:disabled::file-selector-button {
+  cursor: not-allowed;
+}
+
+.file:not(:disabled)::file-selector-button:hover {
+  background: var(--color-surface-hover);
+}

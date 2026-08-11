@@ -279,6 +279,120 @@ export const content = {
     unrenderableBody: 'This message cannot be shown here. Open WhatsApp to see it in full.',
   },
 
+  composer: {
+    // --- The service window -------------------------------------------------
+    /**
+     * WhatsApp's rule, said in the console's own words rather than Meta's.
+     * "24-hour window" is jargon an agent should not have to learn from a failed
+     * send, so both lines name the consequence first.
+     */
+    windowOpenLabel: 'Free replies close',
+    windowOpenNotice: 'You can reply freely until then. After that, only an approved template.',
+    windowClosedHeading: 'This conversation is outside the 24-hour window',
+    windowClosedBody:
+      'WhatsApp only accepts an approved template until the customer writes again. Send one below, and their reply reopens free messaging for another 24 hours.',
+    /** The moment it happens, with the agent's draft still on screen. */
+    windowJustClosedToast: 'The 24-hour window closed. Send an approved template instead.',
+
+    // --- Free-form ----------------------------------------------------------
+    replyLabel: 'Reply to the customer',
+    replyPlaceholder: 'Write a reply…',
+    replyHint: 'The customer receives this on WhatsApp.',
+    send: 'Send',
+    sendSuccess: 'Message sent',
+    /**
+     * One line per `FreeFormProblem`. The control's own `maxLength` stops the
+     * over-length case at the keystroke, so that line is a backstop rather than
+     * something an agent should normally meet.
+     */
+    problems: {
+      'body-required': 'Write a message or attach a file before sending.',
+      'body-too-long': 'That is longer than WhatsApp accepts. Shorten it and try again.',
+      'attachment-uploading': 'Wait for the file to finish uploading.',
+      'attachment-failed': 'Remove the file that could not be uploaded, or pick another.',
+    },
+    /**
+     * Said rather than left as a missing control. An agent without
+     * `conversation:send` can read a thread and reply to nothing in it, and a
+     * composer that simply was not there would read as a broken screen.
+     */
+    sendNotPermitted:
+      'Your role can read this conversation but not reply to it. Ask a workspace admin.',
+
+    // --- Attachments --------------------------------------------------------
+    attachLabel: 'Attach a file',
+    attachChange: 'Replace file',
+    attachRemove: 'Remove attachment',
+    attachRemoveAria: (fileName: string) => `Remove ${fileName}`,
+    attachUploading: (fileName: string) => `Uploading ${fileName}…`,
+    attachReady: (fileName: string) => `${fileName} ready to send`,
+    attachFailed: 'That file could not be uploaded. Try again, or pick another.',
+    attachUnsupportedError: 'WhatsApp does not accept that kind of file here.',
+    /** `kind` comes from `messageTypes`, so it arrives already capitalised. */
+    attachTooLargeError: (kind: string, value: string, unit: string) =>
+      `${kind} files can be up to ${value} ${unit} on WhatsApp. Pick a smaller one.`,
+    captionLabel: 'Caption',
+    captionHint: 'Sent with the file. Leave it empty to send the file on its own.',
+
+    // --- Templates ----------------------------------------------------------
+    useTemplate: 'Use a template',
+    templateTitle: 'Send an approved template',
+    templateDescription:
+      'Meta approves these in advance. Only approved templates can be sent outside the 24-hour window.',
+    templateSearchLabel: 'Search templates',
+    templateSearchPlaceholder: 'Template name',
+    templateLoading: 'Loading templates',
+    templateEmptyHeading: 'No templates to send',
+    templateEmptyBody:
+      'This number has no approved template yet. A workspace admin submits them to Meta for approval.',
+    /**
+     * Not "you have none". The endpoint drops templates whose buttons take a
+     * parameter after reading each page, so a tenant with hundreds of them can
+     * have several empty pages before a sendable one — and telling them they
+     * have no templates would be false.
+     */
+    templateDeepPageHeading: 'No sendable template in the first few pages',
+    templateDeepPageBody:
+      'This number has a lot of approved templates and the ones you can send from here are further in. Search by name to jump to one.',
+    templateNoMatchHeading: 'No template matches that name',
+    templateNoMatchBody: 'Templates are matched on the start of their name. Try fewer characters.',
+    templateMoreNotice: 'More templates are available — narrow the search to find one by name.',
+    templateChoose: 'Choose',
+    templateChooseAria: (name: string) => `Choose the ${name} template`,
+    templateBack: 'Pick another template',
+    /** Meta's own language tag, e.g. `en_US`. Shown because a name is unique only within one. */
+    templateLanguage: (language: string) => `Language ${language}`,
+    templateNoPreview: 'This template has no text body.',
+    templatePreviewHeading: 'What the customer receives',
+    templateSend: 'Send template',
+    templateSendSuccess: (name: string) => `Template ${name} sent`,
+
+    // --- Filling a template -------------------------------------------------
+    templateVariableLabel: (position: number) => `Value ${String(position)}`,
+    templateHeaderVariableLabel: (position: number) => `Heading value ${String(position)}`,
+    templateHeaderMediaLabel: (format: string) => `Header ${format}`,
+    templateHeaderMediaHint:
+      'This template was approved with a header, so one has to be supplied with every send.',
+    templateLatitudeLabel: 'Latitude',
+    templateLongitudeLabel: 'Longitude',
+    templatePlaceNameLabel: 'Place name',
+    templatePlaceAddressLabel: 'Address',
+    /**
+     * One line per `TemplateDraftProblem`. The Send button stays available and
+     * the reason sits beside it, rather than a disabled button that explains
+     * nothing — a disabled control is the hardest kind of thing to debug from
+     * the other side of a support call.
+     */
+    templateProblems: {
+      'body-variables': 'Fill in every value before sending.',
+      'header-variables': 'Fill in every heading value before sending.',
+      'header-media': 'Attach the header file before sending.',
+      'header-media-uploading': 'Wait for the header file to finish uploading.',
+      'header-media-failed': 'The header file could not be uploaded. Remove it and pick another.',
+      'header-coordinates': 'Enter a latitude and a longitude before sending.',
+    },
+  },
+
   notes: {
     heading: 'Internal notes',
     /** Repeated at the composer, because "the customer never sees this" is the

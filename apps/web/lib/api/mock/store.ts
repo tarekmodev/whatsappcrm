@@ -4,11 +4,13 @@ import {
   MOCK_CONVERSATIONS,
   MOCK_INTERNAL_NOTES,
   MOCK_MESSAGES,
+  MOCK_MESSAGE_TEMPLATES,
   MOCK_TEAMS,
   MOCK_USERS,
   type MockConversation,
   type MockInternalNote,
   type MockMessage,
+  type MockMessageTemplate,
   type MockTeam,
   type MockUser,
 } from '@/lib/api/mock/fixtures';
@@ -29,6 +31,17 @@ interface MockState {
   conversations: Map<string, MockConversation>;
   messages: Map<string, MockMessage>;
   internalNotes: Map<string, MockInternalNote>;
+  messageTemplates: Map<string, MockMessageTemplate>;
+  /**
+   * `Idempotency-Key` → the request it was spent on, and what it produced.
+   *
+   * The composer's whole double-send guard rests on the API remembering this, so
+   * the mock transport remembers it too — a fixture layer that happily sent
+   * twice would let the one bug this feature exists to prevent through review.
+   * The serialised payload is kept alongside because the real endpoint replays
+   * only an *identical* request and refuses a key reused with a different body.
+   */
+  sentByIdempotencyKey: Map<string, { payload: string; message: MockMessage }>;
   /** Monotonic counter for fabricated ids — never `Math.random()`, which would break resume. */
   nextId: number;
 }
@@ -53,6 +66,8 @@ function seed(): MockState {
     ),
     messages: new Map(MOCK_MESSAGES.map((message) => [message.id, message])),
     internalNotes: new Map(MOCK_INTERNAL_NOTES.map((note) => [note.id, note])),
+    messageTemplates: new Map(MOCK_MESSAGE_TEMPLATES.map((item) => [item.id, item])),
+    sentByIdempotencyKey: new Map(),
     nextId: 1,
   };
 }

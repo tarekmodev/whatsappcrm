@@ -142,6 +142,54 @@ change.
 
 ### Added
 
+- **The inbox can reply: a composer that knows which of WhatsApp's two send modes it is in**
+  (TAR-72) — the thread gains a reply box, and the interesting part is that there are two of
+  them behind one control. Inside Meta's 24-hour customer service window an agent writes what
+  they like; outside it WhatsApp accepts only a template the business had approved, so the
+  free-form control goes inert — **disabled, not removed**, because removing it would throw
+  away a half-typed draft and leave nobody to explain why — and the template picker becomes
+  the way through. `features/inbox/service-window.ts` mirrors the API's own rule rather than
+  inventing one: `null` means closed, the boundary is exclusive, and no duration lives on this
+  side. The state is computed on the server and handed down as `initialWindow`, so the first
+  client render matches the markup that arrived, and `useServiceWindow` then schedules a timer
+  for the moment it shuts — which is the whole point: the window used to be discovered by
+  pressing Send and reading `whatsapp_window_expired`, and now the composer switches under the
+  agent's hands with the draft still on screen and a toast saying so. The countdown re-phrases
+  on a timer through `Intl.RelativeTimeFormat`, so a banner left open on a second monitor is
+  not quietly an hour stale.
+
+  **A send cannot be recalled, so the double-send guard is the feature.** Every send carries
+  an `Idempotency-Key`, and `useIdempotencyKey` mints it **per payload and retires it the
+  moment a send lands** — two rules, because the API enforces two things: an identical body
+  under the same key replays the original message, and a _different_ body under it is refused
+  as `idempotency_key_reused`. Per payload alone is wrong in a way that costs a message. The
+  draft clears on success, but the _next_ identical reply hashes the same, so `ok` twice in a
+  row would spend a key that had already delivered, replay the first send's 201, and reach
+  nobody — while the console said "Message sent" and cleared the box. Keys live 24 hours, and
+  short repeated replies are ordinary support traffic. A key held constant would block an agent
+  fixing a typo and retrying; a key minted per click would let a double-click through as two
+  messages. Keying on the draft and dropping it on delivery covers all four: a double-click and
+  a retry after a network drop deduplicate, an edit gets a fresh key, and so does a repeat.
+
+  Template filling is decided before the send, not after it: `template-draft.ts` checks arity
+  and the header rule 0002 amendment 1 states — a header exactly when the template publishes
+  one, formats agreeing — so the Send button never reaches a `whatsapp_template_invalid` a
+  person cannot act on. All four header formats are supported, with a media header reusing the
+  same attach control the free-form box uses, narrowed to the one kind Meta approved. The
+  preview goes through the contract's `renderTemplateBody`, now published from
+  `packages/contracts` and re-exported by the API's validator rather than implemented twice —
+  a console promising one sentence while the customer receives another is the one thing a
+  record of a conversation must never do. Media uploads leave from the browser to the
+  same-origin `/api` proxy instead of through a server action, because WhatsApp's document
+  ceiling is 100 MB and buffering that in the console's memory would move bytes that are going
+  to the API anyway; the file is checked against the contract's `WHATSAPP_MEDIA_LIMITS` before
+  the upload is spent, and spent on pick rather than on send, so Send stays a small JSON call.
+  The picker is behind `next/dynamic` and confirmed to be its own chunk. `run-action.ts` now
+  treats `whatsapp_window_expired` and `whatsapp_template_invalid` as actionable, so their
+  messages reach the agent instead of being flattened into "we could not save that", and the
+  mock transport gained the send route — idempotency replay, key reuse and the closed window
+  included — so the guard can be exercised in review rather than assumed.
+
 - **A ruled visual design language, and a console frame to match**
   (TAR-202) — `docs/design/0001-visual-design-language.md` records what the design tokens
   equal and what the recurring layouts are, the same way 0002 records the API contract. The

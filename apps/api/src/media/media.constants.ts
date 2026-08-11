@@ -22,5 +22,12 @@ export const MEDIA_QUEUE = 'media';
 /** Download one inbound attachment's bytes from Meta, named by attachment id. */
 export const DOWNLOAD_INBOUND_MEDIA_JOB = 'media.download-inbound';
 
-/** The multipart field `POST /api/v1/media` reads the file from. */
-export const MEDIA_UPLOAD_FIELD = 'file';
+/**
+ * The multipart field `POST /api/v1/media` reads the file from.
+ *
+ * Re-exported rather than declared: the composer (TAR-20g) builds the other half
+ * of this multipart body, so the name moved to `packages/contracts` where both
+ * sides read one copy. Kept on this module's surface so the media pipeline's
+ * existing call sites still name the file that owns its wire values.
+ */
+export { MEDIA_UPLOAD_FIELD } from '@whatsappcrm/contracts';

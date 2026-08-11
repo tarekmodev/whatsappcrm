@@ -1,4 +1,8 @@
-import { InternalNoteCreateInputSchema } from '@whatsappcrm/contracts';
+import {
+  InternalNoteCreateInputSchema,
+  SendMediaInputSchema,
+  SendTextInputSchema,
+} from '@whatsappcrm/contracts';
 
 /**
  * Page sizes, skeleton counts and contract-derived bounds for the shared inbox
@@ -34,9 +38,36 @@ export const NOTE_BODY_MAX_LENGTH = requireBound(
   'InternalNoteCreateInputSchema.body.maxLength',
 );
 
+/**
+ * The two send bounds, read off the contract for the same reason: WhatsApp caps
+ * a text message and a media caption at different lengths, and a composer that
+ * guessed either would let a reply through to a refusal the agent cannot act on.
+ */
+export const MESSAGE_BODY_MAX_LENGTH = requireBound(
+  SendTextInputSchema.shape.body.maxLength,
+  'SendTextInputSchema.body.maxLength',
+);
+
+export const MEDIA_CAPTION_MAX_LENGTH = requireBound(
+  SendMediaInputSchema.shape.caption.unwrap().maxLength,
+  'SendMediaInputSchema.caption.maxLength',
+);
+
+/**
+ * How many templates the picker opens with, and how many rows stand in for them.
+ *
+ * The page size is the contract's ceiling: an agent scans this list for a name
+ * they already know, and paging through approved templates twenty-five at a time
+ * to find `order_update` is worse than one slightly larger read. The skeleton
+ * count is smaller — it stands in for what is about to be on screen, not for
+ * what the request returns.
+ */
+export const TEMPLATE_PAGE_SIZE = 100;
+export const TEMPLATE_SKELETON_COUNT = 4;
+
 function requireBound(value: number | null, name: string): number {
   if (value === null) {
-    throw new Error(`The contract no longer publishes ${name}; the note form cannot validate.`);
+    throw new Error(`The contract no longer publishes ${name}; the composer cannot validate.`);
   }
 
   return value;

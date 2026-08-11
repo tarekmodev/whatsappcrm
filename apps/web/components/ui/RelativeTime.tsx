@@ -17,17 +17,41 @@ import styles from './RelativeTime.module.css';
 export function RelativeTime({
   isoTimestamp,
   label,
+  refreshMs,
 }: {
   /** ISO 8601 with offset, exactly as the contract transports timestamps. */
   isoTimestamp: string;
   /** Accessible prefix, so the figure is not a bare number to a screen reader. */
   label: string;
+  /**
+   * Re-phrase on this interval while mounted. Omitted, the value is computed
+   * once after mount and left alone — right for a sent-at stamp, which only
+   * drifts while somebody stares at it.
+   *
+   * Set it where the passage of time is the point rather than a detail: the
+   * composer's service-window countdown is a deadline an agent is working
+   * against, and one that silently said "in 20 minutes" for an hour would be
+   * worse than no countdown at all.
+   */
+  refreshMs?: number;
 }) {
   const [relative, setRelative] = useState<string | null>(null);
 
   useEffect(() => {
     setRelative(formatRelative(isoTimestamp));
-  }, [isoTimestamp]);
+
+    if (refreshMs === undefined) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setRelative(formatRelative(isoTimestamp));
+    }, refreshMs);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [isoTimestamp, refreshMs]);
 
   return (
     <time className={styles.time} dateTime={isoTimestamp} title={`${label}: ${isoTimestamp}`}>

@@ -1,0 +1,55 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* Scrolls inside the dialog rather than growing it: the search box above and
+     the dialog's own actions must stay reachable however many templates a
+     tenant has approved. */
+  max-block-size: var(--size-scroll-region);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.row {
+  padding: var(--space-3);
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-md);
+}
+
+.name {
+  font-weight: var(--font-weight-medium);
+  /* Template names are machine-ish (`order_update_v2`) and do not break on
+     spaces, so they are told they may break anywhere. */
+  overflow-wrap: anywhere;
+}
+
+.language {
+  font-size: var(--font-size-caption);
+  color: var(--color-on-surface-muted);
+}
+
+.body {
+  font-size: var(--font-size-body-sm);
+  /* The approved copy, newlines and all. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.previewHeading {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.preview {
+  padding: var(--space-3);
+  /* The accent surface the outbound bubble uses, so the preview reads as the
+     message it is about to become rather than as another form field. */
+  background: var(--color-accent-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-on-accent-subtle);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

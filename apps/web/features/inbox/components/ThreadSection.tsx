@@ -5,7 +5,9 @@ import { verifySession } from '@/lib/session/session';
 import { loadConversationThread } from '@/features/inbox/thread.data';
 import { nameFor } from '@/features/inbox/directory.data';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { serviceWindowAt } from '@/features/inbox/service-window';
 import { InternalNotesPanel, InternalNotesPanelSkeleton } from './InternalNotesPanel';
+import { MessageComposer, MessageComposerSkeleton } from './MessageComposer';
 import { MessageList, MessageListSkeleton } from './MessageList';
 import { ThreadHeader, ThreadHeaderSkeleton, type ThreadQuery } from './ThreadHeader';
 
@@ -54,6 +56,16 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
             senderNames={userNames}
             hasOlderMessages={hasOlderMessages}
           />
+          {/* The window is evaluated here, on the server, and handed down as the
+              composer's starting point — so the first client render produces the
+              markup that was sent and the countdown does not hydrate into a
+              mismatch. The composer owns it from there. */}
+          <MessageComposer
+            conversationId={conversation.id}
+            serviceWindowExpiresAt={conversation.serviceWindowExpiresAt}
+            initialWindow={serviceWindowAt(conversation.serviceWindowExpiresAt, new Date())}
+            canSend={session.checker.can('conversation:send')}
+          />
         </Stack>
       </SectionCard>
 
@@ -96,6 +108,7 @@ export function ThreadSectionSkeleton({ query }: { query: ThreadQuery }) {
         <Stack gap="4">
           <ThreadHeaderSkeleton query={query} />
           <MessageListSkeleton />
+          <MessageComposerSkeleton />
         </Stack>
       </SectionCard>
 

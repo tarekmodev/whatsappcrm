@@ -109,29 +109,10 @@ function assertHeaderMatches(
 }
 
 /**
- * The template's approved body with its positional placeholders filled in.
- *
- * Stored on the message row as `body` so the thread shows what was actually
- * sent. Meta renders the real thing from its own approved copy — this is a
- * local reproduction for the inbox, and it is deliberately *not* the source of
- * truth: if the two ever disagree, Meta's is what the customer saw.
- *
- * `null` when the template publishes no body text, which leaves the thread
- * showing a template message with no preview rather than an invented one.
+ * Re-exported, not implemented here: the composer (TAR-20g) previews the same
+ * string before the send that this path stores on the row after it, so the
+ * renderer moved to `packages/contracts` where both can read one copy. Kept on
+ * this module's surface so the send path's existing call sites and tests still
+ * name the file that owns template sending.
  */
-export function renderTemplateBody(
-  bodyText: string | null,
-  variables: readonly string[],
-): string | null {
-  if (bodyText === null) {
-    return null;
-  }
-
-  // `{{1}}` is the first variable. A placeholder with no matching variable is
-  // left as it is rather than blanked: the arity check above has already made
-  // that unreachable, and silently swallowing the marker would hide a future
-  // regression in it.
-  return bodyText.replaceAll(/\{\{\s*(\d+)\s*\}\}/g, (marker, index: string) => {
-    return variables[Number(index) - 1] ?? marker;
-  });
-}
+export { renderTemplateBody } from '@whatsappcrm/contracts';

@@ -966,6 +966,53 @@ Three things about the connection are deliberate and easy to undo by accident:
 
 The socket is disabled under `NEXT_PUBLIC_USE_MOCK_API`, which has no server behind it.
 
+### Sending a message: the composer
+
+`features/inbox/components/MessageComposer.tsx` sits at the foot of the thread and has two
+modes, because WhatsApp does. Inside Meta's 24-hour customer service window an agent writes
+what they like; outside it, only a template the business had approved in advance. Four
+things about it are load-bearing.
+
+**`null` is a closed window, not an unknown one.** `features/inbox/service-window.ts` mirrors
+the API's `isServiceWindowOpen` exactly — a `null` `serviceWindowExpiresAt` and an expiry in
+the past mean the same thing, and the boundary is exclusive. Two clocks that disagreed would
+mean a console offering a send the API refuses.
+
+**The window is a prop _and_ a hook.** `ThreadSection` evaluates it on the server and passes
+`initialWindow` down, so the first client render matches the markup that arrived; deciding it
+during render from `Date.now()` is a hydration mismatch. `useServiceWindow` then owns it and
+schedules a timer for the exact moment it shuts, so an agent part-way through a reply sees the
+composer switch — with the draft intact — rather than discovering it by pressing Send. A
+toast fires on that edge only.
+
+**Every send carries an `Idempotency-Key`, keyed on the draft and retired on success.** The
+API replays an identical request under the same key and refuses a _different_ body under it as
+`idempotency_key_reused`, so `useIdempotencyKey` mints one per payload: a double-click and a
+retry after a network drop share a key and deduplicate, while an edited draft gets a fresh one.
+A key that never changed would block somebody fixing a typo; a key minted per click would send
+twice.
+
+The `retire()` on success is the other half, and it is not optional. The draft clears when a
+send lands, but the _next_ identical reply hashes to the same signature — so without it, `ok`
+twice in a row reuses a key that already delivered, the API replays the first send's 201, and
+the customer receives nothing while the console shows "Message sent". Keys live 24 hours.
+Every caller clears the ledger on success; nothing clears it on failure, because retrying the
+same draft onto the same key is exactly what idempotency is for.
+
+**Media uploads leave from the browser, not from a server action.** `lib/api/media-browser.ts`
+posts multipart to the same-origin `/api` proxy. Everything else in `lib/api` runs on the Next
+process — this cannot, because WhatsApp's document ceiling is 100 MB and a server action
+buffers its body in the console's memory to move bytes that are going to the API anyway. The
+file is checked against the contract's `WHATSAPP_MEDIA_LIMITS` _before_ the upload, and the
+upload happens on pick rather than on send, so Send stays a small JSON call.
+
+Template filling lives in `features/inbox/template-draft.ts`. It decides arity and headers
+before the send, so the Send button never reaches a `whatsapp_template_invalid`, and it renders
+the preview through the contract's own `renderTemplateBody` — the same function the API stores
+on the message row, so the sentence an agent approves is the sentence the record shows. The
+picker itself is behind `next/dynamic`: most replies are free-form, and a tenant's approved
+template set has no business in the inbox's initial JavaScript.
+
 ### Route groups: signed in and signed out
 
 `app/` holds two route groups, and neither changes a URL — `/inbox` is still `/inbox`.
