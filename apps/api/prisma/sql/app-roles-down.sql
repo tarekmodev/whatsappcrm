@@ -21,8 +21,29 @@
 -- The `system_unrestricted` policies go first and explicitly: dropping a role
 -- referenced by a policy's `TO` clause fails, and the message names the policy
 -- rather than the table, which is a needlessly puzzling way to find out.
+--
+-- The `EXECUTE` grant on `assert_tenant_active` goes back to `PUBLIC` for a
+-- different reason. `DROP OWNED BY` removes what was granted *to* these roles,
+-- but not the `REVOKE ... FROM PUBLIC` that app-roles.sql pairs it with — so
+-- without this the function would be left executable by nobody but the owner,
+-- which is not the state this file claims to restore.
 
 \set ON_ERROR_STOP on
+
+\echo '== app roles: restoring the default grant on assert_tenant_active =='
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = 'assert_tenant_active'
+    ) THEN
+        GRANT EXECUTE ON FUNCTION "public"."assert_tenant_active"(text) TO PUBLIC;
+    END IF;
+END
+$$;
 
 \echo '== app roles: dropping system_unrestricted policies =='
 

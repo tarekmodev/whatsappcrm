@@ -16,7 +16,9 @@
 -- of a fail-closed policy. Point this at a local or disposable database. Every
 -- row it touches carries a `tar48-fixture` marker and a fixed id, and the
 -- script deletes those rows before it starts as well as after it finishes, so
--- an interrupted run cleans up on the next one.
+-- an interrupted run cleans up on the next one. Phase 1 also creates and drops
+-- one empty probe table, `tar95_default_privilege_probe`, inside a single
+-- transaction — it never outlives the statement that makes it, even on failure.
 --
 -- Reconnecting (`\connect -`) inherits psql's current connection parameters. On
 -- the local Docker stack that is a Unix socket and needs no password; over TCP,
@@ -32,8 +34,11 @@
 --   Structure   Every table carrying `tenant_id` has RLS enabled AND forced AND
 --               a `tenant_isolation` policy. Every table the app role can touch
 --               is either protected or on a two-entry read-only allowlist. The
---               app role holds neither SUPERUSER nor BYPASSRLS.
---   Behaviour   On a connection that has never set the GUC, all 33 protected
+--               app role holds neither SUPERUSER nor BYPASSRLS. A table created
+--               *after* `app-roles.sql` last ran is reachable by the system
+--               role and by nobody else — the grant waits for the policy
+--               instead of arriving ahead of it (TAR-95).
+--   Behaviour   On a connection that has never set the GUC, all 34 protected
 --               tables return zero rows. With the GUC set, each tenant sees its
 --               own rows and none of the other's. Writing another tenant's
 --               `tenant_id` is rejected; updating and deleting its rows match
@@ -204,6 +209,71 @@ BEGIN
 END
 $$;
 
+DO $$
+DECLARE
+    probe constant text := 'tar95_default_privilege_probe';
+    priv text;
+    app_granted text[] := '{}';
+    system_missing text[] := '{}';
+BEGIN
+    -- 1e. The default privileges themselves (TAR-95). Everything above reads
+    -- the tables that exist; this one asks what happens to the *next* table,
+    -- which is where the dangerous mistake lives — a migration that adds a
+    -- tenant-scoped table and forgets its RLS block. The grant must not arrive
+    -- ahead of the policy, so a table `app-roles.sql` has not seen must be
+    -- unreachable by the app role rather than wide open to it.
+    --
+    -- Created for real rather than read out of `pg_default_acl`: default
+    -- privileges are per creating role, and the ACL a new table actually ends
+    -- up with is the composition of that entry with the built-in default.
+    -- Creating one and asking is the only form of this check that cannot be
+    -- fooled by reasoning about the catalog incorrectly.
+    --
+    -- No cleanup branch: a DO block is one transaction and DDL is transactional
+    -- in PostgreSQL, so the probe table disappears on the RAISE below exactly
+    -- as it does on the DROP.
+    EXECUTE format(
+        'CREATE TABLE "public".%I ("id" uuid PRIMARY KEY, "tenant_id" uuid NOT NULL)',
+        probe
+    );
+
+    FOREACH priv IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
+        IF has_table_privilege('whatsappcrm_app', format('"public".%I', probe), priv) THEN
+            app_granted := app_granted || priv;
+        END IF;
+    END LOOP;
+
+    -- The other half, and the reason this is not simply "revoke everything":
+    -- SystemPrisma still has to reach a new table on the day it is created.
+    -- Losing that is a fail-closed outage rather than a leak, but it is an
+    -- outage, and it would be invisible until something queried the new table.
+    FOREACH priv IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE'] LOOP
+        IF NOT has_table_privilege('whatsappcrm_system', format('"public".%I', probe), priv) THEN
+            system_missing := system_missing || priv;
+        END IF;
+    END LOOP;
+
+    EXECUTE format('DROP TABLE "public".%I', probe);
+
+    IF array_length(app_granted, 1) > 0 THEN
+        RAISE EXCEPTION
+            E'a brand-new table is already reachable by whatsappcrm_app (%) — default privileges are fail-OPEN\n'
+            '  a migration that forgets its tenant_isolation block would ship a table every tenant can read\n'
+            '  fix: the ALTER DEFAULT PRIVILEGES block in app-roles.sql must not grant ON TABLES to the app role',
+            array_to_string(app_granted, ', ');
+    END IF;
+
+    IF array_length(system_missing, 1) > 0 THEN
+        RAISE EXCEPTION
+            E'a brand-new table is not reachable by whatsappcrm_system (missing %)\n'
+            '  re-run app-roles.sql; if that does not fix it, its ALTER DEFAULT PRIVILEGES block is wrong',
+            array_to_string(system_missing, ', ');
+    END IF;
+
+    RAISE NOTICE 'ok: a new table is unreachable by the app role until app-roles.sql grants it, and reachable by the system role';
+END
+$$;
+
 -- ---------------------------------------------------------------------------
 -- Phase 2 — the two-tenant fixture.
 --
@@ -228,6 +298,7 @@ DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
@@ -235,6 +306,7 @@ DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_b';
 
 DELETE FROM "public"."tenants" WHERE "id" IN (:'tenant_a', :'tenant_b');
@@ -248,8 +320,12 @@ SET LOCAL app.tenant_id = :'tenant_a';
 
 INSERT INTO "public"."users" ("id", "tenant_id", "email", "name", "updated_at")
     VALUES ('11111111-1111-7111-8111-1111111111a1', :'tenant_a', 'agent@tar48-fixture-a.test', 'Fixture A agent', now());
-INSERT INTO "public"."whatsapp_accounts" ("id", "tenant_id", "phone_number_id", "waba_id", "display_phone_number", "updated_at")
-    VALUES ('11111111-1111-7111-8111-1111111111a2', :'tenant_a', 'tar48-fixture-a-phone', 'tar48-fixture-a-waba', '+10000000001', now());
+-- The WABA comes before the number it owns (TAR-52): `whatsapp_accounts` is now
+-- its child, and the composite FK is checked at insert.
+INSERT INTO "public"."whatsapp_business_accounts" ("id", "tenant_id", "waba_id", "updated_at")
+    VALUES ('11111111-1111-7111-8111-1111111111a0', :'tenant_a', 'tar48-fixture-a-waba', now());
+INSERT INTO "public"."whatsapp_accounts" ("id", "tenant_id", "whatsapp_business_account_id", "phone_number_id", "display_phone_number", "updated_at")
+    VALUES ('11111111-1111-7111-8111-1111111111a2', :'tenant_a', '11111111-1111-7111-8111-1111111111a0', 'tar48-fixture-a-phone', '+10000000001', now());
 INSERT INTO "public"."contacts" ("id", "tenant_id", "phone_e164", "display_name", "updated_at")
     VALUES ('11111111-1111-7111-8111-1111111111a3', :'tenant_a', '+10000000011', 'Fixture A contact', now());
 INSERT INTO "public"."conversations" ("id", "tenant_id", "whatsapp_account_id", "contact_id", "updated_at")
@@ -263,8 +339,10 @@ SET LOCAL app.tenant_id = :'tenant_b';
 
 INSERT INTO "public"."users" ("id", "tenant_id", "email", "name", "updated_at")
     VALUES ('22222222-2222-7222-8222-2222222222b1', :'tenant_b', 'agent@tar48-fixture-b.test', 'Fixture B agent', now());
-INSERT INTO "public"."whatsapp_accounts" ("id", "tenant_id", "phone_number_id", "waba_id", "display_phone_number", "updated_at")
-    VALUES ('22222222-2222-7222-8222-2222222222b2', :'tenant_b', 'tar48-fixture-b-phone', 'tar48-fixture-b-waba', '+10000000002', now());
+INSERT INTO "public"."whatsapp_business_accounts" ("id", "tenant_id", "waba_id", "updated_at")
+    VALUES ('22222222-2222-7222-8222-2222222222b0', :'tenant_b', 'tar48-fixture-b-waba', now());
+INSERT INTO "public"."whatsapp_accounts" ("id", "tenant_id", "whatsapp_business_account_id", "phone_number_id", "display_phone_number", "updated_at")
+    VALUES ('22222222-2222-7222-8222-2222222222b2', :'tenant_b', '22222222-2222-7222-8222-2222222222b0', 'tar48-fixture-b-phone', '+10000000002', now());
 INSERT INTO "public"."contacts" ("id", "tenant_id", "phone_e164", "display_name", "updated_at")
     VALUES ('22222222-2222-7222-8222-2222222222b3', :'tenant_b', '+10000000012', 'Fixture B contact', now());
 INSERT INTO "public"."conversations" ("id", "tenant_id", "whatsapp_account_id", "contact_id", "updated_at")
@@ -276,7 +354,7 @@ INSERT INTO "public"."messages" ("id", "tenant_id", "conversation_id", "directio
 
 COMMIT;
 
-\echo 'fixture committed: 2 tenants, 5 rows each'
+\echo 'fixture committed: 2 tenants, 6 rows each'
 
 -- ---------------------------------------------------------------------------
 -- Phase 3 — behaviour, on a connection that has never set the GUC.
@@ -366,7 +444,7 @@ BEGIN
     SELECT count(*) INTO n FROM "public"."messages" WHERE "tenant_id" = tenant_b;
     IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of messages returned % rows', n; END IF;
 
-    RAISE NOTICE 'ok: tenant A sees its own 5 rows and none of tenant B''s';
+    RAISE NOTICE 'ok: tenant A sees its own 6 rows and none of tenant B''s';
 
     -- 3c. Tenant B, symmetrically. Same connection, same role — only the GUC
     -- changed, which is exactly what the client extension will do per request.
@@ -459,6 +537,7 @@ DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
@@ -466,6 +545,7 @@ DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_b';
 
 DELETE FROM "public"."tenants" WHERE "id" IN (:'tenant_a', :'tenant_b');

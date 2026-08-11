@@ -15,6 +15,31 @@ export const TICKET_STATUSES = ['open', 'pending', 'resolved', 'closed'] as cons
 export const TicketStatusSchema = z.enum(TICKET_STATUSES);
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 
+/**
+ * Which statuses count as *live work on this contact* — the invariant TAR-73
+ * makes a database constraint: at most one active ticket per contact per tenant.
+ *
+ * `pending` is active, and that is the whole subtlety. A ticket waiting on the
+ * customer is still the open thread for that customer; when they finally reply,
+ * the reply belongs to it, not to a second ticket opened beside it. Restricting
+ * the invariant to `open` alone would let every `pending` conversation grow a
+ * duplicate on the customer's next message.
+ *
+ * `resolved` and `closed` are terminal for this purpose: a contact who writes
+ * back after resolution gets a new ticket. There is no reopen window at v1 —
+ * see the ADR for the trigger to revisit that.
+ */
+export const TICKET_STATUS_IS_ACTIVE: Record<TicketStatus, boolean> = {
+  open: true,
+  pending: true,
+  resolved: false,
+  closed: false,
+};
+
+export const TICKET_ACTIVE_STATUSES = TICKET_STATUSES.filter(
+  (status) => TICKET_STATUS_IS_ACTIVE[status],
+);
+
 export const TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 export const TicketPrioritySchema = z.enum(TICKET_PRIORITIES);
 
@@ -46,9 +71,24 @@ export const TicketResponseSchema = z.object({
   id: IdSchema,
   /** Per-tenant sequential number — what agents and customers actually quote. */
   number: z.int().positive(),
-  conversationId: IdSchema,
-  contactId: IdSchema,
-  subject: z.string().min(1).max(200),
+  /**
+   * The conversation the ticket was opened from. Nullable to match the column:
+   * TAR-25 creates tickets by hand with no conversation behind them.
+   *
+   * For a tenant running several WhatsApp numbers this is the *originating*
+   * conversation, not necessarily the one the latest message landed on — the
+   * invariant is one active ticket per contact, and a contact can hold one
+   * conversation per number. A message arriving on a different conversation
+   * appends a `conversation_linked` event rather than moving this field.
+   */
+  conversationId: IdSchema.nullable(),
+  contactId: IdSchema.nullable(),
+  /**
+   * Null on an auto-created ticket (TAR-21): the first inbound message is as
+   * likely to be an image or a sticker as a sentence, so there is nothing
+   * honest to derive a subject from. Clients fall back to the contact's name.
+   */
+  subject: z.string().min(1).max(200).nullable(),
   status: TicketStatusSchema,
   priority: TicketPrioritySchema,
   assignedUserId: IdSchema.nullable(),
@@ -95,6 +135,14 @@ export const TicketAssignInputSchema = z
  */
 export const TICKET_EVENT_TYPES = [
   'created',
+  /**
+   * A message arrived on a conversation other than the one this ticket was
+   * opened from — only reachable when a tenant runs more than one WhatsApp
+   * number for the same contact (TAR-73). Recorded rather than acted on, so
+   * that if the one-active-ticket-per-contact assumption turns out to be wrong
+   * for real tenants, the evidence is already in the log.
+   */
+  'conversation_linked',
   'status_changed',
   'priority_changed',
   'assigned',

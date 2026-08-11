@@ -1,14 +1,21 @@
 import { resolve } from 'node:path';
 import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import { AuditModule } from './audit/audit.module';
 import { TenantContextMiddleware } from './common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
-import { RedisModule } from './infra/redis/redis.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { RequestLoggingMiddleware } from './observability/request-logging.middleware';
+import { PeopleModule } from './people/people.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { QueueModule } from './queue/queue.module';
+import { RbacModule } from './rbac/rbac.module';
+import { TenancyModule } from './tenancy/tenancy.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
 /**
  * One `.env` for the whole repository, at the root — the same file
@@ -33,11 +40,21 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
       // not a test, and the readiness specs assert the unconfigured case.
       ignoreEnvFile: process.env.NODE_ENV === 'test',
     }),
+    // The in-process bus TAR-39 chose for same-request fan-out where loss is
+    // acceptable — the realtime relay is its first consumer. Anything that must
+    // survive a restart goes on BullMQ instead, through `QueueModule`.
+    EventEmitterModule.forRoot(),
     TenantContextModule,
     ObservabilityModule,
     PrismaModule,
-    RedisModule,
+    QueueModule,
+    AuditModule,
+    RbacModule,
     HealthModule,
+    TenancyModule,
+    PeopleModule,
+    WhatsAppModule,
+    WebhooksModule,
   ],
 })
 export class AppModule implements NestModule {

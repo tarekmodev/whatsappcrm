@@ -1,9 +1,16 @@
-import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Res, VERSION_NEUTRAL } from '@nestjs/common';
 import type { HealthResponse } from '@whatsappcrm/contracts';
 import type { Response } from 'express';
 import { HealthService } from './health.service';
 
-@Controller('health')
+/**
+ * `VERSION_NEUTRAL` keeps these on `/api/health` now that URI versioning is
+ * enabled (TAR-39: "`/api/health` stays unversioned"). The uptime monitor, the
+ * container `HEALTHCHECK` and Render's own health check all point at a fixed
+ * path, and moving them to `/api/v1/health` on the next API version would
+ * silently break all three.
+ */
+@Controller({ path: 'health', version: VERSION_NEUTRAL })
 export class HealthController {
   constructor(private readonly health: HealthService) {}
 

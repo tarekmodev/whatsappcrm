@@ -5,9 +5,17 @@ import type { Logger } from 'pino';
 import { describeFailure } from '../common/describe-failure';
 import { withTimeout } from '../common/with-timeout';
 import type { Env } from '../config/env.schema';
-import { RedisService } from '../infra/redis/redis.service';
 import { AppLoggerService } from '../observability/app-logger.service';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
+import { QueueService } from '../queue/queue.service';
+
+/** Carries the queue's own explanation into the shared probe error handling. */
+class QueueUnreachableError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = detail;
+  }
+}
 
 @Injectable()
 export class HealthService {
@@ -16,7 +24,7 @@ export class HealthService {
 
   constructor(
     private readonly config: ConfigService<Env, true>,
-    private readonly redis: RedisService,
+    private readonly queue: QueueService,
     logger: AppLoggerService,
     @Inject(SYSTEM_PRISMA) private readonly prisma: SystemPrisma,
   ) {
@@ -42,7 +50,7 @@ export class HealthService {
    * roughly one probe's time even when a dependency is hanging.
    */
   async readiness(): Promise<HealthResponse> {
-    const [database, queue] = await Promise.all([this.probeDatabase(), this.redis.ping()]);
+    const [database, queue] = await Promise.all([this.probeDatabase(), this.probeQueue()]);
     const checks = { database, queue };
 
     return this.envelope(aggregate(checks), checks);
@@ -60,15 +68,38 @@ export class HealthService {
    * table and returns no row.
    */
   private async probeDatabase(): Promise<HealthCheck> {
+    return this.probe('database', async () => {
+      await this.prisma.$queryRaw`SELECT 1`;
+    });
+  }
+
+  /**
+   * Goes through `QueueService`, which owns the only Redis connections.
+   *
+   * Bounded like the database probe, and for a sharper reason: BullMQ's producer
+   * connection sets `maxRetriesPerRequest: null` so a worker's blocking commands
+   * are not aborted, which leaves ioredis buffering commands in its offline queue
+   * while Redis is unreachable rather than failing them. Without a timeout here a
+   * Redis outage does not make readiness say `down` — it makes readiness hang,
+   * which reads to a monitor as a dead instance and to an engineer as nothing at
+   * all.
+   */
+  private async probeQueue(): Promise<HealthCheck> {
+    return this.probe('queue', async () => {
+      const { reachable, detail } = await this.queue.checkHealth();
+
+      if (!reachable) {
+        throw new QueueUnreachableError(detail ?? 'unreachable');
+      }
+    });
+  }
+
+  private async probe(name: string, run: () => Promise<void>): Promise<HealthCheck> {
     try {
-      await withTimeout(
-        this.prisma.$queryRaw`SELECT 1`,
-        this.healthCheckTimeoutMs,
-        'database ping',
-      );
+      await withTimeout(run(), this.healthCheckTimeoutMs, `${name} ping`);
       return { status: 'ok' };
     } catch (error) {
-      this.log.warn({ reason: describeFailure(error) }, 'database probe failed');
+      this.log.warn({ reason: describeFailure(error) }, `${name} probe failed`);
       return { status: 'down', detail: describeFailure(error) };
     }
   }

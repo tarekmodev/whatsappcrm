@@ -20,11 +20,18 @@ export * from './rbac';
 export * from './tenant';
 export * from './users';
 
+// --- Platform administration ------------------------------------------------
+export * from './admin';
+
 // --- CRM, inbox and helpdesk ------------------------------------------------
 export * from './contacts';
 export * from './conversations';
 export * from './messages';
 export * from './tickets';
+export * from './ticket-linking';
+
+// --- WhatsApp channel -------------------------------------------------------
+export * from './whatsapp';
 
 // --- Channel ingestion ------------------------------------------------------
 export * from './webhooks';

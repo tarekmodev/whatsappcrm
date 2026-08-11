@@ -10,9 +10,16 @@ import { configureApp } from './bootstrap';
 import type { Env } from './config/env.schema';
 
 async function bootstrap(): Promise<void> {
-  // Buffered until `configureApp` installs the real logger, so boot-time output is
-  // structured too rather than arriving as Nest's default console format.
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // `rawBody` keeps the exact bytes of each request alongside the parsed body.
+  // Meta signs the raw payload, and a body that was parsed and re-serialised
+  // does not reproduce it — so without this the WhatsApp webhook rejects every
+  // genuine delivery, and the failure reads as a wrong app secret rather than as
+  // a missing option (TAR-39, signature check). `apps/api/src/webhooks` is the
+  // only reader; the cost is one retained buffer per request.
+  //
+  // `bufferLogs` holds boot output until `configureApp` installs the real logger,
+  // so it is structured too rather than arriving in Nest's default console format.
+  const app = await NestFactory.create(AppModule, { rawBody: true, bufferLogs: true });
 
   configureApp(app);
 
