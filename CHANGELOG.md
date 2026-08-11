@@ -159,10 +159,11 @@ change.
   is a separate entity and no send path can reach one) but it is invisible to the person
   typing. Claiming is three states, not two: the shared pool gets a **Claim**, a thread you
   hold gets a **Release**, and one a colleague holds gets **Take over** behind a
-  confirmation that names them and says plainly that they are not told — because the API
-  writes the assignment unconditionally (no compare-and-set until TAR-186) and emits nothing
-  to the previous holder, so presenting a takeover as a claim quietly moved work off the
-  person doing it. Outbound authorship reads `MessageResponse.sentByAutomation` rather than
+  confirmation that names them and says what it costs them — because the API writes the
+  assignment unconditionally (no compare-and-set until TAR-186), so presenting a takeover as
+  a claim quietly moved work off the person doing it. TAR-198 now puts the hand-over on that
+  person's socket, so their inbox follows it; what the confirmation says is that nothing
+  _interrupts_ them, and they may be part-way through a reply. Outbound authorship reads `MessageResponse.sentByAutomation` rather than
   a failed name lookup, so an agent whose name falls outside the directory's single page is
   "sent by a teammate" and never "sent automatically" — misattributing a colleague's words
   to a bot is a lie about the one thing this product is a record of. Realtime is TAR-69's

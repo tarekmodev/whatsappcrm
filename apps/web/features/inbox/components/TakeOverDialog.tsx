@@ -16,10 +16,12 @@ import { claimConversationAction } from '@/features/inbox/inbox.actions';
  * offered as an undo, and the confirmation names the person and states exactly
  * what happens, rather than asking "are you sure?".
  *
- * It says the previous holder is not told, because they are not: the API emits
- * no `conversation.updated` today (TAR-198 adds it), so their tab keeps the
- * thread on screen. Telling the person doing the taking is the only way that
- * fact reaches anybody.
+ * Since TAR-198 the hand-over reaches that person's inbox live — the relay
+ * addresses `conversation.updated` to the previous audience as well as the new
+ * one, precisely so the agent who just lost a thread finds out. What still does
+ * not exist is a notification: nothing interrupts them, and they may be part-way
+ * through a reply. The copy says that rather than the older, blunter "they are
+ * not told", which stopped being true when the emit landed.
  */
 export function TakeOverDialog({
   conversationId,

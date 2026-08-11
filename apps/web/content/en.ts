@@ -202,8 +202,15 @@ export const content = {
     takeOverAria: (contact: string, holder: string) =>
       `Take over the conversation with ${contact} from ${holder}`,
     takeOverTitle: 'Take this conversation over?',
+    /**
+     * Accurate as of TAR-198: the assignment now reaches the previous holder's
+     * inbox live, so the thread stops being theirs on their screen. What still
+     * does not happen is a *notification* — nothing interrupts them to say so,
+     * and they may be mid-reply. Hence the instruction, which is the part that
+     * survived the event landing.
+     */
     takeOverBody: (contact: string, holder: string) =>
-      `${holder} is handling ${contact} right now. Taking it over assigns it to you — they keep the thread on screen and are not told, so tell them yourself.`,
+      `${holder} is handling ${contact} right now. Taking it over assigns it to you and their inbox updates straight away — but nothing interrupts them to say so, and they may be part-way through a reply. Tell them yourself.`,
     takeOverConfirm: 'Take over',
     takeOverSuccess: (contact: string, holder: string) =>
       `You are handling ${contact}, taken over from ${holder}`,

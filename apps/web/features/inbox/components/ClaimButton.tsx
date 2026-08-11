@@ -23,9 +23,9 @@ import { LazyTakeOverDialog } from './inbox-dialogs.lazy';
  *   * **mine** — "Release". Reversible in one click, so no confirmation: a modal
  *     for a reversible action is friction, not safety.
  *   * **theirs** — "Take over", behind a confirmation that names the colleague
- *     and says plainly that they are not told. It is the same write as a claim,
- *     because the API has no compare-and-set until TAR-186 — which is exactly
- *     why the UI must not present it as the same act.
+ *     and says what it costs them. It is the same write as a claim, because the
+ *     API has no compare-and-set until TAR-186 — which is exactly why the UI
+ *     must not present it as the same act.
  *
  * Rendered only for a principal holding `conversation:assign`. That check is the
  * caller's, and the action asserts it again: a server action is a public
