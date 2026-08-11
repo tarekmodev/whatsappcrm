@@ -7,6 +7,7 @@ import { TenantContextMiddleware } from './common/tenant-context/tenant-context.
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
+import { IdentityModule } from './identity/identity.module';
 import { MediaModule } from './media/media.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { RequestLoggingMiddleware } from './observability/request-logging.middleware';
@@ -51,6 +52,11 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     PrismaModule,
     QueueModule,
     AuditModule,
+    // Before `RbacModule`, which binds `PRINCIPAL_SOURCE` to the session source
+    // this module provides. Both are global and neither imports the other, so
+    // the order here is a readability choice rather than a requirement — but it
+    // is the order the request pipeline resolves them in.
+    IdentityModule,
     RbacModule,
     HealthModule,
     TenancyModule,

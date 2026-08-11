@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { AUDIT_ACTIONS, type SessionRevocationReason } from '../audit/audit.actions';
 import { AuditService } from '../audit/audit.service';
 import type { Prisma } from '../generated/prisma/client';
+import { SessionService } from '../identity/session.service';
 
 /**
  * Logs a user out, in the same transaction as the change that demands it
@@ -15,32 +16,52 @@ import type { Prisma } from '../generated/prisma/client';
  * actually true.
  *
  * Applies to any write that changes what a principal may do: `users.role`,
- * `users.status`, and team membership. The cost is one extra `DELETE` on an
+ * `users.status`, and team membership. The cost is one extra statement on an
  * operation that happens a few times a month per tenant. What it buys is that a
- * demoted supervisor is *logged out*, not eventually downgraded — and, as a
- * side effect, that the console's navigation (computed from the principal at
- * render time) cannot keep showing controls the user no longer has.
+ * demoted supervisor is *logged out*, not eventually downgraded — and that an
+ * admin suspending an agent ends that agent's access at the commit rather than
+ * at their next expiry, which is TAR-56's fifth acceptance criterion.
  *
  * `permissions` on the principal is what makes this the only invalidation path
  * worth reasoning about: it is materialised once at resolution, so killing the
- * session is the whole story. There is no second cache.
+ * session is the whole story.
  *
- * ⚠️ TAR-35 must extend this to evict the Redis principal cache it introduces,
- * in this same transaction. Deleting the row is sufficient today only because
- * that cache does not exist yet.
+ * ## Two halves, and why the caller owns the second
+ *
+ * `revokeFor` runs inside the caller's transaction: it purges the principal
+ * cache, then writes `revoked_at`. Between those two moments an in-flight
+ * request can miss the cache, read the still-unrevoked row and write it back —
+ * so the cache has to be purged **again** once the transaction commits, and
+ * only the caller knows when that happened. That second call is
+ * `purgeCacheFor`, and it is safe to make unconditionally.
  */
 @Injectable()
 export class SessionRevocationService {
-  constructor(private readonly audit: AuditService) {}
+  constructor(
+    private readonly audit: AuditService,
+    private readonly sessions: SessionService,
+  ) {}
 
   /**
-   * Deletes every session the target holds, and records why. Returns how many
+   * Revokes every session the target holds, and records why. Returns how many
    * were killed, which is what a caller logs — zero is normal and means the
    * user was not signed in anywhere.
+   *
+   * A soft revoke (`revoked_at`, `revoked_reason`) rather than a delete, which
+   * is a change from the first version of this file: the row is what lets the
+   * trail say *why* every session for one person died at 14:03, and what lets
+   * the person's own device list stop showing a session that is gone. Every
+   * read path filters `revoked_at IS NULL`, so a revoked row grants nothing.
    *
    * `tenantId` is passed explicitly rather than read from the request scope
    * because this runs inside `$tenantTransaction`, whose client is the
    * un-extended one: the row filter has to be written, not inherited.
+   *
+   * **Calling `purgeCacheFor` once the transaction commits is mandatory, not
+   * advisory.** This method on its own leaves a window in which a concurrent
+   * request repopulates the principal cache from the row it is about to revoke,
+   * so a caller that skips the second half keeps a revoked session answering for
+   * up to `sessionCacheTtlMs`. It has already been forgotten once.
    */
   async revokeFor(
     tx: Prisma.TransactionClient,
@@ -48,7 +69,7 @@ export class SessionRevocationService {
     userId: string,
     reason: SessionRevocationReason,
   ): Promise<number> {
-    const { count } = await tx.session.deleteMany({ where: { tenantId, userId } });
+    const count = await this.sessions.revokeAllForUser(tx, tenantId, userId, reason);
 
     if (count === 0) {
       // Nothing was revoked, so there is nothing to record. An audit row per
@@ -65,5 +86,19 @@ export class SessionRevocationService {
     });
 
     return count;
+  }
+
+  /**
+   * The after-commit half of a revocation. Call it once the transaction that
+   * contained `revokeFor` has resolved.
+   *
+   * Unconditional by design: a purge that was not needed costs one Postgres
+   * read on somebody's next request, while a purge that was needed and skipped
+   * leaves a revoked session answering for up to a minute. Calling it after a
+   * transaction that revoked nothing — or that rolled back — is harmless for
+   * the same reason.
+   */
+  async purgeCacheFor(tenantId: string, userId: string): Promise<void> {
+    await this.sessions.purgeCacheFor(tenantId, userId);
   }
 }

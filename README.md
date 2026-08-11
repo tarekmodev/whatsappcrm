@@ -418,13 +418,15 @@ writes them again. It touches nothing else, so a scratch tenant of your own surv
 without `--force`, and prints the host and database it is about to write to before it
 writes anything.
 
-**It carries no credentials.** `users.password_hash` is null on every row — TAR-35 owns
-login — so there is nothing to sign in with yet. Until then, set `AUTH_STUB_ENABLED=true`
-and `NEXT_PUBLIC_ENABLE_ROLE_STUB=true` and the console resolves a real seeded user with
-the role in the switcher, in the tenant the hostname resolves to. The per-WABA WhatsApp
-access token is a placeholder encrypted at rest with the local key: enough for the
-connection to read as connected, and rejected by Meta the moment anything tries to send
-with it, which is the intended behaviour for a local stack.
+**It carries no credentials.** `POST /api/v1/auth/login` exists (TAR-56), but
+`users.password_hash` is null on every seeded row, and a user with no password can never
+sign in — so there is still nothing to sign in _with_. Setting one is invite acceptance's
+job (TAR-55). Until that lands, set `AUTH_STUB_ENABLED=true` and
+`NEXT_PUBLIC_ENABLE_ROLE_STUB=true` and the console resolves a real seeded user with the
+role in the switcher, in the tenant the hostname resolves to. The per-WABA WhatsApp access
+token is a placeholder encrypted at rest with the local key: enough for the connection to
+read as connected, and rejected by Meta the moment anything tries to send with it, which
+is the intended behaviour for a local stack.
 
 `apps/api/src/seed/demo-dataset.ts` is the data; `seed.ts` is the mechanism. Editing the
 dataset into a shape the database would reject is caught by `pnpm test` — the seed itself

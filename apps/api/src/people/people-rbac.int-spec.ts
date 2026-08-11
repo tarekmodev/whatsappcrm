@@ -327,7 +327,16 @@ describe('agent, team and role management API', () => {
       expect(userOf(response).status).toBe('suspended');
       // ADR 0002's promise that a role or status change takes effect
       // immediately — which the cached principal would otherwise have broken.
-      expect(await systemPrisma.session.count({ where: { userId: AGENT_A } })).toBe(0);
+      //
+      // A revoked row rather than a deleted one since TAR-56: every read path
+      // filters `revoked_at IS NULL`, so it grants nothing, and keeping it is
+      // what lets the trail say *why* the session died.
+      expect(await liveSessionCount(AGENT_A)).toBe(0);
+      expect(
+        await systemPrisma.session.count({
+          where: { userId: AGENT_A, revokedReason: 'status_change' },
+        }),
+      ).toBe(1);
     });
 
     it('refuses to let a supervisor assign a role — delta 1', async () => {
@@ -606,7 +615,7 @@ describe('agent, team and role management API', () => {
       expect(teamOf(response).memberUserIds).toEqual([SUPERVISOR_A]);
       // The removed member keeps the team's visibility until their session
       // dies, so the session has to die with the membership.
-      expect(await systemPrisma.session.count({ where: { userId: AGENT_A } })).toBe(0);
+      expect(await liveSessionCount(AGENT_A)).toBe(0);
     });
 
     it('lets every role read the team list, because agents see routing labels', async () => {
@@ -617,6 +626,17 @@ describe('agent, team and role management API', () => {
       }
     });
   });
+
+  /**
+   * Sessions the user could still authenticate with.
+   *
+   * Revocation is a soft one since TAR-56 — `revoked_at` plus a reason, so the
+   * audit trail can say why — and every read path filters on it. Counting rows
+   * would therefore be counting history, not access.
+   */
+  async function liveSessionCount(userId: string): Promise<number> {
+    return await systemPrisma.session.count({ where: { userId, revokedAt: null } });
+  }
 });
 
 /** Loaded from the repository-root `.env` by `jest.int.setup.cjs`. */

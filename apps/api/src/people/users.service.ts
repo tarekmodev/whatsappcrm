@@ -262,7 +262,7 @@ export class UsersService {
       this.assertMayChangeRole(userId, input.role, principal);
     }
 
-    return this.prisma.$tenantTransaction(async (tx) => {
+    const response = await this.prisma.$tenantTransaction(async (tx) => {
       const before = await tx.user.findUnique({
         where: { id: userId },
         select: { id: true, role: true, status: true, name: true },
@@ -307,6 +307,13 @@ export class UsersService {
           : { ...after, teamMemberships: input.teamIds.map((teamId) => ({ teamId })) },
       );
     });
+
+    // The second cache purge, after the commit. See `SessionRevocationService`
+    // for why one before the write is not enough, and why this is unconditional
+    // rather than gated on whether anything was actually revoked.
+    await this.sessions.purgeCacheFor(tenantId, userId);
+
+    return response;
   }
 
   /**
@@ -405,6 +412,8 @@ export class UsersService {
 
       await this.sessions.revokeFor(tx, tenantId, userId, 'removed');
     });
+
+    await this.sessions.purgeCacheFor(tenantId, userId);
 
     this.logger.log(`Removed user ${userId}`);
   }

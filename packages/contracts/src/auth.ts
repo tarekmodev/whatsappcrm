@@ -94,6 +94,29 @@ export const AUTH_POLICY = {
   /** Mirrors `PasswordSchema`, restated so one object governs every auth number. */
   passwordMinLength: 12,
   passwordMaxLength: 256,
+
+  /**
+   * argon2id, at OWASP's documented minimum configuration: 19 MiB of memory,
+   * two passes, no parallelism. Memory-hard rather than merely slow, which is
+   * what makes a GPU farm no cheaper per guess than the machine that hashed it.
+   *
+   * They live here rather than in the API's config for the reason the whole
+   * object does — TAR-63 asserts against them, and a threshold the tests read
+   * from a different source than the code enforces is a threshold nobody is
+   * actually checking.
+   *
+   * Raising any of them is a **free upgrade**: the hash is stored as a PHC
+   * string, so its own parameters travel with it, and a verify that succeeds
+   * against weaker parameters is re-hashed in place on the next login. Lowering
+   * one is not free and needs a reason.
+   *
+   * ⚠️ Unmeasured (TAR-53, open question 1). The target is 100–250 ms per
+   * verify on the deployed instance size; raise `passwordHashMemoryKib` first,
+   * because memory is the axis an attacker cannot buy their way around.
+   */
+  passwordHashMemoryKib: 19_456,
+  passwordHashTimeCost: 2,
+  passwordHashParallelism: 1,
 } as const;
 
 export type AuthPolicy = typeof AUTH_POLICY;
@@ -277,6 +300,19 @@ export const SessionSummarySchema = z.object({
 export const SessionListResponseSchema = z.array(SessionSummarySchema);
 
 /**
+ * `DELETE /api/v1/auth/sessions/{id}` — the id of one of the caller's own
+ * sessions.
+ *
+ * Only ever their own: the handler scopes the delete to the calling principal,
+ * so an id belonging to a colleague answers `not_found` rather than revoking
+ * it. Signing somebody else out is an administrative action, and it happens
+ * through their status.
+ */
+export const SessionParamsSchema = z.object({
+  id: IdSchema,
+});
+
+/**
  * The transactional-email seam.
  *
  * Invites and password resets are undeliverable without one, and no provider has
@@ -340,4 +376,5 @@ export type InviteLookupInput = z.infer<typeof InviteLookupInputSchema>;
 export type InvitePreviewResponse = z.infer<typeof InvitePreviewResponseSchema>;
 export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 export type SessionListResponse = z.infer<typeof SessionListResponseSchema>;
+export type SessionParams = z.infer<typeof SessionParamsSchema>;
 export type RealtimeTicketResponse = z.infer<typeof RealtimeTicketResponseSchema>;

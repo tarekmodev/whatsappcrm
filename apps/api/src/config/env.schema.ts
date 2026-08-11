@@ -106,6 +106,25 @@ const envShape = z.object({
   AUTH_STUB_ENABLED: z.enum(['true', 'false']).default('false'),
 
   // ---------------------------------------------------------------------------
+  // Sessions (TAR-35 / TAR-56)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Whether the session cookie carries `Secure` and the `__Host-` prefix.
+   *
+   * `true` everywhere real. `false` exists for one reason: Safari does not treat
+   * plain-HTTP `localhost` as a secure context, so a `__Host-` cookie cannot be
+   * set there at all and local development would be unable to log in. The
+   * refinement below refuses to boot with it off under `NODE_ENV=production` —
+   * a session cookie without `Secure` is one a network attacker reads.
+   *
+   * The name is a function of this flag (`sessionCookieName` in the contract),
+   * so the API, the Next.js proxy and the tests cannot disagree about which of
+   * the two spellings is in play.
+   */
+  SESSION_COOKIE_SECURE: z.stringbool().default(true),
+
+  // ---------------------------------------------------------------------------
   // WhatsApp webhook ingestion (TAR-20)
   //
   // One Meta app serves every tenant, so both secrets below are platform-level
@@ -298,6 +317,19 @@ export const envSchema = envShape.superRefine((env, ctx) => {
       code: 'custom',
       path: ['REDIS_URL'],
       message: 'is required when NODE_ENV=production',
+    });
+  }
+
+  // A session cookie without `Secure` travels in clear text over any plain-HTTP
+  // hop, and the `__Host-` prefix it also drops is what stops a sibling tenant
+  // subdomain shadowing it. Neither is optional outside a developer's machine.
+  if (!env.SESSION_COOKIE_SECURE && env.NODE_ENV === 'production') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['SESSION_COOKIE_SECURE'],
+      message:
+        'must not be disabled when NODE_ENV=production — it drops both the Secure flag and the ' +
+        '__Host- cookie prefix. It exists only so Safari can set a cookie on plain-HTTP localhost.',
     });
   }
 

@@ -68,7 +68,7 @@ export class TeamsService {
   async create(input: TeamCreateInput): Promise<TeamResponse> {
     const tenantId = this.tenantContext.requireTenantId();
 
-    return this.prisma.$tenantTransaction(async (tx) => {
+    const team = await this.prisma.$tenantTransaction(async (tx) => {
       await assertUsersExist(tx, tenantId, input.memberUserIds);
 
       const created = await tx.team
@@ -110,6 +110,10 @@ export class TeamsService {
 
       return toTeamResponse(team);
     });
+
+    await this.purgeCachesFor(tenantId, input.memberUserIds);
+
+    return team;
   }
 
   /**
@@ -125,7 +129,7 @@ export class TeamsService {
   async update(teamId: string, input: TeamUpdateInput): Promise<TeamResponse> {
     const tenantId = this.tenantContext.requireTenantId();
 
-    return this.prisma.$tenantTransaction(async (tx) => {
+    const { team, affectedUserIds } = await this.prisma.$tenantTransaction(async (tx) => {
       const before = await tx.team.findUnique({
         where: { id: teamId },
         select: { id: true, name: true, members: { select: { userId: true } } },
@@ -171,18 +175,26 @@ export class TeamsService {
         },
       });
 
-      if (membership !== null) {
-        // Both directions: a new member gains a scope they did not have, and a
-        // removed one keeps it until their session dies.
-        await this.revokeFor(tx, tenantId, [...membership.added, ...membership.removed]);
-      }
+      // Both directions: a new member gains a scope they did not have, and a
+      // removed one keeps it until their session dies.
+      const affectedUserIds =
+        membership === null ? [] : [...membership.added, ...membership.removed];
 
-      return toTeamResponse(
-        membership === null
-          ? team
-          : { ...team, members: input.memberUserIds?.map((userId) => ({ userId })) ?? [] },
-      );
+      await this.revokeFor(tx, tenantId, affectedUserIds);
+
+      return {
+        team: toTeamResponse(
+          membership === null
+            ? team
+            : { ...team, members: input.memberUserIds?.map((userId) => ({ userId })) ?? [] },
+        ),
+        affectedUserIds,
+      };
     });
+
+    await this.purgeCachesFor(tenantId, affectedUserIds);
+
+    return team;
   }
 
   private async revokeFor(
@@ -192,6 +204,19 @@ export class TeamsService {
   ): Promise<void> {
     for (const userId of userIds) {
       await this.sessions.revokeFor(tx, tenantId, userId, 'teams_change');
+    }
+  }
+
+  /**
+   * The after-commit half of the revocation above, and the reason it is a
+   * separate pass rather than one more statement inside the transaction: the
+   * in-transaction purge only clears what was cached *before* the write, and a
+   * concurrent request from the same user can repopulate the entry from the
+   * still-unrevoked row before the commit lands. See `SessionRevocationService`.
+   */
+  private async purgeCachesFor(tenantId: string, userIds: readonly string[]): Promise<void> {
+    for (const userId of userIds) {
+      await this.sessions.purgeCacheFor(tenantId, userId);
     }
   }
 }

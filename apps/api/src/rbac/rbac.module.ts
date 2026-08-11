@@ -1,6 +1,7 @@
 import { Global, Logger, Module, type Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AUTH_STUB_ON } from '../config/env.schema';
+import { SessionPrincipalSource } from '../identity/session-principal.source';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { PermissionGuard } from './permission.guard';
 import { PrincipalGuard } from './principal.guard';
@@ -18,44 +19,42 @@ import { StubPrincipalSource } from './stub-principal.source';
  * the guards is — but the providers being reachable from anywhere removes one
  * way to get that wrong.
  *
- * ## The one binding that changes when TAR-35 lands
+ * ## The one binding
  *
- * `PRINCIPAL_SOURCE` is the seam. Today it can only be `StubPrincipalSource`,
- * and only when `AUTH_STUB_ENABLED=true`; TAR-35 adds `SessionPrincipalSource`
- * and binds it here. Nothing downstream of `PrincipalGuard` knows or cares which
- * is bound, so the swap is this factory plus deleting the stub file.
+ * `PRINCIPAL_SOURCE` is the seam, and TAR-56 filled it: the default is now
+ * `SessionPrincipalSource`, which reads the session cookie against the tenant
+ * the request host resolved. Nothing downstream of `PrincipalGuard` knows or
+ * cares which implementation is bound — the guards, the permission matrix and
+ * the visibility predicate run identically either way, which is exactly what
+ * TAR-22 stubbed *the source* rather than the guard to achieve.
+ *
+ * `AUTH_STUB_ENABLED=true` still swaps in the interim stub, and still refuses
+ * to boot under `NODE_ENV=production`. It survives because TAR-82's console
+ * drives it from the same switch; removing both halves is TAR-62's, once the
+ * console signs in for real.
  */
 const principalSourceProvider: Provider = {
   provide: PRINCIPAL_SOURCE,
-  inject: [ConfigService, TENANT_PRISMA],
-  useFactory: (config: ConfigService, prisma: TenantPrisma): PrincipalSource => {
+  inject: [ConfigService, TENANT_PRISMA, SessionPrincipalSource],
+  useFactory: (
+    config: ConfigService,
+    prisma: TenantPrisma,
+    sessions: SessionPrincipalSource,
+  ): PrincipalSource => {
     const logger = new Logger(RbacModule.name);
-    const configured = config.get<string>('AUTH_STUB_ENABLED');
 
-    if (configured === AUTH_STUB_ON) {
+    if (config.get<string>('AUTH_STUB_ENABLED') === AUTH_STUB_ON) {
       // Loud on purpose. Which source is bound decides who every request is
       // attributed to, and an operator reading a startup log should never have
       // to infer it from a 401.
       logger.warn(
-        'Callers are being resolved by the INTERIM ROLE STUB (AUTH_STUB_ENABLED=true). ' +
-          'Development and tests only — remove when TAR-35 lands.',
+        'Callers are being resolved by the INTERIM ROLE STUB (AUTH_STUB_ENABLED=true), ' +
+          'not by their session cookie. Development and tests only.',
       );
       return new StubPrincipalSource(prisma);
     }
 
-    logger.log(
-      `No principal source is bound (AUTH_STUB_ENABLED=${configured ?? 'unset'}); ` +
-        'every authenticated route answers 401 until TAR-35 provides sessions.',
-    );
-
-    // No session source exists yet, so the honest binding is one that
-    // authenticates nobody. Every route behind `PrincipalGuard` answers 401
-    // until TAR-35 lands or the stub is switched on deliberately — which is the
-    // correct failure for an environment with no way to sign in, and is very
-    // different from a source that fabricates a caller.
-    return {
-      resolve: () => Promise.resolve(null),
-    };
+    return sessions;
   },
 };
 
