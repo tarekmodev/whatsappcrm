@@ -34,6 +34,8 @@ interface Recorded {
   userUpdates: Record<string, unknown>[];
   audits: string[];
   revocations: { userId: string; reason: string; keptSessionId?: string }[];
+  /** The after-commit cache purges — the other half of "revoked immediately". */
+  purges: string[];
   emails: OutboundEmail[];
 }
 
@@ -49,7 +51,13 @@ async function build(storedPassword: string | null): Promise<{
   const passwords = new PasswordService();
   const passwordHash = storedPassword === null ? null : await passwords.hash(storedPassword);
 
-  const recorded: Recorded = { userUpdates: [], audits: [], revocations: [], emails: [] };
+  const recorded: Recorded = {
+    userUpdates: [],
+    audits: [],
+    revocations: [],
+    purges: [],
+    emails: [],
+  };
 
   const tx = {
     user: {
@@ -84,6 +92,10 @@ async function build(storedPassword: string | null): Promise<{
     ) => {
       recorded.revocations.push({ userId, reason, keptSessionId });
       return Promise.resolve(3);
+    },
+    purgeCacheFor: (_tenantId: string, userId: string) => {
+      recorded.purges.push(userId);
+      return Promise.resolve();
     },
   } as unknown as SessionRevocationService;
 
@@ -129,6 +141,9 @@ describe('PasswordChangeService', () => {
     expect(recorded.revocations).toEqual([
       { userId: USER, reason: 'password_change', keptSessionId: SESSION },
     ]);
+    // Without this the other devices keep answering from Redis for up to a
+    // minute after a change made precisely to lock them out.
+    expect(recorded.purges).toEqual([USER]);
   });
 
   it('audits the change and notifies the account holder', async () => {

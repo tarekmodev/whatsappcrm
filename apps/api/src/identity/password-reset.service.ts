@@ -29,7 +29,12 @@ const THROTTLE_WINDOW_MS = 60 * 60 * 1000;
 type Redemption =
   | { readonly outcome: 'not-redeemable' }
   | { readonly outcome: 'owner-inactive' }
-  | { readonly outcome: 'reset'; readonly email: string; readonly sessionsRevoked: number };
+  | {
+      readonly outcome: 'reset';
+      readonly userId: string;
+      readonly email: string;
+      readonly sessionsRevoked: number;
+    };
 
 /**
  * Forgotten-password recovery (TAR-57): request a link, redeem it once.
@@ -222,7 +227,7 @@ export class PasswordResetService {
 
       const sessionsRevoked = await this.sessions.revokeFor(tx, tenantId, userId, 'password_reset');
 
-      return { outcome: 'reset', email: user.email, sessionsRevoked };
+      return { outcome: 'reset', userId, email: user.email, sessionsRevoked };
     });
 
     if (redemption.outcome === 'not-redeemable') {
@@ -232,6 +237,15 @@ export class PasswordResetService {
     if (redemption.outcome === 'owner-inactive') {
       throw new ResetTokenInvalidError('revoked');
     }
+
+    // The after-commit half of the revocation, which `SessionRevocationService`
+    // documents as mandatory rather than advisory. `revokeFor` purges the cache
+    // *before* it writes `revoked_at`, so between those two moments an in-flight
+    // request can miss, read the still-live row and write it back — and a
+    // session this reset just killed would keep answering for up to
+    // `sessionCacheTtlMs`. That window is the whole thing a reset exists to
+    // close: the person resetting is often not the person holding the others.
+    await this.sessions.purgeCacheFor(tenantId, redemption.userId);
 
     this.logger.log(`Password reset completed; ${redemption.sessionsRevoked} session(s) revoked.`);
 

@@ -91,6 +91,14 @@ export class PasswordChangeService {
       );
     });
 
+    // The after-commit half of the revocation, as above. It evicts the caller's
+    // own cache entry too, which is correct and cheap: their session row was
+    // deliberately spared, so their next request re-reads it from Postgres and
+    // carries on. Leaving the *other* devices cached is the failure that
+    // matters — a password change made after a suspected compromise would keep
+    // the attacker signed in for another `sessionCacheTtlMs`.
+    await this.sessions.purgeCacheFor(tenantId, principal.userId);
+
     this.logger.log(`Password changed; ${sessionsRevoked} other session(s) revoked.`);
 
     try {
