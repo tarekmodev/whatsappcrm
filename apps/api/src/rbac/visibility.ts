@@ -115,10 +115,21 @@ export function visibilityFilter(
   principal: SessionPrincipal,
   readAll: Permission,
 ): VisibilityFilter | null {
-  if (principal.permissions.includes(readAll)) {
-    return null;
-  }
+  return principal.permissions.includes(readAll) ? null : assignedFilter(principal);
+}
 
+/**
+ * "Assigned to me, or to a team I am in" — the same two branches, **without**
+ * the `_all` short-circuit.
+ *
+ * Separated out because the two callers want different things from the same
+ * predicate. A *visibility* question is answered `null` for a principal who may
+ * see everything, so the query carries no scope clause at all. A list endpoint's
+ * explicit `scope=assigned` is a filter the caller chose, and a supervisor
+ * asking for their own work must get their own work rather than the tenant's —
+ * which is what returning `null` there would give them.
+ */
+export function assignedFilter(principal: SessionPrincipal): VisibilityFilter {
   return {
     OR: [
       { assignedUserId: principal.userId },
@@ -136,8 +147,93 @@ export function visibilityFilter(
  * them would make the other two convert.
  */
 export interface VisibilityFilter {
-  readonly OR: readonly [
-    { readonly assignedUserId: string },
-    { readonly assignedTeamId: { readonly in: readonly string[] } },
-  ];
+  OR: [{ assignedUserId: string }, { assignedTeamId: { in: string[] } }];
+}
+
+// ---------------------------------------------------------------------------
+// The shared inbox — conversations only (TAR-68)
+// ---------------------------------------------------------------------------
+
+/**
+ * A record nobody has claimed: no assignee and no team.
+ *
+ * Written once because it is both a visibility branch and the `unassigned`
+ * scope's filter, and the two must mean exactly the same thing — a queue that
+ * lists rows the detail route then answers `not_found` for is worse than no
+ * queue at all.
+ */
+export interface UnclaimedFilter {
+  assignedUserId: null;
+  assignedTeamId: null;
+}
+
+/**
+ * Built per call rather than shared as one frozen object: these fragments are
+ * handed to Prisma as `where` input, which is typed mutable, and a module-level
+ * constant reachable from two queries is a shape somebody eventually spreads
+ * into and edits.
+ */
+export function unclaimedFilter(): UnclaimedFilter {
+  return { assignedUserId: null, assignedTeamId: null };
+}
+
+export function isUnclaimed(record: AssignableRecord): boolean {
+  return record.assignedUserId === null && record.assignedTeamId === null;
+}
+
+/**
+ * The visibility rule **for a shared inbox**: `isVisible`, widened by one
+ * branch — an unclaimed conversation is visible to every agent in the tenant.
+ *
+ * ## Why this is a second function rather than a change to `isVisible`
+ *
+ * `isVisible` is the rule for assignable records generally, and tickets use it.
+ * It says unclaimed work is invisible without `_all`, and its own comment argues
+ * that widening it "would expose the whole tenant backlog". That argument holds
+ * for tickets, where the backlog is a work queue nobody has triaged.
+ *
+ * It does not hold for conversations, because a conversation is not created by
+ * an agent — it is created by a **customer writing in**, and until somebody
+ * claims it there is by construction nobody it is visible to. TAR-20's product
+ * is a *shared* inbox: a message that arrives and can be seen by no one is not
+ * an isolation property, it is an unanswered customer. So the widening is
+ * deliberate, bounded to this one entity, and stated here beside the rule it
+ * differs from rather than re-derived inside the conversations module.
+ *
+ * What it does **not** widen: a conversation claimed by somebody else, or
+ * routed to a team the principal is not in, stays invisible without
+ * `conversation:read_all`. Claiming is the act that takes a thread out of the
+ * shared pool, which is exactly what `POST /conversations/{id}/assign` is for.
+ */
+export function isVisibleOrUnclaimed(
+  record: AssignableRecord,
+  principal: SessionPrincipal,
+  readAll: Permission,
+): boolean {
+  return isVisible(record, principal, readAll) || isUnclaimed(record);
+}
+
+/**
+ * A `where` fragment matching everything a principal may see in the shared
+ * inbox, or `null` when they hold `_all` and the query needs no scope clause.
+ *
+ * Three branches rather than `visibilityFilter`'s two, and the third is served
+ * by the same `(tenant_id, assigned_user_id, status, last_message_at DESC,
+ * id DESC)` index the first one uses — `assigned_user_id IS NULL` is an index
+ * condition, and the team column is a cheap heap-side recheck on the rows it
+ * returns. The planner answers the whole thing with a `BitmapOr` across TAR-80's
+ * two scope indexes, which is the shape `visibility-query-shape.int-spec.ts`
+ * measured for the two-branch form.
+ */
+export function sharedInboxFilter(
+  principal: SessionPrincipal,
+  readAll: Permission,
+): SharedInboxFilter | null {
+  const assigned = visibilityFilter(principal, readAll);
+
+  return assigned === null ? null : { OR: [...assigned.OR, unclaimedFilter()] };
+}
+
+export interface SharedInboxFilter {
+  OR: [{ assignedUserId: string }, { assignedTeamId: { in: string[] } }, UnclaimedFilter];
 }

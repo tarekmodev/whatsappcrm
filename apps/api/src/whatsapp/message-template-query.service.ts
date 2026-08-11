@@ -54,6 +54,17 @@ export interface MessageTemplatePage {
   nextCursor: string | null;
 }
 
+/** What a send names a template by: the number it goes out on, and Meta's own key. */
+export interface FindApprovedTemplateQuery {
+  /** The tenant in scope. RLS filters on it too; the unique index needs it addressable. */
+  tenantId: string;
+  /** `whatsapp_accounts.id` — the number the conversation belongs to. */
+  whatsappAccountId: string;
+  name: string;
+  /** Meta's language tag, exactly as `MessageTemplateResponse.language` published it. */
+  language: string;
+}
+
 /** Raised for a cursor this build cannot act on. The controller turns it into `validation_failed`. */
 export class InvalidCursorError extends Error {
   constructor() {
@@ -191,18 +202,73 @@ export class MessageTemplateQueryService {
   }
 
   /**
+   * One approved template, by the name and language a send names it with.
+   *
+   * The send path's pre-check (TAR-68). Meta validates the same things and
+   * answers with an opaque provider error — a parameter index at best — which
+   * an agent cannot act on and which arrives *after* the message row has been
+   * created, so the composer would show a reply that silently failed. Reading
+   * the row first is what turns that into `whatsapp_template_invalid` while the
+   * composer is still open.
+   *
+   * `null` for a template that does not exist, is not approved, or belongs to
+   * another WABA — the three are indistinguishable to the caller on purpose,
+   * being the same "you cannot send this" and none of them worth confirming the
+   * existence of somebody else's template for.
+   *
+   * The `approved` filter is the same fixed one `list` applies and for the same
+   * reason: Meta refuses a send on a `pending`, `rejected`, `paused` or
+   * `disabled` template, so there is no request that can reach an unapproved one
+   * through this service.
+   */
+  async findApprovedForNumber(query: FindApprovedTemplateQuery): Promise<ListedTemplate | null> {
+    const whatsappBusinessAccountId = await this.businessAccountIdForNumber(
+      query.whatsappAccountId,
+    );
+
+    const row = await this.prisma.messageTemplate.findUnique({
+      where: {
+        tenantId_whatsappBusinessAccountId_name_language: {
+          // Supplied because the unique index leads with it; RLS supplies the
+          // same equality independently, so this narrows nothing it does not
+          // already narrow — it is what makes the composite key addressable.
+          tenantId: query.tenantId,
+          whatsappBusinessAccountId,
+          name: query.name,
+          language: query.language,
+        },
+        status: 'approved',
+      },
+      select: TEMPLATE_PROJECTION,
+    });
+
+    return row === null ? null : { row, summary: describeTemplateComponents(row.components) };
+  }
+
+  /**
    * The number, when one is named, otherwise whatever WABA the caller asked for.
    * The contract rejects both together, so there is no precedence to decide here.
    */
   private async resolveBusinessAccountId(
     query: ListMessageTemplatesQuery,
   ): Promise<string | undefined> {
-    if (query.whatsappAccountId === undefined) {
-      return query.whatsappBusinessAccountId;
-    }
+    return query.whatsappAccountId === undefined
+      ? query.whatsappBusinessAccountId
+      : await this.businessAccountIdForNumber(query.whatsappAccountId);
+  }
 
+  /**
+   * The WABA behind one connected number.
+   *
+   * Throws rather than returning `null` for a miss: both callers hold an id they
+   * believe in — the composer read it off a conversation, the send path off the
+   * conversation it is replying to — so "no such number" is bad input or a
+   * broken reference, never an empty result. A number belonging to another
+   * tenant arrives here as the same miss, because RLS hides it.
+   */
+  private async businessAccountIdForNumber(whatsappAccountId: string): Promise<string> {
     const account = await this.prisma.whatsappAccount.findUnique({
-      where: { id: query.whatsappAccountId },
+      where: { id: whatsappAccountId },
       select: { whatsappBusinessAccountId: true },
     });
 

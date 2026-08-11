@@ -190,6 +190,11 @@ export class HostTenantGuard implements CanActivate, OnModuleInit {
     // Only the tenant. The user is `PrincipalGuard`'s to add — this guard has
     // established where the request is, not who is making it.
     this.tenantContext.setTenant(domain.tenantId);
+    // And *where* that is, for the responses that have to name this origin back
+    // to the caller. Written here because this is the one place the forwarded-
+    // host trust rule is implemented, and a second reader of those headers is
+    // one that eventually reads them ungated (TAR-68).
+    this.tenantContext.setHostname(hostname);
 
     return true;
   }

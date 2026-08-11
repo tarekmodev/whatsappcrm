@@ -7,6 +7,24 @@ export interface TenantContext {
   requestId: string;
   /** Owning tenant, or `null` before the session has been resolved. */
   tenantId: string | null;
+  /**
+   * The hostname this request is *for*, as `HostTenantGuard` resolved it — the
+   * tenant's own domain behind a trusted edge, the `Host` header otherwise
+   * (TAR-148).
+   *
+   * Recorded because a response can carry an absolute URL back to this API —
+   * `MessageAttachment.url` is the first — and the origin such a URL must name
+   * is the one the caller reached us at, not whichever host this process is
+   * listening on. Publishing it here rather than re-reading the headers at the
+   * response boundary keeps the forwarded-host trust rule in the one place that
+   * already implements it: a second reader would either duplicate the secret
+   * check or, worse, trust the header ungated.
+   *
+   * Optional and absent-means-null for the same reason as `principal`: the
+   * guard runs at pipeline slot 2, so the middleware, a queue worker and a
+   * fixture all legitimately have none.
+   */
+  hostname?: string | null;
   /** Authenticated user, or `null` for unauthenticated and machine-to-machine calls. */
   userId: string | null;
   /**
@@ -84,6 +102,10 @@ export class TenantContextService {
     return this.storage.getStore()?.platformActorLabel ?? null;
   }
 
+  get hostname(): string | null {
+    return this.storage.getStore()?.hostname ?? null;
+  }
+
   /** Attaches the resolved session to the active scope. */
   setTenant(tenantId: string, userId: string | null = null): void {
     const store = this.storage.getStore();
@@ -94,6 +116,25 @@ export class TenantContextService {
 
     store.tenantId = tenantId;
     store.userId = userId;
+  }
+
+  /**
+   * Publishes the hostname this request was made against, once
+   * `HostTenantGuard` has decided which header to believe.
+   *
+   * Separate from `setTenant` rather than a third parameter on it: the two are
+   * written by the same guard but read by unrelated code, and a caller that
+   * only has a tenant id — a queue worker, a fixture — must not be able to
+   * supply a host it invented.
+   */
+  setHostname(hostname: string): void {
+    const store = this.storage.getStore();
+
+    if (!store) {
+      throw new Error('setHostname() called outside of a tenant context scope');
+    }
+
+    store.hostname = hostname;
   }
 
   /**

@@ -142,6 +142,32 @@ change.
 
 ### Added
 
+- **The shared inbox has an API: nine routes, the 24-hour window rule, and idempotent
+  sending** (TAR-68) — `ConversationsModule` implements TAR-39's Inbox surface end to end.
+  Reads are keyset-paginated on `(last_message_at DESC, id DESC)` over TAR-80's three
+  scope-carrying indexes, and every route that names one conversation goes through a single
+  visibility check, so a thread the caller may not see answers `not_found` rather than
+  `forbidden` — never confirming that an id names a real conversation somebody else is
+  handling. The send endpoint checks `conversations.service_window_expires_at`: inside the
+  window a free-form message is accepted, outside it only a template that is **approved on
+  that number's business account**, with its variables and its header slot checked against
+  Meta's own component tree before the Cloud API is called — because every one of those
+  failures otherwise comes back as an opaque provider error, after the message row exists.
+  A send creates the row `queued` and returns; delivery is a BullMQ job guarded on
+  `status = queued`, so a worker that crashed after Meta accepted the send produces lateness
+  rather than a second message to the customer, and only "Meta is unreachable" or "Meta is
+  throttling" are retried. `Idempotency-Key` is required on the send and implemented as
+  0002 rules it — the key is claimed **before** the work runs, so two requests arriving in
+  the same millisecond are decided by the unique index on `(tenant_id, key)` rather than by
+  a check that both of them pass. An unclaimed conversation is visible to every agent on the
+  tenant, which is the one place this widens a rule 0004 shipped; the reasoning, and the
+  three other questions the endpoint table did not answer, are ruled in
+  [amendment 4](docs/architecture/0002-architecture-and-api-contract.md#amendment-4--the-shared-inbox-tar-68).
+  `conversation_status` gains `closed` (`20260811170000_conversation_status_closed`,
+  additive and re-runnable), which the contract has published since TAR-39 and the enum
+  never carried — so a status update the schema called valid reached the database as an
+  invalid label.
+
 - **Console routes enforce the session, and the API is the only thing that decides who you
   are** (TAR-62) — every route below `app/(app)` is now guarded in two halves. `proxy.ts`
   (Next 16's rename of `middleware.ts`) checks only for a session **cookie**, because it runs

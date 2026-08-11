@@ -5,6 +5,7 @@ import { AuditModule } from './audit/audit.module';
 import { TenantContextMiddleware } from './common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
 import { RequestPipelineModule } from './common/request-pipeline/request-pipeline.module';
+import { ConversationsModule } from './conversations/conversations.module';
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
 import { IdentityModule } from './identity/identity.module';
@@ -59,6 +60,9 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     WhatsAppModule,
     TicketsModule,
     MediaModule,
+    // After `WhatsAppModule` and `MediaModule`, which it imports for the send
+    // path and for turning a `mediaId` into a handle Meta holds.
+    ConversationsModule,
     WebhooksModule,
   ],
 })

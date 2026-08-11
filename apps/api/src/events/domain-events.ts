@@ -55,7 +55,15 @@ export interface MessageStatusChangedEvent {
   readonly conversationId: string;
   readonly messageId: string;
   readonly status: MessageStatus;
-  readonly providerMessageId: string;
+  /**
+   * Meta's id, or `null` when there is not one yet.
+   *
+   * Null is the outbound send path's case (TAR-68): a message that Meta refused
+   * moves `queued → failed` without ever being given an id, and that transition
+   * is exactly the one an agent has to see. Non-null for every transition a
+   * status webhook drives, because the webhook is matched on it.
+   */
+  readonly providerMessageId: string | null;
 }
 
 /**

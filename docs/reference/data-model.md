@@ -701,7 +701,7 @@ definitions — stays text or JSON.
 | `whatsapp_quality_rating`               | `green`, `yellow`, `red`, `unknown`                                                                                                  |
 | `message_template_status`               | `pending`, `approved`, `rejected`, `paused`, `disabled`                                                                              |
 | `custom_field_type`                     | `text`, `number`, `date`, `boolean`, `select`, `multi_select`                                                                        |
-| `conversation_status`                   | `open`, `pending`, `resolved`                                                                                                        |
+| `conversation_status`                   | `open`, `pending`, `resolved`, `closed` — `closed` added by TAR-68; it is exactly `CONVERSATION_STATUSES` in `packages/contracts`    |
 | `message_direction`                     | `inbound`, `outbound`                                                                                                                |
 | `message_status`                        | `received`, `queued`, `sent`, `delivered`, `read`, `failed`                                                                          |
 | `message_content_type`                  | `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `system`, `unsupported` |
@@ -742,6 +742,7 @@ Applied in this order. Every directory carries a hand-written `down.sql` beside 
 | `20260811130000_ticket_active_constraint_and_counters`  | `tickets_one_active_per_contact`; the `ticket_counters` allocator and the 35th policy                                                                                                                                | TAR-74  |
 | `20260811140000_media_pipeline`                         | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable                                                     | TAR-20e |
 | `20260811150000_auth_schema_and_policies`               | `password_reset_tokens` and `invite_teams` and the 37th and 38th policies; lockout columns on `users`; `absolute_expires_at` and `revoked_reason` on `sessions`; `revoked_at` and the live-invite index on `invites` | TAR-54  |
+| `20260811170000_conversation_status_closed`             | `ALTER TYPE conversation_status ADD VALUE 'closed'`                                                                                                                                                                  | TAR-68  |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's

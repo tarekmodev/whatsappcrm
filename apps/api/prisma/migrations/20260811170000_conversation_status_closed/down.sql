@@ -1,0 +1,30 @@
+-- Reverses 20260811170000_conversation_status_closed.
+--
+-- Prisma does not generate down migrations; every migration directory carries a
+-- hand-written one, per docs/adr/0001-stack-decision.md (decision 6).
+--
+-- ---------------------------------------------------------------------------
+-- This one is deliberately a no-op, and that is the safe answer
+-- ---------------------------------------------------------------------------
+--
+-- PostgreSQL has no `ALTER TYPE … DROP VALUE`. Removing an enum label means
+-- creating a replacement type, rewriting every dependent column, re-pointing
+-- defaults and dropping the old type — a full rewrite of `conversations`
+-- holding an ACCESS EXCLUSIVE lock for its duration, to undo an addition that
+-- costs nothing to leave in place.
+--
+-- It would also lose data: a conversation an agent has already closed has no
+-- other legal value to move to, so the rewrite would either fail on those rows
+-- or silently re-open threads somebody finished.
+--
+-- An unused enum label is inert — no query filters on it, no index is affected,
+-- and the catalogue row is a few bytes. Rolling the application back is
+-- therefore complete on its own: code that predates TAR-68 never writes the
+-- value, and code that follows it needs the value present.
+--
+-- If the label genuinely has to go, that is its own forward migration with a
+-- verified backup, a maintenance window sized against the largest tenant's
+-- `conversations` table, and a recorded decision for the rows already carrying
+-- it. It is not a rollback step.
+
+SELECT 1;
