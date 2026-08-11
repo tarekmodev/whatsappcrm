@@ -102,6 +102,15 @@ projects:
               # NEXT_PUBLIC_* is inlined into the browser bundle. Never a secret.
               - key: NEXT_PUBLIC_API_BASE_URL
                 sync: false
+              # The API origin, used by server rendering and as the destination of
+              # the /api/* rewrite. Needed at BUILD time as well as at runtime:
+              # next.config.mjs reads it while building and freezes the rewrite
+              # destination into .next/routes-manifest.json. Without it, both the
+              # browser proxy and every server-side call go to localhost:3001 and
+              # the console cannot reach the API at all. Needs a scheme, which
+              # `fromService` cannot supply. Server-only — no NEXT_PUBLIC_ prefix.
+              - key: API_BASE_URL
+                sync: false
 
           - type: keyvalue
             name: whatsappcrm-kv-dev
@@ -222,6 +231,10 @@ projects:
                 value: production
               - key: NEXT_PUBLIC_API_BASE_URL
                 sync: false
+              # Read at build time as well as at runtime — see the development
+              # environment above for why omitting it breaks both API paths.
+              - key: API_BASE_URL
+                sync: false
 
           - type: keyvalue
             name: whatsappcrm-kv-staging
@@ -332,6 +345,10 @@ projects:
               - key: NODE_ENV
                 value: production
               - key: NEXT_PUBLIC_API_BASE_URL
+                sync: false
+              # Read at build time as well as at runtime — see the development
+              # environment above for why omitting it breaks both API paths.
+              - key: API_BASE_URL
                 sync: false
 
           - type: keyvalue

@@ -284,6 +284,29 @@ change.
 
 ### Fixed
 
+- **Server-side API calls now name the tenant they are for** (TAR-64) — every call made by
+  the Next process went out with no indication of the host it came in on, so
+  `HostTenantGuard` would resolve no tenant and answer `tenant_not_found` the moment the
+  mock transport is switched off: not one screen, but every server-rendered route in the
+  console, in every environment. `lib/api/tenant-host.ts` forwards the incoming host as
+  `x-forwarded-host`, and it is applied in `apiRequest` rather than per resource module, so
+  a new call site cannot forget it — including the unauthenticated ones, since sign-in and
+  password reset are tenant-scoped too. A request that arrives with no host now fails
+  loudly there instead of as an unrecognisable 404 three layers down. `x-forwarded-host`
+  rather than `Host` because `Host` cannot be set on either path, both verified against the
+  versions in this repository: Next's rewrite proxy hardcodes `changeOrigin: true` and
+  replaces `Host` with the API origin (putting the browser's own host in `x-forwarded-host`,
+  which is why the two paths now agree), and `fetch` derives `Host` from the URL and
+  silently drops a caller-supplied one. **This is one half of the fix**: `HostTenantGuard`
+  still reads `Host` only, so both paths stay broken until the API reads the forwarded host
+  — whether it may trust one, and on what evidence, is an `apps/api` decision open on
+  TAR-64. ADR 0005's sequence diagram, which assumed `Host` was preserved, carries the
+  correction.
+- **`API_BASE_URL` is declared for the web service in every environment** (TAR-64) — it was
+  missing from all three, and `next.config.mjs` reads it at _build_ time and freezes the
+  `/api/*` rewrite destination into `.next/routes-manifest.json`. Every deployed build
+  therefore proxied the browser to `http://localhost:3001/api`, and server-side calls went
+  to the same place, so the console could not reach the API at all regardless of tenancy.
 - **A malformed tenant id is refused as `TN001`, not raised as a cast error.** It previously
   reached the application as SQLSTATE `22P02`, which was reported as a fault rather than as
   the refusal it is. No isolation consequence — the cast raised before `set_config` either

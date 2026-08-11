@@ -1,12 +1,13 @@
 import { webEnv } from '@/lib/config/env';
 import { handleMockRequest } from '@/lib/api/mock/handlers';
 import { toApiRequestError } from '@/lib/api/error';
+import { tenantHostHeaders } from '@/lib/api/tenant-host';
 import type { ApiRequest } from '@/lib/api/request';
 
 /**
  * The server-side entry point for talking to the API. Every resource module goes
- * through `apiRequest`, so error mapping and the mock/real switch live in exactly
- * one place.
+ * through `apiRequest`, so error mapping, the mock/real switch and the tenant the
+ * call is for live in exactly one place.
  *
  * The mock branch is a *transport*, not a per-feature fake: resource modules are
  * byte-identical in both modes, so wiring TAR-81's real endpoints is one flag.
@@ -29,7 +30,15 @@ export async function apiRequest(request: ApiRequest): Promise<unknown> {
     // Role and tenant scoping are decided per request; a cached list would
     // survive a role change and show one principal another one's data.
     cache: 'no-store',
-    headers: { 'content-type': 'application/json', ...request.headers },
+    // The tenant host goes on every server-side call, not just the authenticated
+    // ones: sign-in and password reset are unauthenticated *and* tenant-scoped,
+    // so they need it too. Here rather than per resource module, so a new call
+    // site cannot forget it — the same reason the cookie has one home.
+    headers: {
+      'content-type': 'application/json',
+      ...(await tenantHostHeaders()),
+      ...request.headers,
+    },
     body: request.body === undefined ? undefined : JSON.stringify(request.body),
   });
 

@@ -137,7 +137,7 @@ sequenceDiagram
   participant P as Postgres
 
   B->>W: POST /api/v1/auth/login
-  W->>A: same-origin proxy, Host preserved
+  W->>A: same-origin proxy, tenant host in X-Forwarded-Host (see note)
   A->>P: host → tenant (SystemPrisma), setTenant(tenantId, null)
   A->>P: users.findUnique(tenantId, email)   [TenantPrisma, RLS]
   A->>A: argon2id verify (always, even when no user row)
@@ -157,6 +157,24 @@ sequenceDiagram
 
   Note over A,P: revoke: UPDATE sessions SET revoked_at=now()<br/>+ DEL sess:{hash} for every hash in user:{id}:sessions
 ```
+
+> **Correction (TAR-64): `Host` is not preserved, and cannot be.** This diagram originally
+> assumed the proxy passed the tenant's `Host` through untouched. It does not, on either
+> path, and neither is fixable from `apps/web`:
+>
+> - Next's rewrite proxy hardcodes `changeOrigin: true`, so it replaces `Host` with the API
+>   origin and puts the browser's host in `x-forwarded-host`. `rewrites()` exposes no option
+>   that changes it.
+> - `fetch` derives `Host` from the URL and silently drops a caller-supplied one, so a
+>   server-rendered call cannot set it either.
+>
+> Both paths therefore name the tenant in `x-forwarded-host` — the browser path always did,
+> and `lib/api/tenant-host.ts` makes the server path match. **`HostTenantGuard` still reads
+> `Host` only**, so tenant resolution remains broken until the API is changed; whether it may
+> trust a forwarded host, and on what evidence, is the open decision on TAR-64. Note that
+> preserving `Host` end-to-end is not an option on the current Render topology: the API is a
+> public service whose edge routes by `Host`, so a request carrying a tenant's host would
+> never reach it.
 
 ### Components and responsibilities
 
