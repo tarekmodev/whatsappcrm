@@ -655,6 +655,65 @@ Nothing is ever served from a client-supplied path. A caller names a media **id*
 lookup goes through `TenantPrisma`, and the storage key is read off the row that resolved.
 Another tenant's id is `not_found`, never `forbidden` — a 403 would confirm it exists.
 
+## Invitations
+
+How somebody who has never signed in gets an account. `IdentityModule` owns it, against
+the contract in
+[ADR 0005](docs/architecture/0005-auth-session-and-invite-contract.md). Login, password
+reset and the global auth guard are the rest of TAR-35 and are not here yet.
+
+```
+POST   /api/v1/users/invites            user:invite   201 created · 200 refreshed
+GET    /api/v1/users/invites            user:read     ?status=pending|accepted|revoked|expired
+POST   /api/v1/users/invites/{id}/resend  user:invite
+DELETE /api/v1/users/invites/{id}       user:invite   204
+POST   /api/v1/invites/lookup           public        what the accept screen renders
+POST   /api/v1/invites/accept           public        sets the session cookie
+```
+
+**Re-inviting an address is never an error.** `invites_one_live_per_email` is a partial
+unique index and cannot carry an expiry term — Postgres requires an index predicate to be
+`IMMUTABLE` — so a lapsed invitation still occupies it. Creating one is therefore an
+upsert: the same row, a new token, a new expiry, and the role and teams the admin just
+asked for. Only an address that already has a usable account is a `conflict`. The reply is
+`201` when a row was written and `200` when one was refreshed.
+
+**The token is a credential and is treated as one.** 32 random bytes, mailed once, stored
+only as its SHA-256 digest, and single-use because acceptance is a conditional
+`UPDATE … WHERE accepted_at IS NULL … RETURNING` — two people clicking the same link means
+the second one updates no rows. The emailed link carries it in the URL **fragment**
+(`https://{tenant host}/invite#token=…`), which browsers never send to a server, so it stays
+out of access logs and `Referer` headers. The host comes from `tenant_domains`, never from
+the request `Host`, which an attacker chooses.
+
+**Nothing about the acceptance comes from the request.** The body is a token, a display
+name and a password. The tenant is the one the hostname resolved to and the role is the one
+on the invitation, so there is no field to tamper with; a token issued by one tenant and
+presented at another's address matches zero rows under RLS.
+
+**Trying it locally.** No mail provider has been chosen yet (ADR 0005, open question 2), so
+outside production `ConsoleMailer` prints the rendered link to the API log and you click it
+from there. In production `UndeliverableMailer` drops the message and logs that it did —
+loudly, and without the token — until TAR-41 wires a real adapter.
+
+```bash
+# as an admin, against a seeded tenant (AUTH_STUB_ENABLED=true)
+curl -X POST http://northwind.app.localhost:3001/api/v1/users/invites \
+  -H 'content-type: application/json' -H 'x-dev-role: admin' \
+  -d '{"email":"newhire@northwind.example","role":"agent"}'
+
+# the link is in the API log; take the fragment from it
+curl -X POST http://northwind.app.localhost:3001/api/v1/invites/accept \
+  -H 'content-type: application/json' \
+  -d '{"token":"…","displayName":"New Hire","password":"a-long-enough-password"}'
+```
+
+Passwords are argon2id (`m=19456 KiB, t=2, p=1`), stored as the PHC string so the
+parameters travel with the hash and can be raised without a migration. The session cookie
+is `__Host-wac_session`; set `SESSION_COOKIE_SECURE=false` for plain-HTTP local
+development, which drops the prefix and `Secure` — the API refuses to boot with it off
+under `NODE_ENV=production`.
+
 ## Environments
 
 Three hosted environments — development, staging and production — each with its own

@@ -1,11 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
-  isRoleWithin,
   type AgentAvailability,
   type CursorPage,
-  type InviteCreateInput,
-  type InviteResponse,
   type SessionPrincipal,
   type TenantRole,
   type UserListQuery,
@@ -20,18 +16,9 @@ import { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { SessionRevocationService } from '../rbac/session-revocation.service';
 import { toUserResponse, type UserRow } from './people.mapper';
-import {
-  EmailAlreadyRegisteredError,
-  LastAdminRequiredError,
-  RoleAssignmentNotPermittedError,
-  RoleEscalationError,
-  SelfRoleChangeError,
-  UnknownReferenceError,
-  UserNotFoundError,
-} from './people.errors';
-
-/** How long an invite is good for. Long enough for a holiday, short enough to expire. */
-const INVITE_TTL_DAYS = 7;
+import { LastAdminRequiredError, SelfRoleChangeError, UserNotFoundError } from './people.errors';
+import { assertRoleAssignable } from './role-assignment';
+import { assertTeamsExist } from './team-references';
 
 /**
  * The columns a `UserResponse` is built from — and the reason this constant
@@ -115,134 +102,6 @@ export class UsersService {
     });
 
     return toPage(rows, query.limit);
-  }
-
-  /**
-   * Invites somebody into the tenant.
-   *
-   * The `users` row is written **now**, in `invited` status with no password
-   * hash, rather than at acceptance. Three things fall out of that and all of
-   * them are wanted: the invitee appears in the people list immediately, their
-   * team memberships are real `team_members` rows rather than an intention
-   * parked somewhere, and `UNIQUE (tenant_id, email)` is what rejects a second
-   * invite to an address that already has an account — instead of two pending
-   * invites racing to create the same person.
-   *
-   * ⚠️ **The invite token is not deliverable yet.** A single-use token is
-   * generated and only its hash is stored, which is correct, but sending it is
-   * TAR-35's (invite email + `POST /auth/invites/accept`). Until that lands the
-   * plaintext is discarded here — deliberately, because logging or returning a
-   * credential to make it reachable would be worse than the gap. The durable
-   * half is the row; TAR-35's resend path issues a token that can actually be
-   * used.
-   */
-  async invite(input: InviteCreateInput): Promise<InviteResponse> {
-    const principal = this.tenantContext.requirePrincipal();
-    const tenantId = this.tenantContext.requireTenantId();
-
-    this.assertMayAssign(input.role, principal);
-
-    const token = randomBytes(32).toString('base64url');
-    const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000);
-
-    return this.prisma.$tenantTransaction(async (tx) => {
-      await assertTeamsExist(tx, tenantId, input.teamIds);
-
-      const existing = await tx.user.findFirst({
-        where: { email: input.email },
-        select: { id: true, status: true, role: true },
-      });
-
-      if (existing !== null && existing.status !== 'invited') {
-        throw new EmailAlreadyRegisteredError(input.email);
-      }
-
-      // Re-inviting somebody whose invite is still pending updates their role
-      // and teams and issues a fresh token, rather than failing on the unique
-      // key — which is what an admin who mistyped the role actually wants.
-      const user =
-        existing === null
-          ? await tx.user.create({
-              data: {
-                tenantId,
-                email: input.email,
-                // The invitee sets their real name when they accept. A
-                // placeholder rather than a nullable column: `name` is NOT NULL
-                // and every list rendering it would otherwise need a fallback.
-                name: input.email.split('@')[0] ?? input.email,
-                role: input.role,
-                status: 'invited',
-              },
-              select: { id: true },
-            })
-          : await tx.user.update({
-              where: { id: existing.id },
-              data: { role: input.role },
-              select: { id: true },
-            });
-
-      await replaceTeamMemberships(tx, tenantId, user.id, input.teamIds);
-
-      // One live invite per address per tenant. A re-invite replaces the token,
-      // which also revokes the old one — a link mailed out by mistake stops
-      // working the moment a new one is issued. Not an `upsert`: `invites` has
-      // no unique key on `(tenant_id, email)` to upsert against, and adding one
-      // is a schema change TAR-80 owns. The read and the write are in the same
-      // transaction, and a lost race collides on `token_hash`'s unique index
-      // rather than duplicating.
-      const pending = await tx.invite.findFirst({
-        where: { email: input.email, acceptedAt: null },
-        select: { id: true },
-      });
-
-      const inviteFields = {
-        role: input.role,
-        tokenHash: hashToken(token),
-        invitedByUserId: principal.userId,
-        expiresAt,
-      };
-      const inviteProjection = {
-        id: true,
-        email: true,
-        role: true,
-        invitedByUserId: true,
-        expiresAt: true,
-        acceptedAt: true,
-        createdAt: true,
-      } as const;
-
-      const invite =
-        pending === null
-          ? await tx.invite.create({
-              data: { tenantId, email: input.email, ...inviteFields },
-              select: inviteProjection,
-            })
-          : await tx.invite.update({
-              where: { id: pending.id },
-              data: inviteFields,
-              select: inviteProjection,
-            });
-
-      await this.audit.record(tx, {
-        action: AUDIT_ACTIONS.userInvited,
-        targetType: 'user',
-        targetId: user.id,
-        metadata: { role: input.role, teamIds: input.teamIds },
-      });
-
-      return {
-        id: invite.id,
-        email: invite.email,
-        role: invite.role,
-        // Non-null in practice — an invite always has an inviter — but the
-        // column is nullable for a future system-issued invite, so the response
-        // reports the caller rather than asserting the column.
-        invitedByUserId: invite.invitedByUserId ?? principal.userId,
-        expiresAt: invite.expiresAt.toISOString(),
-        acceptedAt: invite.acceptedAt?.toISOString() ?? null,
-        createdAt: invite.createdAt.toISOString(),
-      };
-    });
   }
 
   /**
@@ -393,6 +252,25 @@ export class UsersService {
       // picker and stop widening anybody's `teamIds`.
       await tx.teamMember.deleteMany({ where: { userId } });
 
+      // The outstanding invitation dies with the account.
+      //
+      // Without this, removing somebody who had been invited but had not yet
+      // accepted leaves their emailed link live: `InviteService.activateAccount`
+      // refuses only `active` and `suspended`, so a `removed` row falls through
+      // to the update branch and is set back to `active` with the invited role
+      // and the lockout counters cleared — reinstated by whoever holds the link,
+      // with no admin action and no authentication beyond holding it.
+      //
+      // Revoked rather than deleted, so the trail still shows the invitation was
+      // issued and how it ended. Matched by address rather than by
+      // `invites.email = users.email` in SQL because both are `citext` on the
+      // same tenant and the partial unique index already guarantees at most one
+      // live row per address.
+      const invitesRevoked = await tx.invite.updateMany({
+        where: { tenantId, email: user.email, acceptedAt: null, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+
       await tx.user.update({
         where: { id: userId },
         data: { status: 'removed', availability: 'offline' },
@@ -407,6 +285,7 @@ export class UsersService {
           email: user.email,
           roleAtRemoval: user.role,
           assignmentsCleared: conversations.count + tickets.count,
+          invitesRevoked: invitesRevoked.count,
         },
       });
 
@@ -438,29 +317,6 @@ export class UsersService {
     return toUserResponse(row);
   }
 
-  /**
-   * What role an invite may carry (TAR-79, delta 1).
-   *
-   * A caller holding `user:invite` but not `user:set_role` may invite an
-   * `agent` and nothing else. That single rule is what closes the live
-   * escalation path in the shipped contract: `InviteCreateInputSchema.role`
-   * accepts any role, so without it a supervisor could mint an admin, accept
-   * nothing, and have that account administer billing and the WhatsApp
-   * credentials.
-   */
-  private assertMayAssign(role: TenantRole, principal: SessionPrincipal): void {
-    if (!principal.permissions.includes('user:set_role')) {
-      if (role !== 'agent') {
-        throw new RoleAssignmentNotPermittedError(role);
-      }
-      return;
-    }
-
-    if (!isRoleWithin(role, principal.role)) {
-      throw new RoleEscalationError(role, principal.role);
-    }
-  }
-
   /** Invariants 1 and 2, applied to a role write on an existing user. */
   private assertMayChangeRole(userId: string, role: TenantRole, principal: SessionPrincipal): void {
     if (userId === principal.userId) {
@@ -471,13 +327,9 @@ export class UsersService {
       throw new SelfRoleChangeError();
     }
 
-    if (!principal.permissions.includes('user:set_role')) {
-      throw new RoleAssignmentNotPermittedError(role);
-    }
-
-    if (!isRoleWithin(role, principal.role)) {
-      throw new RoleEscalationError(role, principal.role);
-    }
+    // Delta 1 and invariant 2, shared with the invite path so the two cannot
+    // drift: whoever may grant a role may grant it in both places or neither.
+    assertRoleAssignable(role, principal);
   }
 
   /**
@@ -590,35 +442,6 @@ async function replaceTeamMemberships(
   return { added, removed, changed: added.length > 0 || removed.length > 0 };
 }
 
-/**
- * Rejects any id that is not a team in this tenant.
- *
- * The composite foreign key `(tenant_id, team_id)` would refuse the write
- * anyway — that is TAR-80's guarantee and the one that actually holds — but a
- * constraint violation surfaces as a 500. This turns "team 9f… does not exist"
- * into a `validation_failed` naming the ids, which is what the caller can act on.
- */
-async function assertTeamsExist(
-  tx: Prisma.TransactionClient,
-  tenantId: string,
-  teamIds: readonly string[],
-): Promise<void> {
-  if (teamIds.length === 0) {
-    return;
-  }
-
-  const found = await tx.team.findMany({
-    where: { tenantId, id: { in: [...teamIds] } },
-    select: { id: true },
-  });
-  const known = new Set(found.map((team) => team.id));
-  const unknown = [...new Set(teamIds)].filter((teamId) => !known.has(teamId));
-
-  if (unknown.length > 0) {
-    throw new UnknownReferenceError('team', unknown);
-  }
-}
-
 /** True when the requested change takes the target out of the active-admin set. */
 function leavesTenantWithoutAdmin(
   before: { role: TenantRole; status: UserStatus },
@@ -694,12 +517,4 @@ function toPage(rows: readonly UserRow[], limit: number): CursorPage<UserRespons
  */
 function statusFilter(status: UserStatus | undefined): Prisma.UserWhereInput {
   return status === undefined ? { status: { not: 'removed' } } : { status };
-}
-
-function hashToken(token: string): string {
-  // The plaintext is what goes in the email; only this ever touches the
-  // database, so a dump of `invites` grants nobody an account. SHA-256 rather
-  // than a password hash: the token is 256 bits of machine-generated entropy,
-  // so there is nothing for a work factor to protect against.
-  return createHash('sha256').update(token, 'utf8').digest('hex');
 }

@@ -1,7 +1,7 @@
 import { ApiException } from '../common/errors/api.exception';
 import {
   CurrentPasswordIncorrectError,
-  RESET_TOKEN_REJECTIONS,
+  TOKEN_REJECTION_REASONS,
   ResetTokenInvalidError,
 } from './identity.errors';
 import { translateIdentityFailure } from './identity.http';
@@ -17,7 +17,7 @@ function thrownBy(error: unknown): ApiException {
 }
 
 describe('translateIdentityFailure', () => {
-  it.each(RESET_TOKEN_REJECTIONS)('answers 410 token_invalid for a %s token', (reason) => {
+  it.each(TOKEN_REJECTION_REASONS)('answers 410 token_invalid for a %s token', (reason) => {
     const api = thrownBy(new ResetTokenInvalidError(reason));
 
     // 410 rather than 404: the reset screen has to offer "request a new link",

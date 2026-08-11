@@ -369,7 +369,7 @@ describe('agent, team and role management API', () => {
   });
 
   describe('an admin holds the whole tenant scope', () => {
-    it('invites an agent, creating the account and its team memberships', async () => {
+    it('invites an agent, reserving the account and parking its teams', async () => {
       const response = await call(HOST_A, 'admin')
         .post('/api/v1/users/invites')
         .send({ email: 'newhire@tar81-a.invalid', role: 'agent', teamIds: [TEAM_A] });
@@ -382,7 +382,13 @@ describe('agent, team and role management API', () => {
       });
 
       expect(invited).toMatchObject({ status: 'invited', passwordHash: null });
-      expect(invited?.teamMemberships).toEqual([{ teamId: TEAM_A }]);
+      // The teams wait on `invite_teams` until the invitation is accepted
+      // (TAR-55), so somebody who never accepts never widens a team's
+      // membership — and therefore never widens what its members can see.
+      expect(invited?.teamMemberships).toEqual([]);
+      expect(
+        await systemPrisma.inviteTeam.count({ where: { tenantId: TENANT_A, teamId: TEAM_A } }),
+      ).toBe(1);
     });
 
     it('stores only a hash of the invite token, never the token', async () => {

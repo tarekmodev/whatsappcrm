@@ -4,6 +4,8 @@ import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { InviteService } from './invite.service';
+import { InvitesController } from './invites.controller';
 import { ConsoleMailer, UndeliverableMailer } from './mailer/console.mailer';
 import { MAILER, type MailerPort } from './mailer/mailer.port';
 import { TenantLinkService } from './mailer/tenant-link.service';
@@ -15,6 +17,7 @@ import { SessionCacheService } from './session-cache.service';
 import { SessionController } from './session.controller';
 import { SessionPrincipalSource } from './session-principal.source';
 import { SessionService } from './session.service';
+import { UserInvitesController } from './user-invites.controller';
 
 /**
  * Authentication, the session lifecycle, and the flows that change a credential
@@ -26,9 +29,11 @@ import { SessionService } from './session.service';
  * contract — so the principal can carry materialised permissions without either
  * module depending on the other.
  *
- * One module rather than two, because `PasswordService` is the hasher login,
- * reset and invite acceptance must all use: a second argon2 configuration
- * anywhere in the codebase is how a stored hash stops verifying after a deploy.
+ * One module rather than several, because `PasswordService` is the hasher
+ * login, reset and invite acceptance must all use, and `SessionService` is the
+ * one thing that mints a session: a second argon2 configuration is how a stored
+ * hash stops verifying after a deploy, and a second way to write a `sessions`
+ * row is how two of them come to disagree about the token shape or the expiry.
  * Extend this module; do not open a parallel one.
  *
  * ## Why it is global
@@ -85,10 +90,17 @@ const mailerProvider: Provider = {
 
 @Global()
 @Module({
-  controllers: [AuthController, SessionController, PasswordController],
+  controllers: [
+    AuthController,
+    SessionController,
+    PasswordController,
+    UserInvitesController,
+    InvitesController,
+  ],
   providers: [
     mailerProvider,
     AuthService,
+    InviteService,
     TenantLinkService,
     PasswordService,
     PasswordResetService,

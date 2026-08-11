@@ -9,7 +9,7 @@ import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { SessionRevocationService } from '../rbac/session-revocation.service';
-import { ResetTokenInvalidError, type ResetTokenRejection } from './identity.errors';
+import { ResetTokenInvalidError, type TokenRejectionReason } from './identity.errors';
 import { MAILER, RESET_PASSWORD_LINK_PATH, type MailerPort } from './mailer/mailer.port';
 import { PasswordService } from './password.service';
 import { hashResetToken, issueResetToken } from './reset-token';
@@ -283,7 +283,7 @@ export class PasswordResetService {
    * itself: at this point the database has already ruled, and this is choosing
    * wording.
    */
-  private async classifyRejection(tokenHash: string): Promise<ResetTokenRejection> {
+  private async classifyRejection(tokenHash: string): Promise<TokenRejectionReason> {
     const token = await this.readToken(tokenHash);
 
     if (token === null) {

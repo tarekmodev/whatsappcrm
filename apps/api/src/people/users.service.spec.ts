@@ -61,6 +61,8 @@ interface Recorded {
   /** The after-commit cache purge (TAR-56), which is unconditional by design. */
   purgedUserIds: string[];
   updates: Record<string, unknown>[];
+  /** `where` clauses passed to `invite.updateMany` — the withdrawal on removal. */
+  inviteWithdrawals: Record<string, unknown>[];
 }
 
 function buildService(state: FakeState): {
@@ -68,7 +70,13 @@ function buildService(state: FakeState): {
   recorded: Recorded;
   tenantContext: TenantContextService;
 } {
-  const recorded: Recorded = { audits: [], revokedUserIds: [], purgedUserIds: [], updates: [] };
+  const recorded: Recorded = {
+    audits: [],
+    revokedUserIds: [],
+    purgedUserIds: [],
+    updates: [],
+    inviteWithdrawals: [],
+  };
 
   const row = {
     id: TARGET,
@@ -105,6 +113,10 @@ function buildService(state: FakeState): {
     },
     invite: {
       findFirst: () => Promise.resolve(null),
+      updateMany: ({ where }: { where: Record<string, unknown> }) => {
+        recorded.inviteWithdrawals.push(where);
+        return Promise.resolve({ count: 1 });
+      },
       create: () =>
         Promise.resolve({
           id: '0192f0ff-0000-7000-8000-00000000c001',
@@ -116,6 +128,13 @@ function buildService(state: FakeState): {
           createdAt: new Date('2026-01-01T00:00:00.000Z'),
         }),
     },
+    // The routing references `remove` clears (TAR-79's invariant 4). Counts
+    // only — what they are is asserted in `people-rbac.int-spec.ts` against real
+    // rows; here they exist so the transaction body runs to the end.
+    conversation: { updateMany: () => Promise.resolve({ count: 0 }) },
+    ticket: { updateMany: () => Promise.resolve({ count: 0 }) },
+    assignmentState: { updateMany: () => Promise.resolve({ count: 0 }) },
+    assignmentRule: { updateMany: () => Promise.resolve({ count: 0 }) },
     session: { deleteMany: () => Promise.resolve({ count: 1 }) },
     auditLog: { create: () => Promise.resolve({}) },
     $queryRaw: () => Promise.resolve(state.activeAdminIds.map((id) => ({ id }))),
@@ -241,38 +260,9 @@ describe('UsersService — role write invariants', () => {
       expect(recorded.audits.map((entry) => entry.action)).toContain('user.status_changed');
     });
 
-    it('refuses a supervisor inviting anybody above an agent', async () => {
-      const { users, tenantContext } = buildService({
-        target: null,
-        activeAdminIds: [CALLER],
-        teams: [],
-        memberships: [],
-      });
-
-      for (const role of ['supervisor', 'admin'] as const) {
-        await expect(
-          asPrincipal(tenantContext, 'supervisor', () =>
-            users.invite({ email: 'new@example.invalid', role, teamIds: [] }),
-          ),
-        ).rejects.toBeInstanceOf(RoleAssignmentNotPermittedError);
-      }
-    });
-
-    it('lets a supervisor invite an agent', async () => {
-      const { users, tenantContext, recorded } = buildService({
-        target: null,
-        activeAdminIds: [CALLER],
-        teams: [],
-        memberships: [],
-      });
-
-      const invite = await asPrincipal(tenantContext, 'supervisor', () =>
-        users.invite({ email: 'new@example.invalid', role: 'agent', teamIds: [] }),
-      );
-
-      expect(invite.role).toBe('agent');
-      expect(recorded.audits.map((entry) => entry.action)).toEqual(['user.invited']);
-    });
+    // The same rule applied to an *invitation* moved to `IdentityModule` with
+    // the invite flow (TAR-55); `role-assignment.spec.ts` covers it directly,
+    // against the function both paths now call.
   });
 
   describe('invariant 3: the last active admin is protected', () => {
@@ -340,6 +330,36 @@ describe('UsersService — role write invariants', () => {
       await expect(
         asPrincipal(tenantContext, 'admin', () => users.update(TARGET, { teamIds: [TEAM] })),
       ).resolves.toBeDefined();
+    });
+  });
+
+  describe('removing a user closes every way back in', () => {
+    it('withdraws their outstanding invitation, so the emailed link cannot reinstate them', async () => {
+      const { users, tenantContext, recorded } = buildService({
+        target: activeAgent,
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+      });
+
+      await asPrincipal(tenantContext, 'admin', () => users.remove(TARGET));
+
+      // Without this, `InviteService.activateAccount` refuses only `active` and
+      // `suspended`: a `removed` row falls through to the update branch and is
+      // set back to `active` with the invited role and the lockout counters
+      // cleared. Whoever holds the link reinstates the account with no admin
+      // action and no authentication beyond holding it.
+      expect(recorded.inviteWithdrawals).toEqual([
+        {
+          tenantId: TENANT,
+          email: 'target@example.invalid',
+          acceptedAt: null,
+          revokedAt: null,
+        },
+      ]);
+      // Live invitations only. An accepted or already-withdrawn row is history
+      // and stays as it is.
+      expect(recorded.audits.map((entry) => entry.action)).toContain('user.removed');
     });
   });
 

@@ -12,7 +12,17 @@
  * the whole set stays readable in one place.
  */
 export const AUDIT_ACTIONS = {
+  /**
+   * Superseded by `invite.created` (TAR-55), and kept because rows carrying it
+   * already exist: an auditor filtering the history of an account that was
+   * invited before that change still has to find them. Nothing writes it any
+   * more except the demo seeder, which reproduces that history on purpose.
+   */
   userInvited: 'user.invited',
+  inviteCreated: 'invite.created',
+  inviteResent: 'invite.resent',
+  inviteRevoked: 'invite.revoked',
+  inviteAccepted: 'invite.accepted',
   userRoleChanged: 'user.role_changed',
   userStatusChanged: 'user.status_changed',
   userProfileChanged: 'user.profile_changed',
