@@ -225,7 +225,7 @@ describe('ResetPasswordForm', () => {
   it('explains a link that arrived without a token, and never renders the form', async () => {
     openLinkWith('');
 
-    // A fresh module registry stands in for a fresh document: `useResetToken`
+    // A fresh module registry stands in for a fresh document: `useLinkToken`
     // remembers the token for the life of the document it arrived in, so this has
     // to be a new one rather than a remount of the link the tests above opened.
     vi.resetModules();

@@ -3,24 +3,28 @@
 import { useEffect, useState } from 'react';
 
 /**
- * Reads the reset token out of the URL fragment, then removes it from the
- * address bar. Usage: `const token = useResetToken();`
+ * Reads the token out of an emailed link's URL fragment, then removes it from the
+ * address bar. Usage: `const token = useLinkToken();`
  *
- * The token is in the **fragment** (`/reset-password#token=…`), not the query,
- * and that is load-bearing: browsers never send a fragment to a server, so a live
- * credential stays out of every access log, proxy log and `Referer` header
- * between the recipient's inbox and the API (TAR-53, link shapes). The costs are
- * both paid here — the value is unreadable during server rendering, so the screen
- * needs a mount guard, and it has to be scrubbed once read, so a screenshot or a
- * shoulder does not carry it away.
+ * Both of TAR-53's emailed links are this shape — `/reset-password#token=…` and
+ * `/invite#token=…` — so both screens read them through here rather than each
+ * solving the same three problems.
+ *
+ * The token is in the **fragment**, not the query, and that is load-bearing:
+ * browsers never send a fragment to a server, so a live credential stays out of
+ * every access log, proxy log and `Referer` header between the recipient's inbox
+ * and the API (TAR-53, link shapes). The costs are both paid here — the value is
+ * unreadable during server rendering, so the screen needs a mount guard, and it
+ * has to be scrubbed once read, so a screenshot or a shoulder does not carry it
+ * away.
  *
  * `replaceState` rather than `pushState`: a Back button that puts the token back
  * in the bar would undo the scrub.
  */
 
-export const RESET_TOKEN_FRAGMENT_KEY = 'token';
+export const LINK_TOKEN_FRAGMENT_KEY = 'token';
 
-export type ResetTokenState =
+export type LinkTokenState =
   /** Server render and first paint: the fragment is not readable yet. */
   | { status: 'reading' }
   /** The link arrived without a token — truncated by an email client, usually. */
@@ -46,8 +50,8 @@ export type ResetTokenState =
  */
 let scrubbed: { readonly path: string; readonly token: string | null } | null = null;
 
-export function useResetToken(): ResetTokenState {
-  const [state, setState] = useState<ResetTokenState>({ status: 'reading' });
+export function useLinkToken(): LinkTokenState {
+  const [state, setState] = useState<LinkTokenState>({ status: 'reading' });
 
   useEffect(() => {
     const sync = (): void => {
@@ -86,7 +90,7 @@ function readToken(): string | null {
     return scrubbed?.path === pathname ? scrubbed.token : null;
   }
 
-  const raw = new URLSearchParams(hash.replace(/^#/, '')).get(RESET_TOKEN_FRAGMENT_KEY);
+  const raw = new URLSearchParams(hash.replace(/^#/, '')).get(LINK_TOKEN_FRAGMENT_KEY);
   const token = raw === null || raw === '' ? null : raw;
 
   scrubbed = { path: pathname, token };

@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { ConversationListQuerySchema } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { searchParamKeys, type ConversationStatusFilter, type InboxScope } from '@/lib/routes';
+import { firstSearchParam, type RouteSearchParams } from '@/lib/search-params';
 import { verifySession } from '@/lib/session/session';
 import { allowedConversationScopes } from '@/lib/session/permissions';
 import { Stack } from '@/components/layout/Stack';
@@ -31,17 +32,17 @@ export const dynamic = 'force-dynamic';
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
+  searchParams: Promise<RouteSearchParams>;
 }) {
   const { checker } = await verifySession();
   const params = await searchParams;
 
   const availableScopes = allowedConversationScopes(checker);
-  const requestedScope = parseScope(firstValue(params[searchParamKeys.inboxScope]));
+  const requestedScope = parseScope(firstSearchParam(params[searchParamKeys.inboxScope]));
   // Narrowed here as well as by the API, so the tab strip and the list agree about
   // which scope is actually in effect.
   const effectiveScope = availableScopes.includes(requestedScope) ? requestedScope : 'assigned';
-  const status = parseStatus(firstValue(params[searchParamKeys.inboxStatus]));
+  const status = parseStatus(firstSearchParam(params[searchParamKeys.inboxStatus]));
 
   return (
     <PageShell>
@@ -62,12 +63,6 @@ export default async function InboxPage({
       </Stack>
     </PageShell>
   );
-}
-
-function firstValue(value: string | string[] | undefined): string | undefined {
-  const candidate = Array.isArray(value) ? value[0] : value;
-
-  return candidate === undefined || candidate.trim() === '' ? undefined : candidate;
 }
 
 /** The URL is untrusted; the contract's own schema decides what is valid. */

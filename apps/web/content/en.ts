@@ -252,11 +252,58 @@ export const content = {
     passwordHint: (minLength: number) =>
       `At least ${minLength} characters. A long phrase beats a short puzzle.`,
     backToSignIn: 'Back to sign in',
+    forgotPasswordLink: 'Forgot your password?',
     requestNewLink: 'Request a new link',
     genericFailure: 'We could not complete that. Try again in a moment.',
 
     // --- Session ------------------------------------------------------------
     signOut: 'Sign out',
+
+    // --- Sign in -----------------------------------------------------------
+    signInTitle: 'Sign in',
+    signInDescription: 'Use the email address your workspace invited.',
+    signInSubmit: 'Sign in',
+    signInSuccess: (displayName: string) => `Signed in as ${displayName}`,
+    passwordLabel: 'Password',
+    /**
+     * The API answers `invalid_credentials` for a wrong password, an unknown
+     * address and a suspended account alike, precisely so login cannot be used to
+     * find out which addresses exist. This line must not undo that by hinting.
+     */
+    invalidCredentialsError: 'That email address and password do not match',
+    /** A lockout arrives as `rate_limited`; the wait comes from `AUTH_POLICY`. */
+    lockedOutError: (minutes: number) =>
+      `Too many failed sign-in attempts. Try again in ${minutes} minutes, or ask an admin to unlock the account.`,
+    workspaceInactiveError: 'This workspace is not active. Contact your administrator.',
+    workspaceNotFoundError: 'This address is not set up for a workspace. Check the link you used.',
+    signInFailedError: 'We could not sign you in. Try again.',
+
+    // --- Accept an invitation ----------------------------------------------
+    inviteTitle: 'Accept your invitation',
+    inviteDescription: 'Set a password to finish creating your account.',
+    inviteLoading: 'Opening your invitation',
+    invitedByTo: (inviter: string, workspace: string) =>
+      `${inviter} invited you to join ${workspace}.`,
+    /** The platform-issued bootstrap invite has no inviting user to name. */
+    invitedTo: (workspace: string) => `You have been invited to join ${workspace}.`,
+    inviteExpiryLabel: 'Invitation expires',
+    inviteExpires: 'Expires',
+    inviteRoleLabel: 'Role',
+    inviteDisplayNameLabel: 'Your name',
+    inviteDisplayNameHint: 'Teammates see this on the conversations you handle.',
+    inviteDisplayNameRequiredError: 'Enter your name',
+    inviteDisplayNameTooLongError: 'That name is too long. Use a shorter one.',
+    invitePasswordLabel: 'Choose a password',
+    inviteSubmit: 'Create account',
+    inviteSuccess: (workspace: string) => `Welcome to ${workspace}`,
+    inviteFailedError: 'We could not create your account. Try again.',
+    inviteAccountExistsError:
+      'There is already an account for this address in this workspace. Sign in instead.',
+    inviteUnusableHeading: 'This invitation link cannot be used',
+    inviteIncompleteBody:
+      'The link is missing its token, which usually means it was truncated on the way to you. Open the invitation email again, without editing the address.',
+    inviteDeadLinkBody:
+      'It may have expired, already been used, or been withdrawn. Ask a workspace admin to send you a new one.',
 
     // --- Forgot password ---------------------------------------------------
     forgotTitle: 'Reset your password',

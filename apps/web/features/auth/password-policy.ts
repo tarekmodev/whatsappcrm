@@ -2,8 +2,8 @@ import { AUTH_POLICY, PasswordSchema } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 
 /**
- * Client-side validation for a new password, shared by the reset screen and the
- * change screen.
+ * Client-side validation for a new password, shared by every screen that sets
+ * one: reset, change, and invite acceptance.
  *
  * The rule itself is the contract's `PasswordSchema` — the identical object the
  * API validates with — so the two cannot disagree and nobody is sent on a round

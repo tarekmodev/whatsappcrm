@@ -60,20 +60,46 @@ export interface LoginQuery {
 }
 
 /**
+ * The origin an untrusted `?next=` is resolved against. `.invalid` is reserved by
+ * RFC 2606 and can never be a real host, so a value that still resolves here is
+ * one that named no host of its own.
+ */
+const REDIRECT_ORIGIN = 'https://redirect.invalid';
+
+/**
  * Narrows an untrusted `?next=` value to a path inside this app.
  *
  * Anything else is dropped rather than corrected: a value like
  * `//evil.example.com` or `https://evil.example.com` is a browser-protocol-relative
  * URL, and following it after a successful sign-in is an open redirect that hands
- * a freshly authenticated user to somebody else's site. A backslash is rejected
- * for the same reason — some browsers normalise `/\` to `//`.
+ * a freshly authenticated user to somebody else's site.
+ *
+ * The check is a real URL resolution, not string inspection, because those two
+ * disagree: the WHATWG parser strips tab, CR and LF *before* resolving, so
+ * `/{tab}/evil.example.com` reads as `/…` to every `startsWith` but resolves to
+ * `https://evil.example.com/`. It also treats a backslash as a slash for special
+ * schemes. Only the parser knows where the router will actually go, so this asks
+ * it — and returns its answer rather than the raw input, so nothing downstream
+ * can re-parse the same string differently.
  */
 export function parseRedirectPath(value: string | undefined, fallback: string): string {
+  // An in-app target is absolute-path-relative; a bare `inbox` is not a route
+  // this app ever links to, so it stays a fallback rather than being corrected.
   if (value === undefined || !value.startsWith('/')) {
     return fallback;
   }
 
-  return value.startsWith('//') || value.startsWith('/\\') ? fallback : value;
+  let resolved: URL;
+
+  try {
+    resolved = new URL(value, REDIRECT_ORIGIN);
+  } catch {
+    return fallback;
+  }
+
+  return resolved.origin === REDIRECT_ORIGIN
+    ? `${resolved.pathname}${resolved.search}${resolved.hash}`
+    : fallback;
 }
 
 export type InboxScope = ConversationListQuery['scope'];

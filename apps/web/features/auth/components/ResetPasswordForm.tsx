@@ -13,7 +13,7 @@ import { PasswordField } from './PasswordField';
 import { ResetPasswordFormSkeleton } from './ResetPasswordForm.Skeleton';
 import { confirmPasswordResetAction, type ResetOutcome } from '../auth.actions';
 import { validateNewPassword, hasErrors, type NewPasswordErrors } from '../password-policy';
-import { useResetToken } from '../useResetToken';
+import { useLinkToken } from '../useLinkToken';
 
 /**
  * Step two of recovery: redeem the link. Usage: `<ResetPasswordForm />`.
@@ -33,7 +33,7 @@ import { useResetToken } from '../useResetToken';
  */
 export function ResetPasswordForm() {
   const content = useContent();
-  const token = useResetToken();
+  const token = useLinkToken();
 
   if (token.status === 'reading') {
     return <ResetPasswordFormSkeleton />;

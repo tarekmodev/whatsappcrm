@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { AUTH_POLICY, PasswordResetRequestInputSchema } from '@whatsappcrm/contracts';
+import { AUTH_POLICY } from '@whatsappcrm/contracts';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { TextInput } from '@/components/ui/TextInput';
@@ -13,6 +13,7 @@ import { AuthCard } from './AuthCard';
 import { AuthForm } from './AuthForm';
 import { AuthOutcomeCard } from './AuthOutcomeCard';
 import { requestPasswordResetAction } from '../auth.actions';
+import { emailFieldError } from '../field-errors';
 
 /**
  * Step one of recovery: ask for a link. Usage: `<ForgotPasswordForm />`.
@@ -79,19 +80,13 @@ export function ForgotPasswordForm() {
         requestId={requestId}
         footer={<TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>}
         onSubmit={() => {
-          const trimmed = email.trim();
+          const nextEmailError = emailFieldError(email.trim());
 
-          if (!PasswordResetRequestInputSchema.safeParse({ email: trimmed }).success) {
-            setEmailError(
-              trimmed.length === 0
-                ? content.form.requiredFieldError
-                : content.form.invalidEmailError,
-            );
-            return;
+          setEmailError(nextEmailError ?? null);
+
+          if (nextEmailError === undefined) {
+            submit();
           }
-
-          setEmailError(null);
-          submit();
         }}
       >
         <Field label={content.auth.emailLabel} error={emailError ?? undefined} isRequired>

@@ -1,44 +1,22 @@
-import { ApiErrorSchema } from '@whatsappcrm/contracts';
 import { webEnv } from '@/lib/config/env';
 import { handleMockRequest } from '@/lib/api/mock/handlers';
+import { toApiRequestError } from '@/lib/api/error';
+import type { ApiRequest } from '@/lib/api/request';
 
 /**
- * The single entry point for talking to the API. Every resource module goes
- * through `apiRequest`, so auth headers, error mapping and the mock/real switch
- * live in exactly one place.
+ * The server-side entry point for talking to the API. Every resource module goes
+ * through `apiRequest`, so error mapping and the mock/real switch live in exactly
+ * one place.
  *
  * The mock branch is a *transport*, not a per-feature fake: resource modules are
  * byte-identical in both modes, so wiring TAR-81's real endpoints is one flag.
+ *
+ * The three calls that must be made by the browser rather than by this process
+ * go through `lib/api/auth-browser.ts` instead, which explains why.
  */
 
-export const HTTP_METHODS = ['GET', 'POST', 'PATCH', 'DELETE'] as const;
-export type HttpMethod = (typeof HTTP_METHODS)[number];
-
-export interface ApiRequest {
-  readonly method: HttpMethod;
-  /** Path below the API base, e.g. `/v1/users`. Query included, already encoded. */
-  readonly path: string;
-  readonly body?: unknown;
-  readonly headers?: Record<string, string>;
-}
-
-/**
- * Thrown for every non-2xx API response. Because the API guarantees one error
- * envelope, the whole frontend has exactly one error type to catch.
- */
-export class ApiRequestError extends Error {
-  readonly status: number;
-  readonly code: string;
-  readonly requestId: string | null;
-
-  constructor(status: number, code: string, message: string, requestId: string | null) {
-    super(message);
-    this.name = 'ApiRequestError';
-    this.status = status;
-    this.code = code;
-    this.requestId = requestId;
-  }
-}
+export { ApiRequestError } from '@/lib/api/error';
+export { HTTP_METHODS, type ApiRequest, type HttpMethod } from '@/lib/api/request';
 
 export async function apiRequest(request: ApiRequest): Promise<unknown> {
   if (webEnv.useMockApi) {
@@ -80,26 +58,4 @@ function resolveBaseUrl(): string {
   }
 
   return webEnv.serverApiBaseUrl;
-}
-
-async function toApiRequestError(response: Response): Promise<ApiRequestError> {
-  let body: unknown;
-
-  try {
-    body = await response.json();
-  } catch {
-    // A response that is not JSON at all means the failure happened before the
-    // API's error filter ran — a proxy 502, say. Do not pretend it was our shape.
-    return new ApiRequestError(response.status, 'upstream_error', response.statusText, null);
-  }
-
-  const parsed = ApiErrorSchema.safeParse(body);
-
-  if (!parsed.success) {
-    return new ApiRequestError(response.status, 'malformed_error', response.statusText, null);
-  }
-
-  const { code, message, requestId } = parsed.data.error;
-
-  return new ApiRequestError(response.status, code, message, requestId);
 }
