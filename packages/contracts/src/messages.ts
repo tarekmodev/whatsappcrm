@@ -198,4 +198,16 @@ export type MessageAttachment = z.infer<typeof MessageAttachmentSchema>;
 export type MessageResponse = z.infer<typeof MessageResponseSchema>;
 export type SendTemplateHeader = z.infer<typeof SendTemplateHeaderSchema>;
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
+/**
+ * The three arms of the send union, named individually.
+ *
+ * `SendMessageInput` is what a handler receives; these are what it narrows to,
+ * and the send path (TAR-68) branches on all three — the service window admits
+ * only the template arm once it has closed, and only the media arm names a
+ * `mediaId` to resolve. Published rather than re-derived with `Extract<…>` at
+ * each call site, so the name of an arm is the contract's to change.
+ */
+export type SendTextInput = z.infer<typeof SendTextInputSchema>;
+export type SendMediaInput = z.infer<typeof SendMediaInputSchema>;
+export type SendTemplateInput = z.infer<typeof SendTemplateInputSchema>;
 export type MessageListQuery = z.infer<typeof MessageListQuerySchema>;

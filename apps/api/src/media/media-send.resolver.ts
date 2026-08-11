@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { WhatsAppMediaService } from '../whatsapp/whatsapp-media.service';
-import { MediaReaderService } from './media-reader.service';
+import { MediaReaderService, type MediaObjectRecord } from './media-reader.service';
 
 /**
  * A stored media object, as the Cloud API client wants it named.
@@ -53,6 +53,26 @@ export class MediaSendResolver {
     private readonly reader: MediaReaderService,
     private readonly whatsappMedia: WhatsAppMediaService,
   ) {}
+
+  /**
+   * What a stored object *is*, without fetching its bytes or touching Meta.
+   *
+   * The send endpoint (TAR-68) needs this before it creates a message row: a
+   * `mediaId` that names nothing, or names a document the caller declared as an
+   * image, has to be a `validation_failed` while the composer is still open —
+   * not a message that goes `queued` and then `failed` several seconds later
+   * for a reason the agent cannot see.
+   *
+   * Exposed here rather than by exporting `MediaReaderService`, so
+   * `ConversationsModule` gains one method against the send seam it already
+   * depends on instead of a second route into this module's storage.
+   *
+   * Throws `MediaNotFoundError` for an id the tenant in scope does not own,
+   * which is also what it throws for one that does not exist.
+   */
+  async describeForSend(mediaId: string): Promise<MediaObjectRecord> {
+    return this.reader.describe(mediaId);
+  }
 
   /**
    * @param mediaId our `media_objects.id`, as a send request names it

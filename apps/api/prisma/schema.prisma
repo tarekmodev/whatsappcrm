@@ -215,6 +215,12 @@ enum ConversationStatus {
   open
   pending
   resolved
+  /// Finished, as distinct from `resolved`'s "handled, and I expect this to come
+  /// back". Added by TAR-68 (`20260811170000_conversation_status_closed`) to
+  /// close the drift with `CONVERSATION_STATUSES` in `@whatsappcrm/contracts`,
+  /// which has published it since TAR-39 — without it, a status update the
+  /// published schema calls valid reached the database as an invalid label.
+  closed
 
   @@map("conversation_status")
 }

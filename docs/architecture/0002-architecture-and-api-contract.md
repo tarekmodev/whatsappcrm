@@ -1377,3 +1377,58 @@ durable shared volume until an S3-compatible adapter replaces it. On a container
 layer, media is lost on every deploy while the rows naming it survive, and a second replica
 cannot read what the first wrote. Recorded here rather than only in a comment, because it is
 the one way to deploy this and be wrong.
+
+### Amendment 4 — the shared inbox (TAR-68)
+
+The Inbox endpoints have been in the surface since publication, and implementing them
+turned up four questions the surface does not answer. Each is ruled here rather than left
+to emerge from the implementation, which is what this section is for.
+
+**Four routes carry no permission in the table, and every one of them takes
+`conversation:read`.** `GET /conversations/{id}`, `PATCH /conversations/{id}/status`,
+`POST /conversations/{id}/read` and `GET /conversations/{id}/messages` name none, and
+`PermissionGuard` refuses a route that declares nothing (TAR-58) — so this had to be
+decided rather than defaulted. Resolving a thread and marking it read are things the agent
+handling it does dozens of times an hour, the matrix has no `conversation:update` to ask
+for, and adding one would be a change to 0004 for no separation anybody wants. What bounds
+these routes is not the permission but the **visibility** check each of them makes: a
+thread the caller may not see answers `not_found`, whatever their role.
+
+**An unclaimed conversation is visible to every agent on the tenant.** This is the one
+place TAR-68 widens a rule 0004 already shipped. `visibility.ts` says unclaimed work is
+invisible without `_all`, and its own comment argues that widening it "would expose the
+whole tenant backlog". That argument holds for tickets, where the backlog is work somebody
+has already triaged. It does not hold for conversations, because a conversation is not
+created by an agent — it is created by a **customer writing in** — so an unclaimed one is
+by construction visible to nobody, and a shared inbox in which an arriving message can be
+seen by no one is not an isolation property but an unanswered customer.
+
+So the widening is exactly one branch, bounded to this entity, and written beside the rule
+it differs from as `isVisibleOrUnclaimed`/`sharedInboxFilter`. `isVisible` is unchanged and
+stays the rule for tickets. Nothing else moves: a conversation claimed by somebody else, or
+routed to a team the principal is not in, stays invisible without `conversation:read_all`,
+and `scope=all` for an agent narrows to "mine ∪ my teams' ∪ unclaimed" rather than being
+rejected — the "narrow, never reject" rule, applied to a wider set.
+
+The consequence to state plainly: **claiming still needs `conversation:assign`**, which an
+agent does not hold. An agent can see and read unclaimed work and cannot take it; a
+supervisor, an assignment rule (TAR-24) or round-robin (TAR-23) routes it. If agents should
+self-serve, the answer is a `conversation:claim` permission bounded to unassigned records —
+a change to 0004, not to this.
+
+**A contact who has opted out is refused with `conflict`.** `ContactResponseSchema.optedOutAt`
+says an opt-out "blocks every outbound send, including templates", and the taxonomy has no
+code for it. `conflict` is the honest existing answer — the request conflicts with the
+resource's state, the same family `whatsapp_window_expired` sits in — and inventing
+`contact_opted_out` here would make `error-codes.ts` something an implementation edits
+rather than something this document rules. A dedicated code is a contract change worth
+making when a client needs to branch on it; until then the refusal is honoured and the code
+is approximate, which is the right way round.
+
+**`conversation_status` gains `closed`.** `CONVERSATION_STATUSES` has published four values
+since TAR-39 and the enum carried three, so a status update the published schema calls
+valid reached the database as an invalid label. Added additively in
+`20260811170000_conversation_status_closed`. `resolved` and `closed` are not
+interchangeable — `resolved` is "handled, and I expect this to come back", `closed` is
+"finished" — which is why the answer is to add the label rather than narrow the contract,
+and it is the same pair `ticket_status` already carries.

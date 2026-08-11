@@ -94,5 +94,6 @@ export type ConversationStatus = z.infer<typeof ConversationStatusSchema>;
 export type ConversationResponse = z.infer<typeof ConversationResponseSchema>;
 export type ConversationListQuery = z.infer<typeof ConversationListQuerySchema>;
 export type ConversationAssignInput = z.infer<typeof ConversationAssignInputSchema>;
+export type ConversationStatusUpdateInput = z.infer<typeof ConversationStatusUpdateInputSchema>;
 export type InternalNoteResponse = z.infer<typeof InternalNoteResponseSchema>;
 export type InternalNoteCreateInput = z.infer<typeof InternalNoteCreateInputSchema>;

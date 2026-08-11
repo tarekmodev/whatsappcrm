@@ -1,0 +1,39 @@
+-- Let a conversation be closed (TAR-68).
+--
+-- `@whatsappcrm/contracts` has published `closed` in `CONVERSATION_STATUSES`
+-- since TAR-39, and `ConversationStatusUpdateInputSchema` accepts it — but
+-- `conversation_status` only ever carried `open`, `pending` and `resolved`.
+-- `PATCH /api/v1/conversations/{id}/status` is the first code that has to write
+-- the value, and without it a request the published contract calls valid
+-- reaches the database as an invalid enum label: a 500 for input the schema
+-- validated.
+--
+-- The two terminal states are not interchangeable, which is why the answer is
+-- to add the label rather than to narrow the contract. `resolved` is the
+-- agent's "handled, and I expect this thread to come back"; `closed` is
+-- "finished". `ticket_status` already carries both for the same reason
+-- (0003, ticket lifecycle), and the inbox filter is the place an operator tells
+-- them apart.
+--
+-- ---------------------------------------------------------------------------
+-- Additive and idempotent
+-- ---------------------------------------------------------------------------
+--
+-- `ADD VALUE IF NOT EXISTS` re-runs cleanly, which is what the fleet runner
+-- needs: databases sit at different versions and a run may resume mid-fleet.
+-- Nothing reads or writes the new value in this transaction — PostgreSQL
+-- forbids using an enum value in the transaction that added it — so this is
+-- safe on a fresh database, on one a version behind, and on one where a
+-- previous run stopped halfway.
+--
+-- No table is rewritten and no row is touched: adding a label to an enum is a
+-- catalogue update, so it is O(1) regardless of how large `conversations` has
+-- grown. Expected runtime on the largest tenant: milliseconds.
+--
+-- Appended at the end of the label list rather than inserted after `resolved`.
+-- Enum ordering is the sort order for `ORDER BY status`, and no query sorts by
+-- it — the inbox sorts on `last_message_at` — so position carries no meaning
+-- here, while `BEFORE`/`AFTER` placement would make the statement
+-- non-idempotent in a way `IF NOT EXISTS` cannot cover.
+
+ALTER TYPE "conversation_status" ADD VALUE IF NOT EXISTS 'closed';

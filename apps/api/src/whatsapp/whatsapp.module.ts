@@ -31,6 +31,14 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
  * a cache of Meta's approval decisions, and today they are only as current as
  * the last sync somebody asked for.
  *
+ * `MessageTemplateQueryService` is exported for the send path (TAR-68), which
+ * has to prove a named template is approved on the conversation's number
+ * *before* it calls Meta — otherwise the refusal comes back as an opaque
+ * provider error, after the message row exists. It is a read of this module's
+ * own table through this module's own rules, which is exactly what an export is
+ * for; the alternative was the inbox querying `message_templates` directly and
+ * re-implementing the approved-only filter.
+ *
  * `WhatsAppAccessTokenCipher` and `WhatsAppCredentialResolver` stay **private**.
  * They are the only two places a Meta access token is encrypted or decrypted,
  * and the value of that property is entirely in nobody else being able to.
@@ -72,6 +80,11 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
     PlatformAdminGuard,
     ApiExceptionFilter,
   ],
-  exports: [WhatsAppSenderService, WhatsAppMediaService, MessageTemplateSyncService],
+  exports: [
+    WhatsAppSenderService,
+    WhatsAppMediaService,
+    MessageTemplateSyncService,
+    MessageTemplateQueryService,
+  ],
 })
 export class WhatsAppModule {}
