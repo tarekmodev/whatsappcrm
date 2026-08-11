@@ -1,12 +1,18 @@
 import { Inject, Injectable, type CanActivate, type ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { ApiException } from '../common/errors/api.exception';
+import { isPlatformRoute } from '../common/request-pipeline/route-access';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 
 /**
  * Resolves **which tenant** a request is for, from the host it arrived on, and
  * puts it in scope (TAR-39, request pipeline slot 2).
+ *
+ * Installed globally by `RequestPipelineModule` since TAR-58, so it runs on
+ * every route. `@PlatformRoute()` is the only way past it, and it is the only
+ * decorator in the codebase that removes tenant resolution outright.
  *
  * The host, never the caller. A tenant id taken from a header, a body field or
  * a token claim is a tenant id an attacker can choose; a hostname is chosen by
@@ -41,11 +47,19 @@ import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 @Injectable()
 export class HostTenantGuard implements CanActivate {
   constructor(
+    private readonly reflector: Reflector,
     @Inject(SYSTEM_PRISMA) private readonly systemPrisma: SystemPrisma,
     private readonly tenantContext: TenantContextService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    if (isPlatformRoute(this.reflector, context)) {
+      // No tenant is left in scope, deliberately: `TenantPrisma` then refuses
+      // every statement, so a platform route that reaches for tenant data fails
+      // closed instead of reading whichever tenant happened to be resolved.
+      return true;
+    }
+
     const request = context.switchToHttp().getRequest<Request>();
     const hostname = hostnameOf(request);
 

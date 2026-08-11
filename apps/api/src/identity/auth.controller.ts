@@ -1,20 +1,10 @@
-import {
-  Body,
-  Controller,
-  HttpCode,
-  HttpStatus,
-  Post,
-  Req,
-  Res,
-  UseFilters,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res, UseFilters } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LoginInputSchema, type LoginInput, type SessionResponse } from '@whatsappcrm/contracts';
 import type { Request, Response } from 'express';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
+import { Public } from '../common/request-pipeline/route-access';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { AuthService } from './auth.service';
 import { AccountLockedError } from './identity.errors';
 import { translateIdentityFailure } from './identity.http';
@@ -24,23 +14,20 @@ import { isSecureCookieConfigured, setSessionCookie } from './session-cookie';
  * The one route that runs before anybody is signed in (TAR-53, "Public — no
  * session required").
  *
- * It is a separate controller from `SessionController` rather than a `@Public()`
- * route inside it for one reason: guards are declared once, on the controller,
- * so a route added later inherits them and forgetting one is not possible by
- * omission. Login genuinely cannot run behind `PrincipalGuard`, and mixing the
- * two on one class would mean per-route guard lists — which is how a route
- * eventually ships with the wrong ones.
+ * `@Public()` is declared on the class, not the route, and it stays a separate
+ * controller from `SessionController` for that reason: the exemption is stated
+ * once, so a route added here inherits it and a route added to
+ * `SessionController` cannot pick it up by accident. Login genuinely cannot run
+ * behind `PrincipalGuard`; mixing the two postures on one class is how a route
+ * eventually ships with the wrong one.
  *
- * `HostTenantGuard` still runs. Even an unauthenticated request has a tenant:
- * it comes from the request `Host`, which is why there is no tenant field
- * anywhere in the login contract for a caller to choose.
- *
- * ⚠️ TAR-58 replaces this arrangement with a global `AuthGuard` and a
- * `@Public()` decorator, at which point this class keeps its guard and loses
- * nothing else.
+ * `HostTenantGuard` still runs — that is precisely what `@Public()` does *not*
+ * turn off. Even an unauthenticated request has a tenant: it comes from the
+ * request `Host`, which is why there is no tenant field anywhere in the login
+ * contract for a caller to choose.
  */
 @Controller({ path: 'auth', version: '1' })
-@UseGuards(HostTenantGuard)
+@Public()
 @UseFilters(ApiExceptionFilter)
 export class AuthController {
   private readonly cookieSecure: boolean;

@@ -9,7 +9,6 @@ import {
   Post,
   Query,
   UseFilters,
-  UseGuards,
 } from '@nestjs/common';
 import {
   TeamCreateInputSchema,
@@ -25,22 +24,20 @@ import {
 } from '@whatsappcrm/contracts';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
-import { PermissionGuard } from '../rbac/permission.guard';
-import { PrincipalGuard } from '../rbac/principal.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { translatePeopleFailure } from './people.http';
 import { TeamsService } from './teams.service';
 
 /**
- * Teams (TAR-22 AC2). Same guard stack and ordering as `UsersController`.
+ * Teams (TAR-22 AC2). Behind the global pipeline, exactly like
+ * `UsersController` — neither declares a guard, and since TAR-58 that is what
+ * being fully protected looks like.
  *
  * `team:read` for every role, because an agent needs the names of the teams
  * their conversations are routed to; `team:write` for supervisor and admin,
  * which is what TAR-22 AC3's "manage all agents/teams in their tenant" asks for.
  */
 @Controller({ path: 'teams', version: '1' })
-@UseGuards(HostTenantGuard, PrincipalGuard, PermissionGuard)
 @UseFilters(ApiExceptionFilter)
 export class TeamsController {
   constructor(private readonly teams: TeamsService) {}

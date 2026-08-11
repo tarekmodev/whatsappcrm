@@ -10,7 +10,6 @@ import {
   Post,
   Query,
   UseFilters,
-  UseGuards,
 } from '@nestjs/common';
 import {
   AvailabilityUpdateInputSchema,
@@ -30,26 +29,22 @@ import {
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
 import { AnyPrincipal, RequirePermission } from '../rbac/require-permission.decorator';
-import { PermissionGuard } from '../rbac/permission.guard';
-import { PrincipalGuard } from '../rbac/principal.guard';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { translatePeopleFailure } from './people.http';
 import { UsersService } from './users.service';
 
 /**
  * The tenant's people (TAR-22, TAR-39 endpoint table).
  *
- * The three guards are declared on the controller rather than per route, in the
- * order the pipeline needs them: **where** the request is (`HostTenantGuard`,
+ * It declares no guards. `RequestPipelineModule` runs all three on every route
+ * in the application since TAR-58 — **where** the request is (`HostTenantGuard`,
  * from the host), **who** is making it (`PrincipalGuard`), then **may they**
- * (`PermissionGuard`). A route added later inherits all three; forgetting one is
- * not possible by omission, only by deliberately overriding.
+ * (`PermissionGuard`) — so a route added later is protected whether or not
+ * anybody remembers, and opting out takes a decorator a reviewer can see.
  *
  * `PermissionGuard` denies by default, so every route below states its
  * permission — including the one that needs none, which says so out loud.
  */
 @Controller({ path: 'users', version: '1' })
-@UseGuards(HostTenantGuard, PrincipalGuard, PermissionGuard)
 @UseFilters(ApiExceptionFilter)
 export class UsersController {
   constructor(private readonly users: UsersService) {}

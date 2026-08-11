@@ -26,6 +26,13 @@ export class ApiException extends HttpException {
     message: string,
     readonly details?: readonly ApiErrorDetail[],
   ) {
-    super(message, httpStatusForErrorCode(code));
+    // The payload carries the code rather than only the message, so the taxonomy
+    // survives whichever filter renders it. `ApiExceptionFilter` reads `code` off
+    // the instance, but a global pipeline guard (TAR-58) throws on routes whose
+    // controller may not have declared that filter, and `AllExceptionsFilter`
+    // then falls back to deriving a code from the status — turning
+    // `unauthenticated` into `unauthorized`. Nest keeps `message` in sync with
+    // the `message` key, so nothing else about the exception changes.
+    super({ code, message, ...(details ? { details } : {}) }, httpStatusForErrorCode(code));
   }
 }

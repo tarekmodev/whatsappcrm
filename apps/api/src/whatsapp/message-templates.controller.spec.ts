@@ -1,8 +1,14 @@
 import type { Server } from 'node:http';
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
-import { ApiErrorSchema, MessageTemplatePageSchema } from '@whatsappcrm/contracts';
+import {
+  ApiErrorSchema,
+  MessageTemplatePageSchema,
+  permissionsForRole,
+  type SessionPrincipal,
+} from '@whatsappcrm/contracts';
 import request from 'supertest';
 import { configureApp } from '../bootstrap';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
@@ -10,6 +16,9 @@ import { TenantContextMiddleware } from '../common/tenant-context/tenant-context
 import { TenantContextModule } from '../common/tenant-context/tenant-context.module';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
+import { PermissionGuard } from '../rbac/permission.guard';
+import { PrincipalGuard } from '../rbac/principal.guard';
+import { ANONYMOUS, PRINCIPAL_SOURCE, resolved } from '../rbac/principal.source';
 import {
   InvalidCursorError,
   MessageTemplateQueryService,
@@ -20,9 +29,19 @@ import { MessageTemplatesController } from './message-templates.controller';
 /**
  * The HTTP contract of `GET /api/v1/message-templates`.
  *
- * The first assertion is the load-bearing one until TAR-35 lands: with no
- * tenant resolved, the endpoint answers 401 and never reaches a query. There is
- * no path from an unauthenticated request to a row.
+ * The load-bearing assertion is the first one: with no session, the endpoint
+ * answers 401 and never reaches a query. There is no path from an
+ * unauthenticated request to a row.
+ *
+ * It is proved with the **real** `PrincipalGuard` and `PermissionGuard`,
+ * registered as `APP_GUARD` the way `RequestPipelineModule` registers them, and
+ * a fake principal source in place of the session read (TAR-58). Before that
+ * story this controller had no guards at all and stood on a hand-written tenant
+ * check; the point of asserting against the shipped guards is that the same
+ * refusal now comes from the pipeline rather than from this class remembering.
+ *
+ * `HostTenantGuard` needs a database, so the middleware below stands in for it —
+ * one `setTenant` call, which is all that guard contributes.
  */
 
 const WABA_ROW_ID = '60444444-4444-7444-8444-444444444401';
@@ -58,11 +77,23 @@ const TEMPLATE = {
   },
 };
 
+const PRINCIPAL: SessionPrincipal = {
+  userId: '50444444-4444-7444-8444-4444444444a1',
+  tenantId: TENANT_ID,
+  email: 'agent@example.invalid',
+  displayName: 'Ada Agent',
+  role: 'agent',
+  permissions: [...permissionsForRole('agent')],
+  teamIds: [],
+  sessionId: '50444444-4444-7444-8444-4444444444f1',
+  expiresAt: '2036-12-31T23:59:59.000Z',
+};
+
 describe('GET /api/v1/message-templates', () => {
   let app: INestApplication;
   let server: Server;
   let list: jest.Mock;
-  let tenantId: string | null;
+  let signedIn: boolean;
 
   beforeAll(async () => {
     list = jest.fn();
@@ -74,21 +105,27 @@ describe('GET /api/v1/message-templates', () => {
         ApiExceptionFilter,
         { provide: MessageTemplateQueryService, useValue: { list } },
         { provide: ConfigService, useValue: { get: () => undefined } },
+        {
+          provide: PRINCIPAL_SOURCE,
+          useValue: { resolve: () => Promise.resolve(signedIn ? resolved(PRINCIPAL) : ANONYMOUS) },
+        },
+        { provide: APP_GUARD, useClass: PrincipalGuard },
+        { provide: APP_GUARD, useClass: PermissionGuard },
       ],
     }).compile();
-
-    // Stands in for TAR-35's `AuthGuard`, which is what will eventually put a
-    // tenant on the scope the middleware opens. Spied on the prototype rather
-    // than swapping the provider, because the middleware and the error filter
-    // both need the real service.
-    jest
-      .spyOn(TenantContextService.prototype, 'tenantId', 'get')
-      .mockImplementation(() => tenantId);
 
     app = moduleRef.createNestApplication();
 
     const middleware = app.get(TenantContextMiddleware);
+    const tenantContext = app.get(TenantContextService);
+
     app.use(middleware.use.bind(middleware));
+    // Stands in for `HostTenantGuard`, which needs a database. Everything the
+    // guards under test read is on the scope the middleware opened.
+    app.use((_request: unknown, _response: unknown, next: () => void) => {
+      tenantContext.setTenant(TENANT_ID);
+      next();
+    });
 
     configureApp(app);
     await app.init();
@@ -100,7 +137,7 @@ describe('GET /api/v1/message-templates', () => {
   });
 
   beforeEach(() => {
-    tenantId = TENANT_ID;
+    signedIn = true;
     list.mockReset().mockResolvedValue({ items: [TEMPLATE], nextCursor: null });
   });
 
@@ -108,8 +145,8 @@ describe('GET /api/v1/message-templates', () => {
     return request(server).get(`/api/v1/message-templates${query}`);
   }
 
-  it('refuses a request with no tenant resolved, without reaching a query', async () => {
-    tenantId = null;
+  it('refuses a request with no session, without reaching a query', async () => {
+    signedIn = false;
 
     const response = await get();
 

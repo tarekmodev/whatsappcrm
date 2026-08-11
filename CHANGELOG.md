@@ -12,6 +12,29 @@ change.
 
 ## [Unreleased]
 
+### Security
+
+- **The auth pipeline is global, so a new endpoint is closed before anybody thinks about
+  it** — `HostTenantGuard`, `PrincipalGuard` and `PermissionGuard` are registered as
+  `APP_GUARD` by a new `RequestPipelineModule` and run on every route in the application.
+  They were opt-in per controller until now, and two controllers had already shipped
+  without them: `GET /api/v1/message-templates` and the three `/api/v1/media` routes stood
+  on a hand-written tenant check that kept anonymous callers out and enforced no
+  permission at all. Both now state their permission like every other route. Opting out
+  takes one of exactly two decorators — `@Public()` (no session; the tenant is still
+  resolved from the host, for login and password reset) or `@PlatformRoute()` (outside
+  tenancy entirely, for health, the Meta webhook and `/api/v1/admin/*`, each authenticated
+  by its own mechanism) — and `route-posture.spec.ts` fails CI for any registered route
+  that declares neither a permission nor an exemption. (TAR-58)
+- **A session replayed at another tenant's host is answered `tenant_mismatch` and paged**
+  — the tenant-scoped session read matches zero rows under RLS, which is indistinguishable
+  from an expired cookie, so `SessionReplayProbe` runs one read-only unscoped `SELECT` to
+  classify the rejection (TAR-53, decision 2 — the sixth and last entry on ADR 0002's
+  `SystemPrisma` call-site list). A live session elsewhere emits an
+  `auth.tenant_mismatch` event carrying both tenants, the session, the user and the target
+  route; anything else stays an ordinary `unauthenticated`. The response body carries none
+  of it, and neither log line nor response ever contains the token. (TAR-58)
+
 ### Added
 
 - **Login and the session lifecycle** — `POST /api/v1/auth/login` authenticates an email

@@ -1,12 +1,12 @@
 import { Global, Module } from '@nestjs/common';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { PasswordService } from './password.service';
 import { SessionCacheService } from './session-cache.service';
 import { SessionController } from './session.controller';
 import { SessionPrincipalSource } from './session-principal.source';
+import { SessionReplayProbe } from './session-replay.probe';
 import { SessionService } from './session.service';
 
 /**
@@ -34,9 +34,11 @@ import { SessionService } from './session.service';
  * registry. Adding an `imports` edge in either direction is what would create
  * one.
  *
- * `HostTenantGuard` and `ApiExceptionFilter` are declared locally for the same
- * reason `PeopleModule` declares them: `TenancyModule` keeps its providers
- * private, and both are stateless.
+ * `ApiExceptionFilter` is declared locally for the same reason `PeopleModule`
+ * declares it: it is stateless wiring for this module's own controllers. The
+ * `HostTenantGuard` instance that sat beside it went away with TAR-58 —
+ * `RequestPipelineModule` now installs it on every route, so `AuthController`
+ * states `@Public()` instead of a guard list.
  */
 @Global()
 @Module({
@@ -47,7 +49,7 @@ import { SessionService } from './session.service';
     SessionService,
     SessionCacheService,
     SessionPrincipalSource,
-    HostTenantGuard,
+    SessionReplayProbe,
     ApiExceptionFilter,
   ],
   exports: [PasswordService, SessionService, SessionPrincipalSource],
