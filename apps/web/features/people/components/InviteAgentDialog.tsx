@@ -3,7 +3,6 @@
 import { useCallback, useState } from 'react';
 import {
   InviteCreateInputSchema,
-  TENANT_ROLES,
   type TeamResponse,
   type TenantRole,
 } from '@whatsappcrm/contracts';
@@ -16,22 +15,31 @@ import { useActionForm } from '@/lib/hooks/useActionForm';
 import { useContent } from '@/lib/content';
 import { inviteAgentAction } from '../people.actions';
 import { roleOptions } from '../presentation';
+import { invitableRoles, type PeopleCaller } from '../role-assignment';
+import { StaticFieldValue } from '@/components/ui/StaticFieldValue';
 import { TeamSelectionField } from './TeamSelectionField';
 
 /**
  * Creates an agent with a role and team memberships. Usage:
- * `<InviteAgentDialog teams={teams} onClose={…} />` — mounted only while open, so
- * its chunk loads on first use.
+ * `<InviteAgentDialog teams={teams} caller={caller} onClose={…} />` — mounted only
+ * while open, so its chunk loads on first use.
  *
  * Validation runs against the contract's `InviteCreateInputSchema`, the identical
  * object the API validates with, so the user is not sent on a round trip to learn
  * that an email is malformed.
+ *
+ * The role picker is capped by `invitableRoles`: a caller without `user:set_role`
+ * may invite an `agent` and nothing else, because `InviteCreateInputSchema.role`
+ * accepts any role and without the cap a supervisor could mint an admin (TAR-79,
+ * delta 1). The API refuses it either way; this stops the console offering it.
  */
 export function InviteAgentDialog({
   teams,
+  caller,
   onClose,
 }: {
   teams: readonly TeamResponse[];
+  caller: PeopleCaller;
   onClose: () => void;
 }) {
   const content = useContent();
@@ -40,6 +48,7 @@ export function InviteAgentDialog({
   const [role, setRole] = useState<TenantRole>('agent');
   const [teamIds, setTeamIds] = useState<readonly string[]>([]);
   const [emailError, setEmailError] = useState<string | null>(null);
+  const roles = invitableRoles(caller);
 
   const perform = useCallback(async () => {
     return inviteAgentAction({ email: email.trim(), role, teamIds: [...teamIds] });
@@ -105,20 +114,30 @@ export function InviteAgentDialog({
         )}
       </Field>
 
-      <Field label={content.people.inviteRoleLabel} hint={content.roleDescriptions[role]}>
-        {({ controlId, describedBy }) => (
-          <Select
-            id={controlId}
-            aria-describedby={describedBy}
-            name="role"
-            value={role}
-            options={roleOptions(TENANT_ROLES)}
-            onChange={(event) => {
-              setRole(event.target.value as TenantRole);
-            }}
-          />
-        )}
-      </Field>
+      {roles.length > 1 ? (
+        <Field label={content.people.inviteRoleLabel} hint={content.roleDescriptions[role]}>
+          {({ controlId, describedBy }) => (
+            <Select
+              id={controlId}
+              aria-describedby={describedBy}
+              name="role"
+              value={role}
+              options={roleOptions(roles)}
+              onChange={(event) => {
+                setRole(event.target.value as TenantRole);
+              }}
+            />
+          )}
+        </Field>
+      ) : (
+        // One option is not a choice. State the role and why it is fixed, rather
+        // than rendering a select the user cannot change.
+        <Field label={content.people.inviteRoleLabel} hint={content.people.roleNotAssignableHint}>
+          {({ controlId }) => (
+            <StaticFieldValue id={controlId}>{content.roles[role]}</StaticFieldValue>
+          )}
+        </Field>
+      )}
 
       <TeamSelectionField teams={teams} selectedTeamIds={teamIds} onChange={setTeamIds} />
     </FormDialog>

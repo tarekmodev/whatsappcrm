@@ -1,0 +1,9 @@
+.value {
+  display: flex;
+  align-items: center;
+  /* Matches a control's height, so swapping between the editable and read-only
+     variants of a form leaves the layout alone. */
+  min-block-size: var(--size-control-md);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}

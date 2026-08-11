@@ -7,6 +7,7 @@ import { SectionCard } from '@/components/ui/SectionCard';
 import { useContent } from '@/lib/content';
 import { AgentsTable, AgentsTableSkeleton } from './AgentsTable';
 import { LazyInviteAgentDialog } from './agent-dialogs.lazy';
+import type { PeopleCaller } from '../role-assignment';
 
 /**
  * The agents section: the card, the invite trigger and the table. Usage:
@@ -22,9 +23,18 @@ export interface AgentsSectionProps {
   canInvite: boolean;
   canEdit: boolean;
   canRemove: boolean;
+  /** Who is looking; the dialogs need it to cap role assignment. */
+  caller: PeopleCaller;
 }
 
-export function AgentsSection({ users, teams, canInvite, canEdit, canRemove }: AgentsSectionProps) {
+export function AgentsSection({
+  users,
+  teams,
+  canInvite,
+  canEdit,
+  canRemove,
+  caller,
+}: AgentsSectionProps) {
   const content = useContent();
   const [isInviting, setIsInviting] = useState(false);
 
@@ -46,10 +56,17 @@ export function AgentsSection({ users, teams, canInvite, canEdit, canRemove }: A
         ) : undefined
       }
     >
-      <AgentsTable users={users} teams={teams} canEdit={canEdit} canRemove={canRemove} />
+      <AgentsTable
+        users={users}
+        teams={teams}
+        canEdit={canEdit}
+        canRemove={canRemove}
+        caller={caller}
+      />
 
       {isInviting ? (
         <LazyInviteAgentDialog
+          caller={caller}
           teams={teams}
           onClose={() => {
             setIsInviting(false);

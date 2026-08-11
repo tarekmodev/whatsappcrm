@@ -119,7 +119,7 @@ describe('role enforcement', () => {
     ).rejects.toMatchObject({ status: 403, code: 'forbidden' });
   });
 
-  it('lets a supervisor invite and create teams but not edit or remove a user', async () => {
+  it('lets a supervisor invite, edit and create teams, but not remove a user', async () => {
     asRole('supervisor');
 
     await expect(
@@ -130,6 +130,32 @@ describe('role enforcement', () => {
       }),
     ).resolves.toMatchObject({ status: 'invited' });
 
+    // TAR-79 granted `user:update`: a supervisor may suspend someone or change
+    // their teams from the person's side.
+    await expect(
+      handleMockRequest({
+        method: 'PATCH',
+        path: `/v1/users/${MOCK_IDS.users.amina}`,
+        body: { status: 'suspended' },
+      }),
+    ).resolves.toMatchObject({ status: 'suspended' });
+
+    // Deletion stays admin-only.
+    await expect(
+      handleMockRequest({ method: 'DELETE', path: `/v1/users/${MOCK_IDS.users.amina}` }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+/**
+ * TAR-79's three role-assignment invariants. These are the escalation paths, so
+ * they are asserted against the transport rather than trusted to the dialog that
+ * hides the control.
+ */
+describe('role assignment', () => {
+  it('refuses a supervisor a role change, even though they may edit the person', async () => {
+    asRole('supervisor');
+
     await expect(
       handleMockRequest({
         method: 'PATCH',
@@ -137,10 +163,65 @@ describe('role enforcement', () => {
         body: { role: 'supervisor' },
       }),
     ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('refuses a supervisor an invite above agent, so they cannot mint an admin', async () => {
+    asRole('supervisor');
 
     await expect(
-      handleMockRequest({ method: 'DELETE', path: `/v1/users/${MOCK_IDS.users.amina}` }),
+      handleMockRequest({
+        method: 'POST',
+        path: '/v1/users/invites',
+        body: { email: 'escalation@northwind.example', role: 'admin', teamIds: [] },
+      }),
     ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('refuses an admin a change to their own role, so nobody can self-demote', async () => {
+    asRole('admin');
+
+    await expect(
+      handleMockRequest({
+        method: 'PATCH',
+        path: `/v1/users/${MOCK_IDS.users.omar}`,
+        body: { role: 'agent' },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('lets an admin change someone else’s role', async () => {
+    asRole('admin');
+
+    await expect(
+      handleMockRequest({
+        method: 'PATCH',
+        path: `/v1/users/${MOCK_IDS.users.amina}`,
+        body: { role: 'supervisor' },
+      }),
+    ).resolves.toMatchObject({ role: 'supervisor' });
+  });
+});
+
+describe('removal is a soft delete', () => {
+  it('keeps the row as `removed` rather than dropping it', async () => {
+    await handleMockRequest({ method: 'DELETE', path: `/v1/users/${MOCK_IDS.users.amina}` });
+
+    // Absent from the default list, so the account is gone from every screen…
+    const listed = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/users?limit=100',
+    })) as CursorPage<UserResponse>;
+
+    expect(listed.items.map((user) => user.id)).not.toContain(MOCK_IDS.users.amina);
+
+    // …but still there when asked for by name, so the record survives.
+    const removed = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/users?limit=100&status=removed',
+    })) as CursorPage<UserResponse>;
+
+    expect(removed.items.map((user) => user.id)).toContain(MOCK_IDS.users.amina);
+    expect(removed.items[0]?.occupiesSeat).toBe(false);
   });
 });
 

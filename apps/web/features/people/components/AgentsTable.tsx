@@ -12,6 +12,7 @@ import { useContent } from '@/lib/content';
 import { AgentIdentity } from './AgentIdentity';
 import { TeamNameList } from './TeamNameList';
 import { agentColumnMeta } from './agent-columns';
+import type { PeopleCaller } from '../role-assignment';
 import { AGENTS_PAGE_SIZE } from '../constants';
 import { AVAILABILITY_TONES, ROLE_TONES, USER_STATUS_TONES } from '../presentation';
 import { LazyEditAgentDialog, LazyRemoveAgentDialog } from './agent-dialogs.lazy';
@@ -34,9 +35,15 @@ export interface AgentsTableProps {
   teams: readonly TeamResponse[];
   canEdit: boolean;
   canRemove: boolean;
+  /**
+   * Who is looking: their id, role and whether they hold `user:set_role`. The edit
+   * dialog needs all three, because assigning a role is narrower than `canEdit` —
+   * see `role-assignment.ts`.
+   */
+  caller: PeopleCaller;
 }
 
-export function AgentsTable({ users, teams, canEdit, canRemove }: AgentsTableProps) {
+export function AgentsTable({ users, teams, canEdit, canRemove, caller }: AgentsTableProps) {
   const content = useContent();
   const [editing, setEditing] = useState<UserResponse | null>(null);
   const [removing, setRemoving] = useState<UserResponse | null>(null);
@@ -125,6 +132,7 @@ export function AgentsTable({ users, teams, canEdit, canRemove }: AgentsTablePro
         <LazyEditAgentDialog
           user={editing}
           teams={teams}
+          caller={caller}
           onClose={() => {
             setEditing(null);
           }}

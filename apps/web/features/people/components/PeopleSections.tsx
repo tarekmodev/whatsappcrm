@@ -1,8 +1,9 @@
-import type { Permission } from '@whatsappcrm/contracts';
+import type { Permission, SessionPrincipal } from '@whatsappcrm/contracts';
 import { Stack } from '@/components/layout/Stack';
 import type { PermissionChecker } from '@/lib/session/permissions';
 import { loadPeople, type PeopleFilters } from '../people.data';
 import { AgentsSection, AgentsSectionSkeleton } from './AgentsSection';
+import type { PeopleCaller } from '../role-assignment';
 import { TeamsSection, TeamsSectionSkeleton } from './TeamsSection';
 
 /**
@@ -17,18 +18,31 @@ import { TeamsSection, TeamsSectionSkeleton } from './TeamsSection';
 export const PEOPLE_PERMISSIONS = {
   invite: 'user:invite',
   editAgent: 'user:update',
+  /**
+   * Deliberately separate from `editAgent`. TAR-79 split assigning a role out of
+   * `user:update` so a supervisor holding the latter cannot promote themselves,
+   * and the console has to honour the split or it offers a control the API refuses.
+   */
+  setRole: 'user:set_role',
   removeAgent: 'user:remove',
   writeTeam: 'team:write',
 } as const satisfies Record<string, Permission>;
 
 export async function PeopleSections({
+  principal,
   checker,
   filters,
 }: {
+  principal: SessionPrincipal;
   checker: PermissionChecker;
   filters: PeopleFilters;
 }) {
   const { users, teams } = await loadPeople(filters);
+  const caller: PeopleCaller = {
+    userId: principal.userId,
+    role: principal.role,
+    canSetRole: checker.can(PEOPLE_PERMISSIONS.setRole),
+  };
 
   return (
     <Stack gap="5">
@@ -38,6 +52,7 @@ export async function PeopleSections({
         canInvite={checker.can(PEOPLE_PERMISSIONS.invite)}
         canEdit={checker.can(PEOPLE_PERMISSIONS.editAgent)}
         canRemove={checker.can(PEOPLE_PERMISSIONS.removeAgent)}
+        caller={caller}
       />
       <TeamsSection
         teams={teams}

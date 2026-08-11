@@ -57,7 +57,11 @@ export default async function PeoplePage({
           key={`${filters.role ?? ''}:${filters.q ?? ''}`}
           fallback={<PeopleSectionsSkeleton />}
         >
-          <PeopleSections checker={session.checker} filters={filters} />
+          <PeopleSections
+            principal={session.principal}
+            checker={session.checker}
+            filters={filters}
+          />
         </Suspense>
       </SectionErrorBoundary>
     </Stack>

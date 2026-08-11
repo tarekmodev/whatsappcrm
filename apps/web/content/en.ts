@@ -59,6 +59,10 @@ export const content = {
     invited: 'Invited',
     active: 'Active',
     suspended: 'Suspended',
+    // A soft delete. `DELETE /users/{id}` sets it rather than dropping the row,
+    // so the record of what that person did survives — it is reachable only by
+    // asking for it explicitly, but it still has to have a label.
+    removed: 'Removed',
   } satisfies Record<UserStatus, string>,
 
   availability: {
@@ -165,6 +169,12 @@ export const content = {
     editTeamsLabel: 'Teams',
     editStatusLabel: 'Status',
     editSuccess: (name: string) => `${name} updated`,
+    roleNotEditableHint: 'Only an admin can change someone’s role, and never their own.',
+    roleNotAssignableHint: 'Only an admin can invite someone as a supervisor or an admin.',
+    roleNotAssignableError: 'You can only invite someone as an agent.',
+    roleEscalationError: 'You cannot give someone a role above your own.',
+    selfRoleChangeError: 'You cannot change your own role. Ask another admin.',
+    statusHint: 'Suspending someone cuts their access immediately and is reversible.',
 
     removeAgent: 'Remove',
     removeAgentAria: (name: string) => `Remove ${name}`,

@@ -7,6 +7,7 @@ import {
   TeamUpdateInputSchema,
   UserListQuerySchema,
   UserUpdateInputSchema,
+  isRoleWithin,
   roleHasPermission,
   type ConversationResponse,
   type CursorPage,
@@ -158,6 +159,10 @@ function listUsers({ principal, query }: RouteContext): CursorPage<UserResponse>
   const items = tenantUsers(principal)
     .filter((user) => role === undefined || user.role === role)
     .filter((user) => status === undefined || user.status === status)
+    // A soft delete has to be absent from every screen, not merely marked, so
+    // `removed` is excluded unless asked for by name. Filtering it in some queries
+    // and not others is how a "deleted" account reappears in a picker.
+    .filter((user) => status !== undefined || user.status !== 'removed')
     .filter((user) => teamId === undefined || user.teamIds.includes(teamId))
     .filter(
       (user) =>
@@ -181,6 +186,16 @@ function inviteUser({ principal, body }: RouteContext): UserResponse {
 
   const { email, role, teamIds } = parsed.data;
   const normalisedEmail = email.trim().toLowerCase();
+
+  // Mirrors the API's `assertMayAssign`. `InviteCreateInputSchema.role` accepts any
+  // role, so without this a supervisor holding `user:invite` could mint an admin.
+  if (!roleHasPermission(principal.role, 'user:set_role')) {
+    if (role !== 'agent') {
+      throw refused('forbidden', 'You can only invite someone as an agent.');
+    }
+  } else if (!isRoleWithin(role, principal.role)) {
+    throw refused('forbidden', 'You cannot grant a role above your own.');
+  }
 
   if (tenantUsers(principal).some((user) => user.email.toLowerCase() === normalisedEmail)) {
     throw new ApiRequestError(
@@ -223,6 +238,23 @@ function updateUser({ principal, params, body }: RouteContext): UserResponse {
   }
 
   const { displayName, role, teamIds, status } = parsed.data;
+
+  // The three role-assignment invariants, mirroring the API's `assertMayChangeRole`.
+  // `user:update` alone does not carry the right to assign a role.
+  if (role !== undefined) {
+    if (user.id === principal.userId) {
+      throw refused('forbidden', 'You cannot change your own role.');
+    }
+
+    if (!roleHasPermission(principal.role, 'user:set_role')) {
+      throw refused('forbidden', 'Assigning a role requires the user:set_role permission.');
+    }
+
+    if (!isRoleWithin(role, principal.role)) {
+      throw refused('forbidden', 'You cannot grant a role above your own.');
+    }
+  }
+
   const teams = teamIds === undefined ? null : assertTeamsInTenant(principal, teamIds);
 
   const updated: MockUser = {
@@ -242,11 +274,17 @@ function updateUser({ principal, params, body }: RouteContext): UserResponse {
   return toUserResponse(updated);
 }
 
+/**
+ * A **soft** delete, matching TAR-81: the row survives with `status: 'removed'`, so
+ * the record of what that person did is not destroyed and no foreign key is left
+ * dangling. `listUsers` excludes them, which is what makes the account absent from
+ * every screen.
+ */
 function removeUser({ principal, params }: RouteContext): null {
   const user = findUserInTenant(principal, params[0]);
   const state = mockState();
 
-  state.users.delete(user.id);
+  state.users.set(user.id, { ...user, status: 'removed', teamIds: [], occupiesSeat: false });
 
   for (const team of state.teams.values()) {
     if (team.memberUserIds.includes(user.id)) {
@@ -547,6 +585,11 @@ function forbidden(permission: Permission): ApiRequestError {
     `Your role does not include ${permission}.`,
     MOCK_REQUEST_ID,
   );
+}
+
+/** A refusal from a rule the route's declared permission does not express. */
+function refused(code: string, message: string): ApiRequestError {
+  return new ApiRequestError(HTTP_FORBIDDEN, code, message, MOCK_REQUEST_ID);
 }
 
 function notFound(): ApiRequestError {

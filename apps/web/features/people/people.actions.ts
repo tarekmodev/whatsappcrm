@@ -6,12 +6,13 @@ import {
   TeamCreateInputSchema,
   TeamUpdateInputSchema,
   UserUpdateInputSchema,
+  isRoleWithin,
   type Permission,
 } from '@whatsappcrm/contracts';
 import { ApiRequestError } from '@/lib/api/http';
 import { inviteUser, removeUser, updateUser } from '@/lib/api/users';
 import { createTeam, updateTeam } from '@/lib/api/teams';
-import { assertPermission } from '@/lib/session/session';
+import { assertPermission, resolveSession } from '@/lib/session/session';
 import { routes } from '@/lib/routes';
 import { content } from '@/content/en';
 import type { ActionResult } from '@/lib/actions/result';
@@ -33,6 +34,19 @@ import type { ActionResult } from '@/lib/actions/result';
 
 export async function inviteAgentAction(input: unknown): Promise<ActionResult<{ email: string }>> {
   return run('user:invite', InviteCreateInputSchema, input, async (parsed) => {
+    // Mirrors the API's `assertMayAssign`: `user:invite` alone may invite an
+    // `agent` and nothing else, or a supervisor could mint an admin.
+    const session = await resolveSession();
+    const mayAssign = session.checker.can('user:set_role');
+
+    if (!mayAssign && parsed.role !== 'agent') {
+      throw new RoleAssignmentRefusedError(content.people.roleNotAssignableError);
+    }
+
+    if (mayAssign && !isRoleWithin(parsed.role, session.principal.role)) {
+      throw new RoleAssignmentRefusedError(content.people.roleEscalationError);
+    }
+
     const user = await inviteUser(parsed);
 
     return { email: user.email };
@@ -44,6 +58,20 @@ export async function updateAgentAction(
   input: unknown,
 ): Promise<ActionResult<{ displayName: string }>> {
   return run('user:update', UserUpdateInputSchema, input, async (parsed) => {
+    // A server action is a public endpoint, so the role-assignment invariants are
+    // re-checked here and not trusted from the dialog that hid the control.
+    if (parsed.role !== undefined) {
+      const session = await assertPermission('user:set_role');
+
+      if (userId === session.principal.userId) {
+        throw new RoleAssignmentRefusedError(content.people.selfRoleChangeError);
+      }
+
+      if (!isRoleWithin(parsed.role, session.principal.role)) {
+        throw new RoleAssignmentRefusedError(content.people.roleEscalationError);
+      }
+    }
+
     const user = await updateUser(userId, parsed);
 
     return { displayName: user.displayName };
@@ -132,6 +160,12 @@ const PEOPLE_PATH = routes.settingsPeople().split('?')[0] ?? '/settings/people';
  * the generic line, because an internal message is not user-facing text.
  */
 function toErrorResult<T>(error: unknown): ActionResult<T> {
+  // Refused by this module's own invariant check rather than by the API. The
+  // message is already content-layer copy, so it is shown as-is.
+  if (error instanceof RoleAssignmentRefusedError) {
+    return { status: 'error', message: error.message, requestId: null };
+  }
+
   if (error instanceof ApiRequestError) {
     return {
       status: 'error',
@@ -154,3 +188,15 @@ const ACTIONABLE_ERROR_CODES = new Set([
   'plan_limit_exceeded',
   'forbidden',
 ]);
+
+/**
+ * A role assignment this action refuses before it reaches the API, carrying copy
+ * the form can render inline. Thrown rather than returned so it joins the same
+ * error path as an `ApiRequestError` and cannot be forgotten by a caller.
+ */
+class RoleAssignmentRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RoleAssignmentRefusedError';
+  }
+}
