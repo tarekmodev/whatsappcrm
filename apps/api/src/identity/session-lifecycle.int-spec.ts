@@ -10,8 +10,8 @@ import { SessionRevocationService } from '../rbac/session-revocation.service';
 import { AuthRedisClient } from './auth-redis.client';
 import { AuthService } from './auth.service';
 import {
-  AccountLockedError,
   InvalidCredentialsError,
+  RateLimitedError,
   SessionNotFoundError,
   TooManyAttemptsError,
 } from './identity.errors';
@@ -251,14 +251,20 @@ describe('the session lifecycle, end to end', () => {
     });
     await cache.purgeUser(TENANT_A, AGENT_A, true);
     await cache.purgeUser(TENANT_B, AGENT_B, true);
-    // And a clean address window, so a re-run does not inherit the last one's
-    // failures — the window outlives the fixture rows by design.
+    // And clean Redis counters, so a re-run does not inherit the last test's
+    // failures — all three of them outlive the fixture rows by design, and the
+    // email lock outlives them for a full fifteen minutes.
     await redis.run('int-spec cleanup', async (client) => {
-      const keys = await client.keys(`wac:auth:authfail:${TENANT_A}:*`);
-      const others = await client.keys(`wac:auth:authfail:${TENANT_B}:*`);
+      const patterns = ['authfail', 'emailfail', 'emaillock'].flatMap((kind) =>
+        [TENANT_A, TENANT_B].map((tenantId) => `wac:auth:${kind}:${tenantId}:*`),
+      );
 
-      if (keys.length + others.length > 0) {
-        await client.del(...keys, ...others);
+      const keys = (await Promise.all(patterns.map(async (pattern) => await client.keys(pattern))))
+        .flat()
+        .filter((key) => key.length > 0);
+
+      if (keys.length > 0) {
+        await client.del(...keys);
       }
     });
   });
@@ -476,8 +482,14 @@ describe('the session lifecycle, end to end', () => {
         async () => await auth.login({ email: SHARED_EMAIL, password: PASSWORD }, blankContext()),
       ).catch((thrown: unknown) => thrown);
 
-      expect(error).toBeInstanceOf(AccountLockedError);
-      expect((error as AccountLockedError).retryAfterSeconds).toBeGreaterThan(0);
+      // `RateLimitedError`, not one of its two subclasses. With a Redis
+      // configured the per-email lock trips on the same attempt and is checked
+      // first; without one it is `AccountLockedError`. Which of the two fired is
+      // exactly what must not be observable — same 429, same message, same
+      // `Retry-After` — so asserting the subclass here would be asserting the
+      // thing the design promises a caller cannot see.
+      expect(error).toBeInstanceOf(RateLimitedError);
+      expect((error as RateLimitedError).retryAfterSeconds).toBeGreaterThan(0);
 
       const locked = await systemPrisma.user.findUniqueOrThrow({
         where: { id: AGENT_A },

@@ -33,10 +33,16 @@ import { webEnv } from '@/lib/config/env';
  *
  * A forwarded host is a host the caller chose, which is the tenant spoof
  * `HostTenantGuard`'s own docstring warns about. So the pair travels together:
- * the API honours `x-forwarded-host` only from a request that also presents the
+ * the API honours `x-edge-host` only from a request that also presents the
  * secret both tiers hold, and otherwise falls back to `Host` exactly as it does
  * today — never to the forwarded value. See the trust-boundary decision on
  * TAR-64 for the options weighed and the residual risk accepted.
+ *
+ * Both header names come from `@whatsappcrm/contracts` rather than being spelled
+ * here, so the API and this tier cannot disagree about them — and they are
+ * private names rather than `x-forwarded-*` precisely because the hop between
+ * the two services crosses proxies entitled to rewrite the standard ones
+ * (TAR-148).
  *
  * The browser's own calls do not come through here — they are proxied by
  * `next.config.mjs` — so `proxy.ts` injects the same pair on that path.

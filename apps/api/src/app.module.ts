@@ -1,4 +1,3 @@
-import { resolve } from 'node:path';
 import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
@@ -16,21 +15,11 @@ import { PeopleModule } from './people/people.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
 import { RbacModule } from './rbac/rbac.module';
+import { REPOSITORY_ENV_FILE } from './repository-env-file';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
-
-/**
- * One `.env` for the whole repository, at the root — the same file
- * `prisma.config.mjs` and Docker Compose read. Without this, `ConfigModule`
- * looks in the process working directory, which is `apps/api` under `pnpm dev`,
- * the repository root under `pnpm test`, and `/app` in a container. A real
- * environment always wins: `ConfigModule` never overwrites a variable that is
- * already set, so a deployed process reads its platform's secrets and this file
- * is simply absent.
- */
-const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
 
 @Module({
   imports: [
@@ -66,7 +55,6 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     RequestPipelineModule,
     HealthModule,
     TenancyModule,
-    IdentityModule,
     PeopleModule,
     WhatsAppModule,
     TicketsModule,

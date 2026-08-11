@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { AUTH_POLICY } from '@whatsappcrm/contracts';
 import { AuditService } from '../audit/audit.service';
@@ -8,24 +9,33 @@ import { TooManyAttemptsError } from './identity.errors';
 import { LoginThrottleService } from './login-throttle.service';
 
 /**
- * The two brute-force counters (TAR-59).
+ * The three brute-force counters (TAR-59).
  *
- * The address window runs against a fake Redis rather than a mocked service,
- * because what is under test is the *window* — that entries age out, that the
- * allowance is spent at the threshold and not before, and that two tenants
- * cannot reach each other's. A mock returning a number would assert only that
- * a comparison exists.
+ * They run against a fake Redis rather than a mocked service, because what is
+ * under test is the *window* — that entries age out, that the allowance is
+ * spent at the threshold and not before, and that two tenants cannot reach each
+ * other's. A mock returning a number would assert only that a comparison
+ * exists.
  *
- * The two properties worth reading twice: the keys carry the tenant, which is
+ * The three properties worth reading twice: the keys carry the tenant, which is
  * what makes cross-tenant interference impossible by construction rather than
- * by a check; and an unreachable Redis lets the attempt through, because the
- * alternative is a cache blip locking a whole tenant out of signing in.
+ * by a check; an unreachable Redis lets the attempt through, because the
+ * alternative is a cache blip locking a whole tenant out of signing in; and an
+ * address with no account locks exactly as one with an account does, which is
+ * what keeps the 429 from answering "this account exists".
  */
 
 const TENANT_A = '59111111-1111-7111-8111-111111111101';
 const TENANT_B = '59111111-1111-7111-8111-111111111102';
 const USER = '59111111-1111-7111-8111-1111111111a1';
 const ADDRESS = '203.0.113.7';
+const EMAIL = 'ada@acme.invalid';
+const UNKNOWN_EMAIL = 'nobody@acme.invalid';
+
+/** The key derivation restated, so a change to it has to be a deliberate one. */
+function digestOf(email: string): string {
+  return createHash('sha256').update(email.trim().toLowerCase(), 'utf8').digest('hex').slice(0, 32);
+}
 
 interface SortedSetEntry {
   score: number;
@@ -33,13 +43,16 @@ interface SortedSetEntry {
 }
 
 /**
- * Just enough Redis: the five commands the service issues, against sorted sets
- * in a `Map`. `exec()` answers ioredis's `[error, reply][]` shape so the reply
- * readers in the service are exercised rather than bypassed.
+ * Just enough Redis: the commands the service issues, against `Map`s. `exec()`
+ * answers ioredis's `[error, reply][]` shape so the reply readers in the
+ * service are exercised rather than bypassed.
  */
 class FakeRedis {
   readonly sets = new Map<string, SortedSetEntry[]>();
   readonly expiries = new Map<string, number>();
+  readonly counters = new Map<string, number>();
+  /** Key → remaining TTL in ms, which is all `PTTL` is asked for here. */
+  readonly locks = new Map<string, number>();
 
   multi(): FakeMulti {
     return new FakeMulti(this);
@@ -47,6 +60,31 @@ class FakeRedis {
 
   entries(key: string): SortedSetEntry[] {
     return this.sets.get(key) ?? [];
+  }
+
+  /** ioredis answers `-2` for a key that does not exist. */
+  pttl(key: string): Promise<number> {
+    return Promise.resolve(this.locks.get(key) ?? -2);
+  }
+
+  set(key: string, _value: string, unit: 'PX', ttlMs: number): Promise<'OK'> {
+    expect(unit).toBe('PX');
+    this.locks.set(key, ttlMs);
+
+    return Promise.resolve('OK');
+  }
+
+  del(...keys: string[]): Promise<number> {
+    // Both maps, never short-circuited: one key can be a counter and another a
+    // lock in the same call, and a `||` here would silently leave one behind.
+    const removed = keys.map((key) => {
+      const hadCounter = this.counters.delete(key);
+      const hadLock = this.locks.delete(key);
+
+      return hadCounter || hadLock;
+    });
+
+    return Promise.resolve(removed.filter(Boolean).length);
   }
 }
 
@@ -99,6 +137,16 @@ class FakeMulti {
         .sort((left, right) => left.score - right.score)
         .slice(Number(start), Number(stop) + 1)
         .flatMap((entry) => [entry.member, String(entry.score)]);
+    });
+  }
+
+  incr(key: string): this {
+    return this.queue(() => {
+      const next = (this.redis.counters.get(key) ?? 0) + 1;
+
+      this.redis.counters.set(key, next);
+
+      return next;
     });
   }
 
@@ -183,7 +231,26 @@ async function failFromAddress(
   address: string = ADDRESS,
 ): Promise<void> {
   for (let attempt = 0; attempt < times; attempt += 1) {
-    await harness.throttle.recordFailure({ tenantId, userId: null, ipAddress: address });
+    await harness.throttle.recordFailure({
+      tenantId,
+      userId: null,
+      // A distinct address per attempt, so a spray from one client does not also
+      // trip the per-email lock and confuse what these cases are measuring.
+      email: `spray-${String(attempt)}@acme.invalid`,
+      ipAddress: address,
+    });
+  }
+}
+
+async function failForEmail(
+  harness: Harness,
+  tenantId: string,
+  times: number,
+  email: string,
+  userId: string | null = null,
+): Promise<void> {
+  for (let attempt = 0; attempt < times; attempt += 1) {
+    await harness.throttle.recordFailure({ tenantId, userId, email, ipAddress: null });
   }
 }
 
@@ -294,7 +361,7 @@ describe('the per-address failure window', () => {
   it('counts nothing when the request carried no address', async () => {
     const harness = buildHarness();
 
-    await harness.throttle.recordFailure({ tenantId: TENANT_A, userId: null, ipAddress: null });
+    await failForEmail(harness, TENANT_A, 1, EMAIL);
 
     await expect(
       harness.throttle.assertAddressWithinLimit(TENANT_A, null),
@@ -327,12 +394,17 @@ describe('the per-address failure window', () => {
     expect(harness.redis.sets.size).toBe(0);
   });
 
-  it('still counts the account, so the lockout is unaffected by the flag', async () => {
+  it('still counts the account and the email, so neither depends on the flag', async () => {
     const harness = buildHarness({ addressWindow: false });
 
-    await harness.throttle.recordFailure({ tenantId: TENANT_A, userId: USER, ipAddress: ADDRESS });
+    await failForEmail(harness, TENANT_A, 1, EMAIL, USER);
 
     expect(harness.statements).toHaveLength(1);
+    // The flag exists because `request.ip` is a proxy behind a load balancer.
+    // The typed address is not, so it is counted whatever the flag says — and
+    // it has to be, or the lockout goes back to being an existence oracle in
+    // the shipped configuration.
+    expect([...harness.redis.counters.values()]).toEqual([1]);
   });
 });
 
@@ -343,6 +415,7 @@ describe('the per-account counter', () => {
     await harness.throttle.recordFailure({
       tenantId: TENANT_A,
       userId: USER,
+      email: EMAIL,
       ipAddress: ADDRESS,
     });
 
@@ -361,6 +434,7 @@ describe('the per-account counter', () => {
       await harness.throttle.recordFailure({
         tenantId: TENANT_A,
         userId: USER,
+        email: EMAIL,
         ipAddress: ADDRESS,
       });
     }
@@ -373,9 +447,144 @@ describe('the per-account counter', () => {
   it('leaves the account alone when the attempt matched no user', async () => {
     const harness = buildHarness();
 
-    await harness.throttle.recordFailure({ tenantId: TENANT_A, userId: null, ipAddress: ADDRESS });
+    await failForEmail(harness, TENANT_A, 1, UNKNOWN_EMAIL);
 
     expect(harness.statements).toHaveLength(0);
+  });
+});
+
+/**
+ * The layer that keeps the lockout from answering "this account exists".
+ *
+ * The per-account counter can only count for an address that has a row, so on
+ * its own the eleventh wrong password answers 429 for a real account and 401
+ * for an address with none — eleven requests, and the identical bodies and the
+ * dummy verify are worth nothing. These cases assert the two are the same.
+ */
+describe('the per-email lockout', () => {
+  it('locks an address that has no account exactly as it locks one that has', async () => {
+    const harness = buildHarness();
+
+    await failForEmail(harness, TENANT_A, AUTH_POLICY.loginFailureThreshold, UNKNOWN_EMAIL);
+    await failForEmail(harness, TENANT_A, AUTH_POLICY.loginFailureThreshold, EMAIL, USER);
+
+    const unknown = await harness.throttle
+      .assertEmailWithinLimit(TENANT_A, UNKNOWN_EMAIL)
+      .catch((thrown: unknown) => thrown);
+    const known = await harness.throttle
+      .assertEmailWithinLimit(TENANT_A, EMAIL)
+      .catch((thrown: unknown) => thrown);
+
+    expect(unknown).toBeInstanceOf(TooManyAttemptsError);
+    expect(known).toBeInstanceOf(TooManyAttemptsError);
+    // Same class, same message, same retry-after. Nothing a caller can read
+    // separates an address with an account from one without.
+    expect((unknown as TooManyAttemptsError).message).toBe((known as TooManyAttemptsError).message);
+    expect((unknown as TooManyAttemptsError).retryAfterSeconds).toBe(
+      (known as TooManyAttemptsError).retryAfterSeconds,
+    );
+  });
+
+  it('lets an address through until it has spent the account allowance', async () => {
+    const harness = buildHarness();
+
+    await failForEmail(harness, TENANT_A, AUTH_POLICY.loginFailureThreshold - 1, UNKNOWN_EMAIL);
+
+    // One short of the threshold the durable lockout uses, so the two trip on
+    // the same attempt rather than one attempt apart — which would itself be
+    // the distinguisher this layer exists to remove.
+    await expect(
+      harness.throttle.assertEmailWithinLimit(TENANT_A, UNKNOWN_EMAIL),
+    ).resolves.toBeUndefined();
+
+    await failForEmail(harness, TENANT_A, 1, UNKNOWN_EMAIL);
+
+    await expect(
+      harness.throttle.assertEmailWithinLimit(TENANT_A, UNKNOWN_EMAIL),
+    ).rejects.toBeInstanceOf(TooManyAttemptsError);
+  });
+
+  it('locks for the same duration the account lockout uses', async () => {
+    const harness = buildHarness();
+
+    await failForEmail(harness, TENANT_A, AUTH_POLICY.loginFailureThreshold, UNKNOWN_EMAIL);
+
+    expect([...harness.redis.locks.values()]).toEqual([AUTH_POLICY.loginLockoutMs]);
+  });
+
+  it('keys the lock by tenant, so one tenant cannot lock another out', async () => {
+    const harness = buildHarness();
+
+    await failForEmail(harness, TENANT_A, AUTH_POLICY.loginFailureThreshold, EMAIL, USER);
+
+    await expect(harness.throttle.assertEmailWithinLimit(TENANT_A, EMAIL)).rejects.toBeInstanceOf(
+      TooManyAttemptsError,
+    );
+    // The same person, the same address, a different tenant. One agent working
+    // for two client organisations keeps their second sign-in.
+    await expect(harness.throttle.assertEmailWithinLimit(TENANT_B, EMAIL)).resolves.toBeUndefined();
+  });
+
+  it('treats two casings of one address as one account, as citext does', async () => {
+    const harness = buildHarness();
+
+    await failForEmail(harness, TENANT_A, AUTH_POLICY.loginFailureThreshold, EMAIL.toUpperCase());
+
+    // Two windows for one account would hand an attacker twice the allowance
+    // for the price of a shift key.
+    await expect(harness.throttle.assertEmailWithinLimit(TENANT_A, EMAIL)).rejects.toBeInstanceOf(
+      TooManyAttemptsError,
+    );
+  });
+
+  it('never puts the address itself in a key', async () => {
+    const harness = buildHarness();
+
+    await failForEmail(harness, TENANT_A, 1, EMAIL);
+
+    const [key] = [...harness.redis.counters.keys()];
+
+    // An email address is PII and `redis-cli KEYS` is not a place to keep a
+    // list of who has an account here. It is also free text from a request
+    // body, so a verbatim key would let a crafted address inject the separator.
+    expect(key).toBe(`wac:auth:emailfail:${TENANT_A}:${digestOf(EMAIL)}`);
+    expect(key).not.toContain(EMAIL);
+  });
+
+  it('clears the counter and the lock after a successful sign-in', async () => {
+    const harness = buildHarness();
+
+    await failForEmail(harness, TENANT_A, AUTH_POLICY.loginFailureThreshold, EMAIL, USER);
+    await harness.throttle.clearEmailFailures(TENANT_A, EMAIL);
+
+    // Whoever just proved they hold the password is not the attacker those
+    // failures were accumulating against.
+    await expect(harness.throttle.assertEmailWithinLimit(TENANT_A, EMAIL)).resolves.toBeUndefined();
+    expect(harness.redis.counters.size).toBe(0);
+    expect(harness.redis.locks.size).toBe(0);
+  });
+
+  it('lets the attempt through when Redis is unreachable', async () => {
+    const harness = buildHarness({ redisDown: true });
+
+    // Fails open, like every other Redis path here. The cost is stated rather
+    // than hidden: while Redis is down the durable lockout is the only producer
+    // of a 429 again, and the oracle is open again with it.
+    await expect(harness.throttle.assertEmailWithinLimit(TENANT_A, EMAIL)).resolves.toBeUndefined();
+  });
+
+  it('locks again on the next multiple, not once and never after', async () => {
+    const harness = buildHarness();
+
+    await failForEmail(harness, TENANT_A, AUTH_POLICY.loginFailureThreshold, UNKNOWN_EMAIL);
+    // The lock lapsing is what a patient attacker waits for; it must not hand
+    // them an unlimited allowance afterwards.
+    harness.redis.locks.clear();
+    await failForEmail(harness, TENANT_A, AUTH_POLICY.loginFailureThreshold, UNKNOWN_EMAIL);
+
+    await expect(
+      harness.throttle.assertEmailWithinLimit(TENANT_A, UNKNOWN_EMAIL),
+    ).rejects.toBeInstanceOf(TooManyAttemptsError);
   });
 });
 

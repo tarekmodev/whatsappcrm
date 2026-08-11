@@ -99,13 +99,21 @@ function isApiPath(pathname: string): boolean {
 /**
  * The tenant, and the proof it came from us.
  *
- * Both are `set`, never `append`: a caller that sent either header itself must
- * not be able to name the tenant its request resolves to, and the incoming
- * `Host` is the only thing here that a browser cannot forge past the edge.
+ * Both are deleted first and then `set`, never appended: a caller that sent
+ * either header itself must not be able to name the tenant its request resolves
+ * to, and the incoming `Host` is the only thing here that a browser cannot forge
+ * past the edge. The delete matters even when nothing is written afterwards —
+ * otherwise a browser-supplied pair would travel on untouched.
+ *
+ * The names are private (`x-edge-host`, not `x-forwarded-host`) because the hop
+ * from here to the API leaves Render and re-enters through proxies that populate
+ * `x-forwarded-*` as a matter of course; a standard name is one an intermediary
+ * is entitled to rewrite. Both come from `@whatsappcrm/contracts`, so this and
+ * the guard cannot drift (TAR-148).
  *
  * With no secret configured the pair is dropped rather than sent unproven — the
- * API would refuse a forwarded host it cannot attribute anyway, and sending a
- * host with no proof only invites a guard that is tempted to trust it.
+ * API would refuse a host it cannot attribute anyway, and sending a host with no
+ * proof only invites a guard that is tempted to trust it.
  */
 function withTenantRouting(request: NextRequest): Headers {
   const headers = new Headers(request.headers);

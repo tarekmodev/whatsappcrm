@@ -7,6 +7,7 @@ import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.exten
 import { SessionRevocationService } from '../rbac/session-revocation.service';
 import { AuthRedisClient } from './auth-redis.client';
 import { ResetTokenInvalidError } from './identity.errors';
+import { LoginThrottleService } from './login-throttle.service';
 import type { MailerPort, OutboundEmail } from './mailer/mailer.port';
 import { PasswordResetService } from './password-reset.service';
 import { PasswordService } from './password.service';
@@ -122,6 +123,11 @@ describe('password reset, against real Postgres', () => {
       tenantContext,
       audit,
       new SessionRevocationService(audit, new SessionService(tenantPrisma, cache)),
+      // The real throttle against the same Redis: a completed reset has to clear
+      // the per-email lockout as well as the durable columns, and the assertion
+      // that one tenant's reset leaves the other's untouched now covers that key
+      // too.
+      new LoginThrottleService(tenantPrisma, redis, audit, config),
     );
 
     await removeFixture();

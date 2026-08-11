@@ -14,7 +14,7 @@ Three pieces, each of which fails closed on its own.
 
 ### 1. Row-level security on every tenant-scoped table
 
-All 37 tenant-scoped tables have `ENABLE`/`FORCE ROW LEVEL SECURITY` and one policy:
+All 38 tenant-scoped tables have `ENABLE`/`FORCE ROW LEVEL SECURITY` and one policy:
 
 ```sql
 CREATE POLICY tenant_isolation ON conversations
@@ -306,7 +306,7 @@ pnpm test:db         # the same guarantee through TenantPrisma
 ```
 
 `pnpm db:verify:rls` creates two tenants, reconnects so the connection has genuinely never set
-the GUC, and asserts that all 37 tables return zero rows; that each tenant then sees its own
+the GUC, and asserts that all 38 tables return zero rows; that each tenant then sees its own
 rows and none of the other's; that a cross-tenant insert is rejected and a cross-tenant update
 or delete matches nothing. It reads the catalog rather than a list, so a new table with no
 policy is caught by name rather than assumed to be fine, and it creates one throwaway table of

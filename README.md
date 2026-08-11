@@ -239,13 +239,23 @@ two tenants and writes them again.
 
 ## Working with the database
 
-Postgres 17 and Redis 7 run from `docker-compose.yml`. Two details in there are
+Postgres 16 and Redis 7 run from `docker-compose.yml`. Three details in there are
 deliberate and worth knowing:
 
+- The Postgres major matches Render's — `postgresMajorVersion: '16'` on all three managed
+  databases in `render.yaml`. CI builds its database from the same Compose file, so a
+  construct that needs a newer major fails in front of you rather than on Render's
+  `preDeployCommand`. The two pins move together or not at all.
 - Redis runs with `maxmemory-policy noeviction`, which **BullMQ requires** — under memory
   pressure any other policy lets Redis silently discard job data.
 - Postgres logs any statement slower than 500 ms. `pnpm db:logs` is the fastest way to
   catch a bad plan before it reaches staging.
+
+If your `pgdata` volume was created by the old Postgres 17 image, the 16 server refuses to
+start against it — `database files are incompatible with server` in `pnpm db:logs`. A data
+directory cannot be downgraded in place, and the volume holds nothing but local
+development data, so throw it away and rebuild:
+`docker compose down -v && pnpm db:up && pnpm db:migrate:deploy && pnpm db:roles && pnpm db:roles:login && pnpm db:seed`.
 
 Connection details come from `.env` and are the same values Compose itself reads. The
 password there is a throwaway for a container bound to localhost; it is not a secret and
@@ -258,7 +268,7 @@ expresses the entity table in `docs/architecture/0002-architecture-and-api-contr
 (TAR-39) — read that first for _why_ the entities are shaped this way; the schema file
 carries the per-model reasoning next to each model.
 
-37 models. 34 are tenant-scoped: they carry a non-null `tenant_id`, and row-level security
+41 models. 38 are tenant-scoped: they carry a non-null `tenant_id`, and row-level security
 filters them. Three are not — `tenants`, `plans` and `webhook_events`, each deliberately.
 Six conventions hold across every model, starting with a non-null `tenant_id` on every
 scoped table and composite `(tenant_id, <parent_id>)` foreign keys.
@@ -270,7 +280,7 @@ what TAR-52 changed about the WhatsApp entities.
 ### Tenant isolation
 
 Isolation is enforced by the database, not by application code remembering a `where`
-clause. All 37 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
+clause. All 38 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
 
 ```sql
 CREATE POLICY tenant_isolation ON conversations
@@ -291,7 +301,7 @@ Two roles back it up, created by `apps/api/prisma/sql/app-roles.sql`:
 | `whatsappcrm_system` | The same, plus a `system_unrestricted` policy        | Everything — five call sites only  |
 
 **`pnpm db:verify:rls` is the proof, not the documentation.** It creates two tenants,
-reconnects so the connection has genuinely never set the GUC, and asserts that all 37 tables
+reconnects so the connection has genuinely never set the GUC, and asserts that all 38 tables
 return zero rows; that each tenant then sees its own rows and none of the other's; that a
 cross-tenant insert is rejected and a cross-tenant update or delete matches nothing. It
 reads the catalog rather than a list, exits non-zero on the first failure, and cleans up
