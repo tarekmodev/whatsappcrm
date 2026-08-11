@@ -96,6 +96,11 @@ export const MOCK_USERS: readonly MockUser[] = [
     teamIds: [TEAM_IDS.billing],
     occupiesSeat: true,
     lastSeenAt: '2026-08-10T08:40:00.000Z',
+    // The mock transport does not model lockout yet: TAR-59 adds the enforcement
+    // that moves this off `null`, and TAR-35 the admin view that reads it. Until
+    // then every fixture reports "you are not allowed to know", which is a valid
+    // `UserResponse` and keeps the console from rendering invented lockout state.
+    security: null,
     createdAt: '2026-07-02T10:00:00.000Z',
   },
   {
@@ -110,6 +115,7 @@ export const MOCK_USERS: readonly MockUser[] = [
     teamIds: [TEAM_IDS.billing, TEAM_IDS.onboarding],
     occupiesSeat: true,
     lastSeenAt: '2026-08-10T08:55:00.000Z',
+    security: null,
     createdAt: '2026-07-02T10:05:00.000Z',
   },
   {
@@ -124,6 +130,7 @@ export const MOCK_USERS: readonly MockUser[] = [
     teamIds: [],
     occupiesSeat: true,
     lastSeenAt: '2026-08-10T07:10:00.000Z',
+    security: null,
     createdAt: '2026-07-01T09:00:00.000Z',
   },
   {
@@ -138,6 +145,7 @@ export const MOCK_USERS: readonly MockUser[] = [
     teamIds: [TEAM_IDS.onboarding],
     occupiesSeat: true,
     lastSeenAt: '2026-08-08T16:20:00.000Z',
+    security: null,
     createdAt: '2026-07-05T11:30:00.000Z',
   },
   {
@@ -152,6 +160,7 @@ export const MOCK_USERS: readonly MockUser[] = [
     teamIds: [],
     occupiesSeat: false,
     lastSeenAt: null,
+    security: null,
     createdAt: '2026-08-09T13:00:00.000Z',
   },
   {
@@ -167,6 +176,7 @@ export const MOCK_USERS: readonly MockUser[] = [
     teamIds: [TEAM_IDS.otherTenant],
     occupiesSeat: true,
     lastSeenAt: '2026-08-10T08:00:00.000Z',
+    security: null,
     createdAt: '2026-06-01T09:00:00.000Z',
   },
 ];
