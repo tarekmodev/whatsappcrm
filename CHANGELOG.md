@@ -34,6 +34,15 @@ change.
   `validation_failed`, an oversize one `payload_too_large`. Ruled as
   [amendment 3](docs/architecture/0002-architecture-and-api-contract.md#amendment-3--media-tar-20e).
   (TAR-20e)
+- **Demo seed data** — `pnpm db:seed` loads two tenants (`northwind.app.localhost` and
+  `southwind.app.localhost`) with agents across all three roles, teams, WhatsApp business
+  accounts and numbers, message templates, contacts, conversations, messages, tickets and a
+  subscription. Written through `TenantPrisma` as `whatsappcrm_app` under row-level
+  security, with tenants created by `TenantProvisioningService` rather than by hand, so a
+  seed that finishes proves the application role can read and write the data. Re-runnable:
+  it deletes its own two slugs and nothing else, and refuses to run under
+  `NODE_ENV=production` without `--force`. The second tenant exists so that a dropped
+  tenant predicate is visible rather than theoretical. The Database CI job runs it. (TAR-46)
 - **WhatsApp Business Account connection** — `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts`
   and `.../{wabaId}/template-sync`, behind the same platform admin guard, plus the Meta
   Cloud API client, the credential resolver and the sender service. (TAR-66)

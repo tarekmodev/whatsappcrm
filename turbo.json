@@ -31,6 +31,17 @@
       "dependsOn": ["^build", "generate"],
       "cache": false,
       "persistent": true
+    },
+    "db:seed": {
+      "dependsOn": ["build"],
+      "cache": false,
+      "passThroughEnv": [
+        "APP_DATABASE_URL",
+        "SYSTEM_DATABASE_URL",
+        "PLATFORM_DOMAIN",
+        "WHATSAPP_TOKEN_ENCRYPTION_KEY",
+        "NODE_ENV"
+      ]
     }
   }
 }
