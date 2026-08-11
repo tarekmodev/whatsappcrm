@@ -1,6 +1,9 @@
 export const THEMES = ['light', 'dark'] as const;
 export type Theme = (typeof THEMES)[number];
 
+/** What a visitor who has never used the toggle gets. Read through `resolveTheme`. */
+export const DEFAULT_THEME: Theme = 'light';
+
 /** Read on the server so the correct theme is in the HTML before first paint. */
 export const THEME_COOKIE_NAME = 'wac_theme';
 

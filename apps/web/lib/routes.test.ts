@@ -28,8 +28,30 @@ describe('parseRedirectPath', () => {
     expect(parseRedirectPath('//evil.example.com/inbox', FALLBACK)).toBe(FALLBACK);
   });
 
-  it('refuses the backslash spelling some browsers normalise to //', () => {
+  it('refuses the backslash spelling the URL parser reads as //', () => {
     expect(parseRedirectPath('/\\evil.example.com', FALLBACK)).toBe(FALLBACK);
+  });
+
+  /**
+   * The bypass a string check cannot see: the WHATWG parser strips tab, CR and LF
+   * before resolving, so each of these looks like an in-app path to `startsWith`
+   * and resolves to `https://evil.example.com/` once the router parses it.
+   */
+  it.each([
+    ['tab', '/\t/evil.example.com'],
+    ['newline', '/\n/evil.example.com'],
+    ['carriage return', '/\r/evil.example.com'],
+    ['tab then backslash', '/\t\\evil.example.com'],
+  ])('refuses a host smuggled past a string check with a %s', (_label, value) => {
+    expect(parseRedirectPath(value, FALLBACK)).toBe(FALLBACK);
+  });
+
+  it('refuses a relative path, which is not a shape this app ever links to', () => {
+    expect(parseRedirectPath('inbox', FALLBACK)).toBe(FALLBACK);
+  });
+
+  it('returns what the router will resolve, not the raw input', () => {
+    expect(parseRedirectPath('/settings/../inbox', FALLBACK)).toBe('/inbox');
   });
 });
 

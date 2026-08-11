@@ -27,12 +27,23 @@ export async function signIn(input: LoginInput): Promise<ActionResult<SessionPri
   }
 }
 
-export async function acceptInvitation(
-  input: InviteAcceptInput,
-): Promise<ActionResult<SessionPrincipal>> {
+/**
+ * Accepting can fail the same way looking up can. The server re-checks the
+ * invitation when it accepts (`InviteService.accept`), so a link that was live at
+ * lookup is dead by submit if it expired, was withdrawn, or somebody else used it
+ * in the meantime — and a dead link is a screen state, not a message above a form
+ * that can no longer succeed however it is filled in.
+ */
+export type InviteAcceptOutcome = ActionResult<SessionPrincipal> | { status: 'dead-link' };
+
+export async function acceptInvitation(input: InviteAcceptInput): Promise<InviteAcceptOutcome> {
   try {
     return { status: 'success', data: await acceptInvite(input) };
   } catch (error) {
+    if (isDeadLinkError(error)) {
+      return { status: 'dead-link' };
+    }
+
     return toAuthErrorResult(error, {
       fallback: content.auth.inviteFailedError,
       // The address already has an account in this tenant — the one refusal here

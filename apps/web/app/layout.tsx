@@ -1,9 +1,8 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { cookies } from 'next/headers';
 import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
-import { parseTheme, THEME_COOKIE_NAME, type Theme } from '@/lib/theme/theme';
+import { resolveTheme } from '@/lib/theme/resolve-theme';
 import './globals.css';
 
 /**
@@ -25,11 +24,8 @@ export const metadata: Metadata = {
   description: content.app.description,
 };
 
-const DEFAULT_THEME: Theme = 'light';
-
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const cookieStore = await cookies();
-  const theme = parseTheme(cookieStore.get(THEME_COOKIE_NAME)?.value) ?? DEFAULT_THEME;
+  const theme = await resolveTheme();
 
   return (
     <html lang="en" dir="ltr" data-theme={theme}>

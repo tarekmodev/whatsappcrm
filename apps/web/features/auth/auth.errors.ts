@@ -15,7 +15,8 @@ import type { ActionResult } from '@/lib/actions/result';
  *
  * `token_invalid` is absent on purpose. A dead invitation link is a *screen
  * state*, not a form error, so the invite flow branches on it before it gets
- * here.
+ * here — on the lookup and on the accept alike, because the server re-checks the
+ * invitation at both steps.
  */
 
 const MS_PER_MINUTE = 60 * 1000;

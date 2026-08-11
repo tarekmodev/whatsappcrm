@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react';
-import { cookies } from 'next/headers';
 import { webEnv } from '@/lib/config/env';
 import { resolveSession } from '@/lib/session/session';
-import { parseTheme, THEME_COOKIE_NAME, type Theme } from '@/lib/theme/theme';
+import { resolveTheme } from '@/lib/theme/resolve-theme';
 import { AppHeader } from '@/components/shell/AppHeader';
 import { NAV_ITEMS, visibleNavItems } from '@/components/shell/navigation';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
@@ -18,11 +17,8 @@ import { MAIN_CONTENT_ID } from '@/components/shell/main-content';
  * `(auth)/` render without one.
  */
 
-const DEFAULT_THEME: Theme = 'light';
-
 export default async function AppLayout({ children }: { children: ReactNode }) {
-  const cookieStore = await cookies();
-  const theme = parseTheme(cookieStore.get(THEME_COOKIE_NAME)?.value) ?? DEFAULT_THEME;
+  const theme = await resolveTheme();
   const { principal, checker, isStubbed } = await resolveSession();
   const navItems = visibleNavItems(NAV_ITEMS, checker);
 

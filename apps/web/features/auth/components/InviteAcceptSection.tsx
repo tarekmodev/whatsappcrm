@@ -75,6 +75,15 @@ export function InviteAcceptSection() {
     setAttempt((current) => current + 1);
   }, []);
 
+  /**
+   * The same state a dead lookup lands in. The invitation can die between the two
+   * requests — the accept re-checks it server-side — and when it does the form is
+   * replaced rather than annotated, because there is nothing left to submit.
+   */
+  const showDeadLink = useCallback(() => {
+    setState({ status: 'dead-link' });
+  }, []);
+
   if (state.status === 'missing-token') {
     return (
       <InviteProblemCard
@@ -119,7 +128,7 @@ export function InviteAcceptSection() {
   return (
     <AuthCard title={content.auth.inviteTitle} description={content.auth.inviteDescription}>
       <InvitePreview preview={state.preview} />
-      <InviteAcceptForm token={state.token} preview={state.preview} />
+      <InviteAcceptForm token={state.token} preview={state.preview} onDeadLink={showDeadLink} />
     </AuthCard>
   );
 }

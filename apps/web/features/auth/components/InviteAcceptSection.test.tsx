@@ -174,6 +174,35 @@ describe('InviteAcceptSection', () => {
     expect(screen.getByText(content.auth.inviteSuccess(PREVIEW.tenantName))).toBeInTheDocument();
   });
 
+  /**
+   * The invitation is re-checked when it is accepted, so it can die between the
+   * lookup and the submit — expired, withdrawn, or used by somebody else in the
+   * meantime. That is the same screen state as a dead lookup, not a "try again"
+   * above a form that can never succeed.
+   */
+  it('swaps the form for the dead-link card when the invitation dies before submit', async () => {
+    transport.lookupInvite.mockResolvedValue(PREVIEW);
+    transport.acceptInvite.mockRejectedValue(
+      new ApiRequestError(410, 'token_invalid', 'Server-side message', null),
+    );
+    renderSection();
+
+    await screen.findByRole('button', { name: content.auth.inviteSubmit });
+
+    fill(content.auth.inviteDisplayNameLabel, 'Amina Haddad');
+    fill(content.auth.invitePasswordLabel, 'correct horse battery staple');
+    submit();
+
+    expect(
+      await screen.findByRole('heading', { name: content.auth.inviteDeadLinkHeading }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: content.auth.inviteSubmit }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: content.auth.goToSignIn })).toBeInTheDocument();
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
   it('points an already-registered address at sign-in instead of failing generically', async () => {
     transport.lookupInvite.mockResolvedValue(PREVIEW);
     transport.acceptInvite.mockRejectedValue(

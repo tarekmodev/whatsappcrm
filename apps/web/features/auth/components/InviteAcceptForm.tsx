@@ -2,7 +2,11 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { AUTH_POLICY, type InvitePreviewResponse } from '@whatsappcrm/contracts';
+import {
+  AUTH_POLICY,
+  type InvitePreviewResponse,
+  type SessionPrincipal,
+} from '@whatsappcrm/contracts';
 import { Stack } from '@/components/layout/Stack';
 import { Field } from '@/components/ui/Field';
 import { SkeletonBlock, SkeletonLine } from '@/components/ui/Skeleton';
@@ -12,6 +16,7 @@ import { useActionForm } from '@/lib/hooks/useActionForm';
 import { useContent } from '@/lib/content';
 import { cx } from '@/lib/cx';
 import { routes } from '@/lib/routes';
+import type { ActionResult } from '@/lib/actions/result';
 import { acceptInvitation } from '../auth.requests';
 import { validateDisplayName, validateNewPassword } from '../auth.validation';
 import { AuthForm } from './AuthForm';
@@ -20,7 +25,7 @@ import styles from './InviteAcceptForm.module.css';
 
 /**
  * Set a name and a password, get an account and a session. Usage:
- * `<InviteAcceptForm token={token} preview={preview} />`.
+ * `<InviteAcceptForm token={token} preview={preview} onDeadLink={…} />`.
  *
  * The body carries a token, a display name and a password — no tenant and no
  * role, and it could not: the tenant comes from the request host and the role
@@ -30,9 +35,16 @@ import styles from './InviteAcceptForm.module.css';
 export function InviteAcceptForm({
   token,
   preview,
+  onDeadLink,
 }: {
   token: string;
   preview: InvitePreviewResponse;
+  /**
+   * The invitation died between the lookup and this submit — expired, withdrawn,
+   * or used by somebody else. Raised to the screen rather than shown here,
+   * because no amount of retyping makes this form succeed.
+   */
+  onDeadLink: () => void;
 }) {
   const content = useContent();
   const router = useRouter();
@@ -44,10 +56,20 @@ export function InviteAcceptForm({
   const displayNameRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
 
-  const perform = useCallback(
-    async () => acceptInvitation({ token, displayName: displayName.trim(), password }),
-    [displayName, password, token],
-  );
+  const perform = useCallback(async (): Promise<ActionResult<SessionPrincipal>> => {
+    const outcome = await acceptInvitation({ token, displayName: displayName.trim(), password });
+
+    if (outcome.status === 'dead-link') {
+      onDeadLink();
+
+      // The screen swaps this form for the dead-link card, so this line is only
+      // reached as copy if a consumer keeps the form mounted — in which case it
+      // should still say the true thing rather than "try again".
+      return { status: 'error', message: content.auth.inviteDeadLinkBody, requestId: null };
+    }
+
+    return outcome;
+  }, [content, displayName, onDeadLink, password, token]);
 
   const onSuccess = useCallback(() => {
     showToast({ tone: 'success', message: content.auth.inviteSuccess(preview.tenantName) });
