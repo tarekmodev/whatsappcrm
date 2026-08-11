@@ -1,3 +1,5 @@
+import type { WhatsAppSignupFailureReason } from '@whatsappcrm/contracts';
+
 /**
  * The failures this module produces, as typed domain errors rather than
  * `HttpException`s.
@@ -94,6 +96,32 @@ export class WhatsAppCredentialMissingError extends WhatsAppError {
       `WhatsApp business account ${wabaId} has no stored access token. Connect it before sending ` +
         'or syncing templates.',
     );
+  }
+}
+
+/**
+ * Thrown when an Embedded Signup run could not be turned into a connected WABA
+ * (TAR-168, 0002 amendment 2).
+ *
+ * `reason` is the published vocabulary the console branches on, and it is
+ * nullable rather than exhaustive: two failures this orchestration can meet — a
+ * WABA Meta reports no phone numbers for, and a number Meta reports in a form
+ * that is not a phone number — are real, are the tenant's to act on, and are not
+ * one of the four. `whatsAppSignupFailureReason` already answers `null` for a
+ * reason a client does not recognise, so an envelope carrying no reason at all
+ * lands on the same fallback rather than on a value that would mislead.
+ *
+ * **The message is authored here, per case, and is never Meta's.** It is read by
+ * a tenant admin in a console: Meta's own text describes our app's grant and our
+ * app's configuration, which is neither actionable to them nor ours to publish.
+ * The underlying failure is logged where an operator can see it.
+ */
+export class WhatsAppSignupFailedError extends WhatsAppError {
+  constructor(
+    readonly reason: WhatsAppSignupFailureReason | null,
+    message: string,
+  ) {
+    super(message);
   }
 }
 
