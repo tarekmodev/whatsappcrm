@@ -7,7 +7,9 @@ import {
   type SessionSummary,
   type TenantRole,
 } from '@whatsappcrm/contracts';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { SessionRevocationReason } from '../audit/audit.actions';
+import { SESSIONS_REVOKED_EVENT, type SessionsRevokedEvent } from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { uuidV7 } from '../prisma/uuid-v7';
@@ -109,6 +111,7 @@ export class SessionService {
   constructor(
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly cache: SessionCacheService,
+    private readonly events: EventEmitter2,
   ) {}
 
   /**
@@ -240,6 +243,66 @@ export class SessionService {
   }
 
   /**
+   * A session **id** → the caller, or `null` for anything that is not a live
+   * session in the tenant already in scope.
+   *
+   * The seam TAR-69's Socket.IO handshake spends its ticket against. A realtime
+   * ticket carries a `sessionId` rather than the session token — the token is a
+   * cookie the WebSocket upgrade cannot carry, which is why the ticket exists at
+   * all — so `resolve` above cannot answer for it, and the gateway needs an
+   * answer to two questions the ticket alone cannot give:
+   *
+   *   * **Is the session still alive?** A ticket is good for sixty seconds, and
+   *     "log this person out everywhere" must not be defeated by one fetched
+   *     moments before. Every liveness predicate here is the same set `resolve`
+   *     applies, evaluated against the database's `now()`.
+   *   * **What may they do now?** The ticket froze a role at issue. This returns
+   *     a principal materialised from the row, so a role or team change inside
+   *     the window is picked up rather than honoured a minute stale — which
+   *     matters because the gateway authorises `conversation.subscribe` on
+   *     `permissions` and `teamIds`.
+   *
+   * Runs on `TenantPrisma`, so RLS is what bounds it: a `sessionId` belonging to
+   * another tenant matches zero rows exactly as a revoked one does, and a
+   * deactivated tenant's socket is refused by `assert_tenant_active` before the
+   * statement runs. The gateway does not have to compare tenants — though it
+   * does anyway, on `PrincipalGuard`'s reasoning.
+   *
+   * Deliberately does **not** slide the idle deadline or write the cache, unlike
+   * `resolve`. Both are keyed by the token hash, which is not in hand here; and
+   * an open socket is not evidence that anybody is still at the keyboard, so
+   * extending a session on it would keep a session alive for as long as a tab
+   * stayed open. Session liveness stays a property of HTTP activity.
+   */
+  async resolveBySessionId(sessionId: string): Promise<SessionPrincipal | null> {
+    const [row] = await this.prisma.$queryRaw<ResolvedSessionRow[]>`
+      SELECT s.id           AS session_id,
+             s.expires_at   AS expires_at,
+             s.last_seen_at AS last_seen_at,
+             u.id           AS user_id,
+             u.tenant_id    AS tenant_id,
+             u.email::text  AS email,
+             u.name         AS name,
+             u.role::text   AS role,
+             COALESCE(
+               (SELECT array_agg(tm.team_id::text)
+                  FROM team_members tm
+                 WHERE tm.tenant_id = u.tenant_id AND tm.user_id = u.id),
+               ARRAY[]::text[]
+             )              AS team_ids
+        FROM sessions s
+        JOIN users u ON u.tenant_id = s.tenant_id AND u.id = s.user_id
+       WHERE s.id = ${sessionId}::uuid
+         AND s.revoked_at IS NULL
+         AND s.expires_at > now()
+         AND s.absolute_expires_at > now()
+         AND u.status = 'active'
+    `;
+
+    return row === undefined ? null : toPrincipal(row, row.expires_at);
+  }
+
+  /**
    * The caller's own live sessions, so they can drop a device they no longer
    * recognise.
    *
@@ -328,6 +391,10 @@ export class SessionService {
     }
 
     await this.cache.forget(principal.tenantId, principal.userId, tokenHash);
+    // This path does not go through `purgeCacheFor` — it kills one device
+    // rather than all of them — so it announces on its own. The subscriber
+    // re-checks every session this user holds and drops only the dead one.
+    this.announceRevocation(principal.tenantId, principal.userId);
   }
 
   /**
@@ -387,6 +454,32 @@ export class SessionService {
    */
   async purgeCacheFor(tenantId: string, userId: string): Promise<void> {
     await this.cache.purgeUser(tenantId, userId, true);
+    this.announceRevocation(tenantId, userId);
+  }
+
+  /**
+   * Tells anything holding a connection for this user to re-check it (TAR-69
+   * review).
+   *
+   * Here, rather than in each of the seven paths that revoke, because this is
+   * the one call all of them already have to make after their transaction
+   * commits — and after is the only correct moment: a socket dropped for a
+   * transaction that then rolled back is a signed-in agent thrown out of their
+   * inbox.
+   *
+   * The HTTP side needs nothing like this; a revoked session is refused on its
+   * next request. A WebSocket has no next request, so without this an agent
+   * suspended by an admin keeps an open socket until the tab closes — which
+   * contradicts `SessionRevocationService`'s own stated goal of ending access at
+   * the commit.
+   *
+   * `emit` is synchronous dispatch and the listener is not awaited, so nothing
+   * here delays the caller's response; and it is deliberately not part of the
+   * `await` above, because a subscriber that threw must not turn a completed
+   * revocation into a failed request.
+   */
+  private announceRevocation(tenantId: string, userId: string): void {
+    this.events.emit(SESSIONS_REVOKED_EVENT, { tenantId, userId } satisfies SessionsRevokedEvent);
   }
 
   /**

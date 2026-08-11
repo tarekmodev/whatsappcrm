@@ -1432,3 +1432,58 @@ valid reached the database as an invalid label. Added additively in
 interchangeable — `resolved` is "handled, and I expect this to come back", `closed` is
 "finished" — which is why the answer is to add the label rather than narrow the contract,
 and it is the same pair `ticket_status` already carries.
+
+### Amendment 5 — the realtime fan-out is the visibility rule (TAR-69)
+
+The Realtime section publishes three rooms — `tenant:{id}`, `conversation:{id}`, `user:{id}`
+— and the ingestion sequence says "emit `message.created` → tenant room". Implementing it
+showed that those two statements together describe an authorization bypass, so the fan-out
+is ruled here rather than left as published.
+
+**The tenant room is not the audience for a message.** `tenant:{id}` is every socket in the
+tenant, and a relayed payload is a whole `MessageResponse` — body, provider id, absolute
+attachment URLs. An agent with no `conversation:read_all`, holding no relevant assignment,
+therefore received the full content of conversations `GET /conversations/{id}` answers
+`not_found` for, on the same principal, in the same tenant. The socket was strictly wider
+than the REST surface, and the widening was the customer's message text. Nothing in the
+implementation was wrong; the published fan-out was, which is why this is an amendment and
+not a bug fix note.
+
+**The rule: one room per branch of `isVisibleOrUnclaimed`.** The room vocabulary gains two
+names, and the audience of a conversation event is derived from that conversation's
+**current** assignment:
+
+| Branch of the read rule       | Room                               |
+| ----------------------------- | ---------------------------------- |
+| holds `conversation:read_all` | `tenant:{id}:conversation-readers` |
+| assigned to me                | `user:{assignedUserId}`            |
+| assigned to a team I am in    | `team:{assignedTeamId}`            |
+| unclaimed                     | `tenant:{id}`                      |
+
+`conversationAudienceRooms` in `packages/contracts/src/realtime.ts` is that table as code,
+published so the server that emits and the client that reasons about what it will receive
+read one rule rather than two descriptions of it. `tenant:{id}` keeps its meaning and keeps
+a job: amendment 4 rules that an unclaimed conversation is visible to every agent, so while
+a thread is unclaimed the tenant-wide room is exactly right.
+
+**The audience is computed per emit, not joined once.** A socket joins the rooms its
+_principal_ qualifies for at handshake; the publisher then names the rooms the _record_
+qualifies for at the moment it publishes. That is what makes a thread changing hands change
+audience on the very next event, with no stale membership to reconcile — and it is why
+`conversation:{id}` is deliberately **not** in the audience. A subscription was authorised
+when it was made, and an authorisation from a moment ago is not one now: leaving it in the
+fan-out would keep publishing a claimed thread to whoever happened to be watching it while
+it was unclaimed. `conversation.subscribe` remains in the contract and remains authorised —
+it is how a client declares interest for the per-conversation events (`agent.typing`,
+`note.created`) whose audience genuinely is "whoever is looking at this thread".
+
+**A revoked session must reach the socket.** `session.revoked` → `user:{id}` was already
+published "so an open tab logs out rather than sitting on a dead session"; nothing emitted
+it. A WebSocket authenticates once and has no next request to be refused on, so without a
+producer an agent an admin suspends keeps a live socket until the tab closes — which
+contradicts what session revocation states it is for. Any path that revokes now announces
+it, and the gateway re-reads each of that user's sockets and closes the ones whose session
+is gone. Re-reading rather than trusting the announcement is load-bearing: a signed-in
+password change spares one session and `DELETE /auth/sessions/{id}` kills exactly one
+device, so "this user had a revocation" is not the same question as "is _this_ socket still
+good".

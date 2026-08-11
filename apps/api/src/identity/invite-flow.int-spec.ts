@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { ConfigService } from '@nestjs/config';
 import {
   permissionsForRole,
@@ -178,7 +179,7 @@ describe('the invite flow', () => {
       tenantContext,
       new AuditService(tenantContext),
       new PasswordService(),
-      new SessionService(tenantPrisma, cache),
+      new SessionService(tenantPrisma, cache, new EventEmitter2()),
       new LoginThrottleService(
         tenantPrisma,
         redis,

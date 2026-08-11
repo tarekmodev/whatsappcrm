@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AUTH_POLICY, permissionsForRole, type SessionPrincipal } from '@whatsappcrm/contracts';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import { SessionNotFoundError } from './identity.errors';
@@ -95,7 +96,11 @@ function buildHarness(rowsFor: (sql: string) => unknown[]): Harness {
   };
 
   return {
-    sessions: new SessionService(prisma, cache as unknown as SessionCacheService),
+    sessions: new SessionService(
+      prisma,
+      cache as unknown as SessionCacheService,
+      new EventEmitter2(),
+    ),
     statements,
     cache,
   };

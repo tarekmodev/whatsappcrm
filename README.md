@@ -31,8 +31,10 @@ The generated client is **not committed**: `prisma generate` writes it to
 `apps/api/src/generated/prisma`, and `pnpm build`, `pnpm typecheck` and `pnpm test` all
 depend on a `generate` task so it cannot go stale. Run `pnpm db:generate` by hand after
 changing `schema.prisma` if you want it immediately. BullMQ arrived with the webhook
-ingestion pipeline, which is the first thing that needed a queue; Socket.IO is decided but
-not yet installed and arrives with the realtime gateway.
+ingestion pipeline, which is the first thing that needed a queue; Socket.IO arrived with
+the realtime gateway (TAR-69) and runs inside the API process, on `/realtime`, alongside
+`@socket.io/redis-adapter` so a room emit reaches every replica's sockets rather than only
+the one that produced it.
 
 ## Layout
 
@@ -43,6 +45,7 @@ not yet installed and arrives with the realtime gateway.
 | `apps/api/src/queue`       | BullMQ registration and tenant context propagation into jobs  |
 | `apps/api/src/webhooks`    | WhatsApp webhook ingest, its worker and the stuck-event sweep |
 | `apps/api/src/media`       | Media upload, inbound download and the storage port           |
+| `apps/api/src/realtime`    | Socket.IO gateway, room authorisation and the event relay     |
 | `apps/api/prisma`          | Database schema and migrations                                |
 | `apps/api/prisma/sql`      | Operational SQL that is not a migration — roles, RLS check    |
 | `apps/api/src/seed`        | The demo dataset and the script that writes it                |

@@ -21,10 +21,43 @@ import type {
  * that response without a second round trip, and may change with the schema.
  */
 
+export const SESSIONS_REVOKED_EVENT = 'sessions.revoked';
 export const MESSAGE_CREATED_EVENT = 'message.created';
 export const MESSAGE_STATUS_CHANGED_EVENT = 'message.status_changed';
 export const MESSAGE_ATTACHMENT_SETTLED_EVENT = 'message.attachment_settled';
 export const TICKET_CREATED_EVENT = 'ticket.created';
+
+/**
+ * Something happened that may have ended one or more of this user's sessions —
+ * a sign-out, a logout-everywhere, a password change or reset, a suspension, a
+ * role change, a team membership change.
+ *
+ * Emitted **after** the transaction commits, from the one after-commit hook
+ * every revocation path already has to call (`SessionService.purgeCacheFor`), so
+ * there is one producer rather than one per reason.
+ *
+ * ## It says "re-check", not "disconnect"
+ *
+ * Deliberately carries no session ids. That hook is documented as safe to call
+ * unconditionally — including after a transaction that revoked nothing — so an
+ * event meaning "these sessions are dead" would sometimes be a lie, and a
+ * subscriber acting on it would drop live connections. A subscriber instead
+ * re-reads each of that user's sessions and acts on what the database says,
+ * which is correct for the no-op case and costs one indexed read per socket on
+ * an operation that happens a few times a month per tenant.
+ *
+ * On the in-process bus because the consumer is the realtime relay, and because
+ * loss is acceptable in the way that matters: nothing about *authorisation*
+ * depends on this. A missed event leaves a socket connected that no longer
+ * receives anything it may not see — every emit is addressed by the audience
+ * rooms, and the revoked principal's next HTTP request is refused regardless.
+ * What it buys is the tab noticing, which is TAR-56's fifth acceptance criterion
+ * reaching the one surface that outlives a request.
+ */
+export interface SessionsRevokedEvent {
+  readonly tenantId: string;
+  readonly userId: string;
+}
 
 /**
  * A message row that did not exist before — inbound from a webhook, or the

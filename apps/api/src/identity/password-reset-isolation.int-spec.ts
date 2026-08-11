@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { ConfigService } from '@nestjs/config';
 import type { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
@@ -122,7 +123,10 @@ describe('password reset, against real Postgres', () => {
       passwords,
       tenantContext,
       audit,
-      new SessionRevocationService(audit, new SessionService(tenantPrisma, cache)),
+      new SessionRevocationService(
+        audit,
+        new SessionService(tenantPrisma, cache, new EventEmitter2()),
+      ),
       // The real throttle against the same Redis: a completed reset has to clear
       // the per-email lockout as well as the durable columns, and the assertion
       // that one tenant's reset leaves the other's untouched now covers that key
