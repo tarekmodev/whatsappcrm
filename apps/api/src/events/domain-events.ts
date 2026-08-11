@@ -26,6 +26,7 @@ export const MESSAGE_CREATED_EVENT = 'message.created';
 export const MESSAGE_STATUS_CHANGED_EVENT = 'message.status_changed';
 export const MESSAGE_ATTACHMENT_SETTLED_EVENT = 'message.attachment_settled';
 export const TICKET_CREATED_EVENT = 'ticket.created';
+export const CONVERSATION_ASSIGNED_EVENT = 'conversation.assigned';
 
 /**
  * Something happened that may have ended one or more of this user's sessions —
@@ -152,4 +153,35 @@ export interface TicketCreatedEvent {
   readonly contactId: string;
   /** The conversation the ticket was opened from. */
   readonly conversationId: string;
+}
+
+/**
+ * A conversation changed hands (TAR-198): claimed from the shared pool, released
+ * back into it, handed to another agent, or routed to a team.
+ *
+ * Emitted from `POST /conversations/{id}/assign` **only when a column actually
+ * moved**. An assign that names the current owner again has changed nothing, and
+ * relaying it would be a broadcast that says nothing.
+ *
+ * ## It carries the assignment the thread *had*, and nothing about the one it has
+ *
+ * The subscriber reads the row back for its payload, so the new owner needs no
+ * field here — and reading it is what makes the published resource the committed
+ * one rather than the writer's view of it. The previous assignment is the one
+ * thing the subscriber cannot recover after the write, and it is the whole reason
+ * this event exists: a conversation's audience is derived from its assignment
+ * (`conversationAudienceRooms`), so the moment an agent claims a thread the
+ * colleagues who were watching it unclaimed are in none of the rooms it now
+ * addresses. Without the assignment it had, "somebody else has this" reaches
+ * everybody except the people it is for.
+ *
+ * On the in-process bus, like everything here: a missed relay costs a client one
+ * refetch, and the row is already committed. Nothing about authorization depends
+ * on it — every emit is addressed by the rooms the *current* assignment implies.
+ */
+export interface ConversationAssignedEvent {
+  readonly tenantId: string;
+  readonly conversationId: string;
+  readonly previousAssignedUserId: string | null;
+  readonly previousAssignedTeamId: string | null;
 }

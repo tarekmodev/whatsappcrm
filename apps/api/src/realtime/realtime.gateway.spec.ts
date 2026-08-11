@@ -6,15 +6,17 @@ import {
   tenantRoom,
   userRoom,
   type ConversationAudience,
+  type ConversationResponse,
   type MessageResponse,
   type SessionPrincipal,
   type TenantRole,
 } from '@whatsappcrm/contracts';
 import { io, type Socket as ClientSocket } from 'socket.io-client';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
-import type { MessageCreatedEvent } from '../events/domain-events';
+import type { ConversationAssignedEvent, MessageCreatedEvent } from '../events/domain-events';
 import { SessionService } from '../identity/session.service';
 import { ConversationAccessService } from './conversation-access.service';
+import { ConversationResourceService } from './conversation-resource.service';
 import { MessageResourceService, type RelayableMessage } from './message-resource.service';
 import { REALTIME_PATH } from './realtime.constants';
 import { RealtimeGateway } from './realtime.gateway';
@@ -35,7 +37,11 @@ import { TenantHostnameService } from './tenant-hostname.service';
  *     showing the room is still empty and its traffic still does not arrive;
  *   * `conversation.subscribe` is refused for a conversation outside the
  *     caller's tenant;
- *   * a relayed `message.created` reaches a subscribed client whole.
+ *   * a relayed `message.created` reaches a subscribed client whole;
+ *   * a claim reaches the *other* agent's socket live — TAR-20's second
+ *     acceptance criterion, closed by TAR-198. Two real clients, two real
+ *     sockets, one claim, and the assertion is that the colleague who did not
+ *     make it is told without asking for anything.
  *
  * Only the two things that talk to the database are stubbed — the handshake's
  * session lookup and the conversation visibility check. Everything below them is
@@ -108,6 +114,58 @@ function portOf(app: INestApplication): number {
   return (address as { port: number }).port;
 }
 
+/**
+ * The thread as the API publishes it, with whoever currently holds it. The
+ * relay reads this back, so a test states the assignment the claim *landed*
+ * rather than the one it asked for.
+ */
+function conversationHeld(
+  assignedUserId: string | null,
+  conversationId = CONVERSATION_A,
+): ConversationResponse {
+  return {
+    id: conversationId,
+    contact: {
+      id: '80111111-1111-7111-8111-1111111111b9',
+      phone: '+966500000001',
+      waProfileName: 'Maria',
+      displayName: 'Maria',
+      email: null,
+      tags: [],
+      customFields: {},
+      lastContactedAt: null,
+      optedOutAt: null,
+      createdAt: '2026-08-11T08:00:00.000Z',
+      updatedAt: '2026-08-11T08:00:00.000Z',
+    },
+    whatsappAccountId: '80111111-1111-7111-8111-1111111111e1',
+    status: 'open',
+    assignedUserId,
+    assignedTeamId: null,
+    ticketId: null,
+    unreadCount: 1,
+    serviceWindowExpiresAt: null,
+    botHandling: false,
+    lastMessagePreview: 'is my order on its way?',
+    lastMessageAt: '2026-08-11T09:00:00.000Z',
+    createdAt: '2026-08-11T08:00:00.000Z',
+    updatedAt: '2026-08-11T09:00:02.000Z',
+  };
+}
+
+function conversationAssigned(
+  previousAssignedUserId: string | null,
+  conversationId = CONVERSATION_A,
+  tenantId = TENANT_A,
+): ConversationAssignedEvent {
+  return {
+    tenantId,
+    conversationId,
+    previousAssignedUserId,
+    previousAssignedTeamId: null,
+  };
+}
+
 function messageCreated(conversationId: string, tenantId: string): MessageCreatedEvent {
   return {
     tenantId,
@@ -143,6 +201,13 @@ describe('the realtime gateway', () => {
     assignedTeamId: null,
   };
 
+  /**
+   * What the relay reads back for a hand-over — the thread *after* the claim it
+   * is relaying. Mutable for the same reason `audience` is: the fan-out is
+   * derived from it, so a test sets the committed state rather than the event.
+   */
+  let claimed: ConversationResponse | null = conversationHeld(null);
+
   beforeAll(async () => {
     const handshake = {
       authenticate: (auth: unknown): Promise<RealtimeSocketData | null> => {
@@ -176,6 +241,17 @@ describe('the realtime gateway', () => {
         }),
     } as unknown as MessageResourceService;
 
+    const conversationResources = {
+      findForRelay: (): Promise<ConversationResponse | null> =>
+        Promise.resolve(
+          // The real reader runs under the scope the relay opened, so a
+          // conversation only ever resolves inside its own tenant. Answering
+          // `null` for anything else keeps the stub honest for the cross-tenant
+          // cases below.
+          tenantContext.requireTenantId() === TENANT_A ? claimed : null,
+        ),
+    } as unknown as ConversationResourceService;
+
     const hostnames = {
       publish: (): Promise<boolean> => Promise.resolve(true),
     } as unknown as TenantHostnameService;
@@ -192,6 +268,7 @@ describe('the realtime gateway', () => {
         { provide: RealtimeHandshakeService, useValue: handshake },
         { provide: ConversationAccessService, useValue: conversations },
         { provide: MessageResourceService, useValue: messages },
+        { provide: ConversationResourceService, useValue: conversationResources },
         { provide: TenantHostnameService, useValue: hostnames },
         { provide: SessionService, useValue: sessions },
       ],
@@ -210,6 +287,7 @@ describe('the realtime gateway', () => {
 
   afterEach(() => {
     audience = { tenantId: TENANT_A, assignedUserId: null, assignedTeamId: null };
+    claimed = conversationHeld(null);
 
     while (clients.length > 0) {
       const client = clients.pop();
@@ -483,6 +561,32 @@ describe('the realtime gateway', () => {
       expect(await received).not.toBeNull();
     });
 
+    it('tells the subscriber it has been claimed before it goes quiet on them', async () => {
+      // The pair of this file's last test, and the reason TAR-198 exists: the
+      // bystander stops receiving messages the moment somebody claims the
+      // thread, so the claim itself is the one event that has to reach them —
+      // otherwise their inbox shows a row that has silently stopped updating.
+      const bystander = connect({ ticket: 'ticket-bystander' });
+      await connected(bystander);
+      await bystander.emitWithAck('conversation.subscribe', { conversationId: CONVERSATION_A });
+
+      claimed = conversationHeld(USER_A);
+      audience = { tenantId: TENANT_A, assignedUserId: USER_A, assignedTeamId: null };
+
+      const handover = nextEvent(bystander, 'conversation.updated', 2_000);
+      await relay.onConversationAssigned(conversationAssigned(null));
+
+      expect(await handover).toMatchObject({
+        event: 'conversation.updated',
+        conversation: { id: CONVERSATION_A, assignedUserId: USER_A },
+      });
+
+      const afterwards = nextEvent(bystander, 'message.created');
+      await relay.onMessageCreated(messageCreated(CONVERSATION_A, TENANT_A));
+
+      expect(await afterwards).toBeNull();
+    });
+
     it('stops reaching a subscriber once somebody else claims it', async () => {
       // Subscribed while unclaimed, which was legitimate at the time. The
       // audience follows the assignment rather than the subscription, so there
@@ -497,6 +601,99 @@ describe('the realtime gateway', () => {
       await relay.onMessageCreated(messageCreated(CONVERSATION_A, TENANT_A));
 
       expect(await received).toBeNull();
+    });
+  });
+
+  /**
+   * TAR-20's second acceptance criterion — "claiming a conversation updates its
+   * assignment for all connected agents live" — end to end over the wire
+   * (TAR-198).
+   *
+   * Two clients are connected throughout. Neither reconnects, neither
+   * re-subscribes, and nothing refetches: the only thing that happens between
+   * "the thread is unclaimed" and the assertion is one agent claiming it.
+   */
+  describe('a claim, seen by the agent who did not make it', () => {
+    it('reaches a second connected agent live, with the new owner on it', async () => {
+      const claimer = connect({ ticket: 'ticket-a' });
+      const colleague = connect({ ticket: 'ticket-bystander' });
+      await Promise.all([connected(claimer), connected(colleague)]);
+
+      // What `POST /conversations/{id}/assign` has just committed.
+      claimed = conversationHeld(USER_A);
+
+      const seenByColleague = nextEvent(colleague, 'conversation.updated', 2_000);
+      await relay.onConversationAssigned(conversationAssigned(null));
+
+      expect(await seenByColleague).toEqual({
+        event: 'conversation.updated',
+        conversation: conversationHeld(USER_A),
+      });
+    });
+
+    it('reaches the claimer’s own other tabs too', async () => {
+      const claimer = connect({ ticket: 'ticket-a' });
+      await connected(claimer);
+
+      claimed = conversationHeld(USER_A);
+
+      const received = nextEvent(claimer, 'conversation.updated', 2_000);
+      await relay.onConversationAssigned(conversationAssigned(null));
+
+      expect(await received).not.toBeNull();
+    });
+
+    it('reaches the agent who has just lost the thread', async () => {
+      // Addressed through the audience the thread *had*. Without it the previous
+      // owner is the last person to find out they no longer hold it.
+      const previous = connect({ ticket: 'ticket-a' });
+      await connected(previous);
+
+      claimed = conversationHeld(BYSTANDER);
+
+      const received = nextEvent(previous, 'conversation.updated', 2_000);
+      await relay.onConversationAssigned(conversationAssigned(USER_A));
+
+      expect(await received).toMatchObject({ conversation: { assignedUserId: BYSTANDER } });
+    });
+
+    it('does not reach a third agent when the thread moves between two others', async () => {
+      // The reason the fan-out is the union of two audiences rather than the
+      // tenant room: this agent could not read the thread before the hand-over or
+      // after it, and the payload carries the customer and the last message.
+      const outsider = connect({ ticket: 'ticket-bystander' });
+      await connected(outsider);
+
+      claimed = conversationHeld(SUPERVISOR);
+
+      const seenByOutsider = nextEvent(outsider, 'conversation.updated');
+      await relay.onConversationAssigned(conversationAssigned(USER_A));
+
+      expect(await seenByOutsider).toBeNull();
+    });
+
+    it('still reaches a supervisor, who may read every thread in the tenant', async () => {
+      const supervisor = connect({ ticket: 'ticket-supervisor' });
+      await connected(supervisor);
+
+      claimed = conversationHeld(USER_A);
+
+      const received = nextEvent(supervisor, 'conversation.updated', 2_000);
+      await relay.onConversationAssigned(conversationAssigned(BYSTANDER));
+
+      expect(await received).not.toBeNull();
+    });
+
+    it('never crosses tenants', async () => {
+      const b = connect({ ticket: 'ticket-b' });
+      await connected(b);
+
+      claimed = conversationHeld(USER_A);
+
+      const seenByB = nextEvent(b, 'conversation.updated');
+      await relay.onConversationAssigned(conversationAssigned(null));
+
+      expect(await seenByB).toBeNull();
     });
   });
 });
