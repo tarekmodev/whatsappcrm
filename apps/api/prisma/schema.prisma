@@ -390,6 +390,7 @@ model Tenant {
   internalNotes            InternalNote[]
   tickets                  Ticket[]
   ticketEvents             TicketEvent[]
+  ticketCounter            TicketCounter?
   assignmentRules          AssignmentRule[]
   assignmentStates         AssignmentState[]
   slaPolicies              SlaPolicy[]
@@ -972,9 +973,9 @@ model Ticket {
   id              String         @id @default(uuid(7)) @db.Uuid
   tenantId        String         @map("tenant_id") @db.Uuid
   /// Per-tenant, human-facing ticket number. Unique within the tenant only —
-  /// two tenants both having ticket #1 is correct. TAR-21 owns how it is
-  /// allocated; the unique constraint is what makes a racy allocator fail
-  /// loudly instead of duplicating.
+  /// two tenants both having ticket #1 is correct. Allocated by
+  /// `TicketCounter` below (TAR-73, decision 3); the unique constraint is what
+  /// makes a racy allocator fail loudly instead of duplicating.
   number          Int
   subject         String?
   status          TicketStatus   @default(open)
@@ -1014,6 +1015,24 @@ model Ticket {
   @@map("tickets")
 }
 
+// ⚠️ `tickets` carries one index this file cannot express: the partial unique
+// index `tickets_one_active_per_contact`, on `(tenant_id, contact_id)`
+// `WHERE status IN ('open','pending')`. It is the DB-level guarantee behind
+// TAR-21's "one active ticket per contact" (TAR-73, decision 2) and it lives in
+// the 20260811130000_ticket_active_constraint_and_counters migration.
+//
+// Prisma's schema language has no partial-index syntax, and its Postgres
+// describer skips indexes carrying a predicate — so `migrate dev` neither
+// proposes to create it nor proposes to drop it, and it is not drift. The
+// consequence to know about: **nothing in this file will ever regenerate it.**
+// A `migrate reset` replays the migration and is fine; a database built any
+// other way from this schema alone silently loses the invariant.
+// `ticket-active-uniqueness.int-spec.ts` is what catches that.
+//
+// `contact_id` stays nullable and that is load-bearing: Postgres does not
+// collide NULLs in a unique index, so TAR-25's manual ticket with no contact
+// never conflicts. Making the column `NOT NULL` to tidy it would break that.
+
 /// Append-only audit trail for a single ticket (TAR-32). `type` is text, not an
 /// enum: every later story adds event types, and an enum would make each of
 /// them a migration.
@@ -1035,6 +1054,32 @@ model TicketEvent {
   @@index([tenantId, ticketId, createdAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, actorUserId])
   @@map("ticket_events")
+}
+
+/// Per-tenant ticket-number allocator (TAR-73, decision 3). `tickets.number` is
+/// `NOT NULL` with `UNIQUE (tenant_id, number)` and no default, so without this
+/// there is no way to insert a ticket at all.
+///
+/// One row per tenant, created lazily by the first ticket rather than at
+/// provisioning, so TAR-50's flow needs no change. Holds the *next* number to
+/// hand out. Numbers are unique and monotonic but **not gapless** — the
+/// allocating CTE still increments when the outer insert loses the race to
+/// `tickets_one_active_per_contact`, and nothing depends on density.
+model TicketCounter {
+  tenantId   String   @id @map("tenant_id") @db.Uuid
+  nextNumber Int      @default(1) @map("next_number")
+  /// The one deviation from the usual timestamp shape: a database-level `now()`
+  /// default alongside `@updatedAt`. Every other table here is written through
+  /// the Prisma client, which supplies the value; this one is written by the raw
+  /// upsert in TAR-73 decision 2, whose column list is `(tenant_id,
+  /// next_number)`. Without the default that statement violates `NOT NULL` and
+  /// no ticket can be created. `@updatedAt` still wins whenever the client
+  /// writes the row.
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("ticket_counters")
 }
 
 // ---------------------------------------------------------------------------
