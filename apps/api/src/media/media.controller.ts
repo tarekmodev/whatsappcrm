@@ -111,25 +111,34 @@ export class MediaController {
    *
    * The temporary file is removed in a `finally`, on every path including the
    * validation failures, which are the common ones.
+   *
+   * The `try` opens before the tenant check, not after, because multer has
+   * already written the part by then: a rejected request has a file on disk
+   * exactly like an accepted one. Refusing above the `finally` would leak that
+   * file on every unauthenticated call — which today is all of them, until
+   * TAR-35 puts a guard in front. The guard against `undefined` in the `finally`
+   * is for the no-part request, where there is nothing to remove.
    */
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @UseInterceptors(FileInterceptor(MEDIA_UPLOAD_FIELD))
   async upload(@UploadedFile() file: MulterFile | undefined): Promise<MediaUploadResponse> {
-    this.requireTenant();
-
-    if (file === undefined) {
-      translateFailure(new MediaFileMissingError(MEDIA_UPLOAD_FIELD));
-    }
-
     try {
+      this.requireTenant();
+
+      if (file === undefined) {
+        translateFailure(new MediaFileMissingError(MEDIA_UPLOAD_FIELD));
+      }
+
       const stored = await this.uploads
         .store(toUploadedMediaFile(file))
         .catch((error: unknown) => translateFailure(error));
 
       return { mediaId: stored.id };
     } finally {
-      await this.uploads.discardTemporary(file.path);
+      if (file !== undefined) {
+        await this.uploads.discardTemporary(file.path);
+      }
     }
   }
 

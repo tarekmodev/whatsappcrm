@@ -130,6 +130,18 @@ describe('media routes', () => {
       expect(store).not.toHaveBeenCalled();
     });
 
+    // Multer wrote the part before the handler ran, so the refusal owns a file
+    // on disk. Every request is unauthenticated until TAR-35 lands a guard; if
+    // this path skipped the `finally`, each one would strand up to MEDIA_MAX_BYTES
+    // in the temporary directory with nothing sweeping it.
+    it('removes the temporary part when it refuses for no tenant', async () => {
+      tenantId = null;
+
+      await upload();
+
+      expect(discardTemporary).toHaveBeenCalledTimes(1);
+    });
+
     it('answers with the id the composer names in the send that follows', async () => {
       const response = await upload();
 
@@ -154,6 +166,8 @@ describe('media routes', () => {
       expect(response.status).toBe(400);
       expect(ApiErrorSchema.parse(response.body).error.details?.[0]?.path).toBe('file');
       expect(store).not.toHaveBeenCalled();
+      // Nothing was written, so nothing is removed.
+      expect(discardTemporary).not.toHaveBeenCalled();
     });
 
     it('reports an unsupported media type against the field, not as a bare 400', async () => {
