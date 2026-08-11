@@ -9,7 +9,6 @@ import {
   Post,
   Res,
   UseFilters,
-  UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -25,9 +24,6 @@ import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
 import { AnyPrincipal } from '../rbac/require-permission.decorator';
-import { PermissionGuard } from '../rbac/permission.guard';
-import { PrincipalGuard } from '../rbac/principal.guard';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { AuthService } from './auth.service';
 import { translateIdentityFailure } from './identity.http';
 import { clearSessionCookie, isSecureCookieConfigured } from './session-cookie';
@@ -37,9 +33,11 @@ import { SessionService } from './session.service';
  * The caller's own session and devices (TAR-53, "Authenticated — own session
  * and credentials").
  *
- * The three guards are declared on the controller, in the order the pipeline
- * needs them: **where** the request is (`HostTenantGuard`), **who** is making
- * it (`PrincipalGuard`), then **may they** (`PermissionGuard`).
+ * It declares no guards, and since TAR-58 that is what "fully protected" looks
+ * like: `RequestPipelineModule` runs **where** the request is
+ * (`HostTenantGuard`), **who** is making it (`PrincipalGuard`) and **may they**
+ * (`PermissionGuard`) on every route in the application, and this class opts out
+ * of none of it.
  *
  * Every route here is `@AnyPrincipal()`, and that is a decision rather than an
  * omission: the resource *is* the caller. No permission gates reading your own
@@ -53,7 +51,6 @@ import { SessionService } from './session.service';
  * else's sessions, their IP addresses, or their devices.
  */
 @Controller({ path: 'auth', version: '1' })
-@UseGuards(HostTenantGuard, PrincipalGuard, PermissionGuard)
 @UseFilters(ApiExceptionFilter)
 export class SessionController {
   private readonly cookieSecure: boolean;

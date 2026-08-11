@@ -168,7 +168,8 @@ without a module dependency.
 | Component               | Owns                                                                         | Built by |
 | ----------------------- | ---------------------------------------------------------------------------- | -------- |
 | `SessionService`        | Issue, resolve, slide, revoke-one, revoke-all-for-user. Owns the Redis cache | TAR-56   |
-| `AuthGuard`             | Cookie → principal → `setTenant()`. Global, `@Public()` opts out             | TAR-58   |
+| `PrincipalGuard`        | Cookie → principal → `setPrincipal()`. Global, `@Public()` opts out          | TAR-58   |
+| `SessionReplayProbe`    | Classifies a zero-row session read: replay, or an ordinary stale cookie      | TAR-58   |
 | `PasswordService`       | argon2id hash/verify, dummy verify, parameter config                         | TAR-56   |
 | `LoginThrottleService`  | Per-account counters in Postgres, per-IP window in Redis                     | TAR-59   |
 | `InviteService`         | Create, resend, revoke, look up, accept                                      | TAR-55   |
@@ -886,10 +887,14 @@ Everything in TAR-39's security section still applies. What this document adds:
   against the session. There is no tenant id in any auth request body, header or query
   parameter — including for the platform-admin bootstrap invite, where it is a path
   parameter guarded by `PLATFORM_ADMIN_TOKEN`.
-- **Single enforcement point.** `AuthGuard` is global; `@Public()` is the only opt-out, and
-  it opts out of stages 3–6 only — stage 2 still resolves the tenant, so even a public
-  endpoint runs with the tenant in scope. New endpoints are guarded by default, which is
-  TAR-58's fourth acceptance criterion.
+- **Single enforcement point.** `PrincipalGuard` is global (installed by
+  `RequestPipelineModule`, TAR-58); `@Public()` opts out of stages 3–6 only — stage 2 still
+  resolves the tenant, so even a public endpoint runs with the tenant in scope. New
+  endpoints are guarded by default, which is TAR-58's fourth acceptance criterion, and
+  `route-posture.spec.ts` fails CI for a route that declared no posture at all.
+  `@PlatformRoute()` is the second and last opt-out, for the non-tenant surface —
+  health, the Meta webhook and `/api/v1/admin/*` — and it is not an auth surface: nothing
+  under `/api/v1/auth` may ever wear it.
 - **Secrets** — `SESSION_COOKIE_SECURE`, mailer credentials, `PLATFORM_ADMIN_TOKEN` — come
   from the deployment secret store and are declared in `env.schema.ts` with no values in
   `.env.example`. No value appears in this document.

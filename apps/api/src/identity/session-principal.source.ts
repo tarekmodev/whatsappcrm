@@ -1,8 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import type { SessionPrincipal } from '@whatsappcrm/contracts';
 import type { Request } from 'express';
-import type { PrincipalSource } from '../rbac/principal.source';
+import {
+  ANONYMOUS,
+  resolved,
+  type PrincipalResolution,
+  type PrincipalSource,
+} from '../rbac/principal.source';
 import { sessionTokenFrom } from './session-cookie';
+import { SessionReplayProbe } from './session-replay.probe';
 import { SessionService } from './session.service';
 
 /**
@@ -22,21 +27,39 @@ import { SessionService } from './session.service';
  * looking the row up under RLS, where a cookie from another tenant simply
  * matches nothing.
  *
- * Returns `null` for every rejection. Throwing is reserved for a misconfigured
- * deployment, so "nobody is signed in" and "this build is broken" stay
- * distinguishable in the logs.
+ * Throwing is reserved for a misconfigured deployment, so "nobody is signed in"
+ * and "this build is broken" stay distinguishable in the logs. Every ordinary
+ * rejection is an outcome on `PrincipalResolution`.
  */
 @Injectable()
 export class SessionPrincipalSource implements PrincipalSource {
-  constructor(private readonly sessions: SessionService) {}
+  constructor(
+    private readonly sessions: SessionService,
+    private readonly replays: SessionReplayProbe,
+  ) {}
 
-  async resolve(request: Request, tenantId: string): Promise<SessionPrincipal | null> {
+  async resolve(request: Request, tenantId: string): Promise<PrincipalResolution> {
     const token = sessionTokenFrom(request);
 
     if (token === null) {
-      return null;
+      // No credential at all: an anonymous request, which is most of the traffic
+      // to a sign-in page. Nothing to classify and nothing to page anyone about.
+      return ANONYMOUS;
     }
 
-    return await this.sessions.resolve(token, tenantId);
+    const principal = await this.sessions.resolve(token, tenantId);
+
+    if (principal !== null) {
+      return resolved(principal);
+    }
+
+    // Zero rows under this tenant's RLS. That is an expired cookie, a revoked
+    // one, an invented one — or a live session belonging to somebody else, which
+    // is the one worth waking a person for. One read tells the four apart
+    // (TAR-53, decision 2); see `SessionReplayProbe` for why it is allowed to be
+    // unscoped and what it deliberately does not do.
+    const session = await this.replays.classify(token);
+
+    return session === null ? ANONYMOUS : { outcome: 'replayed', session };
   }
 }

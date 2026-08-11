@@ -1,14 +1,4 @@
-import {
-  Body,
-  Controller,
-  HttpCode,
-  HttpStatus,
-  Post,
-  Req,
-  Res,
-  UseFilters,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res, UseFilters } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   InviteAcceptInputSchema,
@@ -21,8 +11,8 @@ import {
 import type { Request, Response } from 'express';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import type { Env } from '../config/env.schema';
+import { Public } from '../common/request-pipeline/route-access';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { translateIdentityFailure } from './identity.http';
 import { InviteService } from './invite.service';
 import { isSecureCookieConfigured, setSessionCookie } from './session-cookie';
@@ -31,8 +21,11 @@ import { isSecureCookieConfigured, setSessionCookie } from './session-cookie';
  * The two routes an invitee reaches before they have an account (ADR 0005,
  * "Public — no session required").
  *
- * `HostTenantGuard` alone: there is no session to resolve, but the **tenant is
- * still established from the request host** before anything runs. That is what
+ * `@Public()` is declared on the class rather than per route, because both
+ * routes share the posture and a third one added here would too — an invitee has
+ * no session by definition. It drops `PrincipalGuard` and `PermissionGuard` and
+ * nothing else: `HostTenantGuard` still runs, so the **tenant is still
+ * established from the request host** before anything else does. That is what
  * lets both routes read and write through `TenantPrisma` under row-level
  * security like every other query in the system, instead of reaching for the
  * unscoped client — a token issued by tenant A and presented at tenant B's
@@ -44,7 +37,7 @@ import { isSecureCookieConfigured, setSessionCookie } from './session-cookie';
  * in the URL *fragment*, which browsers never transmit at all.
  */
 @Controller({ path: 'invites', version: '1' })
-@UseGuards(HostTenantGuard)
+@Public()
 @UseFilters(ApiExceptionFilter)
 export class InvitesController {
   private readonly cookieSecure: boolean;

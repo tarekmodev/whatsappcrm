@@ -47,7 +47,7 @@ export class MissingTenantContextError extends TenantPrismaError {
   ) {
     super(
       `TenantPrisma refused ${describeTarget(model, operation)}: no tenant in scope. ` +
-        'Resolve the tenant first (AuthGuard for HTTP, the job payload for a worker), ' +
+        'Resolve the tenant first (HostTenantGuard for HTTP, the job payload for a worker), ' +
         'or use SystemPrisma if this really is a cross-tenant operation.',
     );
   }

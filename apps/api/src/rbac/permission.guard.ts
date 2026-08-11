@@ -2,11 +2,18 @@ import { Injectable, type CanActivate, type ExecutionContext } from '@nestjs/com
 import { Reflector } from '@nestjs/core';
 import type { Permission } from '@whatsappcrm/contracts';
 import { ApiException } from '../common/errors/api.exception';
+import { isPlatformRoute, isPublicRoute } from '../common/request-pipeline/route-access';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { REQUIRED_PERMISSIONS } from './require-permission.decorator';
 
 /**
  * Enforces the permission matrix (TAR-39, request pipeline slot 5).
+ *
+ * Installed globally by `RequestPipelineModule` since TAR-58, which is what
+ * turns the deny-by-default below from a property of the controllers that
+ * remembered the guard into a property of the application. It skips the same two
+ * decorators `PrincipalGuard` does — neither leaves a caller behind, and a
+ * permission check with no caller has nothing to check.
  *
  * Two properties are the whole design:
  *
@@ -32,6 +39,10 @@ export class PermissionGuard implements CanActivate {
   ) {}
 
   canActivate(context: ExecutionContext): boolean {
+    if (isPlatformRoute(this.reflector, context) || isPublicRoute(this.reflector, context)) {
+      return true;
+    }
+
     const required = this.reflector.getAllAndOverride<readonly Permission[] | undefined>(
       REQUIRED_PERMISSIONS,
       [context.getHandler(), context.getClass()],
