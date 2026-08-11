@@ -903,10 +903,10 @@ gap. Spinners are allowed only for a button's own pending state (`<Button isPend
 
 `app/` holds two route groups, and neither changes a URL — `/inbox` is still `/inbox`.
 
-| Group        | Layout renders                                         | Session     |
-| ------------ | ------------------------------------------------------ | ----------- |
-| `app/(app)`  | Skip link, `AppHeader` with the filtered nav, `<main>` | Resolved    |
-| `app/(auth)` | A centred card column with the wordmark and `<main>`   | None at all |
+| Group        | Layout renders                                         | Session              |
+| ------------ | ------------------------------------------------------ | -------------------- |
+| `app/(app)`  | Skip link, `AppHeader` with the filtered nav, `<main>` | Required — see below |
+| `app/(auth)` | A centred card column with the wordmark and `<main>`   | None at all          |
 
 The split exists because password recovery is reachable by somebody who cannot sign in. A
 root layout that resolved the principal would answer 401 to a visitor following a reset
@@ -920,6 +920,66 @@ browsers never send to a server, so it stays out of access logs, proxies and `Re
 headers. The price is that the reset screen must be client-rendered and must scrub the
 fragment once it has read it (`features/auth/useResetToken.ts`). The path is fixed by the
 API's `RESET_PASSWORD_LINK_PATH`; `lib/routes.test.ts` pins the two together.
+
+### Route guards and sessions
+
+The console never decides who the caller is. Tenant, role and permissions come from
+`GET /api/v1/auth/session`, resolved by the API from the httpOnly session cookie — nothing
+is inferred from the cookie's presence, nothing is cached in the browser, and no
+client-supplied tenant or role is ever consulted.
+
+The guard has two halves, and only the second one is a gate:
+
+| Half              | Where                    | Asks                          | Costs                     |
+| ----------------- | ------------------------ | ----------------------------- | ------------------------- |
+| **Optimistic**    | `proxy.ts`               | Is there a session cookie?    | Nothing — no API call     |
+| **Authoritative** | `lib/session/session.ts` | Who does the API say this is? | One round-trip per render |
+
+`proxy.ts` — Next 16's rename of `middleware.ts` — runs on every request, including
+prefetches, so it only looks for the cookie. Presence proves nothing about validity, which
+is why the answer that matters comes from `verifySession()`. What the first half buys is
+the common case: a signed-out visitor opening a deep link gets a redirect instead of a
+render that fetches, fails and redirects anyway.
+
+Either half sends the caller to `routes.login({ redirectTo })`, so `?next=` carries the
+page they were denied and sign-in returns them to it. That value is attacker-controlled and
+is narrowed by `parseRedirectPath` on the way out — an absolute, protocol-relative or
+backslash-prefixed value is dropped, never corrected, because following one hands a
+freshly authenticated user to somebody else's site.
+
+**The check lives next to the data, not in the layout.** A layout does not re-render on
+client navigation and does not decide whether the segments below it render, so
+`lib/api/authenticated.ts` is the transport every authenticated call goes through: it
+verifies the session, forwards the caller's cookie (server rendering is not the browser, so
+`credentials: 'include'` does nothing there), and turns a lost session into a sign-in.
+`getSession()` is wrapped in React's `cache`, so this costs one session call per render
+pass, not one per query. Unauthenticated endpoints — password-reset request and confirm —
+stay on `apiRequest` directly, because a caller who has lost their password has no session
+to forward.
+
+Three answers, three outcomes:
+
+| API says                                       | Console does                                              |
+| ---------------------------------------------- | --------------------------------------------------------- |
+| 401 `unauthenticated` — expired, revoked, gone | Redirect to sign-in, keeping `?next=`                     |
+| 401 `tenant_mismatch` — replayed cross-tenant  | The same: sign in on the host you belong to               |
+| 403 `forbidden` — signed in, lacks the right   | The explanatory forbidden state, **not** a sign-in bounce |
+
+The 403 row is deliberate: bouncing that caller to sign in would tell them to fix the one
+thing that is not wrong. Anything else — a 502, an unreachable API — is rethrown as an
+error the user can retry, because redirecting on it would sign everybody out whenever the
+API restarted, with no way for them to tell why.
+
+Nothing is cached across requests, so an admin deactivating an agent, a password reset
+revoking every session, or a sign-out shows up on that agent's **very next request** rather
+than whenever a copy expires. `signOutAction` is the same story from the other side: it
+revokes server-side first, then clears the browser's cookie, because the API's
+`Set-Cookie` comes back to the Next process and not to the person leaving.
+
+⚠️ A server action is a POST to the route it lives on, so `proxy.ts` covers it — but a
+matcher is never the gate. Every action still asserts for itself, and the two that map every
+failure onto an inline message call `unstable_rethrow` first, so the guard's `redirect` is
+not swallowed as though it were a failed request.
 
 ### Permissions in the UI
 
@@ -951,7 +1011,9 @@ default to off and both must stay off in a deployed environment:
   that isolation is testable.
 - `NEXT_PUBLIC_ENABLE_ROLE_STUB` reads the role from a cookie and exposes a switcher, so the
   agent/supervisor/admin views can be demonstrated before TAR-35's sessions exist.
-  `resolveSession()` refuses it in production regardless of the flag.
+  `getSession()` refuses it in production regardless of the flag, and while it is on the
+  route guard stands down — there is no session cookie to look for, and no sign-out button
+  offered, because there would be nothing to end.
 
 ## License
 

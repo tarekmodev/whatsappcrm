@@ -1,5 +1,6 @@
 'use server';
 
+import { unstable_rethrow } from 'next/navigation';
 import {
   PasswordChangeInputSchema,
   PasswordResetConfirmInputSchema,
@@ -114,6 +115,14 @@ const ACTIONABLE_ERROR_CODES = new Set([
 ]);
 
 function transportFailure<T>(label: string, error: unknown): ActionResult<T> {
+  // First, and before anything else looks at it: the session guard behind
+  // `changePassword` answers a lost session with a `redirect`, which Next
+  // implements by throwing. Caught and mapped to a message, that navigation would
+  // be swallowed and the user would sit on a page they are no longer signed in to.
+  // `unstable_rethrow` is the documented way to let a framework-controlled throw
+  // back out of a catch that also has real failures to handle.
+  unstable_rethrow(error);
+
   if (error instanceof ApiRequestError) {
     return {
       status: 'error',

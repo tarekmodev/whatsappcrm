@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { routes } from './routes';
+import { parseRedirectPath, routes } from './routes';
 
 describe('routes', () => {
   /**
@@ -24,5 +24,58 @@ describe('routes', () => {
 
   it('encodes a search term rather than letting it become a second filter', () => {
     expect(routes.settingsPeople({ q: 'a&b' })).toBe('/settings/people?q=a%26b');
+  });
+});
+
+describe('routes.login', () => {
+  it('is a bare path when there is nowhere in particular to return to', () => {
+    expect(routes.login()).toBe('/login');
+  });
+
+  it('carries the return path encoded, not concatenated', () => {
+    expect(routes.login({ redirectTo: '/settings/people?tab=teams' })).toBe(
+      '/login?next=%2Fsettings%2Fpeople%3Ftab%3Dteams',
+    );
+  });
+
+  /**
+   * `redirectToLogin` passes an empty string when the proxy did not run, and
+   * relies on this: a `?next=` with nothing in it would make sign-in redirect to
+   * the site root instead of its own landing page.
+   */
+  it('drops an empty return path rather than emitting an empty parameter', () => {
+    expect(routes.login({ redirectTo: '' })).toBe('/login');
+  });
+});
+
+/**
+ * `?next=` is attacker-controlled: anybody can send a link to the sign-in screen,
+ * and the guard itself writes the parameter from a request header. Following either
+ * blindly hands a user who has *just* authenticated to whatever host the value
+ * named — which is exactly when they are least likely to check the address bar.
+ */
+describe('parseRedirectPath', () => {
+  const FALLBACK = '/inbox';
+
+  it('keeps an in-app path, query and all', () => {
+    expect(parseRedirectPath('/settings/people?tab=teams', FALLBACK)).toBe(
+      '/settings/people?tab=teams',
+    );
+  });
+
+  it('falls back when nothing was asked for', () => {
+    expect(parseRedirectPath(undefined, FALLBACK)).toBe(FALLBACK);
+  });
+
+  it('refuses an absolute URL', () => {
+    expect(parseRedirectPath('https://evil.example.com/inbox', FALLBACK)).toBe(FALLBACK);
+  });
+
+  it('refuses a protocol-relative URL, which a browser reads as another host', () => {
+    expect(parseRedirectPath('//evil.example.com/inbox', FALLBACK)).toBe(FALLBACK);
+  });
+
+  it('refuses the backslash spelling some browsers normalise to //', () => {
+    expect(parseRedirectPath('/\\evil.example.com', FALLBACK)).toBe(FALLBACK);
   });
 });

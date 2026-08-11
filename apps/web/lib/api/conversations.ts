@@ -6,7 +6,7 @@ import {
   type ConversationResponse,
   type CursorPage,
 } from '@whatsappcrm/contracts';
-import { apiRequest } from '@/lib/api/http';
+import { authenticatedRequest } from '@/lib/api/authenticated';
 import { parseCursorPage } from '@/lib/api/parse';
 
 /** `GET /api/v1/conversations`, per TAR-39's endpoint table. */
@@ -34,7 +34,7 @@ export async function listConversations(
     params.set('q', query.q);
   }
 
-  const response = await apiRequest({
+  const response = await authenticatedRequest({
     method: 'GET',
     path: `${CONVERSATIONS_PATH}?${params.toString()}`,
   });

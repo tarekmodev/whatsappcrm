@@ -23,7 +23,7 @@ import { SESSION_COOKIE_NAME, SESSION_COOKIE_NAME_SECURE } from '@whatsappcrm/co
 export async function sessionCookieHeaders(): Promise<Record<string, string>> {
   const cookieStore = await cookies();
 
-  for (const name of [SESSION_COOKIE_NAME_SECURE, SESSION_COOKIE_NAME]) {
+  for (const name of SESSION_COOKIE_NAMES) {
     const value = cookieStore.get(name)?.value;
 
     if (value !== undefined) {
@@ -35,3 +35,25 @@ export async function sessionCookieHeaders(): Promise<Record<string, string>> {
   // give to a forged one — the console never decides that question itself.
   return {};
 }
+
+/**
+ * Drops the browser's session cookie after a sign-out.
+ *
+ * The API clears its own on the logout response, but that response comes back to
+ * the Next process, not to the person signing out — so without this the browser
+ * would keep sending a session id the API has already revoked, and every request
+ * would take the long way round to the sign-in screen.
+ *
+ * Both spellings, unconditionally: deleting a cookie that was never set is a
+ * no-op, and guessing which name is in play is how a sign-out leaves one behind.
+ */
+export async function clearSessionCookie(): Promise<void> {
+  const cookieStore = await cookies();
+
+  for (const name of SESSION_COOKIE_NAMES) {
+    cookieStore.delete(name);
+  }
+}
+
+/** Secure spelling first: it is the one every deployed environment uses. */
+const SESSION_COOKIE_NAMES = [SESSION_COOKIE_NAME_SECURE, SESSION_COOKIE_NAME] as const;

@@ -12,12 +12,27 @@ export const routes = {
   settingsAssignment: () => '/settings/assignment',
   settingsSecurity: () => '/settings/security',
   /**
+   * Sign in. `redirectTo` is where the user was heading when the guard turned
+   * them away (TAR-62), carried as `?next=` and read back through
+   * `parseRedirectPath` — never followed raw.
+   *
    * ⚠️ The page behind this lands with **TAR-60**, which owns the login and
    * invite-accept screens. The password screens link to it — a reset ends by
    * sending the user to sign in — so the entry exists here first, and TAR-60
    * fills it in without touching a single caller.
    */
-  login: () => '/login',
+  login: (query?: LoginQuery) =>
+    withQuery('/login', { [searchParamKeys.redirectTo]: query?.redirectTo }),
+  /**
+   * The target of the invitation email, also owned by TAR-60. The token travels
+   * in the URL *fragment* (`/invite#token=…`), which browsers never send to a
+   * server, so it is not part of this function's output.
+   *
+   * Listed here because the session guard needs to know the path is reachable
+   * without a session — an invitee has no account yet, and a guard that bounced
+   * them to sign in would make the invitation impossible to accept.
+   */
+  invite: () => '/invite',
   forgotPassword: () => '/forgot-password',
   /**
    * The target of the link in a password-reset email. The path is fixed by the
@@ -36,7 +51,30 @@ export const searchParamKeys = {
   peopleTab: 'tab',
   peopleRole: 'role',
   peopleQuery: 'q',
+  /** Where sign-in sends the user afterwards. Read through `parseRedirectPath`. */
+  redirectTo: 'next',
 } as const;
+
+export interface LoginQuery {
+  redirectTo?: string;
+}
+
+/**
+ * Narrows an untrusted `?next=` value to a path inside this app.
+ *
+ * Anything else is dropped rather than corrected: a value like
+ * `//evil.example.com` or `https://evil.example.com` is a browser-protocol-relative
+ * URL, and following it after a successful sign-in is an open redirect that hands
+ * a freshly authenticated user to somebody else's site. A backslash is rejected
+ * for the same reason — some browsers normalise `/\` to `//`.
+ */
+export function parseRedirectPath(value: string | undefined, fallback: string): string {
+  if (value === undefined || !value.startsWith('/')) {
+    return fallback;
+  }
+
+  return value.startsWith('//') || value.startsWith('/\\') ? fallback : value;
+}
 
 export type InboxScope = ConversationListQuery['scope'];
 export type ConversationStatusFilter = NonNullable<ConversationListQuery['status']>;

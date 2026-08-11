@@ -8,7 +8,7 @@ import {
   type UserResponse,
   type UserUpdateInput,
 } from '@whatsappcrm/contracts';
-import { apiRequest } from '@/lib/api/http';
+import { authenticatedRequest } from '@/lib/api/authenticated';
 import { parseCursorPage } from '@/lib/api/parse';
 
 /**
@@ -20,7 +20,7 @@ import { parseCursorPage } from '@/lib/api/parse';
 const USERS_PATH = '/v1/users';
 
 export async function listUsers(query: UserListQuery): Promise<CursorPage<UserResponse>> {
-  const response = await apiRequest({
+  const response = await authenticatedRequest({
     method: 'GET',
     path: `${USERS_PATH}${toUserQueryString(query)}`,
   });
@@ -29,7 +29,7 @@ export async function listUsers(query: UserListQuery): Promise<CursorPage<UserRe
 }
 
 export async function inviteUser(input: InviteCreateInput): Promise<UserResponse> {
-  const response = await apiRequest({
+  const response = await authenticatedRequest({
     method: 'POST',
     path: `${USERS_PATH}/invites`,
     body: input,
@@ -39,7 +39,7 @@ export async function inviteUser(input: InviteCreateInput): Promise<UserResponse
 }
 
 export async function updateUser(id: string, input: UserUpdateInput): Promise<UserResponse> {
-  const response = await apiRequest({
+  const response = await authenticatedRequest({
     method: 'PATCH',
     path: `${USERS_PATH}/${encodeURIComponent(id)}`,
     body: input,
@@ -49,7 +49,7 @@ export async function updateUser(id: string, input: UserUpdateInput): Promise<Us
 }
 
 export async function removeUser(id: string): Promise<void> {
-  await apiRequest({ method: 'DELETE', path: `${USERS_PATH}/${encodeURIComponent(id)}` });
+  await authenticatedRequest({ method: 'DELETE', path: `${USERS_PATH}/${encodeURIComponent(id)}` });
 }
 
 function toUserQueryString(query: UserListQuery): string {
