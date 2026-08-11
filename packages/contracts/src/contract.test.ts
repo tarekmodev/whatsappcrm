@@ -9,7 +9,15 @@ import {
   sessionCookieName,
 } from './auth';
 import { IanaTimezoneSchema, PhoneE164Schema } from './common';
-import { API_ERROR_CODES, API_ERROR_STATUS, httpStatusForErrorCode } from './error-codes';
+import { ApiErrorSchema } from './error';
+import {
+  API_ERROR_CODES,
+  API_ERROR_STATUS,
+  httpStatusForErrorCode,
+  WHATSAPP_SIGNUP_FAILURE_REASONS,
+  whatsAppSignupFailureDetails,
+  whatsAppSignupFailureReason,
+} from './error-codes';
 import { isMessageStatusAdvance, SendMessageInputSchema } from './messages';
 import {
   isRoleWithin,
@@ -39,6 +47,7 @@ import {
   MessageTemplateListQuerySchema,
   MessageTemplateResponseSchema,
   WhatsAppBusinessAccountResponseSchema,
+  WhatsAppEmbeddedSignupInputSchema,
 } from './whatsapp';
 
 describe('error taxonomy', () => {
@@ -51,6 +60,58 @@ describe('error taxonomy', () => {
   it('never answers 2xx for an error', () => {
     expect(httpStatusForErrorCode('not_found')).toBe(404);
     expect(httpStatusForErrorCode('plan_limit_exceeded')).toBe(402);
+  });
+});
+
+describe('a failed embedded signup (TAR-161)', () => {
+  const envelope = (details: ReturnType<typeof whatsAppSignupFailureDetails>) => ({
+    error: {
+      code: 'whatsapp_signup_failed',
+      message: 'WhatsApp signup could not be completed.',
+      details,
+      requestId: '01890a5d-ac96-774b-bcce-b302099a8057',
+    },
+  });
+
+  it('publishes exactly the four reasons the amendment rules', () => {
+    expect([...WHATSAPP_SIGNUP_FAILURE_REASONS]).toEqual([
+      'code_expired',
+      'code_invalid',
+      'insufficient_permissions',
+      'waba_mismatch',
+    ]);
+  });
+
+  it('does not answer 502, because Meta answered — it refused the grant', () => {
+    // `upstream_unavailable` and `rate_limited` keep the cases that *are*
+    // retryable as sent; this one needs the whole flow re-run.
+    expect(httpStatusForErrorCode('whatsapp_signup_failed')).toBe(400);
+  });
+
+  it('carries every reason through the envelope TAR-38 already publishes', () => {
+    // 0002 writes `details.reason`, and `ApiErrorSchema.details` is an array of
+    // `{ path, message }`. The reason rides as one entry rather than widening
+    // the envelope for one code, so this has to stay envelope-legal.
+    for (const reason of WHATSAPP_SIGNUP_FAILURE_REASONS) {
+      const parsed = ApiErrorSchema.parse(envelope(whatsAppSignupFailureDetails(reason)));
+
+      expect(whatsAppSignupFailureReason(parsed), reason).toBe(reason);
+    }
+  });
+
+  it('reads a reason it does not recognise as none, rather than throwing', () => {
+    // A console running yesterday's bundle against an API that has published a
+    // fifth reason falls back to the generic message, exactly as it does for an
+    // unknown `code`.
+    const parsed = ApiErrorSchema.parse(
+      envelope([{ path: 'reason', message: 'shipped_after_this_build' }]),
+    );
+
+    expect(whatsAppSignupFailureReason(parsed)).toBeNull();
+  });
+
+  it('reads no reason from an error that carries none', () => {
+    expect(whatsAppSignupFailureReason(ApiErrorSchema.parse(envelope([])))).toBeNull();
   });
 });
 
@@ -545,6 +606,77 @@ describe('connecting a whatsapp business account', () => {
     });
 
     expect(parsed).not.toHaveProperty('accessTokenEncrypted');
+  });
+
+  it('still requires the pasted token, because the operator path is unchanged', () => {
+    // TAR-161 adds a second, tenant-facing input. It does not narrow this one:
+    // an operator doing manual onboarding holds a token and no code.
+    expect(() =>
+      ConnectWhatsAppBusinessAccountInputSchema.parse({
+        wabaId: valid.wabaId,
+        phoneNumbers: valid.phoneNumbers,
+      }),
+    ).toThrow();
+    expect(Object.keys(ConnectWhatsAppBusinessAccountInputSchema.shape)).toContain('accessToken');
+  });
+});
+
+describe('connecting a whatsapp business account from the console (TAR-161)', () => {
+  const valid = { code: 'AQD-a-real-looking-exchangeable-code', wabaId: '102290129340398' };
+
+  it('accepts what embedded signup hands the browser', () => {
+    expect(WhatsAppEmbeddedSignupInputSchema.parse(valid)).toEqual(valid);
+  });
+
+  it('takes the phone number id as an optional hint', () => {
+    // The numbers that get attached are read from Meta on the new token: the
+    // browser does not have `displayPhoneNumber` or `verifiedName`, which the
+    // connection requires.
+    expect(
+      WhatsAppEmbeddedSignupInputSchema.parse({ ...valid, phoneNumberId: '15550001111' }),
+    ).toMatchObject({ phoneNumberId: '15550001111' });
+    expect(WhatsAppEmbeddedSignupInputSchema.parse(valid)).not.toHaveProperty('phoneNumberId');
+  });
+
+  // The property this schema exists to guarantee. The browser never holds a
+  // WABA token — that is the whole reason Embedded Signup returns a code — so a
+  // token arriving on this route is a mistake, and honouring one would put "a
+  // pasted credential is acceptable here" on a tenant-facing route.
+  it('has no token field, and drops one that arrives anyway', () => {
+    expect(Object.keys(WhatsAppEmbeddedSignupInputSchema.shape)).not.toContain('accessToken');
+
+    const parsed = WhatsAppEmbeddedSignupInputSchema.parse({
+      ...valid,
+      accessToken: 'EAAG-a-real-looking-meta-access-token',
+    });
+
+    expect(parsed).not.toHaveProperty('accessToken');
+    expect(JSON.stringify(parsed)).not.toContain('EAAG');
+  });
+
+  it('strips a caller-supplied tenant id rather than honouring it', () => {
+    // The tenant comes from the host and the session, never from the body.
+    const parsed = WhatsAppEmbeddedSignupInputSchema.parse({
+      ...valid,
+      tenantId: '50444444-4444-7444-8444-4444444444c1',
+    });
+
+    expect(parsed).not.toHaveProperty('tenantId');
+  });
+
+  it('requires a code, which is the only credential in the request', () => {
+    for (const code of [undefined, '', 'x'.repeat(1025)]) {
+      expect(
+        () => WhatsAppEmbeddedSignupInputSchema.parse({ ...valid, code }),
+        String(code),
+      ).toThrow();
+    }
+  });
+
+  it('rejects a waba id that is not a Meta Graph id', () => {
+    for (const wabaId of ['not-an-id', '10229 0129', '', '1'.repeat(33)]) {
+      expect(() => WhatsAppEmbeddedSignupInputSchema.parse({ ...valid, wabaId }), wabaId).toThrow();
+    }
   });
 });
 

@@ -243,6 +243,71 @@ export const ConnectWhatsAppBusinessAccountInputSchema = z.object({
     ),
 });
 
+// ---------------------------------------------------------------------------
+// Connecting a WABA — the tenant surface (TAR-161, 0002 amendment 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Meta's exchangeable token code, as Embedded Signup hands it to the browser.
+ *
+ * Bounded only. Meta does not publish the code's format, and this is the one
+ * credential in the flow that cannot be re-requested — a floor guessed too high
+ * would reject a valid code on a request the caller cannot retry, because the
+ * code is spent either way. The ceiling is a denial-of-service guard on a body
+ * that reaches an unauthenticated-until-stage-3 route, not a claim about length.
+ */
+const MetaExchangeableTokenCodeSchema = z.string().min(1).max(1024);
+
+/**
+ * `POST /api/v1/whatsapp/business-accounts` — a tenant connects its own WABA
+ * from the console, having just completed Meta's Embedded Signup.
+ *
+ * **This is not `ConnectWhatsAppBusinessAccountInputSchema` with a different
+ * credential.** That one stays the operator input on
+ * `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts`, reached
+ * through `PlatformAdminGuard`, and keeps its pasted `accessToken`. Two schemas
+ * rather than one union with an either-`code`-or-`accessToken` refinement: they
+ * are different credentials, arriving from different principals through
+ * different guards, and collapsing them would put "a pasted token is acceptable
+ * here" one boolean away from a tenant-facing route (0002, amendment 2).
+ *
+ * **`accessToken` does not appear, and no tenant-facing schema in this file ever
+ * will.** The browser never holds a WABA token: Embedded Signup gives it a code,
+ * the code comes to us, and the exchange is server-to-server with the app
+ * secret — which is the whole reason the flow returns a code and not a token.
+ *
+ * **The code lives about 30 seconds**, which shapes the endpoint rather than
+ * only the schema: the exchange happens inside the request, the `POST` takes no
+ * `Idempotency-Key` and is not retryable — a replay replays a spent code — and
+ * the retry unit is the *flow*, which the console re-runs for a fresh code. The
+ * underlying connection stays idempotent on `wabaId`, which is also how a tenant
+ * rotates a credential Meta has invalidated.
+ *
+ * The response is `ConnectedWhatsAppBusinessAccountResponseSchema`, unchanged:
+ * both paths connect the same thing and an operator and a tenant admin have the
+ * same next question — did every number land.
+ */
+export const WhatsAppEmbeddedSignupInputSchema = z.object({
+  /** Meta's exchangeable token code, straight from the browser's `FINISH` event. */
+  code: MetaExchangeableTokenCodeSchema,
+  /**
+   * What Embedded Signup told the browser it granted — an assertion, not an
+   * authority. The browser does not decide which WABA a token covers, so the
+   * server exchanges the code and reads this WABA back *with the token it just
+   * received*; a token that cannot read it ends the request with
+   * `whatsapp_signup_failed` / `waba_mismatch` and leaves no row behind.
+   */
+  wabaId: MetaWabaIdSchema,
+  /**
+   * A hint, and optional for that reason. The numbers that actually get attached
+   * are read from Meta on the new token: `displayPhoneNumber`, `verifiedName`
+   * and the WABA's own name and verification status are fields the connection
+   * requires and the browser does not have, so there is one authority for what
+   * was connected and it is the one that issued the token.
+   */
+  phoneNumberId: MetaPhoneNumberIdSchema.optional(),
+});
+
 /** The tenant a platform-admin WhatsApp route acts on, named the way an operator has it. */
 export const WhatsAppAdminTenantParamsSchema = z.object({
   slug: TenantSlugSchema,
@@ -364,6 +429,7 @@ export type ConnectWhatsAppPhoneNumberInput = z.infer<typeof ConnectWhatsAppPhon
 export type ConnectWhatsAppBusinessAccountInput = z.infer<
   typeof ConnectWhatsAppBusinessAccountInputSchema
 >;
+export type WhatsAppEmbeddedSignupInput = z.infer<typeof WhatsAppEmbeddedSignupInputSchema>;
 export type WhatsAppAdminTenantParams = z.infer<typeof WhatsAppAdminTenantParamsSchema>;
 export type WhatsAppAdminBusinessAccountParams = z.infer<
   typeof WhatsAppAdminBusinessAccountParamsSchema
