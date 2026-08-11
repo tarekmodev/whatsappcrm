@@ -1,5 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { SESSION_COOKIE_NAME, SESSION_COOKIE_NAME_SECURE } from '@whatsappcrm/contracts';
+import {
+  EDGE_AUTH_HEADER,
+  SESSION_COOKIE_NAME,
+  SESSION_COOKIE_NAME_SECURE,
+  TENANT_HOST_HEADER,
+} from '@whatsappcrm/contracts';
 import { webEnv } from '@/lib/config/env';
 import { routes } from '@/lib/routes';
 import { REQUEST_PATH_HEADER, isPublicPath } from '@/lib/session/session-paths';
@@ -24,6 +29,12 @@ import { REQUEST_PATH_HEADER, isPublicPath } from '@/lib/session/session-paths';
  * a deep link gets a redirect instead of a render that fetches, fails and
  * redirects anyway.
  *
+ * It also names the tenant on the **browser's** calls to the API. Those do not go
+ * through `lib/api/http.ts`; they are proxied to the API origin by
+ * `next.config.mjs`, and that proxy replaces `Host` with the destination's. This
+ * is the only place in the request's life where the tenant host is still known,
+ * so the same header pair the server-side transport sends is injected here.
+ *
  * ⚠️ Next 16 renamed this file convention from `middleware` to `proxy`. Also note
  * that a Server Function is a POST to the route it lives on, so the matcher below
  * covers actions too — but a matcher is never a substitute for the assertion each
@@ -31,6 +42,13 @@ import { REQUEST_PATH_HEADER, isPublicPath } from '@/lib/session/session-paths';
  */
 export function proxy(request: NextRequest): NextResponse {
   const { pathname, search } = request.nextUrl;
+
+  // Before the guard, and returning immediately: an API call must never be
+  // answered with a redirect to an HTML sign-in page, which would turn a clean
+  // 401 into a parse failure in the caller. The API authenticates these itself.
+  if (isApiPath(pathname)) {
+    return NextResponse.next({ request: { headers: withTenantRouting(request) } });
+  }
 
   // Published to the server render on every matched request, protected or not:
   // a page that resolves a session needs to know where the user was going, and
@@ -62,6 +80,58 @@ function hasSessionCookie(request: NextRequest): boolean {
   );
 }
 
+/**
+ * What `next.config.mjs` rewrites to the API origin.
+ *
+ * The rewrite's `/api/:path*` matches **zero** segments too, so bare `/api` is
+ * proxied as well — a prefix test on `/api/` alone would miss it and hand that
+ * one request to the guard, which answers a 307 to `/login`, the exact outcome
+ * the early return exists to prevent. Nothing is mounted there today; the point
+ * is that the two must describe the same set.
+ */
+const API_PATH = '/api';
+const API_PATH_PREFIX = `${API_PATH}/`;
+
+function isApiPath(pathname: string): boolean {
+  return pathname === API_PATH || pathname.startsWith(API_PATH_PREFIX);
+}
+
+/**
+ * The tenant, and the proof it came from us.
+ *
+ * Both are deleted first and then `set`, never appended: a caller that sent
+ * either header itself must not be able to name the tenant its request resolves
+ * to, and the incoming `Host` is the only thing here that a browser cannot forge
+ * past the edge. The delete matters even when nothing is written afterwards —
+ * otherwise a browser-supplied pair would travel on untouched.
+ *
+ * The names are private (`x-edge-host`, not `x-forwarded-host`) because the hop
+ * from here to the API leaves Render and re-enters through proxies that populate
+ * `x-forwarded-*` as a matter of course; a standard name is one an intermediary
+ * is entitled to rewrite. Both come from `@whatsappcrm/contracts`, so this and
+ * the guard cannot drift (TAR-148).
+ *
+ * With no secret configured the pair is dropped rather than sent unproven — the
+ * API would refuse a host it cannot attribute anyway, and sending a host with no
+ * proof only invites a guard that is tempted to trust it.
+ */
+function withTenantRouting(request: NextRequest): Headers {
+  const headers = new Headers(request.headers);
+  const host = request.headers.get('host');
+
+  headers.delete(TENANT_HOST_HEADER);
+  headers.delete(EDGE_AUTH_HEADER);
+
+  if (host === null || host === '' || webEnv.trustedProxySecret === null) {
+    return headers;
+  }
+
+  headers.set(TENANT_HOST_HEADER, host);
+  headers.set(EDGE_AUTH_HEADER, webEnv.trustedProxySecret);
+
+  return headers;
+}
+
 function withRequestPath(incoming: Headers, path: string): Headers {
   const headers = new Headers(incoming);
 
@@ -74,11 +144,15 @@ function withRequestPath(incoming: Headers, path: string): Headers {
 
 export const config = {
   /**
-   * Everything except the API proxy path, Next's own asset routes and any request
-   * for a file. `/api/*` is excluded because `next.config.mjs` rewrites it
-   * straight to the API, which authenticates the request itself and answers 401 —
-   * redirecting an XHR to an HTML sign-in page would turn a clean error into a
-   * parse failure in the caller.
+   * Everything except Next's own asset routes and any request for a file.
+   *
+   * `/api/*` used to be excluded here, because `next.config.mjs` rewrites it
+   * straight to the API and redirecting an XHR to an HTML sign-in page would turn
+   * a clean 401 into a parse failure in the caller. It is matched now — that
+   * rewrite is the last point at which the tenant host is still known, so the
+   * headers have to be attached here — and the guard is skipped for it instead,
+   * in the first branch of `proxy`. What is preserved is "an API call is never
+   * answered with a redirect", not "the proxy never sees an API call".
    */
-  matcher: ['/((?!api/|_next/static|_next/image|favicon.ico|.*\\.[^/]+$).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.[^/]+$).*)'],
 };

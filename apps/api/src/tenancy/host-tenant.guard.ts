@@ -1,10 +1,36 @@
-import { Inject, Injectable, type CanActivate, type ExecutionContext } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type CanActivate,
+  type ExecutionContext,
+  type OnModuleInit,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
+import { EDGE_AUTH_HEADER, TENANT_HOST_HEADER } from '@whatsappcrm/contracts';
 import type { Request } from 'express';
 import { ApiException } from '../common/errors/api.exception';
 import { isPlatformRoute } from '../common/request-pipeline/route-access';
+import { matchesSharedSecret } from '../common/security/shared-secret';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
+import type { Env } from '../config/env.schema';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
+
+/**
+ * Express 5 has already stripped the port from `req.hostname`; a forwarded host
+ * carries whatever the browser sent, so `acme.app.localhost:3000` has to lose its
+ * port here to match a `tenant_domains` row.
+ */
+const PORT_SUFFIX = /:\d+$/;
+
+/**
+ * Floor between two refusal warnings. A wrong `x-edge-auth` is never ordinary
+ * traffic — the web tier strips any inbound one before injecting its own — so it
+ * is worth a line; but it is reachable by an unauthenticated caller, so it is
+ * throttled rather than written per request.
+ */
+const REFUSAL_LOG_INTERVAL_MS = 60_000;
 
 /**
  * Resolves **which tenant** a request is for, from the host it arrived on, and
@@ -20,6 +46,43 @@ import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
  * any principal whose own tenant disagrees with this one, so a stolen session
  * replayed at another tenant's domain fails on the mismatch rather than being
  * served.
+ *
+ * ## The forwarded host, and the secret that makes it a host rather than a claim
+ *
+ * Render routes by `Host` at its edge, and tenant domains are attached to the
+ * **web** service — so inside the API `request.hostname` is always the API's own
+ * host, on the browser path through the Next.js rewrite as much as on the SSR
+ * path. Left as it was, this guard resolved nothing in any deployed environment
+ * (TAR-64 blocker; TAR-148 is the decision that fixes it).
+ *
+ * So the web tier forwards the host it was reached at, and proves it is the web
+ * tier by presenting a secret only it and this process hold: `x-edge-host` is
+ * read **only** when `x-edge-auth` matches `TRUSTED_PROXY_SECRET` (or the
+ * previous one, so the secret can rotate without a synchronised two-service
+ * deploy). Without that proof the header is not read at all — the fallback is
+ * `Host`, exactly as before, never the value the caller supplied.
+ *
+ * Both halves of the pair are private names. `x-forwarded-host` is never read
+ * here, gated or otherwise: it is a standard header the proxies between the two
+ * services are entitled to rewrite, and a payload nobody on the path will touch
+ * is worth more than one that merely looks conventional.
+ *
+ * Both names come from `@whatsappcrm/contracts`, which is where the web tier
+ * reads them too — they are a wire format shared by two deployed services, and a
+ * rename that reached only one of them would leave every tenant route answering
+ * `tenant_not_found` while both sides still reported the feature enabled.
+ *
+ * Express `trust proxy` stays off, deliberately. Turning it on would make
+ * `req.hostname` honour `X-Forwarded-Host` *ungated*, which is precisely the
+ * spoof this guard exists to prevent; the gate has to be explicit code here, not
+ * a framework-wide flag.
+ *
+ * A leaked secret lets its holder name any *verified* tenant hostname. On an
+ * authenticated route `PrincipalGuard` still cross-checks the session's tenant
+ * and answers `tenant_mismatch`, so the secret alone yields no data; on a
+ * `@Public()` route — login, password reset, invite lookup — there is nothing to
+ * cross-check, and that residual exposure is why the secret is per environment,
+ * rotatable, and never given a `NEXT_PUBLIC_` prefix on the web side.
  *
  * ## Why `SystemPrisma`
  *
@@ -45,12 +108,60 @@ import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
  * invalidate, the query is the honest answer.
  */
 @Injectable()
-export class HostTenantGuard implements CanActivate {
+export class HostTenantGuard implements CanActivate, OnModuleInit {
+  private readonly logger = new Logger(HostTenantGuard.name);
+
+  /**
+   * The current and previous `TRUSTED_PROXY_SECRET`, read once at construction:
+   * rotating one is a redeploy, not something a request can observe changing.
+   */
+  private readonly edgeSecrets: readonly string[];
+
+  /** When the last refusal was logged, so a probe cannot flood the stream. */
+  private lastRefusalLoggedAt = 0;
+
   constructor(
     private readonly reflector: Reflector,
     @Inject(SYSTEM_PRISMA) private readonly systemPrisma: SystemPrisma,
     private readonly tenantContext: TenantContextService,
-  ) {}
+    config: ConfigService<Env, true>,
+  ) {
+    this.edgeSecrets = [
+      config.get('TRUSTED_PROXY_SECRET', { infer: true }),
+      config.get('TRUSTED_PROXY_SECRET_PREVIOUS', { infer: true }),
+    ].filter((secret): secret is string => typeof secret === 'string' && secret !== '');
+  }
+
+  /**
+   * One line at boot saying which side of the trust boundary this process is on,
+   * and how many secrets it will accept.
+   *
+   * The flag and the count, never a value. The count is what tells a completed
+   * rotation from a half-finished one: clearing
+   * `TRUSTED_PROXY_SECRET_PREVIOUS` is the step of the rotation procedure with
+   * no visible consequence when skipped, and skipping it leaves a retired secret
+   * valid indefinitely with nothing saying so.
+   */
+  onModuleInit(): void {
+    if (this.edgeSecrets.length === 0) {
+      this.logger.log(
+        'Forwarded-host tenant resolution is disabled (no TRUSTED_PROXY_SECRET): ' +
+          'tenants resolve from the Host header only.',
+      );
+
+      return;
+    }
+
+    const rotation =
+      this.edgeSecrets.length > 1
+        ? ` — a rotation is in progress; clear TRUSTED_PROXY_SECRET_PREVIOUS to finish it`
+        : '';
+
+    this.logger.log(
+      `Forwarded-host tenant resolution is enabled (${this.edgeSecrets.length} secret(s) accepted${rotation}): ` +
+        `a request presenting a valid ${EDGE_AUTH_HEADER} resolves its tenant from ${TENANT_HOST_HEADER}.`,
+    );
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     if (isPlatformRoute(this.reflector, context)) {
@@ -61,7 +172,7 @@ export class HostTenantGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<Request>();
-    const hostname = hostnameOf(request);
+    const hostname = this.hostnameOf(request);
 
     if (hostname === null) {
       throw tenantNotFound();
@@ -82,21 +193,106 @@ export class HostTenantGuard implements CanActivate {
 
     return true;
   }
+
+  /**
+   * The hostname this request is for: port stripped, lowercased to match the
+   * `citext` column.
+   *
+   * `Host` unless a trusted edge said otherwise. `req.hostname` is Express's
+   * reading of `Host`; it honours `X-Forwarded-Host` only when `trust proxy` is
+   * set, which it deliberately is not — and `x-forwarded-host` is not read here
+   * either, so no intermediary between the two services can influence this.
+   */
+  private hostnameOf(request: Request): string | null {
+    if (!this.isTrustedEdge(request)) {
+      return normalisedHostname(request.hostname);
+    }
+
+    const forwarded = request.header(TENANT_HOST_HEADER);
+
+    if (forwarded === undefined || forwarded.trim() === '') {
+      // A trusted edge that named no host is not an attack — a probe that reached
+      // the API service directly looks like this. `Host` is the honest answer, and
+      // it is the same answer an untrusted caller would have got.
+      return normalisedHostname(request.hostname);
+    }
+
+    if (forwarded.includes(',')) {
+      // Multi-valued: either spliced by a caller upstream of the edge, or two
+      // separate headers Express joined into one. Taking the leftmost element is
+      // how forwarded-header splicing gets in, so this is refused outright rather
+      // than resolved to whichever half looks most plausible.
+      return null;
+    }
+
+    return normalisedHostname(forwarded);
+  }
+
+  /**
+   * True when the request proves it came from the web tier by presenting a secret
+   * only the two services hold.
+   *
+   * Fail closed on every step: no secret configured, no header, or an empty one,
+   * and the forwarded host is never read. Both the current and the previous secret
+   * are accepted so a rotation is three ordinary deploys rather than one
+   * synchronised swap — see `TRUSTED_PROXY_SECRET_PREVIOUS` in `env.schema.ts`.
+   */
+  private isTrustedEdge(request: Request): boolean {
+    const presented = request.header(EDGE_AUTH_HEADER);
+
+    if (presented === undefined || presented === '') {
+      return false;
+    }
+
+    if (this.edgeSecrets.some((secret) => matchesSharedSecret(presented, secret))) {
+      return true;
+    }
+
+    this.warnRefusal();
+
+    return false;
+  }
+
+  /**
+   * Says out loud that a caller presented an `x-edge-auth` matching neither
+   * secret, because the most likely cause is not an attacker.
+   *
+   * The web tier strips any inbound `x-edge-auth` before injecting its own, so a
+   * wrong one is never ordinary traffic: it is the two services holding different
+   * values after a rotation, and in that state the boot line above still reads
+   * `enabled` while every tenant route answers `tenant_not_found`. Without this
+   * line the only stated detection is a manual smoke test.
+   *
+   * The fact, never the value, and at most one line per
+   * `REFUSAL_LOG_INTERVAL_MS` — the path is reachable unauthenticated, and a log
+   * an anonymous caller can fill is its own availability problem.
+   */
+  private warnRefusal(): void {
+    const now = Date.now();
+
+    if (now - this.lastRefusalLoggedAt < REFUSAL_LOG_INTERVAL_MS) {
+      return;
+    }
+
+    this.lastRefusalLoggedAt = now;
+    this.logger.warn(
+      `tenancy.edge_auth_mismatch: a caller presented an ${EDGE_AUTH_HEADER} matching neither ` +
+        'TRUSTED_PROXY_SECRET nor TRUSTED_PROXY_SECRET_PREVIOUS, so the tenant was resolved from ' +
+        'Host instead. Usually the web tier and the API holding different values after a ' +
+        `rotation. Further occurrences are suppressed for ${REFUSAL_LOG_INTERVAL_MS}ms.`,
+    );
+  }
 }
 
-/**
- * The `Host` header with any port stripped, lowercased to match the `citext`
- * column.
- *
- * `req.hostname` already does this in Express 5 and honours `X-Forwarded-Host`
- * only when `trust proxy` is set — which it is not, so a client cannot pick its
- * own tenant by forging that header. When the platform sits behind a proxy that
- * rewrites `Host`, enabling `trust proxy` is a deliberate, reviewed change.
- */
-function hostnameOf(request: Request): string | null {
-  const hostname = request.hostname;
+/** Strips a trailing `:port`, lowercases, and reads blank as "no host at all". */
+function normalisedHostname(value: string | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
 
-  return typeof hostname === 'string' && hostname !== '' ? hostname.toLowerCase() : null;
+  const hostname = value.trim().replace(PORT_SUFFIX, '').toLowerCase();
+
+  return hostname === '' ? null : hostname;
 }
 
 /**

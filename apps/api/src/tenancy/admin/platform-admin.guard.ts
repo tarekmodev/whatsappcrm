@@ -1,8 +1,8 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { Injectable, Logger, type CanActivate, type ExecutionContext } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
 import { ApiException } from '../../common/errors/api.exception';
+import { matchesSharedSecret } from '../../common/security/shared-secret';
 
 const BEARER_PREFIX = 'Bearer ';
 
@@ -52,7 +52,7 @@ export class PlatformAdminGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<Request>();
     const presented = bearerTokenFrom(request.header('authorization'));
 
-    if (presented === null || !matches(presented, expected)) {
+    if (presented === null || !matchesSharedSecret(presented, expected)) {
       // Logged, not returned: the caller learns only that it failed. This is
       // the platform's own control plane, so a failure here is worth alerting
       // on (TAR-41 owns wiring that up).
@@ -79,19 +79,4 @@ function bearerTokenFrom(header: string | undefined): string | null {
   const token = header.slice(BEARER_PREFIX.length).trim();
 
   return token === '' ? null : token;
-}
-
-/**
- * `timingSafeEqual` throws on a length mismatch, which would leak the expected
- * length through the error. Hashing both sides first makes every comparison 32
- * bytes against 32 bytes. SHA-256 is used as a length-equaliser here, not as a
- * password hash — the secret is high-entropy and machine-generated, so there is
- * nothing for a work factor to protect against.
- */
-function matches(presented: string, expected: string): boolean {
-  return timingSafeEqual(sha256(presented), sha256(expected));
-}
-
-function sha256(value: string): Buffer {
-  return createHash('sha256').update(value, 'utf8').digest();
 }
