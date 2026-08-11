@@ -903,10 +903,10 @@ gap. Spinners are allowed only for a button's own pending state (`<Button isPend
 
 `app/` holds two route groups, and neither changes a URL — `/inbox` is still `/inbox`.
 
-| Group      | Layout renders                                     | Session      |
-| ---------- | -------------------------------------------------- | ------------ |
-| `app/(app)`  | Skip link, `AppHeader` with the filtered nav, `<main>` | Resolved     |
-| `app/(auth)` | A centred card column with the wordmark and `<main>`   | None at all  |
+| Group        | Layout renders                                         | Session     |
+| ------------ | ------------------------------------------------------ | ----------- |
+| `app/(app)`  | Skip link, `AppHeader` with the filtered nav, `<main>` | Resolved    |
+| `app/(auth)` | A centred card column with the wordmark and `<main>`   | None at all |
 
 The split exists because password recovery is reachable by somebody who cannot sign in. A
 root layout that resolved the principal would answer 401 to a visitor following a reset

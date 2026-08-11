@@ -40,10 +40,7 @@ export function SecuritySections({ email }: { email: string }) {
 export function SecuritySectionsSkeleton() {
   return (
     <Stack gap="5">
-      <SectionCard
-        title={content.auth.changeHeading}
-        description={content.auth.changeDescription}
-      >
+      <SectionCard title={content.auth.changeHeading} description={content.auth.changeDescription}>
         <LoadingAnnouncement label={content.auth.securityLoading} />
         <Stack gap="4">
           <SkeletonField hasHint={false} />

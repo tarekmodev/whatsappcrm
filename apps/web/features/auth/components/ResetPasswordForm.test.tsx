@@ -10,8 +10,7 @@ import { ResetPasswordForm } from './ResetPasswordForm';
 // `fireEvent` rather than `user-event`: the repo does not carry that package.
 // The mock is typed against the action's real signature, so a test cannot go on
 // passing while the action it stands in for changes shape.
-const confirmPasswordResetAction =
-  vi.fn<(input: unknown) => Promise<ActionResult<ResetOutcome>>>();
+const confirmPasswordResetAction = vi.fn<(input: unknown) => Promise<ActionResult<ResetOutcome>>>();
 
 vi.mock('../auth.actions', () => ({
   confirmPasswordResetAction: (input: unknown) => confirmPasswordResetAction(input),
@@ -137,9 +136,7 @@ describe('ResetPasswordForm', () => {
     });
 
     expect(screen.getByText('This password reset link has expired.')).toBeInTheDocument();
-    expect(
-      screen.getByRole('link', { name: content.auth.requestNewLink }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: content.auth.requestNewLink })).toBeInTheDocument();
     // The form is gone: there is nothing left on it worth submitting.
     expect(
       screen.queryByRole('button', { name: content.auth.resetSubmit }),

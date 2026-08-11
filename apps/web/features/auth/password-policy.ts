@@ -30,9 +30,7 @@ export function validateNewPassword(password: string, confirmation: string): New
     return { password: passwordError };
   }
 
-  return confirmation === password
-    ? {}
-    : { confirmation: content.auth.passwordMismatchError };
+  return confirmation === password ? {} : { confirmation: content.auth.passwordMismatchError };
 }
 
 export function hasErrors(errors: NewPasswordErrors): boolean {

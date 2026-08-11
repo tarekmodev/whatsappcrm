@@ -117,9 +117,7 @@ function transportFailure<T>(label: string, error: unknown): ActionResult<T> {
   if (error instanceof ApiRequestError) {
     return {
       status: 'error',
-      message: ACTIONABLE_ERROR_CODES.has(error.code)
-        ? error.message
-        : content.auth.genericFailure,
+      message: ACTIONABLE_ERROR_CODES.has(error.code) ? error.message : content.auth.genericFailure,
       requestId: error.requestId,
     };
   }

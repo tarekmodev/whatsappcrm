@@ -454,11 +454,7 @@ function changePassword({ body }: RouteContext): null {
   }
 
   if (parsed.data.currentPassword === MOCK_WRONG_CURRENT_PASSWORD) {
-    throw refused(
-      'invalid_credentials',
-      'The current password is incorrect.',
-      HTTP_UNAUTHORIZED,
-    );
+    throw refused('invalid_credentials', 'The current password is incorrect.', HTTP_UNAUTHORIZED);
   }
 
   return null;
