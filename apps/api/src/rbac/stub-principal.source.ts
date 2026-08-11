@@ -1,13 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import {
-  TENANT_ROLES,
-  permissionsForRole,
-  type SessionPrincipal,
-  type TenantRole,
-} from '@whatsappcrm/contracts';
+import { TENANT_ROLES, permissionsForRole, type TenantRole } from '@whatsappcrm/contracts';
 import type { Request } from 'express';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
-import type { PrincipalSource } from './principal.source';
+import {
+  ANONYMOUS,
+  resolved,
+  type PrincipalResolution,
+  type PrincipalSource,
+} from './principal.source';
 
 /**
  * ⚠️ **INTERIM STUB — DELETE THIS FILE WHEN TAR-35 LANDS.**
@@ -58,7 +58,7 @@ export class StubPrincipalSource implements PrincipalSource {
 
   constructor(@Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma) {}
 
-  async resolve(request: Request, tenantId: string): Promise<SessionPrincipal | null> {
+  async resolve(request: Request, tenantId: string): Promise<PrincipalResolution> {
     const role = parseStubRole(stubRoleFrom(request));
 
     // Reads through `TenantPrisma`, so the lookup itself is bounded by the
@@ -82,10 +82,12 @@ export class StubPrincipalSource implements PrincipalSource {
         `Interim role stub found no active ${role} in tenant ${tenantId}. ` +
           'Seed one, or the request is refused as unauthenticated.',
       );
-      return null;
+      return ANONYMOUS;
     }
 
-    return {
+    // Never `replayed`: the stub reads through `TenantPrisma`, so the only
+    // tenant it can find anybody in is the one already in scope.
+    return resolved({
       userId: user.id,
       tenantId,
       email: user.email,
@@ -98,7 +100,7 @@ export class StubPrincipalSource implements PrincipalSource {
       teamIds: user.teamMemberships.map((membership) => membership.teamId),
       sessionId: STUB_SESSION_ID,
       expiresAt: STUB_SESSION_EXPIRES_AT,
-    };
+    });
   }
 }
 

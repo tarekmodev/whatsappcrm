@@ -1,6 +1,7 @@
 import type { Server } from 'node:http';
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import {
   ApiErrorSchema,
@@ -12,14 +13,13 @@ import {
 } from '@whatsappcrm/contracts';
 import request from 'supertest';
 import { configureApp } from '../bootstrap';
-import { ApiException } from '../common/errors/api.exception';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { TenantContextMiddleware } from '../common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from '../common/tenant-context/tenant-context.module';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { PermissionGuard } from '../rbac/permission.guard';
 import { PrincipalGuard } from '../rbac/principal.guard';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
+import { ANONYMOUS, PRINCIPAL_SOURCE, resolved } from '../rbac/principal.source';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import {
@@ -38,10 +38,13 @@ import { SessionService } from './session.service';
  * exists nowhere else in the response, which is what makes it unreadable to
  * script on the page.
  *
- * The guards are replaced rather than exercised — `HostTenantGuard` needs a
- * database and `PrincipalGuard` needs a session, and both have their own specs.
- * What is under test here is that they are *declared*: the unauthenticated
- * cases below fail before any service is called.
+ * `PrincipalGuard` and `PermissionGuard` are the real ones, registered as
+ * `APP_GUARD` exactly as `RequestPipelineModule` registers them, over a fake
+ * principal source. That is what makes the two halves of this file meaningful
+ * together: login is reachable with no session because `AuthController` is
+ * `@Public()`, and every route on `SessionController` — which declares nothing —
+ * is refused without one. `HostTenantGuard` needs a database, so the middleware
+ * below stands in for it with the one `setTenant` call it contributes.
  */
 
 const TENANT = '56666666-6666-7666-8666-666666666601';
@@ -90,39 +93,26 @@ describe('auth routes', () => {
           provide: ConfigService,
           useValue: { get: (key: string) => (key === 'SESSION_COOKIE_SECURE' ? false : undefined) },
         },
-      ],
-    })
-      .overrideGuard(HostTenantGuard)
-      .useValue({ canActivate: () => true })
-      .overrideGuard(PrincipalGuard)
-      .useValue({
-        // Refuses the way the real guard does — `unauthenticated`, not Nest's
-        // default 403 — so the assertions below are about what a client sees
-        // rather than about how this stub happens to say no.
-        canActivate: () => {
-          if (!signedIn) {
-            throw new ApiException('unauthenticated', 'This request requires a signed-in user.');
-          }
-
-          return true;
+        {
+          provide: PRINCIPAL_SOURCE,
+          useValue: { resolve: () => Promise.resolve(signedIn ? resolved(PRINCIPAL) : ANONYMOUS) },
         },
-      })
-      .overrideGuard(PermissionGuard)
-      .useValue({ canActivate: () => true })
-      .compile();
+        { provide: APP_GUARD, useClass: PrincipalGuard },
+        { provide: APP_GUARD, useClass: PermissionGuard },
+      ],
+    }).compile();
 
     app = moduleRef.createNestApplication();
 
     const middleware = app.get(TenantContextMiddleware);
+    const tenantContext = app.get(TenantContextService);
 
     app.use(middleware.use.bind(middleware));
-    // The principal the replaced `PrincipalGuard` would have published. Set on
-    // the scope the middleware opened, which is where the controllers read it.
+    // Stands in for `HostTenantGuard`, which needs a database. Both controllers
+    // depend on a tenant being in scope: login resolves credentials within it,
+    // and `PrincipalGuard` checks the session's tenant against it.
     app.use((_request: unknown, _response: unknown, next: () => void) => {
-      if (signedIn) {
-        app.get(TenantContextService).setPrincipal(PRINCIPAL);
-      }
-
+      tenantContext.setTenant(TENANT);
       next();
     });
 

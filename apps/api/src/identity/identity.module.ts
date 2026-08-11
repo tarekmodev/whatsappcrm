@@ -1,7 +1,6 @@
 import { Global, Logger, Module, type Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { AuthController } from './auth.controller';
 import { AuthRedisClient } from './auth-redis.client';
 import { AuthService } from './auth.service';
@@ -18,6 +17,7 @@ import { PasswordService } from './password.service';
 import { SessionCacheService } from './session-cache.service';
 import { SessionController } from './session.controller';
 import { SessionPrincipalSource } from './session-principal.source';
+import { SessionReplayProbe } from './session-replay.probe';
 import { SessionService } from './session.service';
 import { UserInvitesController } from './user-invites.controller';
 
@@ -56,9 +56,11 @@ import { UserInvitesController } from './user-invites.controller';
  * registry. Adding an `imports` edge in either direction is what would create
  * one.
  *
- * `HostTenantGuard` and `ApiExceptionFilter` are declared locally for the same
- * reason `PeopleModule` declares them: `TenancyModule` keeps its providers
- * private, and both are stateless.
+ * `ApiExceptionFilter` is declared locally for the same reason `PeopleModule`
+ * declares it: it is stateless wiring for this module's own controllers. The
+ * `HostTenantGuard` instance that sat beside it went away with TAR-58 —
+ * `RequestPipelineModule` now installs it on every route, so `AuthController`
+ * states `@Public()` instead of a guard list.
  */
 
 /**
@@ -115,7 +117,7 @@ const mailerProvider: Provider = {
     SessionService,
     SessionCacheService,
     SessionPrincipalSource,
-    HostTenantGuard,
+    SessionReplayProbe,
     ApiExceptionFilter,
   ],
   exports: [LoginThrottleService, PasswordService, SessionService, SessionPrincipalSource, MAILER],

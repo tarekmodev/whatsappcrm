@@ -1,4 +1,4 @@
-import { permissionsForRole } from '@whatsappcrm/contracts';
+import { permissionsForRole, type SessionPrincipal } from '@whatsappcrm/contracts';
 import type { Request } from 'express';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import {
@@ -35,6 +35,23 @@ function sourceFinding(user: unknown): StubPrincipalSource {
   return new StubPrincipalSource(prisma);
 }
 
+/**
+ * The principal the stub produced, or `null` when it produced none.
+ *
+ * `PrincipalSource.resolve` answers a `PrincipalResolution` since TAR-58, so the
+ * outcome is unwrapped here rather than in every assertion below. The stub can
+ * never answer `replayed` — it reads through `TenantPrisma`, so the only tenant
+ * it can find anybody in is the one already in scope.
+ */
+async function principalFrom(
+  source: StubPrincipalSource,
+  request: Request,
+): Promise<SessionPrincipal | null> {
+  const resolution = await source.resolve(request, TENANT);
+
+  return resolution.outcome === 'resolved' ? resolution.principal : null;
+}
+
 const SEEDED = {
   id: '0192f0ff-0000-7000-8000-00000000a001',
   email: 'supervisor@example.invalid',
@@ -50,21 +67,21 @@ describe('the interim role stub', () => {
   });
 
   it('reads the role from the same cookie the console sets', async () => {
-    const principal = await sourceFinding(SEEDED).resolve(
+    const principal = await principalFrom(
+      sourceFinding(SEEDED),
       requestWith({ cookie: `theme=dark; ${ROLE_STUB_COOKIE_NAME}=supervisor; other=x` }),
-      TENANT,
     );
 
     expect(principal?.role).toBe('supervisor');
   });
 
   it('lets the header win over the cookie, for curl and integration tests', async () => {
-    const principal = await sourceFinding(SEEDED).resolve(
+    const principal = await principalFrom(
+      sourceFinding(SEEDED),
       requestWith({
         [ROLE_STUB_HEADER]: 'agent',
         cookie: `${ROLE_STUB_COOKIE_NAME}=admin`,
       }),
-      TENANT,
     );
 
     expect(principal?.role).toBe('agent');
@@ -74,13 +91,13 @@ describe('the interim role stub', () => {
   // hardcoded tenant id would let every one of them pass with RLS never
   // exercised, which is the failure mode ADR 0002 warns about.
   it('takes the tenant from the caller, never from itself', async () => {
-    const principal = await sourceFinding(SEEDED).resolve(requestWith({}), TENANT);
+    const principal = await principalFrom(sourceFinding(SEEDED), requestWith({}));
 
     expect(principal?.tenantId).toBe(TENANT);
   });
 
   it('takes the user and their teams from a real seeded row', async () => {
-    const principal = await sourceFinding(SEEDED).resolve(requestWith({}), TENANT);
+    const principal = await principalFrom(sourceFinding(SEEDED), requestWith({}));
 
     expect(principal?.userId).toBe(SEEDED.id);
     expect(principal?.email).toBe(SEEDED.email);
@@ -89,9 +106,9 @@ describe('the interim role stub', () => {
 
   it('materialises permissions through the contract rather than listing them', async () => {
     for (const role of ['agent', 'supervisor', 'admin'] as const) {
-      const principal = await sourceFinding(SEEDED).resolve(
+      const principal = await principalFrom(
+        sourceFinding(SEEDED),
         requestWith({ [ROLE_STUB_HEADER]: role }),
-        TENANT,
       );
 
       expect(principal?.permissions).toEqual([...permissionsForRole(role)]);
@@ -101,6 +118,6 @@ describe('the interim role stub', () => {
   it('authenticates nobody when the tenant holds no active user with that role', async () => {
     // Refused as unauthenticated rather than fabricated — the stub supplies a
     // principal, it does not invent one.
-    await expect(sourceFinding(null).resolve(requestWith({}), TENANT)).resolves.toBeNull();
+    await expect(principalFrom(sourceFinding(null), requestWith({}))).resolves.toBeNull();
   });
 });

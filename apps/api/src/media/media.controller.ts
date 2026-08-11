@@ -21,8 +21,8 @@ import {
 import type { Response } from 'express';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ApiException } from '../common/errors/api.exception';
-import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
+import { RequirePermission } from '../rbac/require-permission.decorator';
 import { contentDispositionFor } from './media-file-name';
 import { MEDIA_UPLOAD_FIELD } from './media.constants';
 import {
@@ -72,15 +72,17 @@ interface MulterFile {
  *
  * ## Authentication and permission — read this before adding a fourth route
  *
- * The published pipeline puts `AuthGuard` (TAR-35) and `PermissionGuard`
- * (TAR-22) in front of every tenant-facing route, and **neither exists yet**.
- * Until they do, every handler here refuses a request with no tenant in scope,
- * which today is all of them: the tenant-context middleware opens the scope
- * with `tenantId: null` and nothing fills it in. This is the same deliberate
- * fail-closed placeholder `MessageTemplatesController` documents, and it gives
- * the same guarantee and no more — no code path from an unauthenticated request
- * to a row, but no enforcement of `conversation:send`, which is the permission
- * these routes get when TAR-22 lands.
+ * Closed by `RequestPipelineModule` (TAR-58): host → tenant, cookie →
+ * principal, then the permission each route names. Until that landed these
+ * handlers stood on a hand-written `requireTenant()` check that kept anonymous
+ * callers out and enforced no permission at all.
+ *
+ * The split between the three: uploading is part of composing a reply, so it
+ * asks for `conversation:send`; reading an object or its bytes is part of
+ * reading the conversation it hangs off, so both ask for `conversation:read`.
+ * Every role holds both today, so this changes no behaviour now — it is written
+ * this way so that narrowing `conversation:send` later narrows uploading without
+ * also taking away the ability to open an attachment somebody else sent.
  *
  * ## Why the content route is authenticated rather than a signed URL
  *
@@ -97,7 +99,6 @@ export class MediaController {
   constructor(
     private readonly uploads: MediaUploadService,
     private readonly reader: MediaReaderService,
-    private readonly tenantContext: TenantContextService,
   ) {}
 
   /**
@@ -112,20 +113,20 @@ export class MediaController {
    * The temporary file is removed in a `finally`, on every path including the
    * validation failures, which are the common ones.
    *
-   * The `try` opens before the tenant check, not after, because multer has
+   * The `try` opens before the first refusal, not after, because multer has
    * already written the part by then: a rejected request has a file on disk
-   * exactly like an accepted one. Refusing above the `finally` would leak that
-   * file on every unauthenticated call — which today is all of them, until
-   * TAR-35 puts a guard in front. The guard against `undefined` in the `finally`
-   * is for the no-part request, where there is nothing to remove.
+   * exactly like an accepted one, and refusing above the `finally` would leak
+   * it. (The pipeline guards refuse earlier still, before multer runs at all, so
+   * an unauthenticated caller never reaches the disk.) The check against
+   * `undefined` in the `finally` is for the no-part request, where there is
+   * nothing to remove.
    */
   @Post()
+  @RequirePermission('conversation:send')
   @HttpCode(HttpStatus.CREATED)
   @UseInterceptors(FileInterceptor(MEDIA_UPLOAD_FIELD))
   async upload(@UploadedFile() file: MulterFile | undefined): Promise<MediaUploadResponse> {
     try {
-      this.requireTenant();
-
       if (file === undefined) {
         translateFailure(new MediaFileMissingError(MEDIA_UPLOAD_FIELD));
       }
@@ -143,11 +144,10 @@ export class MediaController {
   }
 
   @Get(':id')
+  @RequirePermission('conversation:read')
   async describe(
     @Param('id', new ParseUUIDPipe({ exceptionFactory: invalidId })) id: string,
   ): Promise<MediaObjectResponse> {
-    this.requireTenant();
-
     const media = await this.reader.describe(id).catch((error: unknown) => translateFailure(error));
 
     return toResponse(media);
@@ -172,12 +172,11 @@ export class MediaController {
    *     cache, and this response is authorised by a session that can be revoked.
    */
   @Get(':id/content')
+  @RequirePermission('conversation:read')
   async content(
     @Param('id', new ParseUUIDPipe({ exceptionFactory: invalidId })) id: string,
     @Res() response: Response,
   ): Promise<void> {
-    this.requireTenant();
-
     const { media, body } = await this.reader
       .read(id)
       .catch((error: unknown) => translateFailure(error));
@@ -189,16 +188,6 @@ export class MediaController {
     response.setHeader('cache-control', 'private, no-store');
 
     await pipeline(body, response);
-  }
-
-  /** Stands in for `AuthGuard` until TAR-35 lands. See the class comment. */
-  private requireTenant(): void {
-    if (this.tenantContext.tenantId === null) {
-      throw new ApiException(
-        'unauthenticated',
-        'This endpoint requires an authenticated tenant session.',
-      );
-    }
   }
 }
 

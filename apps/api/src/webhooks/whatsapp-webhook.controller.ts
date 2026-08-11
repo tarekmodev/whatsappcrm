@@ -20,6 +20,7 @@ import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ApiException } from '../common/errors/api.exception';
+import { PlatformRoute } from '../common/request-pipeline/route-access';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
 import { WebhookIngestService } from './webhook-ingest.service';
 import { WebhookRefusedError } from './webhook.errors';
@@ -34,10 +35,15 @@ import { WebhookRefusedError } from './webhook.errors';
  * reconfiguration, so it is deliberately outside the versioning scheme — as the
  * published endpoint table has it.
  *
- * There is no guard. Authentication here *is* the HMAC over the raw body, and a
- * guard would have to duplicate it or run before the raw body is available.
+ * `@PlatformRoute()` takes it out of the global pipeline (TAR-58). Meta posts to
+ * the platform host with no cookie, so tenant resolution and session lookup have
+ * nothing to work with — the tenant is derived from the phone number id *inside*
+ * the signed payload, after the signature has been checked. Authentication here
+ * *is* the HMAC over the raw body, and a guard would have to duplicate it or run
+ * before the raw body is available.
  */
 @Controller({ path: 'webhooks/whatsapp', version: VERSION_NEUTRAL })
+@PlatformRoute()
 @UseFilters(ApiExceptionFilter)
 export class WhatsAppWebhookController {
   private readonly logger = new Logger(WhatsAppWebhookController.name);

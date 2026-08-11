@@ -18,9 +18,6 @@ import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { TenantContextMiddleware } from '../common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from '../common/tenant-context/tenant-context.module';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
-import { PermissionGuard } from '../rbac/permission.guard';
-import { PrincipalGuard } from '../rbac/principal.guard';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { InviteTokenInvalidError } from './identity.errors';
 import { InviteService } from './invite.service';
 import { InvitesController } from './invites.controller';
@@ -34,6 +31,13 @@ import { UserInvitesController } from './user-invites.controller';
  * fail visibly in a browser during development; a missing `HttpOnly`, a stray
  * `Domain` or a session token echoed into the response body would not — they
  * would work perfectly and be a credential-exposure bug.
+ *
+ * No guard runs: since TAR-58 the pipeline is installed by
+ * `RequestPipelineModule`, which this narrow testing module does not import. That
+ * is deliberate — which callers get *to* these handlers is settled by the posture
+ * each controller declares, proved in `request-pipeline.http.spec` against the
+ * real guards. What is under test here is what the handlers do once a request is
+ * through them.
  */
 
 const TENANT_ID = '0192f0ff-0000-7000-8000-0000000000b1';
@@ -99,17 +103,7 @@ describe('invite routes', () => {
           },
         },
       ],
-    })
-      // The guards have their own specs and their own dependencies (the system
-      // client, the principal source). What is under test here is what the
-      // controllers do once a request is through them.
-      .overrideGuard(HostTenantGuard)
-      .useValue({ canActivate: () => true })
-      .overrideGuard(PrincipalGuard)
-      .useValue({ canActivate: () => true })
-      .overrideGuard(PermissionGuard)
-      .useValue({ canActivate: () => true })
-      .compile();
+    }).compile();
 
     jest
       .spyOn(TenantContextService.prototype, 'tenantId', 'get')

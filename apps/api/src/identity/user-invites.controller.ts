@@ -10,7 +10,6 @@ import {
   Query,
   Res,
   UseFilters,
-  UseGuards,
 } from '@nestjs/common';
 import {
   InviteCreateInputSchema,
@@ -25,10 +24,7 @@ import {
 import type { Response } from 'express';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
-import { PermissionGuard } from '../rbac/permission.guard';
-import { PrincipalGuard } from '../rbac/principal.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
-import { HostTenantGuard } from '../tenancy/host-tenant.guard';
 import { translateIdentityFailure } from './identity.http';
 import { InviteService } from './invite.service';
 
@@ -36,17 +32,17 @@ import { InviteService } from './invite.service';
  * Managing invitations from inside the tenant (ADR 0005, "Tenant
  * administration").
  *
- * The three guards are declared on the controller in the order the pipeline
- * needs them: **where** the request is (`HostTenantGuard`, from the host),
- * **who** is making it (`PrincipalGuard`), then **may they** (`PermissionGuard`).
- * A route added later inherits all three.
+ * No guard is declared: since TAR-58 the three that protect these routes —
+ * **where** the request is (`HostTenantGuard`), **who** is making it
+ * (`PrincipalGuard`), then **may they** (`PermissionGuard`) — are installed
+ * application-wide by `RequestPipelineModule`, in that order. Each route states
+ * only the permission it wants, and a route added later is closed until it does.
  *
  * `user:invite` gets you here; what `role` the body may carry is a second
  * question the service answers, because a caller holding this permission but not
  * `user:set_role` may invite an agent and only an agent.
  */
 @Controller({ path: 'users/invites', version: '1' })
-@UseGuards(HostTenantGuard, PrincipalGuard, PermissionGuard)
 @UseFilters(ApiExceptionFilter)
 export class UserInvitesController {
   constructor(private readonly invites: InviteService) {}

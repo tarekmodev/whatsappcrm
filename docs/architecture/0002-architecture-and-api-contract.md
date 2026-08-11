@@ -215,9 +215,13 @@ Everything in ADR 0001 is inherited unchanged. Only decisions this document adds
 **Rules that fall out, and are not optional**
 
 1. All tenant data access goes through `TenantPrisma`. `SystemPrisma` — which bypasses
-   scoping — is confined to five call sites: tenant provisioning, login (before a tenant
-   is known), webhook ingest, the sweeper, and platform reporting. TAR-44 should treat
-   any new `SystemPrisma` usage as requiring justification in review.
+   scoping — is confined to a written list of call sites, and TAR-44 should treat any new
+   usage as requiring justification in review. The list was five here; TAR-53's
+   Amendment 2 revised it and it now reads: tenant provisioning, host→tenant resolution,
+   webhook ingest, the sweeper, platform reporting, and `SessionReplayProbe` (TAR-58 —
+   read-only, three uuids, nothing returned to a caller, and only on a request already
+   being rejected). "Login" left the list under TAR-53's Amendment 1: the tenant is known
+   from the `Host` before login runs, so every auth flow reads under RLS.
 2. **Every** tenant-scoped table carries a non-null `tenant_id`, even where it is
    reachable by a foreign key. Denormalised on purpose: RLS policies cannot join.
 3. Composite indexes lead with `tenant_id`.
@@ -470,8 +474,29 @@ Order is not arbitrary — each stage depends on the last:
 10. ErrorFilter              maps any throw to the envelope                [TAR-41 wires logging]
 ```
 
-`@Public()` opts an endpoint out of 3–6: login, password reset, webhooks,
-`GET /tenant/public`, health.
+**Stages 2, 3 and 5 are installed globally by `RequestPipelineModule` (TAR-58)**, in that
+order, as `APP_GUARD` providers. No controller declares them; a route that says nothing is
+closed, and `PermissionGuard` refuses a route carrying no `@RequirePermission` /
+`@AnyPrincipal` rather than admitting it. Stages 4 and 6 slot into the same module when
+TAR-36 and TAR-37 land. Ordering is asserted end to end in
+`request-pipeline.http.spec.ts` — an unknown host must answer `tenant_not_found` before it
+can answer `unauthenticated` — and every registered route is checked for exactly one
+declared posture by `route-posture.spec.ts`, so a new controller that forgets fails in CI
+rather than on the first request.
+
+There are exactly **two** opt-outs, and both are decorators a reviewer can see in the diff:
+
+- **`@Public()`** — out of 3–6, **not** out of 2. The tenant is still resolved from the
+  host, because login and password reset have to know which tenant they are authenticating
+  against. Used by `POST /api/v1/auth/*` (login and the reset pair) and, when they land,
+  `GET /tenant/public` and the invite lookup.
+- **`@PlatformRoute()`** — out of 2–6 as well. For routes that are not served inside a
+  tenant at all: `/api/health`, `/api/webhooks/whatsapp`, and `/api/v1/admin/*`. It removes
+  the _tenant_ pipeline and nothing else — each of those routes carries its own
+  authentication (the platform-admin bearer token, the webhook HMAC) or is deliberately
+  open (the probes). Nothing is left in scope, so `TenantPrisma` refuses every statement and
+  a platform route that reaches for tenant data fails closed rather than reading whichever
+  tenant the host happened to resolve.
 
 `/api/v1/admin/*` skips stages 2–6. Stage 1 still runs, and must: `TenantContextMiddleware`
 is registered at `{*path}` and opens the scope that carries `requestId`, which the error

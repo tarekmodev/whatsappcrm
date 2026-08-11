@@ -22,6 +22,7 @@ import {
 import type { Response } from 'express';
 import { ApiExceptionFilter } from '../../common/errors/api-exception.filter';
 import { ApiException } from '../../common/errors/api.exception';
+import { PlatformRoute } from '../../common/request-pipeline/route-access';
 import { ZodValidationPipe } from '../../common/validation/zod-validation.pipe';
 import { TenantNotFoundError } from '../tenant-deactivation.errors';
 import {
@@ -42,8 +43,17 @@ import { PlatformAdminGuard } from './platform-admin.guard';
  *
  * The guard is declared on the controller rather than per route, so a route
  * added later is protected by default instead of by remembering.
+ *
+ * `@PlatformRoute()` is what takes it out of the global tenant pipeline (TAR-39,
+ * "`/api/v1/admin/*` skips stages 2–6"): the operator is not a user inside any
+ * tenant, there is no session to resolve them against, and provisioning has to
+ * work before the first tenant exists. It removes the *tenant* pipeline and
+ * nothing else — `PlatformAdminGuard` below is still the authentication, and the
+ * one route that touches tenant data enters that tenant's scope explicitly
+ * through `AdminTenantScopeService`.
  */
 @Controller({ path: 'admin/tenants', version: '1' })
+@PlatformRoute()
 @UseGuards(PlatformAdminGuard)
 @UseFilters(ApiExceptionFilter)
 export class AdminTenantsController {
