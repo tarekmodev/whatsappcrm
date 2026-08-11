@@ -159,13 +159,17 @@ change.
   not quietly an hour stale.
 
   **A send cannot be recalled, so the double-send guard is the feature.** Every send carries
-  an `Idempotency-Key` and `useIdempotencyKey` mints it **per payload**, which is the only rule
-  that satisfies both halves of what the API enforces: an identical body under the same key
-  replays the original message, and a _different_ body under it is refused as
-  `idempotency_key_reused`. A key held constant would block an agent fixing a typo and
-  retrying; a key minted per click would let a double-click through as two messages to a
-  customer. Keying on the draft means a double-click and a retry after a network drop
-  deduplicate, and an edit gets a fresh key.
+  an `Idempotency-Key`, and `useIdempotencyKey` mints it **per payload and retires it the
+  moment a send lands** — two rules, because the API enforces two things: an identical body
+  under the same key replays the original message, and a _different_ body under it is refused
+  as `idempotency_key_reused`. Per payload alone is wrong in a way that costs a message. The
+  draft clears on success, but the _next_ identical reply hashes the same, so `ok` twice in a
+  row would spend a key that had already delivered, replay the first send's 201, and reach
+  nobody — while the console said "Message sent" and cleared the box. Keys live 24 hours, and
+  short repeated replies are ordinary support traffic. A key held constant would block an agent
+  fixing a typo and retrying; a key minted per click would let a double-click through as two
+  messages. Keying on the draft and dropping it on delivery covers all four: a double-click and
+  a retry after a network drop deduplicate, an edit gets a fresh key, and so does a repeat.
 
   Template filling is decided before the send, not after it: `template-draft.ts` checks arity
   and the header rule 0002 amendment 1 states — a header exactly when the template publishes

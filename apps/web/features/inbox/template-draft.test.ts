@@ -5,8 +5,13 @@ import {
   type MessageTemplateResponse,
 } from '@whatsappcrm/contracts';
 import { buildTemplateSend, emptyTemplateDraft, type TemplateDraft } from './template-draft';
+import { EMPTY_ATTACHMENT, type ComposerAttachmentValue } from './media-draft';
 
 const MEDIA_ID = '0192f00a-0000-7000-8000-000000000a01';
+
+function uploaded(fileName = 'invoice.pdf'): ComposerAttachmentValue {
+  return { status: 'ready', mediaId: MEDIA_ID, fileName, kind: 'document' };
+}
 
 function template(overrides: Partial<MessageTemplateResponse> = {}): MessageTemplateResponse {
   return {
@@ -33,8 +38,7 @@ function draft(overrides: Partial<TemplateDraft> = {}): TemplateDraft {
   return {
     variables: [],
     headerVariables: [],
-    headerMediaId: null,
-    headerFileName: null,
+    headerMedia: EMPTY_ATTACHMENT,
     location: { latitude: '', longitude: '', name: '', address: '' },
     ...overrides,
   };
@@ -134,7 +138,15 @@ describe('buildTemplateSend', () => {
         expect(
           buildTemplateSend(
             template({ headerFormat: format }),
-            draft({ variables: ['Maria', 'A-1001'], headerMediaId: MEDIA_ID }),
+            draft({
+              variables: ['Maria', 'A-1001'],
+              headerMedia: {
+                status: 'ready',
+                mediaId: MEDIA_ID,
+                fileName: 'shot.jpg',
+                kind: format,
+              },
+            }),
           ),
         ).toEqual({
           outcome: 'ready',
@@ -146,11 +158,7 @@ describe('buildTemplateSend', () => {
     it('carries the file name for a document, so the recipient sees one', () => {
       const build = buildTemplateSend(
         template({ headerFormat: 'document' }),
-        draft({
-          variables: ['Maria', 'A-1001'],
-          headerMediaId: MEDIA_ID,
-          headerFileName: 'invoice.pdf',
-        }),
+        draft({ variables: ['Maria', 'A-1001'], headerMedia: uploaded() }),
       );
 
       expect(build.outcome === 'ready' && build.input.header).toEqual({
@@ -165,8 +173,7 @@ describe('buildTemplateSend', () => {
         template({ headerFormat: 'document' }),
         draft({
           variables: ['Maria', 'A-1001'],
-          headerMediaId: MEDIA_ID,
-          headerFileName: `${'a'.repeat(300)}.pdf`,
+          headerMedia: uploaded(`${'a'.repeat(300)}.pdf`),
         }),
       );
 
@@ -176,13 +183,40 @@ describe('buildTemplateSend', () => {
       ).toBe(true);
     });
 
-    it('is refused until something has been uploaded', () => {
+    it('is refused until something has been attached', () => {
       expect(
         buildTemplateSend(
           template({ headerFormat: 'image' }),
           draft({ variables: ['Maria', 'A-1001'] }),
         ),
       ).toEqual({ outcome: 'incomplete', problem: 'header-media' });
+    });
+
+    // The three not-ready states need three different things from the agent, and
+    // collapsing them told somebody watching an upload to attach the file they
+    // had just attached.
+    it('says to wait while the header upload is still running', () => {
+      expect(
+        buildTemplateSend(
+          template({ headerFormat: 'video' }),
+          draft({
+            variables: ['Maria', 'A-1001'],
+            headerMedia: { status: 'uploading', fileName: 'clip.mp4' },
+          }),
+        ),
+      ).toEqual({ outcome: 'incomplete', problem: 'header-media-uploading' });
+    });
+
+    it('says to pick another when the header upload failed', () => {
+      expect(
+        buildTemplateSend(
+          template({ headerFormat: 'image' }),
+          draft({
+            variables: ['Maria', 'A-1001'],
+            headerMedia: { status: 'failed', fileName: 'shot.jpg', message: 'too large' },
+          }),
+        ),
+      ).toEqual({ outcome: 'incomplete', problem: 'header-media-failed' });
     });
   });
 

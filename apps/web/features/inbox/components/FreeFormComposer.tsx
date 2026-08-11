@@ -58,7 +58,7 @@ export function FreeFormComposer({
 }) {
   const content = useContent();
   const { showToast } = useToast();
-  const keyFor = useIdempotencyKey();
+  const { keyFor, retire } = useIdempotencyKey();
   const [body, setBody] = useState('');
   const [attachment, setAttachment] = useState<ComposerAttachmentValue>(EMPTY_ATTACHMENT);
   const [problem, setProblem] = useState<FreeFormProblem | null>(null);
@@ -68,11 +68,17 @@ export function FreeFormComposer({
   const pendingRef = useRef<SendTextInput | SendMediaInput | null>(null);
 
   const onSuccess = useCallback(() => {
+    // Before anything else: the key that carried this message is spent. Left in
+    // place, the identical reply an agent sends two minutes later would reuse
+    // it, replay this send's response, and never reach the customer.
+    retire();
     setBody('');
+    // The control the agent can see follows this into the empty state, so
+    // re-picking the same file still starts an upload (`useMediaUpload`).
     setAttachment(EMPTY_ATTACHMENT);
     showToast({ tone: 'success', message: content.composer.sendSuccess });
     textareaRef.current?.focus();
-  }, [content.composer.sendSuccess, showToast]);
+  }, [content.composer.sendSuccess, retire, showToast]);
 
   const { submit, isPending, formError, requestId } = useActionForm({
     perform: () => {

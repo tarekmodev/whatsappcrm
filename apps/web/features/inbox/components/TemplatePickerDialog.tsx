@@ -121,6 +121,18 @@ function TemplateResults({
   }
 
   if (state.templates.length === 0) {
+    // Nothing on the pages read, but the feed goes on. Not an empty feed, and
+    // saying so would tell a tenant with plenty of templates that they have
+    // none — the button-parameter exclusion can empty whole pages.
+    if (state.hasMore) {
+      return (
+        <EmptyState
+          heading={content.composer.templateDeepPageHeading}
+          body={content.composer.templateDeepPageBody}
+        />
+      );
+    }
+
     // Two different situations, and telling them apart is the whole value of the
     // empty state: "you have no templates, ask an admin to submit some" and
     // "that search matched none of the ones you have" need different next steps.

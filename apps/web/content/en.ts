@@ -343,6 +343,15 @@ export const content = {
     templateEmptyHeading: 'No templates to send',
     templateEmptyBody:
       'This number has no approved template yet. A workspace admin submits them to Meta for approval.',
+    /**
+     * Not "you have none". The endpoint drops templates whose buttons take a
+     * parameter after reading each page, so a tenant with hundreds of them can
+     * have several empty pages before a sendable one — and telling them they
+     * have no templates would be false.
+     */
+    templateDeepPageHeading: 'No sendable template in the first few pages',
+    templateDeepPageBody:
+      'This number has a lot of approved templates and the ones you can send from here are further in. Search by name to jump to one.',
     templateNoMatchHeading: 'No template matches that name',
     templateNoMatchBody: 'Templates are matched on the start of their name. Try fewer characters.',
     templateMoreNotice: 'More templates are available — narrow the search to find one by name.',
@@ -376,6 +385,8 @@ export const content = {
       'body-variables': 'Fill in every value before sending.',
       'header-variables': 'Fill in every heading value before sending.',
       'header-media': 'Attach the header file before sending.',
+      'header-media-uploading': 'Wait for the header file to finish uploading.',
+      'header-media-failed': 'The header file could not be uploaded. Remove it and pick another.',
       'header-coordinates': 'Enter a latitude and a longitude before sending.',
     },
   },

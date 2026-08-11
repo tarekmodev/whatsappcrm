@@ -60,7 +60,7 @@ export function TemplateSendForm({
   onBack,
 }: TemplateSendFormProps) {
   const content = useContent();
-  const keyFor = useIdempotencyKey();
+  const { keyFor, retire } = useIdempotencyKey();
   const initial = useMemo(() => emptyTemplateDraft(template), [template]);
   const [variables, setVariables] = useState<readonly string[]>(initial.variables);
   const [headerVariables, setHeaderVariables] = useState<readonly string[]>(
@@ -86,8 +86,13 @@ export function TemplateSendForm({
       return sendMessageAction(conversationId, keyFor(JSON.stringify(input)), input);
     },
     onSuccess: useCallback(() => {
+      // Closing the dialog unmounts this form and takes the key with it, so
+      // today this is belt and braces. It is here anyway because "the key that
+      // sent a message is retired" should be a property of the send, not of
+      // whether a parent happens to unmount afterwards.
+      retire();
       onSent();
-    }, [onSent]),
+    }, [onSent, retire]),
   });
 
   const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
@@ -97,8 +102,7 @@ export function TemplateSendForm({
       variables,
       headerVariables,
       location,
-      headerMediaId: headerMedia.status === 'ready' ? headerMedia.mediaId : null,
-      headerFileName: headerMedia.status === 'ready' ? headerMedia.fileName : null,
+      headerMedia,
     });
 
     if (build.outcome === 'incomplete') {
@@ -134,14 +138,7 @@ export function TemplateSendForm({
 
         <TemplateHeaderFields
           format={template.headerFormat}
-          draft={{
-            variables,
-            headerVariables,
-            location,
-            headerMediaId: null,
-            headerFileName: null,
-          }}
-          headerMedia={headerMedia}
+          draft={{ variables, headerVariables, location, headerMedia }}
           onHeaderVariablesChange={setHeaderVariables}
           onHeaderMediaChange={setHeaderMedia}
           onLocationChange={setLocation}
@@ -167,7 +164,14 @@ export function TemplateSendForm({
         <FormError message={formError} requestId={requestId} />
 
         <Cluster justify="end" gap="2">
-          <Button type="submit" variant="primary" isPending={isPending}>
+          {/* Disabled while a header upload runs, mirroring the free-form
+              composer: a Send that can only refuse is not one to offer. */}
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={headerMedia.status === 'uploading'}
+            isPending={isPending}
+          >
             {content.composer.templateSend}
           </Button>
         </Cluster>

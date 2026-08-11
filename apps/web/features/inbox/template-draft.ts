@@ -4,6 +4,7 @@ import {
   type SendTemplateHeader,
   type SendTemplateInput,
 } from '@whatsappcrm/contracts';
+import { EMPTY_ATTACHMENT, type ComposerAttachmentValue } from '@/features/inbox/media-draft';
 
 /**
  * What an agent has filled in for the template they picked, and the one function
@@ -33,16 +34,30 @@ export interface TemplateDraft {
   readonly variables: readonly string[];
   /** Positional substitutions for a `text` header, exactly `headerParameterCount` long. */
   readonly headerVariables: readonly string[];
-  /** From `POST /api/v1/media`, for an `image` / `video` / `document` header. */
-  readonly headerMediaId: string | null;
-  /** `document` headers only: what the recipient sees as the file name. */
-  readonly headerFileName: string | null;
+  /**
+   * The file behind an `image` / `video` / `document` header, at whatever stage
+   * it has reached.
+   *
+   * The whole value rather than the `mediaId` off it, because the four states
+   * are four different answers: an upload still running is a "wait", a failed
+   * one is a "try another file", and only the absence of both is the "attach
+   * something" this used to collapse them all into.
+   */
+  readonly headerMedia: ComposerAttachmentValue;
   readonly location: TemplateLocationDraft;
 }
 
-/** Which field is still missing. Mapped to copy by the form; never shown raw. */
+/**
+ * Which field is still missing, or not yet ready. Mapped to copy by the form;
+ * never shown raw.
+ */
 export type TemplateDraftProblem =
-  'body-variables' | 'header-variables' | 'header-media' | 'header-coordinates';
+  | 'body-variables'
+  | 'header-variables'
+  | 'header-media'
+  | 'header-media-uploading'
+  | 'header-media-failed'
+  | 'header-coordinates';
 
 export type TemplateSendBuild =
   | { readonly outcome: 'ready'; readonly input: SendTemplateInput }
@@ -53,8 +68,7 @@ export function emptyTemplateDraft(template: MessageTemplateResponse): TemplateD
   return {
     variables: Array.from({ length: template.parameterCount }, () => ''),
     headerVariables: Array.from({ length: template.headerParameterCount }, () => ''),
-    headerMediaId: null,
-    headerFileName: null,
+    headerMedia: EMPTY_ATTACHMENT,
     location: { latitude: '', longitude: '', name: '', address: '' },
   };
 }
@@ -114,17 +128,32 @@ function buildHeader(template: MessageTemplateResponse, draft: TemplateDraft): H
     return buildLocationHeader(draft.location);
   }
 
-  if (draft.headerMediaId === null) {
+  const media = draft.headerMedia;
+
+  // Three not-yet-ready answers rather than one, because they need three
+  // different things from the agent: wait, pick another, or attach one at all.
+  // The free-form builder already draws this distinction; a template header
+  // that told somebody to attach the file they were watching upload was the
+  // same message for all three.
+  if (media.status === 'uploading') {
+    return { outcome: 'incomplete', problem: 'header-media-uploading' };
+  }
+
+  if (media.status === 'failed') {
+    return { outcome: 'incomplete', problem: 'header-media-failed' };
+  }
+
+  if (media.status === 'empty') {
     return { outcome: 'incomplete', problem: 'header-media' };
   }
 
-  const fileName = draft.headerFileName?.trim() ?? '';
+  const fileName = media.fileName.trim();
 
   return {
     outcome: 'ready',
     header: {
       format: template.headerFormat,
-      mediaId: draft.headerMediaId,
+      mediaId: media.mediaId,
       // `fileName` is a `document`-only courtesy; the contract caps it at 255,
       // and a longer one is trimmed to the cap rather than refused — an agent
       // should not be blocked by the name their operating system produced.

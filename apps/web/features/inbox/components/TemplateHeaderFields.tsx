@@ -31,7 +31,6 @@ export interface TemplateHeaderFieldsProps {
   /** `null` for a template with no header; this component then renders nothing. */
   format: MessageTemplateHeaderFormat | null;
   draft: TemplateDraft;
-  headerMedia: ComposerAttachmentValue;
   onHeaderVariablesChange: (values: readonly string[]) => void;
   onHeaderMediaChange: (value: ComposerAttachmentValue) => void;
   onLocationChange: (location: TemplateLocationDraft) => void;
@@ -41,7 +40,6 @@ export interface TemplateHeaderFieldsProps {
 export function TemplateHeaderFields({
   format,
   draft,
-  headerMedia,
   onHeaderVariablesChange,
   onHeaderMediaChange,
   onLocationChange,
@@ -82,7 +80,7 @@ export function TemplateHeaderFields({
       // refused here rather than at Meta, where the error names neither the
       // template nor the upload.
       allowedKinds={[format satisfies UploadableMediaKind]}
-      value={headerMedia}
+      value={draft.headerMedia}
       onChange={onHeaderMediaChange}
       isDisabled={isDisabled}
     />

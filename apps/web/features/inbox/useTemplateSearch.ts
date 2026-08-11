@@ -54,37 +54,20 @@ export function useTemplateSearch(conversationId: string, query: string): Templa
 
     setState(LOADING);
 
-    void listTemplatesAction(conversationId, {
-      limit: TEMPLATE_PAGE_SIZE,
-      // Absent rather than empty: the contract's `q` has a floor of one
-      // character, and an empty string is "everything", not a search for "".
-      ...(trimmed === '' ? {} : { q: trimmed }),
-    })
-      .then((result) => {
-        if (!isCurrent) {
-          return;
+    void readUntilAnyItems(conversationId, trimmed, () => isCurrent)
+      .then((next) => {
+        if (isCurrent) {
+          setState(next);
         }
-
-        setState(
-          result.status === 'success'
-            ? {
-                status: 'ready',
-                templates: result.data.items,
-                hasMore: result.data.nextCursor !== null,
-              }
-            : { status: 'failed', message: result.message, requestId: result.requestId },
-        );
       })
       .catch((error: unknown) => {
         // Reaches here only if the action itself could not run — a network drop,
         // or a chunk that would not load. Not swallowed.
         console.error('Template search failed', error);
 
-        if (!isCurrent) {
-          return;
+        if (isCurrent) {
+          setState({ status: 'failed', message: content.errors.body, requestId: null });
         }
-
-        setState({ status: 'failed', message: content.errors.body, requestId: null });
       });
 
     return () => {
@@ -94,5 +77,69 @@ export function useTemplateSearch(conversationId: string, query: string): Templa
 
   return { state, retry };
 }
+
+/**
+ * Reads pages until one yields a template, or the feed ends.
+ *
+ * **A short page is not the end of the feed, and an empty one is not an empty
+ * feed.** The endpoint drops templates whose buttons take a parameter *after*
+ * reading each page, so a page can come back with fewer items than `limit` — or
+ * none at all — while `nextCursor` still points at more. Stopping on the first
+ * page is how a tenant whose alphabetically-first hundred templates all carry
+ * buttons gets told they have none, with sendable ones sitting on page two.
+ *
+ * It stops at the first page that yields anything rather than reading the whole
+ * feed: the picker only has to fill one screen, and the agent narrows it with
+ * `q` from there.
+ */
+async function readUntilAnyItems(
+  conversationId: string,
+  query: string,
+  isCurrent: () => boolean,
+): Promise<TemplateSearchState> {
+  const templates: MessageTemplateResponse[] = [];
+  let cursor: string | null = null;
+
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const result = await listTemplatesAction(conversationId, {
+      limit: TEMPLATE_PAGE_SIZE,
+      // Absent rather than empty: the contract's `q` has a floor of one
+      // character, and an empty string is "everything", not a search for "".
+      ...(query === '' ? {} : { q: query }),
+      ...(cursor === null ? {} : { cursor }),
+    });
+
+    if (result.status === 'error') {
+      return { status: 'failed', message: result.message, requestId: result.requestId };
+    }
+
+    // The dialog closed, or the query moved on. Stop paging for a screen that
+    // will never read the answer.
+    if (!isCurrent()) {
+      return LOADING;
+    }
+
+    templates.push(...result.data.items);
+    cursor = result.data.nextCursor;
+
+    if (templates.length > 0 || cursor === null) {
+      return { status: 'ready', templates, hasMore: cursor !== null };
+    }
+  }
+
+  // Every page so far was emptied by the button-parameter exclusion. Reported as
+  // "there is more, narrow it" rather than as an empty feed, because that is
+  // what it is — and it is the honest answer for a picker that has stopped
+  // reading rather than reached the end.
+  return { status: 'ready', templates, hasMore: true };
+}
+
+/**
+ * How many empty pages to read through before handing back. A backstop against
+ * a tenant with thousands of button templates turning an open into a stall, not
+ * a page budget an ordinary search ever reaches — the first page almost always
+ * yields something.
+ */
+const MAX_PAGES = 5;
 
 const LOADING: TemplateSearchState = { status: 'loading' };

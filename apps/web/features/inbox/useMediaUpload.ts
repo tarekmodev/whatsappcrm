@@ -26,12 +26,27 @@ import { EMPTY_ATTACHMENT, type ComposerAttachmentValue } from '@/features/inbox
  *     one lands last and the message carries the file that was replaced.
  *   * **The dialog closes mid-upload.** A resolve after unmount is a state
  *     update against a component that is gone.
+ *
+ * ## The control follows the state, rather than each caller remembering to
+ *
+ * `<input type="file">` is uncontrolled: it keeps the last file until something
+ * writes `value = ''`, and picking that same file again fires no `change` event
+ * at all. So a parent that empties the attachment *state* without also clearing
+ * the *control* leaves the two disagreeing — and the next send goes out without
+ * the file the agent can still see named in the picker, under a success toast.
+ * A send is the obvious way to reach that; removal and a template form resetting
+ * its header are others.
+ *
+ * Rather than exposing a reset for every one of those to call, the effect below
+ * makes `status: 'empty'` mean an empty control, always. There is one invariant
+ * and one place that holds it.
  */
 
 export interface UseMediaUploadOptions {
   allowedKinds: readonly UploadableMediaKind[];
+  /** Watched, so emptying it anywhere also empties the control. */
+  value: ComposerAttachmentValue;
   onChange: (value: ComposerAttachmentValue) => void;
-  /** Cleared on removal, so re-picking the same file still fires `change`. */
   inputRef: RefObject<HTMLInputElement | null>;
 }
 
@@ -42,6 +57,7 @@ export interface MediaUpload {
 
 export function useMediaUpload({
   allowedKinds,
+  value,
   onChange,
   inputRef,
 }: UseMediaUploadOptions): MediaUpload {
@@ -57,15 +73,21 @@ export function useMediaUpload({
     };
   }, []);
 
-  const clear = useCallback(() => {
-    pickRef.current += 1;
-
-    if (inputRef.current !== null) {
-      // The control keeps the last file otherwise, so re-picking the same one
-      // after a failure would fire no `change` event at all.
+  // Empty state, empty control — however the state got there. Written
+  // unconditionally rather than only when the control looks non-empty: writing
+  // `''` to an already-empty file input fires no event and costs nothing, and
+  // the effect runs only when the status changes.
+  useEffect(() => {
+    if (value.status === 'empty' && inputRef.current !== null) {
       inputRef.current.value = '';
     }
+  }, [value.status, inputRef]);
 
+  const clear = useCallback(() => {
+    // Only the parts a *removal* owns: invalidate any upload still in flight,
+    // empty the state, and put the agent back on the control they just used.
+    // Emptying the control itself is the effect's job.
+    pickRef.current += 1;
     onChange(EMPTY_ATTACHMENT);
     inputRef.current?.focus();
   }, [inputRef, onChange]);

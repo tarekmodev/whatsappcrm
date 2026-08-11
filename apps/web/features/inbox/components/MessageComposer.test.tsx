@@ -13,6 +13,14 @@ vi.mock('@/features/inbox/composer.actions', () => ({
   listTemplatesAction: vi.fn(),
 }));
 
+const UPLOADED_MEDIA_ID = '0192f00a-0000-7000-8000-000000000a01';
+
+// The upload is a browser-direct call to the API, so it is stubbed rather than
+// routed through the fixture transport the rest of the console uses.
+vi.mock('@/lib/api/media-browser', () => ({
+  uploadMedia: () => Promise.resolve({ mediaId: UPLOADED_MEDIA_ID }),
+}));
+
 const CONVERSATION_ID = '0192f004-0000-7000-8000-000000000401';
 const NOW = new Date('2026-08-12T12:00:00.000Z');
 const OPEN_UNTIL = '2026-08-12T13:00:00.000Z';
@@ -161,6 +169,35 @@ describe('the double-send guard', () => {
     expect(sendMessageAction.mock.calls[1]?.[1]).toBe(sendMessageAction.mock.calls[0]?.[1]);
   });
 
+  it('mints a new key for an identical message sent again after a success', async () => {
+    // The one that drops a message. The API remembers a key for 24 hours and
+    // replays it with a 201, so reusing a key that already delivered means the
+    // agent reads "Message sent" and the customer receives nothing — and `ok`
+    // twice in a row is ordinary support traffic.
+    renderComposer();
+
+    fireEvent.change(fieldByLabel(content.composer.replyLabel), { target: { value: 'ok' } });
+    fireEvent.click(sendButton());
+    await waitFor(() => {
+      expect(sendMessageAction).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(fieldByLabel(content.composer.replyLabel)).toHaveValue('');
+    });
+
+    fireEvent.change(fieldByLabel(content.composer.replyLabel), { target: { value: 'ok' } });
+    fireEvent.click(sendButton());
+    await waitFor(() => {
+      expect(sendMessageAction).toHaveBeenCalledTimes(2);
+    });
+
+    const [first, second] = sendMessageAction.mock.calls;
+
+    // Same payload, deliberately different key.
+    expect(second?.[2]).toEqual(first?.[2]);
+    expect(second?.[1]).not.toBe(first?.[1]);
+  });
+
   it('mints a new key once the draft changes, so a fixed typo is not refused as a reuse', async () => {
     sendMessageAction.mockResolvedValue({
       status: 'error',
@@ -189,6 +226,62 @@ describe('the double-send guard', () => {
     // Same key with a different body is `idempotency_key_reused` — a refusal the
     // agent could do nothing about.
     expect(sendMessageAction.mock.calls[1]?.[1]).not.toBe(sendMessageAction.mock.calls[0]?.[1]);
+  });
+});
+
+describe('the attachment control after a send', () => {
+  /**
+   * ⚠️ This covers the *state* half only, and deliberately says so.
+   *
+   * The other half of the fix — `useMediaUpload` writing the native input empty
+   * so re-picking the same file still fires `change` — cannot be asserted here.
+   * jsdom will not enter the state that fails: the spec forbids assigning a
+   * non-empty value to a file input, and `fireEvent`'s `files` shadows the real
+   * accessor, so `input.value` reads `''` whether or not the fix is present.
+   * Any assertion on it passes vacuously. That half is verified in a browser.
+   */
+  it('clears the attachment once the send lands', async () => {
+    renderComposer();
+
+    fireEvent.change(fieldByLabel(content.composer.attachLabel), {
+      target: { files: [new File(['%PDF-'], 'invoice.pdf', { type: 'application/pdf' })] },
+    });
+    await waitFor(() => {
+      expect(screen.getByText(content.composer.attachReady('invoice.pdf'))).toBeInTheDocument();
+    });
+
+    fireEvent.click(sendButton());
+
+    await waitFor(() => {
+      expect(sendMessageAction).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(content.composer.attachReady('invoice.pdf'))).toBeNull();
+    });
+  });
+
+  it('sends the file as a media message, not as text', async () => {
+    renderComposer();
+
+    fireEvent.change(fieldByLabel(content.composer.attachLabel), {
+      target: { files: [new File(['%PDF-'], 'invoice.pdf', { type: 'application/pdf' })] },
+    });
+    await waitFor(() => {
+      expect(screen.getByText(content.composer.attachReady('invoice.pdf'))).toBeInTheDocument();
+    });
+
+    fireEvent.change(fieldByLabel(content.composer.replyLabel), {
+      target: { value: 'July statement.' },
+    });
+    fireEvent.click(sendButton());
+
+    await waitFor(() => {
+      expect(sendMessageAction).toHaveBeenCalledWith(CONVERSATION_ID, expect.any(String), {
+        type: 'document',
+        mediaId: UPLOADED_MEDIA_ID,
+        caption: 'July statement.',
+      });
+    });
   });
 });
 

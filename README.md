@@ -978,12 +978,19 @@ schedules a timer for the exact moment it shuts, so an agent part-way through a 
 composer switch — with the draft intact — rather than discovering it by pressing Send. A
 toast fires on that edge only.
 
-**Every send carries an `Idempotency-Key`, and the key is keyed on the draft.** The API
-replays an identical request under the same key and refuses a _different_ body under it as
-`idempotency_key_reused`. So `useIdempotencyKey` mints one per payload: a double-click and a
+**Every send carries an `Idempotency-Key`, keyed on the draft and retired on success.** The
+API replays an identical request under the same key and refuses a _different_ body under it as
+`idempotency_key_reused`, so `useIdempotencyKey` mints one per payload: a double-click and a
 retry after a network drop share a key and deduplicate, while an edited draft gets a fresh one.
 A key that never changed would block somebody fixing a typo; a key minted per click would send
 twice.
+
+The `retire()` on success is the other half, and it is not optional. The draft clears when a
+send lands, but the _next_ identical reply hashes to the same signature — so without it, `ok`
+twice in a row reuses a key that already delivered, the API replays the first send's 201, and
+the customer receives nothing while the console shows "Message sent". Keys live 24 hours.
+Every caller clears the ledger on success; nothing clears it on failure, because retrying the
+same draft onto the same key is exactly what idempotency is for.
 
 **Media uploads leave from the browser, not from a server action.** `lib/api/media-browser.ts`
 posts multipart to the same-origin `/api` proxy. Everything else in `lib/api` runs on the Next

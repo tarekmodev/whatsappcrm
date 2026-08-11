@@ -56,7 +56,7 @@ export function ComposerAttachment({
   isDisabled = false,
 }: ComposerAttachmentProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const { onPick, clear } = useMediaUpload({ allowedKinds, onChange, inputRef });
+  const { onPick, clear } = useMediaUpload({ allowedKinds, value, onChange, inputRef });
 
   return (
     <Stack gap="2">
