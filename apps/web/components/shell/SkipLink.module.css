@@ -1,0 +1,21 @@
+.skipLink {
+  position: absolute;
+  z-index: var(--z-toast);
+  /* Off-screen rather than `display: none`, so it stays in the tab order. */
+  inset-block-start: calc(var(--space-8) * -1);
+  inset-inline-start: var(--space-4);
+  padding-inline: var(--space-4);
+  padding-block: var(--space-2);
+  background: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  transition: inset-block-start var(--duration-fast) var(--easing-standard);
+}
+
+.skipLink:focus-visible {
+  inset-block-start: var(--space-2);
+}

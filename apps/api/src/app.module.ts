@@ -7,6 +7,8 @@ import { TenantContextMiddleware } from './common/tenant-context/tenant-context.
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
+import { ObservabilityModule } from './observability/observability.module';
+import { RequestLoggingMiddleware } from './observability/request-logging.middleware';
 import { PeopleModule } from './people/people.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
@@ -33,12 +35,17 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
       cache: true,
       validate: validateEnv,
       envFilePath: [REPOSITORY_ENV_FILE],
+      // The suite must never read a developer's `.env`. A test whose result
+      // depends on whether someone happens to have Postgres running locally is
+      // not a test, and the readiness specs assert the unconfigured case.
+      ignoreEnvFile: process.env.NODE_ENV === 'test',
     }),
     // The in-process bus TAR-39 chose for same-request fan-out where loss is
     // acceptable — the realtime relay is its first consumer. Anything that must
     // survive a restart goes on BullMQ instead, through `QueueModule`.
     EventEmitterModule.forRoot(),
     TenantContextModule,
+    ObservabilityModule,
     PrismaModule,
     QueueModule,
     AuditModule,
@@ -55,6 +62,10 @@ export class AppModule implements NestModule {
     // Every route, including the ones later stories add — a route that escapes
     // the tenant context scope is a route with no tenant isolation.
     // `{*path}` is the path-to-regexp v8 spelling of the old `*` wildcard.
-    consumer.apply(TenantContextMiddleware).forRoutes('{*path}');
+    //
+    // Order matters: request logging must run *inside* the context scope the
+    // tenant middleware opens, or every request line loses its `requestId` and
+    // `tenantId`.
+    consumer.apply(TenantContextMiddleware, RequestLoggingMiddleware).forRoutes('{*path}');
   }
 }

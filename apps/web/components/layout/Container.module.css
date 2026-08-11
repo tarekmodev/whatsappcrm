@@ -1,0 +1,18 @@
+.container {
+  width: 100%;
+  margin-inline: auto;
+  /* Fluid gutter: no breakpoint needed for the 320px case. */
+  padding-inline: clamp(var(--space-4), 4vw, var(--space-6));
+}
+
+.container[data-size='md'] {
+  max-inline-size: var(--size-container-md);
+}
+
+.container[data-size='lg'] {
+  max-inline-size: var(--size-container-lg);
+}
+
+.container[data-size='xl'] {
+  max-inline-size: var(--size-container-xl);
+}

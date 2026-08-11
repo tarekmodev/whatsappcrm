@@ -1,0 +1,125 @@
+.dialog {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  max-inline-size: none;
+  max-block-size: none;
+  inline-size: 100%;
+  /* `dvh` rather than `vh`: mobile browser chrome makes `vh` taller than the
+     visible viewport, which pushes the footer off screen on iOS Safari. */
+  block-size: 100dvh;
+  color: var(--color-on-surface);
+}
+
+.dialog::backdrop {
+  background: var(--color-scrim);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  /* Mobile first: a full-height sheet. */
+  inline-size: 100%;
+  block-size: 100%;
+  max-block-size: 100dvh;
+  background: var(--color-surface);
+  /* Respects the home-indicator area on iOS. */
+  padding-block-end: env(safe-area-inset-bottom);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border-block-end: var(--border-hairline) solid var(--color-border);
+}
+
+.headingGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  flex: 1 1 auto;
+}
+
+.title {
+  font-size: var(--font-size-heading-sm);
+  overflow-wrap: anywhere;
+}
+
+.description {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.closeButton {
+  flex: 0 0 auto;
+  padding-inline: var(--space-3);
+}
+
+.body {
+  flex: 1 1 auto;
+  padding: var(--space-5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+  background: var(--color-surface);
+}
+
+/* From tablet up the sheet becomes a centred dialog. */
+@media (min-width: 40rem) {
+  .dialog {
+    display: grid;
+    place-items: center;
+    padding: var(--space-5);
+  }
+
+  .panel {
+    inline-size: min(32rem, 100%);
+    block-size: auto;
+    max-block-size: calc(100dvh - var(--space-8));
+    border: var(--border-hairline) solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-modal);
+  }
+
+  .footer {
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+}
+
+/*
+ * Enter/exit transition. `allow-discrete` plus `@starting-style` is what lets a
+ * native dialog animate at all; browsers without it simply appear instantly,
+ * which is an acceptable degradation. Durations come from tokens, so
+ * `prefers-reduced-motion` is already honoured by the token layer.
+ */
+@supports (transition-behavior: allow-discrete) {
+  .dialog {
+    opacity: 0;
+    transition:
+      opacity var(--duration-medium) var(--easing-enter),
+      overlay var(--duration-medium) var(--easing-enter) allow-discrete,
+      display var(--duration-medium) var(--easing-enter) allow-discrete;
+  }
+
+  .dialog[open] {
+    opacity: 1;
+  }
+
+  @starting-style {
+    .dialog[open] {
+      opacity: 0;
+    }
+  }
+}

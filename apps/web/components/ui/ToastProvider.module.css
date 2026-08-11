@@ -1,0 +1,58 @@
+.region {
+  position: fixed;
+  /* Bottom on mobile, clear of the safe area and of the primary action row. */
+  inset-block-end: calc(var(--space-4) + env(safe-area-inset-bottom));
+  inset-inline: var(--space-4);
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Lets clicks through the empty region to the page beneath it. */
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding-inline: var(--space-4);
+  padding-block: var(--space-3);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay);
+  pointer-events: auto;
+}
+
+.toast[data-tone='success'] {
+  background: var(--color-success-subtle);
+  border-color: var(--color-success);
+  color: var(--color-on-success-subtle);
+}
+
+.toast[data-tone='danger'] {
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger);
+  color: var(--color-on-danger-subtle);
+}
+
+.toast[data-tone='info'] {
+  background: var(--color-info-subtle);
+  border-color: var(--color-info);
+  color: var(--color-on-info-subtle);
+}
+
+.message {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  font-size: var(--font-size-body-sm);
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 40rem) {
+  .region {
+    inset-block-end: var(--space-5);
+    inset-inline-start: auto;
+    inset-inline-end: var(--space-5);
+    inline-size: min(24rem, calc(100% - var(--space-8)));
+  }
+}

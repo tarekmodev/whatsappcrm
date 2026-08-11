@@ -1,0 +1,33 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack-gap);
+}
+
+.stack[data-gap='1'] {
+  --stack-gap: var(--space-1);
+}
+
+.stack[data-gap='2'] {
+  --stack-gap: var(--space-2);
+}
+
+.stack[data-gap='3'] {
+  --stack-gap: var(--space-3);
+}
+
+.stack[data-gap='4'] {
+  --stack-gap: var(--space-4);
+}
+
+.stack[data-gap='5'] {
+  --stack-gap: var(--space-5);
+}
+
+.stack[data-gap='6'] {
+  --stack-gap: var(--space-6);
+}
+
+.stack[data-gap='7'] {
+  --stack-gap: var(--space-7);
+}

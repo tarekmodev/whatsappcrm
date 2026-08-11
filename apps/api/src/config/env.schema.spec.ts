@@ -12,6 +12,10 @@ import { AUTH_STUB_ON } from './env.schema';
 const REQUIRED = {
   APP_DATABASE_URL: 'postgresql://app@localhost:5432/db',
   SYSTEM_DATABASE_URL: 'postgresql://system@localhost:5432/db',
+  // Only mandatory under NODE_ENV=production (TAR-41), but every case here needs
+  // to satisfy that rule for the production assertions below to reach the one
+  // they are actually about.
+  REDIS_URL: 'redis://localhost:6379',
 };
 
 describe('environment validation', () => {

@@ -6,12 +6,15 @@ WhatsApp Business Cloud API.
 > **Status: early.** This repository contains the project skeleton, the stack decision, the
 > local development harness, the database schema, its tenant isolation, the two Prisma
 > clients that enforce it, the platform admin surface that provisions and deactivates
-> tenants, and the first product path end to end — inbound WhatsApp webhooks. Feature work
-> is tracked as the TAR-18 epic. The database has **tables but almost no rows**: the data
-> model landed with TAR-47, row-level security with TAR-48, the client split with TAR-49,
-> provisioning and deactivation with TAR-50 and TAR-51, the WhatsApp Business Account
-> entity with TAR-52, webhook ingestion with TAR-20, and seed data arrives with TAR-46.
-> Everything below works today.
+> tenants, and the first product path end to end — inbound WhatsApp webhooks. On the
+> frontend it contains the design-token and component foundation plus the agent/team/role
+> management console (TAR-82), which currently reads fixtures rather than the API — see
+> [Interim state](#interim-state-mock-api-and-stubbed-role). Feature work is tracked as the
+> TAR-18 epic. The database has **tables but almost no rows**: the data model landed with
+> TAR-47, row-level security with TAR-48, the client split with TAR-49, provisioning and
+> deactivation with TAR-50 and TAR-51, the WhatsApp Business Account entity with TAR-52,
+> webhook ingestion with TAR-20, and seed data arrives with TAR-46. Everything below works
+> today.
 
 ## Stack
 
@@ -40,7 +43,10 @@ not yet installed and arrives with the realtime gateway.
 | `apps/api/src/webhooks`    | WhatsApp webhook ingest, its worker and the stuck-event sweep |
 | `apps/api/prisma`          | Database schema and migrations                                |
 | `apps/api/prisma/sql`      | Operational SQL that is not a migration — roles, RLS check    |
-| `apps/web`                 | Next.js agent console                                         |
+| `apps/web`                 | Next.js agent console — see [Frontend](#frontend)             |
+| `apps/web/styles/tokens`   | The design token layers. A theme swap starts and ends here    |
+| `apps/web/components/ui`   | Domain-free UI primitives (Button, Modal, DataTable, …)       |
+| `apps/web/features`        | Domain-aware feature slices (`people`, `inbox`, `assignment`) |
 | `packages/contracts`       | Zod schemas and types shared by both apps — the API contract  |
 | `packages/tsconfig`        | Shared TypeScript configuration                               |
 | `docker-compose.yml`       | Local PostgreSQL and Redis                                    |
@@ -51,15 +57,18 @@ not yet installed and arrives with the realtime gateway.
 
 ## Documentation
 
-| Document                                                                                 | What it answers                                                             |
-| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| [ADR 0001 — stack decision](docs/adr/0001-stack-decision.md)                             | Why each piece of the stack, and what it costs                              |
-| [Architecture and API contract](docs/architecture/0002-architecture-and-api-contract.md) | Module boundaries, tenant resolution, the endpoint surface, webhooks        |
-| [Data model reference](docs/reference/data-model.md)                                     | Every entity, which are tenant-scoped, which constraints and indexes matter |
-| [Tenant isolation contract](docs/reference/tenancy.md)                                   | Which Prisma client to inject, and what the database refuses                |
-| [Platform admin API](docs/reference/admin-api.md)                                        | Provisioning and deactivation: request, response, errors, retention         |
-| [Documentation style guide](docs/STYLE.md)                                               | How to write the above                                                      |
-| [Changelog](CHANGELOG.md)                                                                | What has landed so far                                                      |
+| Document                                                                                     | What it answers                                                             |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| [ADR 0001 — stack decision](docs/adr/0001-stack-decision.md)                                 | Why each piece of the stack, and what it costs                              |
+| [Architecture and API contract](docs/architecture/0002-architecture-and-api-contract.md)     | Module boundaries, tenant resolution, the endpoint surface, webhooks        |
+| [Data model reference](docs/reference/data-model.md)                                         | Every entity, which are tenant-scoped, which constraints and indexes matter |
+| [Tenant isolation contract](docs/reference/tenancy.md)                                       | Which Prisma client to inject, and what the database refuses                |
+| [Platform admin API](docs/reference/admin-api.md)                                            | Provisioning and deactivation: request, response, errors, retention         |
+| [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                      |
+| [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                      |
+| [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                    |
+| [Environments runbook](docs/runbooks/environments.md)                                        | Provisioning, secrets, health, alerting, rollback                           |
+| [Migrations runbook](docs/runbooks/migrations.md)                                            | How a migration reaches an environment, and how to undo one                 |
 
 ## Getting started
 
@@ -102,13 +111,20 @@ pnpm db:verify:rls
 # PASS — tenant isolation is enforced at the data layer
 
 pnpm test:db
-# Tests: 70 passed — the same guarantee through TenantPrisma, plus provisioning
-#                   and the WhatsApp webhook ingestion pipeline
+# Tests: 138 passed — the same guarantee through TenantPrisma, plus provisioning,
+#                     the WhatsApp webhook ingestion pipeline and the ticket
+#                     uniqueness constraint
 ```
 
-The `checks` object is empty on purpose: the endpoint reports process liveness only and
-must never claim dependency health it has not measured. Real database and queue probes
-arrive with TAR-41.
+Once the database and Redis are up, readiness reports them:
+
+```bash
+curl http://localhost:3001/api/health/ready
+# {"status":"ok",...,"checks":{"database":{"status":"ok"},"queue":{"status":"ok"}}}
+```
+
+`/api/health` stays a liveness probe and deliberately measures nothing — a liveness check
+that fails when the database blinks restarts a healthy process.
 
 **The database has tables but no rows — that is the expected state.** Seeding is TAR-46.
 Provision a tenant to get one (see
@@ -225,7 +241,7 @@ what TAR-52 changed about the WhatsApp entities.
 ### Tenant isolation
 
 Isolation is enforced by the database, not by application code remembering a `where`
-clause. All 34 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
+clause. All 35 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
 
 ```sql
 CREATE POLICY tenant_isolation ON conversations
@@ -363,6 +379,16 @@ arrive first would mean a forgotten step 1 ships a table every tenant can read i
 one nobody can (TAR-95). A permission error on the first query is the cheap version of
 that mistake.
 
+**A partial index has no safety net, so write one.** Prisma cannot express
+`CREATE INDEX … WHERE …`, and its Postgres describer skips indexes that carry a predicate
+— so `migrate dev` will neither generate one nor propose to drop one it finds, and it
+never shows up as drift. Convenient, but it means nothing regenerates the index from
+`schema.prisma` and nothing notices if it disappears. Hand-write it in the migration, note
+it in a comment on the model, and add a test that asserts the index definition —
+`tickets_one_active_per_contact` and `src/prisma/ticket-active-uniqueness.int-spec.ts` are
+the worked example. A missing unique index does not fail loudly; it silently starts
+allowing duplicates.
+
 **A migration that adds a function needs `pnpm db:roles` re-run too.** `app-roles.sql`
 names each one, revokes the default `EXECUTE TO PUBLIC` and grants it to the two
 application roles — so that a routine `REVOKE EXECUTE … FROM PUBLIC` hardening step is
@@ -399,16 +425,24 @@ migration that drops a column or a table **destroys the data in it**. Where that
 unacceptable, the answer is not a better `down.sql`; it is the expand → migrate → contract
 sequence, so the destructive step lands in its own separately deployable migration.
 
-To apply one against the local database:
+To apply one, against local or any other target:
 
 ```bash
-docker compose exec -T postgres psql -U whatsappcrm -d whatsappcrm \
-  < apps/api/prisma/migrations/<timestamp>_<name>/down.sql
+pnpm --filter @whatsappcrm/api db:rollback            # prints the plan, changes nothing
+pnpm --filter @whatsappcrm/api db:rollback --confirm  # runs it
 ```
 
-Prisma does not know you did this, so delete the corresponding row from
-`_prisma_migrations` afterwards or `migrate status` will keep reporting the migration as
-applied. Locally, `pnpm db:reset` is usually the faster path.
+That undoes the single most recently applied migration: it takes a Postgres advisory
+lock so two runners cannot collide, runs that migration's `down.sql`, **and deletes its
+row from `_prisma_migrations`** — the step that is easy to forget by hand and that
+`migrate deploy` needs in order to re-apply the migration afterwards. `DATABASE_URL`
+decides which database is affected, so export it explicitly and read it back before
+adding `--confirm`. Locally, `pnpm db:reset` is often the faster path.
+
+The convention is enforced, not just documented: `pnpm --filter @whatsappcrm/api
+db:check-migrations` fails when a migration directory has no `down.sql`, and CI runs it
+on every pull request. A convention nothing checks is a convention that lasts until the
+first busy afternoon.
 
 The shadow database (`whatsappcrm_shadow`, created on the container's first boot) exists
 only for the `migrate diff` above. Prisma wipes it on every use.
@@ -491,6 +525,36 @@ older than five minutes is the condition worth alerting on.
 Without `REDIS_URL` the API still boots and still accepts and stores deliveries — it logs
 a warning at startup and nothing processes them until a worker exists.
 
+## Environments
+
+Three hosted environments — development, staging and production — each with its own
+database, its own Key Value instance and its own WhatsApp and Polar credentials. They are
+defined as a Render blueprint in [`render.yaml`](render.yaml); provisioning them, the
+secrets you are prompted for, and the alerting wired to them are in
+[`docs/runbooks/environments.md`](docs/runbooks/environments.md).
+
+Health, deliberately split:
+
+| Endpoint            | Answers                           |
+| ------------------- | --------------------------------- |
+| `/api/health`       | is the process alive              |
+| `/api/health/ready` | can it serve — database and queue |
+
+`/api/health/ready` answers `503` when a dependency is down and still returns the full
+body, so an alert names the failing dependency rather than only saying something is wrong.
+It is the health check path on every deployed API service. Both are `VERSION_NEUTRAL`.
+
+**Migrations apply automatically.** Each environment runs `pnpm db:migrate:deploy` as a
+pre-deploy hook, followed by `db:provision-roles` — the deployed equivalent of
+`pnpm db:roles`, which only reaches a local container. Both run from the same build that
+produced the code, before the new instance serves traffic; a failure aborts the deploy and
+the previous instance keeps serving.
+
+Services start with `exec node <entrypoint>`, never a package script. That is
+load-bearing: `exec` makes node PID 1 so `SIGTERM` reaches the shutdown hooks. Through
+`pnpm start` the signal is swallowed and the process is killed outright, cutting in-flight
+requests and discarding buffered error-tracker events on every deploy.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs four jobs — **Lint**, **Type-check**, **Test** and
@@ -565,8 +629,108 @@ is what makes `DATABASE_URL=… pnpm db:migrate:deploy` work against any target.
 - **Shared types live in `packages/contracts`.** If the API and the frontend both need to
   know a shape, it is a Zod schema there, not a duplicated interface.
 - **Errors have one envelope** (`ApiErrorSchema`), and the frontend has one error type
-  (`ApiRequestError` in `apps/web/lib/api.ts`). Every response carries `x-request-id`,
+  (`ApiRequestError` in `apps/web/lib/api/http.ts`). Every response carries `x-request-id`,
   which ties a user-reported error to a log line.
+
+## Frontend
+
+`apps/web` is a Next.js App Router console. Data is read in server components and written
+through server actions, so no list in the app pays for a client-side fetch waterfall and
+every permission decision happens where the session lives.
+
+### Design tokens — every project is a theme
+
+Three layers, and the direction is one-way:
+
+| Layer     | File                           | Contains                                                               |
+| --------- | ------------------------------ | ---------------------------------------------------------------------- |
+| Primitive | `styles/tokens/primitives.css` | Raw scales: palette, spacing, type, radii, shadows, motion, z-index    |
+| Semantic  | `styles/tokens/semantic.css`   | Role names: `--color-surface`, `--space-4`, `--radius-md`, `--z-modal` |
+| Base      | `styles/base.css`              | Reset, base element styles, the one focus ring                         |
+
+**Components read semantic tokens only.** They never reference a primitive and never
+contain a raw colour, px value, duration or z-index. Dark mode re-declares the same
+semantic names under `[data-theme='dark']`, so swapping the whole visual identity means
+editing two files and no components. `prefers-reduced-motion` is handled once, in the token
+layer, by collapsing the duration tokens.
+
+The theme is resolved on the server from the `wac_theme` cookie and rendered into
+`<html data-theme>` in the first response — so a reload paints the right theme on the first
+frame with no flash and nothing to correct after hydration.
+
+Two contrast rules worth knowing: `--color-on-surface-muted` is the darkest muted role that
+clears WCAG AA (4.5:1) in both themes and is what secondary text uses;
+`--color-on-surface-subtle` is around 2.6:1 and is **decoration only** — never put text on it.
+
+### Styling
+
+CSS Modules, colocated with the component, semantic class names. No inline style objects for
+static styling, no utility classes, no CSS-in-JS. Global CSS is limited to
+`app/globals.css`, which imports the three layers above and nothing else.
+
+Dynamic state is a `data-` attribute or a module class toggle (`cx()` in `lib/cx.ts`), never
+a concatenated class string. Layout uses logical properties (`margin-inline-start`,
+`inset-inline-end`) so RTL works without a second stylesheet.
+
+### Adding a component, with its skeleton
+
+1. **Look for an existing one first.** `components/ui/` holds the domain-free primitives.
+   Extend one with a `variant`/`size`/`tone` prop before forking a near-duplicate.
+2. Colocate `Component.tsx` + `Component.module.css` (+ `Component.test.tsx`). One component
+   per file, named the same as the file.
+3. Copy goes in `content/en.ts` and is read through `useContent()`. Route paths come from
+   `lib/routes.ts`. Neither belongs inline.
+4. **Export the skeleton from the same file**, as `ComponentSkeleton`. Build it from the
+   _same_ structure as the real thing — reuse the same layout primitives and column
+   metadata rather than hand-drawing boxes. `AgentsTable` and `AgentsTableSkeleton` both
+   build from `agent-columns.ts` for exactly this reason: adding a column cannot leave the
+   skeleton behind.
+5. Skeleton nodes are `aria-hidden`; the region announces itself once through
+   `<LoadingAnnouncement />`.
+6. If the component is not above the fold, put it behind `next/dynamic` with its own
+   skeleton as the `loading` fallback, and wrap it in `<LazyBoundary>`.
+
+Primitives never import from `features/`. Features may import primitives.
+
+### Loading, error and empty states
+
+Every async region gets a structure-matching skeleton — never a bare spinner, never a blank
+gap. Spinners are allowed only for a button's own pending state (`<Button isPending>`).
+
+- Route level: `loading.tsx` composed from the page's section skeletons, `error.tsx` for the
+  route boundary.
+- Section level: `<Suspense>` with that section's skeleton, inside a
+  `<SectionErrorBoundary>` so one broken widget cannot blank the page. That boundary also
+  detects a chunk-load failure after a deploy and offers a reload rather than a retry that
+  can never succeed.
+- Empty and error use the shared `EmptyState` / `ErrorState`, sized like the content they
+  replace.
+
+### Permissions in the UI
+
+The UI asks _"may this principal do X"_, never _"is this principal an admin"_ — the same rule
+TAR-39 fixed for the API guards. `lib/session/permissions.ts` builds a checker from the
+principal's permissions, which `ROLE_PERMISSIONS` in `packages/contracts/src/rbac.ts`
+materialises from the role. Navigation entries declare `requiresAny` in
+`components/shell/navigation.ts` and are filtered once, on the server.
+
+**None of this is a security boundary.** A server action asserts the permission again, and
+the API asserts it a third time. The UI gating exists so a role is never shown a control
+that leads to a refusal.
+
+### Interim state: mock API and stubbed role
+
+Two flags in `.env.example` exist because TAR-82 was built ahead of its dependencies. Both
+default to off and both must stay off in a deployed environment:
+
+- `NEXT_PUBLIC_USE_MOCK_API` serves every API call from `lib/api/mock/` instead of HTTP.
+  The mock is a _transport_, not a per-feature fake: the resource modules in `lib/api/` are
+  identical in both modes, so wiring the real endpoints is one flag. The mock enforces the
+  same tenant scoping and permissions the real API does, and seeds a second tenant purely so
+  that isolation is testable.
+- `NEXT_PUBLIC_ENABLE_ROLE_STUB` reads the role from a cookie and exposes a switcher, so the
+  agent/supervisor/admin views can be demonstrated before TAR-35's sessions exist.
+  `resolveSession()` refuses it in production regardless of the flag.
 
 ## License
 

@@ -1,0 +1,6 @@
+.none {
+  /* `on-surface-muted`, not `subtle`: this is meaningful text and has to clear
+     4.5:1 in both themes. */
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
