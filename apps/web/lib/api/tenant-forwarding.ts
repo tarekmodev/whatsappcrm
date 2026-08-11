@@ -22,11 +22,11 @@ import { webEnv } from '@/lib/config/env';
  *
  * A forwarded host is a header, and a header is something any caller that can
  * reach the API directly may write — which is exactly the tenant-spoofing hole
- * `HostTenantGuard`'s own docstring warns about. So the API trusts
- * `x-forwarded-host` only when the request also presents `x-edge-auth` matching
- * its `TRUSTED_PROXY_SECRET`, and otherwise reads `Host` as it does today. The
- * secret is what distinguishes "this came from our web tier" from "somebody sent
- * us a header" (TAR-64, and TAR-149 for this half).
+ * `HostTenantGuard`'s own docstring warns about. So the API trusts `x-edge-host`
+ * only when the request also presents `x-edge-auth` matching its
+ * `TRUSTED_PROXY_SECRET`, and otherwise reads `Host` as it does today. The secret
+ * is what distinguishes "this came from our web tier" from "somebody sent us a
+ * header" (TAR-64, and TAR-149 for this half).
  *
  * Deliberately **not** `server-only`, for the same reason
  * `lib/session/session-paths.ts` is not: `proxy.ts` and the server-side
@@ -37,13 +37,26 @@ import { webEnv } from '@/lib/config/env';
  */
 
 /**
- * Standard, and the name Next's own rewrite proxy already uses on the browser
- * path (`next/dist/server/lib/router-utils/proxy-request.js`).
+ * The tenant host, in a name nothing on the path has an opinion about.
+ *
+ * Deliberately **not** `x-forwarded-host`, which is what this carried until the
+ * review of the API half (TAR-148). That is a standard forwarding header every
+ * hop is entitled to set, overwrite or append to, and the hop count here is not
+ * zero: `API_BASE_URL` is a public origin, so a call from this tier leaves Render
+ * and re-enters through TLS-terminating proxies that populate `x-forwarded-*` as
+ * a matter of course. Putting the payload there while the credential rode in a
+ * private header had it backwards — an edge that rewrote it would leave every
+ * tenant route answering a uniform `tenant_not_found`, and would do so on the day
+ * a proxy default changed rather than the day we shipped.
+ *
+ * Both halves of the pair are private names now, and the API reads
+ * `x-forwarded-host` nowhere. The two constants are the contract: changing either
+ * means changing `apps/api/src/tenancy/host-tenant.guard.ts` in the same breath.
  */
-export const FORWARDED_HOST_HEADER = 'x-forwarded-host';
+export const EDGE_HOST_HEADER = 'x-edge-host';
 
 /**
- * Proves the forwarded host above came from this tier. Matched against the API's
+ * Proves the host above came from this tier. Matched against the API's
  * `TRUSTED_PROXY_SECRET` with a timing-safe comparison; a missing or wrong value
  * degrades to reading `Host`, never to trusting the forwarded one.
  */
@@ -73,11 +86,11 @@ export function tenantForwardingHeaders(host: string): Record<string, string> {
   const { trustedProxySecret } = webEnv;
 
   if (trustedProxySecret === null) {
-    return { [FORWARDED_HOST_HEADER]: host };
+    return { [EDGE_HOST_HEADER]: host };
   }
 
   return {
-    [FORWARDED_HOST_HEADER]: host,
+    [EDGE_HOST_HEADER]: host,
     [EDGE_AUTH_HEADER]: trustedProxySecret,
   };
 }

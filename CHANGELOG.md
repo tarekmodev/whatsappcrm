@@ -357,14 +357,13 @@ change.
   `HostTenantGuard` would resolve no tenant and answer `tenant_not_found` the moment the
   mock transport is switched off: not one screen, but every server-rendered route in the
   console, in every environment. `lib/api/tenant-host.ts` forwards the incoming host as
-  `x-forwarded-host`, and it is applied in `apiRequest` rather than per resource module, so
+  `x-edge-host`, and it is applied in `apiRequest` rather than per resource module, so
   a new call site cannot forget it — including the unauthenticated ones, since sign-in and
   password reset are tenant-scoped too. A request that arrives with no host now fails
-  loudly there instead of as an unrecognisable 404 three layers down. `x-forwarded-host`
+  loudly there instead of as an unrecognisable 404 three layers down. A header of our own
   rather than `Host` because `Host` cannot be set on either path, both verified against the
   versions in this repository: Next's rewrite proxy hardcodes `changeOrigin: true` and
-  replaces `Host` with the API origin (putting the browser's own host in `x-forwarded-host`,
-  which is why the two paths now agree), and `fetch` derives `Host` from the URL and
+  replaces `Host` with the API origin, and `fetch` derives `Host` from the URL and
   silently drops a caller-supplied one. **This is one half of the fix**: `HostTenantGuard`
   still reads `Host` only, so both paths stay broken until the API reads the forwarded host
   — whether it may trust one, and on what evidence, is an `apps/api` decision open on
@@ -373,15 +372,23 @@ change.
 - **The forwarded tenant host now carries the credential that makes it believable, on both
   request paths** (TAR-149) — a forwarded host on its own buys nothing, because a header is
   something anything that can reach the API may write. Both paths out of the console now
-  send `x-edge-auth` alongside `x-forwarded-host`, set to the server-only
+  send `x-edge-auth` alongside `x-edge-host`, set to the server-only
   `TRUSTED_PROXY_SECRET`; `HostTenantGuard` resolves the tenant from the forwarded host only
   when the two match, and otherwise reads `Host` exactly as it does today rather than the
   attacker-chosen value (the decision, its rejected alternatives and the residual risk are
-  recorded on ADR 0005). The pair is built in one place, `lib/api/tenant-forwarding.ts`, so
+  recorded on ADR 0005). **Both header names are private, and neither is `x-forwarded-host`**
+  (TAR-148, on review of the API half): that one is standard, which is exactly the problem —
+  every hop on the path may set, overwrite or append to it, and `API_BASE_URL` is a public
+  origin, so the call leaves Render and re-enters through TLS-terminating proxies that
+  populate `x-forwarded-*` as a matter of course. Carrying the payload there while the
+  credential rode in a private header had it backwards; an edge that rewrote it would have
+  answered a uniform `tenant_not_found` on every tenant route, and would have started doing
+  so the day a proxy default changed rather than the day it shipped. The pair is built in one
+  place, `lib/api/tenant-forwarding.ts`, so
   the two paths cannot drift into sending different things. **The browser path was the wider
   half of the problem**: it goes through the `/api/*` rewrite, `rewrites()` cannot add a
   request header, and it does not use `apiRequest` at all — so `proxy.ts` now matches
-  `/api/*` and injects the pair, clearing any inbound `x-edge-auth` and `x-forwarded-host`
+  `/api/*` and injects the pair, clearing any inbound `x-edge-host` and `x-edge-auth`
   first so a browser cannot supply its own. It returns before the redirect branch, so an XHR
   still never receives an HTML sign-in page. That the headers survive Next's rewrite to an
   **external** origin is a claim about Next rather than about this repository, so it is

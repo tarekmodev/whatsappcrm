@@ -37,7 +37,7 @@ export interface WebEnv {
   readonly enableRoleStub: boolean;
   /**
    * The shared secret that lets the API believe the tenant host this tier
-   * forwards. `HostTenantGuard` resolves the tenant from `x-forwarded-host` only
+   * forwards. `HostTenantGuard` resolves the tenant from `x-edge-host` only
    * when the request also presents this value in `x-edge-auth`, and otherwise
    * falls back to the host the request actually arrived on — so a caller that
    * forges the header without the secret names no tenant at all (TAR-64).

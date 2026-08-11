@@ -112,11 +112,14 @@ projects:
               - key: API_BASE_URL
                 sync: false
               # What lets the API believe the tenant host this tier forwards.
-              # Both request paths out of the console send `x-forwarded-host`
+              # Both request paths out of the console send `x-edge-host`
               # alongside `x-edge-auth` set to this value, and HostTenantGuard
               # resolves the tenant from the forwarded host ONLY when the two
               # match — otherwise it reads the host the request arrived on, which
-              # at the API is always the API's own (TAR-64, TAR-149).
+              # at the API is always the API's own (TAR-64, TAR-149). Both names
+              # are private: the call leaves Render and re-enters through proxies
+              # entitled to rewrite `x-forwarded-host`, which the API therefore
+              # reads nowhere (TAR-148).
               #
               # Must be the SAME value as TRUSTED_PROXY_SECRET in
               # whatsappcrm-secrets-dev, which the API reads. Nothing checks that

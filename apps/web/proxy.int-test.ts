@@ -9,7 +9,7 @@ import {
 } from 'node:http';
 import { createRequire } from 'node:module';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { EDGE_AUTH_HEADER, FORWARDED_HOST_HEADER } from '@/lib/api/tenant-forwarding';
+import { EDGE_AUTH_HEADER, EDGE_HOST_HEADER } from '@/lib/api/tenant-forwarding';
 
 /**
  * Does the tenant header pair actually reach the API on the **browser** path?
@@ -104,7 +104,7 @@ describe('the browser path to the API', () => {
   it('delivers the tenant host and the credential that makes it believable', async () => {
     const headers = await callThroughProxy(PROBE_PATH, { host: TENANT_HOST });
 
-    expect(headers[FORWARDED_HOST_HEADER]).toBe(TENANT_HOST);
+    expect(headers[EDGE_HOST_HEADER]).toBe(TENANT_HOST);
     expect(headers[EDGE_AUTH_HEADER]).toBe(TRUSTED_PROXY_SECRET);
   });
 
@@ -127,11 +127,11 @@ describe('the browser path to the API', () => {
     const headers = await callThroughProxy(PROBE_PATH, {
       host: TENANT_HOST,
       [EDGE_AUTH_HEADER]: 'forged',
-      [FORWARDED_HOST_HEADER]: 'victim.example.com',
+      [EDGE_HOST_HEADER]: 'victim.example.com',
     });
 
     expect(headers[EDGE_AUTH_HEADER]).toBe(TRUSTED_PROXY_SECRET);
-    expect(headers[FORWARDED_HOST_HEADER]).toBe(TENANT_HOST);
+    expect(headers[EDGE_HOST_HEADER]).toBe(TENANT_HOST);
   });
 
   /**

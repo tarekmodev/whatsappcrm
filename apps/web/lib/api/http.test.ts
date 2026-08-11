@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiRequestError, apiRequest } from './http';
-import { FORWARDED_HOST_HEADER } from './tenant-host';
+import { EDGE_HOST_HEADER } from './tenant-host';
 
 // The mock transport is chosen by `webEnv.useMockApi`, which is false under
 // `vitest` unless the flag is set — so these cases exercise the HTTP branch.
@@ -109,7 +109,7 @@ describe('apiRequest', () => {
 
     const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
 
-    expect(init?.headers).toMatchObject({ [FORWARDED_HOST_HEADER]: TENANT_HOST });
+    expect(init?.headers).toMatchObject({ [EDGE_HOST_HEADER]: TENANT_HOST });
   });
 
   it('lets a caller override the forwarded host, as it can any other header', async () => {
@@ -118,11 +118,11 @@ describe('apiRequest', () => {
     await apiRequest({
       method: 'GET',
       path: '/v1/auth/session',
-      headers: { [FORWARDED_HOST_HEADER]: 'acme.example.com' },
+      headers: { [EDGE_HOST_HEADER]: 'acme.example.com' },
     });
 
     const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
 
-    expect(init?.headers).toMatchObject({ [FORWARDED_HOST_HEADER]: 'acme.example.com' });
+    expect(init?.headers).toMatchObject({ [EDGE_HOST_HEADER]: 'acme.example.com' });
   });
 });

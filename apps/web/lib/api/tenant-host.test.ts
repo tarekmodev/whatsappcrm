@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EDGE_AUTH_HEADER, FORWARDED_HOST_HEADER, tenantHostHeaders } from './tenant-host';
+import { EDGE_AUTH_HEADER, EDGE_HOST_HEADER, tenantHostHeaders } from './tenant-host';
+import { EDGE_HOST_HEADER as CANONICAL_EDGE_HOST_HEADER } from './tenant-forwarding';
 
 /**
  * The tenant is the host, and nothing else. What these cases pin down is that a
@@ -36,7 +37,7 @@ describe('tenantHostHeaders', () => {
     host.value = 'northwind.app.localhost:3000';
 
     await expect(tenantHostHeaders()).resolves.toEqual({
-      [FORWARDED_HOST_HEADER]: 'northwind.app.localhost:3000',
+      [EDGE_HOST_HEADER]: 'northwind.app.localhost:3000',
     });
   });
 
@@ -45,15 +46,17 @@ describe('tenantHostHeaders', () => {
 
     const headers = await tenantHostHeaders();
 
-    expect(headers[FORWARDED_HOST_HEADER]).toContain(':3000');
+    expect(headers[EDGE_HOST_HEADER]).toContain(':3000');
   });
 
   /**
-   * The header Next's own proxy already sets on the browser path, so the API has
-   * one place to read the tenant from rather than two.
+   * A re-export so a server-side caller has one import, **not** a second copy of
+   * the name. The literal itself is pinned once, in `tenant-forwarding.test.ts`;
+   * what matters here is that the two request paths cannot come to send different
+   * headers, which is the whole reason the pair lives in one module.
    */
-  it('uses the same header the browser path already carries', () => {
-    expect(FORWARDED_HOST_HEADER).toBe('x-forwarded-host');
+  it('re-exports the header the browser path sends, rather than a second copy of it', () => {
+    expect(EDGE_HOST_HEADER).toBe(CANONICAL_EDGE_HOST_HEADER);
   });
 
   /**
@@ -65,7 +68,7 @@ describe('tenantHostHeaders', () => {
     host.value = 'northwind.app.localhost:3000';
 
     await expect(tenantHostHeaders()).resolves.toEqual({
-      [FORWARDED_HOST_HEADER]: 'northwind.app.localhost:3000',
+      [EDGE_HOST_HEADER]: 'northwind.app.localhost:3000',
       [EDGE_AUTH_HEADER]: 'edge-secret',
     });
   });

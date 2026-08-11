@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   API_PROXY_PATH_PREFIX,
   EDGE_AUTH_HEADER,
-  FORWARDED_HOST_HEADER,
+  EDGE_HOST_HEADER,
   isApiProxyPath,
   tenantForwardingHeaders,
 } from './tenant-forwarding';
@@ -33,7 +33,7 @@ describe('tenantForwardingHeaders', () => {
     env.trustedProxySecret = 'edge-secret';
 
     expect(tenantForwardingHeaders('northwind.app.localhost:3000')).toEqual({
-      [FORWARDED_HOST_HEADER]: 'northwind.app.localhost:3000',
+      [EDGE_HOST_HEADER]: 'northwind.app.localhost:3000',
       [EDGE_AUTH_HEADER]: 'edge-secret',
     });
   });
@@ -46,22 +46,23 @@ describe('tenantForwardingHeaders', () => {
   it('sends no credential header at all when no secret is configured', () => {
     const headers = tenantForwardingHeaders('acme.app.localhost:3000');
 
-    expect(headers).toEqual({ [FORWARDED_HOST_HEADER]: 'acme.app.localhost:3000' });
+    expect(headers).toEqual({ [EDGE_HOST_HEADER]: 'acme.app.localhost:3000' });
     expect(headers).not.toHaveProperty(EDGE_AUTH_HEADER);
   });
 
   it('keeps the port, which distinguishes two tenants in local development', () => {
-    expect(tenantForwardingHeaders('acme.app.localhost:3000')[FORWARDED_HOST_HEADER]).toContain(
-      ':3000',
-    );
+    expect(tenantForwardingHeaders('acme.app.localhost:3000')[EDGE_HOST_HEADER]).toContain(':3000');
   });
 
   /**
-   * The header Next's own rewrite proxy already sets on the browser path, so the
-   * API has one place to read the tenant from rather than two.
+   * The literals are the contract with `HostTenantGuard`, which reads exactly
+   * these two names and no others — `x-forwarded-host` included, which it stopped
+   * reading in TAR-148 because every proxy on a public hop is entitled to rewrite
+   * it. A rename on one side alone is not a partial outage but a total one, so it
+   * is pinned here as a literal rather than derived from anything.
    */
   it('uses the header names the API guard reads', () => {
-    expect(FORWARDED_HOST_HEADER).toBe('x-forwarded-host');
+    expect(EDGE_HOST_HEADER).toBe('x-edge-host');
     expect(EDGE_AUTH_HEADER).toBe('x-edge-auth');
   });
 });

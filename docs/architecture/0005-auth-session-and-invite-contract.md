@@ -168,8 +168,8 @@ sequenceDiagram
 > - `fetch` derives `Host` from the URL and silently drops a caller-supplied one, so a
 >   server-rendered call cannot set it either.
 >
-> Both paths therefore name the tenant in `x-forwarded-host` — the browser path always did,
-> and `lib/api/tenant-host.ts` makes the server path match. Note that preserving `Host`
+> Both paths therefore name the tenant in a header of our own, built once in
+> `lib/api/tenant-forwarding.ts` so the two cannot drift. Note that preserving `Host`
 > end-to-end is not an option on the current Render topology either: the API is a public
 > service whose edge routes by `Host`, so a request carrying a tenant's host would never
 > reach it.
@@ -177,18 +177,37 @@ sequenceDiagram
 > **How the API knows to believe it (TAR-64, decided).** A forwarded host is a header, and a
 > header is something anything that can reach the API may write — which is the tenant
 > spoofing `HostTenantGuard`'s own docstring warns about. So the pair, not the host alone, is
-> the contract: `x-forwarded-host` is trusted **only** when `x-edge-auth` matches the API's
+> the contract: `x-edge-host` is trusted **only** when `x-edge-auth` matches the API's
 > `TRUSTED_PROXY_SECRET`, compared the same fail-closed, timing-safe way
 > `PlatformAdminGuard` already compares its bearer token. Missing or wrong, the guard falls
 > back to `request.hostname` exactly as before — never to the forwarded value — and a
-> multi-valued `x-forwarded-host` is refused rather than split. Express `trust proxy` stays
+> multi-valued `x-edge-host` is refused rather than split. Express `trust proxy` stays
 > off: it would honour the forwarded host _ungated_, which is the whole hole.
+>
+> **Why both names are private (TAR-148, on review of the API half).** The pair originally
+> carried the host in `x-forwarded-host`, on the reasoning that it is standard and Next's
+> rewrite already sets it. That was backwards: it put the payload in the one header every hop
+> is entitled to rewrite while the credential rode in one nothing would touch — and the hop
+> count is not zero, because `API_BASE_URL` is a public origin, so the call leaves Render and
+> re-enters through TLS-terminating proxies that populate `x-forwarded-*` as a matter of
+> course. An edge that rewrote it would answer a uniform `tenant_not_found` on every tenant
+> route while the API's boot line still read `enabled`, and would start doing so the day a
+> proxy default changed. The host therefore travels as `x-edge-host`, which the guard reads;
+> `x-forwarded-host` it reads nowhere, gated or otherwise. Two private names cost one string
+> on each side, and the alternative — proving the standard header survives the public hop with
+> a `curl` from outside Render — would have rested correctness on an undocumented property of
+> an intermediary we do not own.
 >
 > The console sends the pair on both paths (TAR-149): `lib/api/tenant-forwarding.ts` builds
 > it once, `lib/api/http.ts` spreads it onto every server-side call, and `proxy.ts` injects it
 > before the `/api/*` rewrite — clearing any inbound `x-edge-auth` first, so a browser cannot
 > supply its own. `rewrites()` cannot add a request header, which is why the proxy has to.
 > The secret is server-only on the console side and never carries a `NEXT_PUBLIC_` prefix.
+>
+> A wrong `x-edge-auth` is logged once per minute at `warn` (`tenancy.edge_auth_mismatch`) —
+> the fact, never the value. It is the line to alert on: the two services holding different
+> secrets after a rotation looks exactly like an unknown domain otherwise, and the API's boot
+> line confirms only that it _has_ a secret, not that it is the same one.
 >
 > Residual risk, stated plainly: a leaked secret lets its holder name any **verified** tenant
 > host. On authenticated routes `PrincipalGuard` still answers `tenant_mismatch`, so the

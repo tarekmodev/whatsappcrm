@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { SESSION_COOKIE_NAME, SESSION_COOKIE_NAME_SECURE } from '@whatsappcrm/contracts';
-import { EDGE_AUTH_HEADER, FORWARDED_HOST_HEADER } from '@/lib/api/tenant-forwarding';
+import { EDGE_AUTH_HEADER, EDGE_HOST_HEADER } from '@/lib/api/tenant-forwarding';
 import { REQUEST_PATH_HEADER } from '@/lib/session/session-paths';
 import { proxy } from './proxy';
 
@@ -130,7 +130,7 @@ describe('proxy, on the browser path to the API', () => {
 
     const response = proxy(request('/api/v1/auth/session'));
 
-    expect(forwardedHeader(response, FORWARDED_HOST_HEADER)).toBe(TENANT_HOST);
+    expect(forwardedHeader(response, EDGE_HOST_HEADER)).toBe(TENANT_HOST);
     expect(forwardedHeader(response, EDGE_AUTH_HEADER)).toBe('edge-secret');
   });
 
@@ -147,7 +147,7 @@ describe('proxy, on the browser path to the API', () => {
   });
 
   /**
-   * `x-edge-auth` is the one credential that makes `x-forwarded-host` believable,
+   * `x-edge-auth` is the one credential that makes `x-edge-host` believable,
    * so a value that arrived from the browser must not reach the API — otherwise
    * the pair proves nothing and any visitor could name any tenant.
    */
@@ -157,12 +157,12 @@ describe('proxy, on the browser path to the API', () => {
     const response = proxy(
       request('/api/v1/auth/login', undefined, {
         [EDGE_AUTH_HEADER]: 'guessed',
-        [FORWARDED_HOST_HEADER]: 'victim.example.com',
+        [EDGE_HOST_HEADER]: 'victim.example.com',
       }),
     );
 
     expect(forwardedHeader(response, EDGE_AUTH_HEADER)).toBe('edge-secret');
-    expect(forwardedHeader(response, FORWARDED_HOST_HEADER)).toBe(TENANT_HOST);
+    expect(forwardedHeader(response, EDGE_HOST_HEADER)).toBe(TENANT_HOST);
   });
 
   it('strips a forged credential even when this tier has no secret to replace it with', () => {

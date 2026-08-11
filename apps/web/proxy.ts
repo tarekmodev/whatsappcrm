@@ -4,7 +4,7 @@ import { webEnv } from '@/lib/config/env';
 import { routes } from '@/lib/routes';
 import {
   EDGE_AUTH_HEADER,
-  FORWARDED_HOST_HEADER,
+  EDGE_HOST_HEADER,
   isApiProxyPath,
   tenantForwardingHeaders,
 } from '@/lib/api/tenant-forwarding';
@@ -90,15 +90,19 @@ function hasSessionCookie(request: NextRequest): boolean {
  * The tenant headers for a browser call, on their way to the rewrite.
  *
  * Both are cleared before either is written. A browser can send whatever headers
- * it likes, and `x-edge-auth` is the one credential that makes `x-forwarded-host`
+ * it likes, and `x-edge-auth` is the one credential that makes `x-edge-host`
  * believable — so a value that arrived from outside must never survive to the
  * API, whether or not this tier has a secret of its own to replace it with. The
  * host likewise comes from the connection, never from what the caller claimed.
+ *
+ * Nothing here touches `x-forwarded-host`: the API stopped reading it when the
+ * pair moved to private names (TAR-148), and Next's own rewrite proxy sets it
+ * from the connection on the way out regardless.
  */
 function withTenantForwarding(incoming: Headers): Headers {
   const headers = new Headers(incoming);
 
-  headers.delete(FORWARDED_HOST_HEADER);
+  headers.delete(EDGE_HOST_HEADER);
   headers.delete(EDGE_AUTH_HEADER);
 
   const host = incoming.get('host');

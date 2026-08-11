@@ -12,7 +12,7 @@ import { tenantForwardingHeaders } from '@/lib/api/tenant-forwarding';
  * caller's host resolves no tenant and is answered `tenant_not_found` — so every
  * server-rendered page under `app/(app)` fails, not just the ones that read data.
  *
- * ## Why `x-forwarded-host` rather than `Host`
+ * ## Why a header rather than `Host`
  *
  * `Host` cannot be set on either path, and both were verified against the
  * versions in this repository rather than assumed:
@@ -23,12 +23,14 @@ import { tenantForwardingHeaders } from '@/lib/api/tenant-forwarding';
  *   - **Browser-side.** `next.config.mjs` rewrites `/api/*` to the API origin, and
  *     Next's proxy hardcodes `changeOrigin: true`
  *     (`next/dist/server/lib/router-utils/proxy-request.js`). It overwrites `Host`
- *     with the destination's and puts the browser's own host in
- *     `x-forwarded-host`. `rewrites()` exposes no option that changes this.
+ *     with the destination's. `rewrites()` exposes no option that changes this.
  *
- * So the browser path already delivers the tenant host in `x-forwarded-host`, and
- * this makes the server path say the same thing in the same header. One header
- * carries the tenant on both, which is what lets the API read it in one place.
+ * So both paths have to name the tenant in a header of our own, and this makes
+ * the server path say exactly what `proxy.ts` says on the browser path. One
+ * header carries the tenant on both, which is what lets the API read it in one
+ * place — `x-edge-host` rather than `x-forwarded-host` for the reason
+ * `tenant-forwarding.ts` gives: the payload belongs in a name no proxy between
+ * the two services is entitled to rewrite.
  *
  * What the header *pair* is, and why a secret rides alongside the host, lives in
  * `lib/api/tenant-forwarding.ts` — shared with `proxy.ts`, which sends the same
@@ -39,7 +41,7 @@ import { tenantForwardingHeaders } from '@/lib/api/tenant-forwarding';
 
 export {
   EDGE_AUTH_HEADER,
-  FORWARDED_HOST_HEADER,
+  EDGE_HOST_HEADER,
   tenantForwardingHeaders,
 } from '@/lib/api/tenant-forwarding';
 
