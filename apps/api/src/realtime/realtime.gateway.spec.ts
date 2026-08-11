@@ -18,6 +18,7 @@ import { RealtimeGateway } from './realtime.gateway';
 import { RealtimeHandshakeService } from './realtime-handshake.service';
 import { RealtimeRelayService } from './realtime-relay.service';
 import type { RealtimeSocketData } from './realtime-socket';
+import { TenantHostnameService } from './tenant-hostname.service';
 
 /**
  * The gateway against a real Socket.IO server and real clients (TAR-69).
@@ -146,6 +147,10 @@ describe('the realtime gateway', () => {
       findForRelay: (): Promise<MessageResponse | null> => Promise.resolve(PUBLISHED),
     } as unknown as MessageResourceService;
 
+    const hostnames = {
+      publish: (): Promise<boolean> => Promise.resolve(true),
+    } as unknown as TenantHostnameService;
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         RealtimeGateway,
@@ -154,6 +159,7 @@ describe('the realtime gateway', () => {
         { provide: RealtimeHandshakeService, useValue: handshake },
         { provide: ConversationAccessService, useValue: conversations },
         { provide: MessageResourceService, useValue: messages },
+        { provide: TenantHostnameService, useValue: hostnames },
       ],
     }).compile();
 

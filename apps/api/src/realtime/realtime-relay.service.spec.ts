@@ -9,6 +9,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import type { MessageCreatedEvent, MessageStatusChangedEvent } from '../events/domain-events';
 import type { MessageResourceService } from './message-resource.service';
 import { RealtimeRelayService } from './realtime-relay.service';
+import type { TenantHostnameService } from './tenant-hostname.service';
 
 /**
  * What reaches the rooms when the ingestion pipeline emits (TAR-69).
@@ -84,7 +85,12 @@ interface Harness {
 }
 
 function harnessFor(
-  options: { message?: MessageResponse | null; readFails?: boolean; attach?: boolean } = {},
+  options: {
+    message?: MessageResponse | null;
+    readFails?: boolean;
+    attach?: boolean;
+    hostname?: boolean;
+  } = {},
 ): Harness {
   const emissions: Emission[] = [];
   const scopes: (string | null)[] = [];
@@ -102,7 +108,19 @@ function harnessFor(
     },
   } as unknown as MessageResourceService;
 
-  const relay = new RealtimeRelayService(messages, tenantContext);
+  const hostnames = {
+    publish: (): Promise<boolean> => {
+      if (options.hostname === false) {
+        return Promise.resolve(false);
+      }
+
+      tenantContext.setHostname('acme.app.localhost');
+
+      return Promise.resolve(true);
+    },
+  } as unknown as TenantHostnameService;
+
+  const relay = new RealtimeRelayService(messages, hostnames, tenantContext);
 
   if (options.attach !== false) {
     relay.attach(fakeServer(emissions));
@@ -182,6 +200,17 @@ describe('relaying message.created', () => {
     const { relay } = harnessFor({ attach: false });
 
     await expect(relay.onMessageCreated(created())).resolves.toBeUndefined();
+  });
+
+  it('relays nothing for a tenant with no verified host to name', async () => {
+    // A payload can carry an absolute attachment URL, and there is no origin to
+    // build one against. Costs nothing real: a tenant with no verified domain
+    // has no host `HostTenantGuard` resolves, so nobody is signed in to it.
+    const { relay, emissions } = harnessFor({ hostname: false });
+
+    await relay.onMessageCreated(created());
+
+    expect(emissions).toEqual([]);
   });
 });
 

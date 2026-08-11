@@ -271,15 +271,26 @@ describe('the realtime gateway cannot be pointed at another tenant', () => {
       ).resolves.toBe(false);
     });
 
-    it('refuses an unassigned conversation to an agent and admits it to a supervisor', async () => {
+    it('admits every agent on the tenant to a conversation nobody has claimed', async () => {
+      // TAR-68's amendment 4, applied to the socket so it answers the same as
+      // the route: a customer wrote in, and a thread visible to nobody is an
+      // unanswered customer rather than an isolation property.
       await expect(
         asTenant(TENANT_A, async () => access.maySubscribe(principal(), UNASSIGNED_A)),
-      ).resolves.toBe(false);
+      ).resolves.toBe(true);
       await expect(
         asTenant(TENANT_A, async () =>
           access.maySubscribe(principal({ role: 'supervisor' }), UNASSIGNED_A),
         ),
       ).resolves.toBe(true);
+    });
+
+    it('still refuses a conversation another agent has claimed', async () => {
+      await expect(
+        asTenant(TENANT_A, async () =>
+          access.maySubscribe(principal({ userId: USER_B }), CONVERSATION_A),
+        ),
+      ).resolves.toBe(false);
     });
 
     it('admits an agent to a team’s conversation only while they are in that team', async () => {

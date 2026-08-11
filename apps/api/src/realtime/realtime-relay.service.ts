@@ -16,6 +16,7 @@ import {
   type MessageStatusChangedEvent,
 } from '../events/domain-events';
 import { MessageResourceService } from './message-resource.service';
+import { TenantHostnameService } from './tenant-hostname.service';
 
 /**
  * The bridge from the in-process domain bus to the rooms (TAR-39: the realtime
@@ -24,10 +25,12 @@ import { MessageResourceService } from './message-resource.service';
  * ## What it relays, and what it does not
  *
  * `message.created` from TAR-20b's ingestion pipeline, and the send-status
- * ladder — `queued → sent → delivered → read`, or `failed` — from the same
- * writer and, once it exists, from TAR-20c's send path. Both arrive as the
+ * ladder — `queued → sent → delivered → read`, or `failed` — from that same
+ * writer and from TAR-68's send path and delivery worker. Both arrive as the
  * *same* two domain events regardless of which side produced them, which is why
- * this file has two subscribers rather than one per producer.
+ * this file has two subscribers rather than one per producer, and why a send
+ * that Meta refuses reaches the agent's screen on the same path a customer's
+ * message does.
  *
  * `message.attachment_settled` and `ticket.created` are emitted today and
  * deliberately not relayed here: neither has a server event in TAR-39's fixed
@@ -77,6 +80,7 @@ export class RealtimeRelayService {
 
   constructor(
     private readonly messages: MessageResourceService,
+    private readonly hostnames: TenantHostnameService,
     private readonly tenantContext: TenantContextService,
   ) {}
 
@@ -140,7 +144,12 @@ export class RealtimeRelayService {
     try {
       const message = await this.tenantContext.run(
         { requestId: randomUUID(), tenantId, userId: null, principal: null },
-        async () => await this.messages.findForRelay(messageId),
+        async () =>
+          // The hostname first: a relayed payload can carry an absolute
+          // attachment URL, and `ResponseOriginService` refuses to invent an
+          // origin for a scope no request opened. Establishing it here, beside
+          // the tenant, is the same thing a queue worker does with its payload.
+          (await this.hostnames.publish()) ? await this.messages.findForRelay(messageId) : null,
       );
 
       if (message === null) {

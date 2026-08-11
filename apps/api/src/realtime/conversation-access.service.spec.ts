@@ -139,12 +139,28 @@ describe('authorising conversation.subscribe', () => {
     ).resolves.toBe(false);
   });
 
-  it('refuses an agent an unassigned conversation', async () => {
-    // `unassigned` needs `conversation:read_all` (TAR-22, `narrowScope`), so the
-    // socket cannot be a way round the list endpoint's own answer.
+  it('admits an agent to a conversation nobody has claimed', async () => {
+    // Wider than `isVisible`, and deliberately so: TAR-68's amendment 4 rules
+    // that an unclaimed thread is visible to every agent on the tenant, because
+    // a customer wrote in and until somebody claims it there is nobody it would
+    // otherwise be visible to. The socket must not be narrower than the route —
+    // an agent who can open the thread over HTTP and gets no live updates for it
+    // is the worst of both answers.
     const { access } = accessFor({
       id: CONVERSATION,
       assignedUserId: null,
+      assignedTeamId: null,
+    });
+
+    await expect(access.maySubscribe(principal(), CONVERSATION)).resolves.toBe(true);
+  });
+
+  it('still refuses an agent a conversation somebody else has claimed', async () => {
+    // The unclaimed widening stops here: claiming is what takes a thread out of
+    // the shared pool.
+    const { access } = accessFor({
+      id: CONVERSATION,
+      assignedUserId: USER_B,
       assignedTeamId: null,
     });
 
