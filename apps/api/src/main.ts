@@ -8,6 +8,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { configureApp } from './bootstrap';
 import type { Env } from './config/env.schema';
+import { RealtimeIoAdapter } from './realtime/realtime-io.adapter';
 
 async function bootstrap(): Promise<void> {
   // `rawBody` keeps the exact bytes of each request alongside the parsed body.
@@ -22,6 +23,12 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { rawBody: true, bufferLogs: true });
 
   configureApp(app);
+
+  // Installed here rather than in `configureApp` because it opens Redis
+  // connections: every HTTP spec calls `configureApp` so the tested app is
+  // configured like the deployed one, and none of them should acquire a pub/sub
+  // pair to exercise a controller. The gateway's own specs install it themselves.
+  app.useWebSocketAdapter(await RealtimeIoAdapter.create(app));
 
   const port = app.get<ConfigService<Env, true>>(ConfigService).get('PORT', { infer: true });
   await app.listen(port, '0.0.0.0');

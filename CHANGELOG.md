@@ -168,6 +168,43 @@ change.
   never carried — so a status update the schema called valid reached the database as an
   invalid label.
 
+- **The inbox updates itself: a Socket.IO gateway, its rooms, and the relay that feeds
+  them** (TAR-69) — `RealtimeModule` attaches a Socket.IO server to the API process at
+  `/realtime` and turns the domain events the ingestion pipeline and TAR-68's send path
+  already emit into `message.created` and `message.status_changed` on the wire. The
+  handshake spends the single-use ticket TAR-180 issues, and then does the thing the ticket
+  alone cannot: it re-reads the session by id (`SessionService.resolveBySessionId`, new) so
+  a sign-out inside the ticket's sixty seconds is honoured and a role change is picked up
+  rather than served a minute stale — the socket authorises `conversation.subscribe` on
+  `permissions` and `teamIds`, so a frozen copy would be a frozen authorization. That
+  lookup runs on `TenantPrisma`, which makes RLS rather than a comparison the thing that
+  stops a ticket minted in one tenant resolving a principal in another; it deliberately
+  does **not** slide the idle deadline, because an open tab is not evidence anybody is at
+  the keyboard. Rooms are joined from the server's view only: `tenant:{id}` and `user:{id}`
+  come from the resolved principal, and the single client-supplied identifier anywhere in
+  the gateway is a conversation id, which `ConversationAccessService` checks against RLS
+  _and_ `isVisibleOrUnclaimed` — the same predicate TAR-68's routes apply, so the socket
+  and the REST surface answer identically for an unclaimed thread — before joining
+  `conversation:{id}`. Refusals are uniform, so the channel is not an oracle for which ids
+  exist. Payloads are whole `MessageResponse` resources rather than deltas, built by
+  TAR-68's own `MESSAGE_PROJECTION` and `toMessageResponse` rather than a second copy, and
+  made absolute through the `ResponseOriginService` that module's doc invites a second
+  declarer for. The origin the socket path publishes comes from the tenant's primary
+  **verified** domain in the control plane, on `TenantLinkService`'s reasoning: a WebSocket
+  upgrade carries no host worth believing. `RealtimeIoAdapter` supplies CORS from
+  `WEB_ORIGIN` and, where `REDIS_URL` is set, a `@socket.io/redis-adapter` pub/sub pair —
+  without it an event emitted on one replica reaches only that replica's sockets, which is
+  a silent failure rather than a slow one, so its absence is warned about at boot.
+  ⚠️ **Known limitation, recorded rather than papered over**: the tenant room is every
+  socket in the tenant, so a tenant-wide fan-out of message content reaches agents who
+  could not read that conversation over HTTP. TAR-39 fixes the room vocabulary and the
+  fan-out, and TAR-20f/20g are built against it, so closing this needs a contract
+  amendment — either scoping the fan-out to `user:{assignedUserId}` plus a team room, or
+  restricting `tenant:{id}` to holders of `conversation:read_all`. Also not relayed:
+  `message.attachment_settled` and `ticket.created`, which are emitted today but have no
+  server event in the fixed contract, so an inbound picture's spinner still stops on a
+  refetch.
+
 - **Console routes enforce the session, and the API is the only thing that decides who you
   are** (TAR-62) — every route below `app/(app)` is now guarded in two halves. `proxy.ts`
   (Next 16's rename of `middleware.ts`) checks only for a session **cookie**, because it runs

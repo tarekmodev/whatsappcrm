@@ -16,6 +16,7 @@ import { PeopleModule } from './people/people.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
 import { RbacModule } from './rbac/rbac.module';
+import { RealtimeModule } from './realtime/realtime.module';
 import { REPOSITORY_ENV_FILE } from './repository-env-file';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { TicketsModule } from './tickets/tickets.module';
@@ -55,6 +56,10 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     // remember, and forgetting is the failure it exists to remove.
     RequestPipelineModule,
     HealthModule,
+    // Platform layer, beside the pipeline rather than above it: it subscribes to
+    // the domain bus and imports no feature module, so it can sit before the
+    // producers whose events it relays without a cycle.
+    RealtimeModule,
     TenancyModule,
     PeopleModule,
     WhatsAppModule,
