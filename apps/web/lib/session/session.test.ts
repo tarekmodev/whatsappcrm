@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { permissionsForRole } from '@whatsappcrm/contracts';
-import { ApiRequestError } from '@/lib/api/http';
 import { REQUEST_PATH_HEADER } from '@/lib/session/session-paths';
 
 /**
@@ -48,19 +47,32 @@ const PRINCIPAL = {
   expiresAt: '2026-12-31T23:59:59.000Z',
 };
 
-function refuse(status: number, code: string): ApiRequestError {
-  return new ApiRequestError(status, code, 'Refused', null);
-}
-
 /**
  * `getSession` is wrapped in React's `cache`, which memoises per render pass.
  * Re-importing the module per test gives each one its own, so a `null` from one
  * case cannot be served to the next.
+ *
+ * `refuse` comes back with it, bound to the **same** module graph, and that is
+ * not a convenience: `isSessionExpiredError` narrows with `instanceof`, and
+ * `vi.resetModules()` gives the reloaded guard a fresh `ApiRequestError` class.
+ * An error built from a class captured before the reset is an instance of a
+ * different constructor with the same name, and the guard would rethrow it as an
+ * unrecognised failure instead of reading it as a lost session.
  */
-async function loadSession(): Promise<typeof import('./session')> {
+async function loadSession(): Promise<
+  typeof import('./session') & { refuse: (status: number, code: string) => Error }
+> {
   vi.resetModules();
 
-  return import('./session');
+  const [session, { ApiRequestError }] = await Promise.all([
+    import('./session'),
+    import('@/lib/api/error'),
+  ]);
+
+  return {
+    ...session,
+    refuse: (status, code) => new ApiRequestError(status, code, 'Refused', null),
+  };
 }
 
 afterEach(() => {
@@ -100,19 +112,23 @@ describe('getSession', () => {
     ['no session, or one that expired or was revoked', 401, 'unauthenticated'],
     ['a session replayed against another tenant’s host', 401, 'tenant_mismatch'],
   ])('reports no session for %s', async (_case, status, code) => {
-    apiRequest.mockRejectedValue(refuse(status, code));
+    const { getSession, refuse } = await loadSession();
 
-    const { getSession } = await loadSession();
+    apiRequest.mockRejectedValue(refuse(status, code));
 
     await expect(getSession()).resolves.toBeNull();
   });
 
   it('rethrows an unreachable API rather than treating it as a sign-out', async () => {
+    const { getSession, refuse } = await loadSession();
+
     apiRequest.mockRejectedValue(refuse(502, 'upstream_unavailable'));
 
-    const { getSession } = await loadSession();
-
-    await expect(getSession()).rejects.toBeInstanceOf(ApiRequestError);
+    await expect(getSession()).rejects.toMatchObject({
+      name: 'ApiRequestError',
+      status: 502,
+      code: 'upstream_unavailable',
+    });
   });
 });
 
@@ -128,9 +144,9 @@ describe('verifySession', () => {
   });
 
   it('sends a caller with no session to sign in, keeping where they were going', async () => {
-    apiRequest.mockRejectedValue(refuse(401, 'unauthenticated'));
+    const { verifySession, refuse } = await loadSession();
 
-    const { verifySession } = await loadSession();
+    apiRequest.mockRejectedValue(refuse(401, 'unauthenticated'));
 
     await expect(verifySession()).rejects.toMatchObject({
       target: '/login?next=%2Fsettings%2Fpeople',
@@ -152,9 +168,9 @@ describe('requireAnyPermission', () => {
    * wrong answer for someone who has not had the chance to say who they are.
    */
   it('redirects rather than returning null when there is no session at all', async () => {
-    apiRequest.mockRejectedValue(refuse(401, 'unauthenticated'));
+    const { requireAnyPermission, refuse } = await loadSession();
 
-    const { requireAnyPermission } = await loadSession();
+    apiRequest.mockRejectedValue(refuse(401, 'unauthenticated'));
 
     await expect(requireAnyPermission(['user:set_role'])).rejects.toBeInstanceOf(RedirectSignal);
   });

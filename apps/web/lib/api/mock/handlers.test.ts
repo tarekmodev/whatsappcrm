@@ -235,7 +235,7 @@ describe('removal is a soft delete', () => {
 });
 
 describe('conversation scoping', () => {
-  it('narrows an agent’s scope to their own and their teams’ conversations', async () => {
+  it('narrows an agent’s `all` to their work plus whatever nobody has claimed', async () => {
     asRole('agent');
 
     // Asks for everything; the agent lacks `conversation:read_all`, so the
@@ -250,9 +250,24 @@ describe('conversation scoping', () => {
     expect(ids).toContain(MOCK_IDS.conversations.assignedToAmina);
     // Assigned to her Billing team, so visible — TAR-22's second criterion.
     expect(ids).toContain(MOCK_IDS.conversations.billingTeam);
-    // Another agent's, in a team she is not in.
+    // ADR 0002 amendment 4: a thread nobody has claimed is visible to every
+    // agent, because a customer wrote in and it is otherwise visible to nobody.
+    expect(ids).toContain(MOCK_IDS.conversations.unassigned);
+    // Another agent's, in a team she is not in — still invisible.
     expect(ids).not.toContain(MOCK_IDS.conversations.assignedToLiang);
-    expect(ids).not.toContain(MOCK_IDS.conversations.unassigned);
+  });
+
+  it('lets an agent browse the unclaimed pool', async () => {
+    asRole('agent');
+
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/conversations?scope=unassigned&limit=100',
+    })) as CursorPage<{ id: string }>;
+
+    expect(page.items.map((conversation) => conversation.id)).toEqual([
+      MOCK_IDS.conversations.unassigned,
+    ]);
   });
 
   it('lets a supervisor see every conversation in their tenant', async () => {
@@ -267,6 +282,138 @@ describe('conversation scoping', () => {
 
     expect(ids).toContain(MOCK_IDS.conversations.assignedToLiang);
     expect(ids).toContain(MOCK_IDS.conversations.unassigned);
+  });
+});
+
+/**
+ * The thread, its notes and the claim (TAR-71). These are the routes the shared
+ * inbox reads and writes, and the visibility rule they share is the one place a
+ * mistake would show one agent another's conversation.
+ */
+describe('one conversation', () => {
+  const AMINA_THREAD = `/v1/conversations/${MOCK_IDS.conversations.assignedToAmina}`;
+
+  it('serves the thread newest-first, with its attachments', async () => {
+    asRole('agent');
+
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: `${AMINA_THREAD}/messages?limit=100`,
+    })) as CursorPage<{ id: string; sentAt: string; attachments: unknown[] }>;
+
+    expect(page.items.length).toBeGreaterThan(1);
+    expect(page.items[0]?.sentAt.localeCompare(page.items[1]?.sentAt ?? '')).toBeGreaterThan(0);
+    expect(page.items.some((message) => message.attachments.length > 0)).toBe(true);
+  });
+
+  it('answers `not_found` for a thread the caller may not see, never `forbidden`', async () => {
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({
+        method: 'GET',
+        path: `/v1/conversations/${MOCK_IDS.conversations.assignedToLiang}`,
+      }),
+    ).rejects.toMatchObject({ status: 404, code: 'not_found' });
+  });
+
+  it('lets an agent read a conversation nobody has claimed', async () => {
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({
+        method: 'GET',
+        path: `/v1/conversations/${MOCK_IDS.conversations.unassigned}`,
+      }),
+    ).resolves.toMatchObject({ assignedUserId: null, assignedTeamId: null });
+  });
+
+  it('refuses an agent the claim, which needs conversation:assign', async () => {
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/conversations/${MOCK_IDS.conversations.unassigned}/assign`,
+        body: { userId: MOCK_IDS.users.amina },
+      }),
+    ).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+  });
+
+  it('lets a supervisor claim an unassigned conversation and release it again', async () => {
+    asRole('supervisor');
+
+    const path = `/v1/conversations/${MOCK_IDS.conversations.unassigned}/assign`;
+
+    await expect(
+      handleMockRequest({ method: 'POST', path, body: { userId: MOCK_IDS.users.priya } }),
+    ).resolves.toMatchObject({ assignedUserId: MOCK_IDS.users.priya });
+
+    // Releasing clears both columns, which is what puts it back in
+    // `scope=unassigned` where every agent can see it again.
+    await expect(
+      handleMockRequest({ method: 'POST', path, body: { userId: null, teamId: null } }),
+    ).resolves.toMatchObject({ assignedUserId: null, assignedTeamId: null });
+  });
+
+  it('refuses an assignee who is not an active member of the tenant', async () => {
+    asRole('supervisor');
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/conversations/${MOCK_IDS.conversations.unassigned}/assign`,
+        body: { userId: MOCK_IDS.users.otherTenant },
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/conversations/${MOCK_IDS.conversations.unassigned}/assign`,
+        // Invited but never accepted: no session, so nothing would reach them.
+        body: { userId: MOCK_IDS.users.noor },
+      }),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+  });
+
+  it('writes a note as the caller, whatever the body claims', async () => {
+    asRole('agent');
+
+    const note = (await handleMockRequest({
+      method: 'POST',
+      path: `${AMINA_THREAD}/notes`,
+      body: { body: 'Chased accounting.', authorUserId: MOCK_IDS.users.omar },
+    })) as { authorUserId: string; body: string };
+
+    expect(note.authorUserId).toBe(MOCK_IDS.users.amina);
+
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: `${AMINA_THREAD}/notes?limit=100`,
+    })) as CursorPage<{ body: string }>;
+
+    expect(page.items.map((item) => item.body)).toContain('Chased accounting.');
+  });
+
+  it('refuses a mention that names nobody in this tenant', async () => {
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `${AMINA_THREAD}/notes`,
+        body: { body: 'Over to you.', mentionedUserIds: [MOCK_IDS.users.otherTenant] },
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('rejects an empty note before it reaches the store', async () => {
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({ method: 'POST', path: `${AMINA_THREAD}/notes`, body: { body: '' } }),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
   });
 });
 

@@ -2,33 +2,39 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  /* Scrolls beside the thread rather than growing the page, so the two panes
+     stay side by side however long the list gets. Below the two-pane
+     breakpoint it is the whole screen and the page scroll is enough. */
+  max-block-size: var(--size-scroll-region);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0;
   margin: 0;
   list-style: none;
 }
 
 .row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-4);
   background: var(--color-surface-sunken);
   border: var(--border-hairline) solid var(--color-border);
+  /* Reserved, and transparent until the row is the open one, so selecting a
+     conversation changes a colour rather than the geometry of the list. */
+  border-inline-start-width: var(--focus-ring-width);
+  border-inline-start-color: transparent;
   border-radius: var(--radius-md);
 }
 
-.contact {
-  font-weight: var(--font-weight-medium);
-  overflow-wrap: anywhere;
+@media (hover: hover) {
+  .row:hover {
+    background: var(--color-surface-hover);
+  }
 }
 
-.preview {
-  color: var(--color-on-surface-muted);
-  font-size: var(--font-size-body-sm);
-  /* Two lines maximum, so one long message cannot stretch a row off the screen. */
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  overflow-wrap: anywhere;
+/*
+ * The open thread. Colour is not the only signal — the link carries
+ * `aria-current`, and the border weight changes too, so this survives
+ * forced-colors mode and reads for anyone who cannot separate the two greens.
+ */
+.row[data-selected='true'] {
+  background: var(--color-surface-selected);
+  border-inline-start-color: var(--color-accent);
 }

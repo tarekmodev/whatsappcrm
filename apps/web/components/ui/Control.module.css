@@ -31,6 +31,13 @@
   cursor: not-allowed;
 }
 
+.textarea {
+  /* Vertical only: a horizontally resizable control can be dragged wider than
+     its column and take the layout with it. */
+  resize: vertical;
+  line-height: var(--line-height-body);
+}
+
 .select {
   /* Room for the platform's own disclosure arrow, which is deliberately left
      native — a custom one is one more thing to get wrong in forced-colors mode. */

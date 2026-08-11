@@ -1,0 +1,133 @@
+'use client';
+
+import Link from 'next/link';
+import type { ConversationResponse } from '@whatsappcrm/contracts';
+import { RelativeTime } from '@/components/ui/RelativeTime';
+import { SkeletonLine, SkeletonText } from '@/components/ui/Skeleton';
+import { Cluster } from '@/components/layout/Cluster';
+import { useContent } from '@/lib/content';
+import { routes, type ConversationStatusFilter, type InboxScope } from '@/lib/routes';
+import { conversationHold } from '@/features/inbox/conversation-hold';
+import { ClaimButton } from './ClaimButton';
+import { ConversationBadges } from './ConversationBadges';
+import styles from './ConversationRow.module.css';
+import listStyles from './ConversationList.module.css';
+
+/**
+ * One conversation in the list. Usage:
+ * `<ConversationRow conversation={…} assigneeName={…} teamName={…} isSelected={…} query={…} claim={…} />`.
+ *
+ * A card rather than a table row: a conversation is a headline plus metadata,
+ * not a set of comparable columns, and cards read the same at 320px as at
+ * 1920px with no stacking rules.
+ *
+ * ## Two targets, one card
+ *
+ * The headline is a link whose hit area is stretched over the whole card, so the
+ * target is far larger than the 44px minimum. The claim control is a **sibling**
+ * of that link, not a child — a button inside an anchor is invalid and behaves
+ * differently in every browser — lifted above the stretched area so a click on it
+ * claims rather than navigates. That is what puts the claim on the list as well
+ * as the thread, which is TAR-71's scope.
+ */
+
+export interface ConversationRowProps {
+  conversation: ConversationResponse;
+  assigneeName: string | null;
+  teamName: string | null;
+  isSelected: boolean;
+  /** The list's current filters, carried into the link so back preserves them. */
+  query: { scope: InboxScope; status: ConversationStatusFilter | undefined };
+  /** `null` for a principal without `conversation:assign`, who gets no control. */
+  claim: { currentUserId: string } | null;
+}
+
+export function ConversationRow({
+  conversation,
+  assigneeName,
+  teamName,
+  isSelected,
+  query,
+  claim,
+}: ConversationRowProps) {
+  const content = useContent();
+  const contactName = conversation.contact.displayName;
+
+  return (
+    <li className={listStyles.row} data-selected={isSelected ? 'true' : undefined}>
+      <div className={styles.card}>
+        <Link
+          className={styles.link}
+          href={routes.inbox({ ...query, conversationId: conversation.id })}
+          // Says which conversation without the reader having to infer it from the
+          // card's contents, and marks the open one for assistive technology.
+          aria-label={content.inbox.openConversation(contactName)}
+          aria-current={isSelected ? 'true' : undefined}
+          scroll={false}
+        >
+          <Cluster justify="between" align="start" gap="2">
+            <p className={styles.contact}>{contactName}</p>
+            <RelativeTime
+              isoTimestamp={conversation.lastMessageAt}
+              label={content.inbox.lastActivity}
+            />
+          </Cluster>
+
+          <p className={styles.preview}>{conversation.lastMessagePreview ?? ''}</p>
+        </Link>
+
+        <Cluster justify="between" align="end" gap="2" className={styles.footer}>
+          <ConversationBadges
+            conversation={conversation}
+            assigneeName={assigneeName}
+            teamName={teamName}
+          />
+          {claim === null ? null : (
+            <div className={styles.action}>
+              <ClaimButton
+                conversationId={conversation.id}
+                contactName={contactName}
+                hold={conversationHold(
+                  conversation.assignedUserId,
+                  claim.currentUserId,
+                  assigneeName,
+                )}
+                size="sm"
+              />
+            </div>
+          )}
+        </Cluster>
+      </div>
+    </li>
+  );
+}
+
+/**
+ * Mirrors `ConversationRow`: the same card frame and the same three rows —
+ * headline, preview, badge row — so nothing shifts when the data lands.
+ *
+ * `hasClaim` keeps the badge row the same height for a principal who will get a
+ * claim button, since a `sm` button is taller than a badge.
+ */
+export function ConversationRowSkeleton({ hasClaim = false }: { hasClaim?: boolean }) {
+  return (
+    <li className={listStyles.row}>
+      <div className={styles.card}>
+        <div className={styles.link}>
+          <Cluster justify="between" align="start" gap="2">
+            <SkeletonLine width="10rem" />
+            <SkeletonLine width="5rem" />
+          </Cluster>
+          <SkeletonText lines={1} />
+        </div>
+        <Cluster justify="between" align="end" gap="2" className={styles.footer}>
+          <Cluster gap="2">
+            <SkeletonLine width="4rem" height="1.25rem" />
+            <SkeletonLine width="6rem" height="1.25rem" />
+          </Cluster>
+          {hasClaim ? <SkeletonLine width="4.5rem" height="var(--size-control-sm)" /> : null}
+        </Cluster>
+      </div>
+    </li>
+  );
+}

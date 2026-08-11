@@ -142,6 +142,45 @@ change.
 
 ### Added
 
+- **The shared inbox has a screen: a live conversation list beside the thread, with its
+  media, its notes and the claim** (TAR-71) — `/inbox` becomes master-detail. Scope, status
+  filter and the open conversation all live in the URL, so a refresh, a copied link and the
+  back button reproduce the same view; the two panes are one CSS switch on a data attribute,
+  so a phone shows the list until a conversation is picked and then the thread with a real
+  link back, and nothing measures a viewport in JavaScript. The thread renders text and all
+  four media kinds in both directions from `MessageAttachment.kind`, never from the media
+  type — `image/webp` is a sticker and `image/png` is a photo, and they do not render the
+  same way — and it renders the two states an inbound attachment can be in before it is
+  `stored`: `pending` gets a placeholder **in the box the picture will occupy**, `failed`
+  says so, because the customer did send something and a silent gap would say otherwise. A
+  type nothing can draw — a location, a shared contact — gets a labelled row rather than a
+  hole in the conversation. Internal notes get their own panel that says, above the list and
+  again on the field, that the customer never sees them; the guarantee is structural (a note
+  is a separate entity and no send path can reach one) but it is invisible to the person
+  typing. Claiming is three states, not two: the shared pool gets a **Claim**, a thread you
+  hold gets a **Release**, and one a colleague holds gets **Take over** behind a
+  confirmation that names them and says what it costs them — because the API writes the
+  assignment unconditionally (no compare-and-set until TAR-186), so presenting a takeover as
+  a claim quietly moved work off the person doing it. TAR-198 now puts the hand-over on that
+  person's socket, so their inbox follows it; what the confirmation says is that nothing
+  _interrupts_ them, and they may be part-way through a reply. Outbound authorship reads `MessageResponse.sentByAutomation` rather than
+  a failed name lookup, so an agent whose name falls outside the directory's single page is
+  "sent by a teammate" and never "sent automatically" — misattributing a colleague's words
+  to a bot is a lie about the one thing this product is a record of. Realtime is TAR-69's
+  socket, and the console's rule is that **an event is a signal to refetch, never state to
+  apply**: `router.refresh()` re-runs the same visibility checks
+  the API enforces, so a thread that changes hands cannot leave a stale copy on screen and a
+  reconnect recovers full state with no replay to miss. Socket.IO's own reconnection is off
+  because the handshake ticket is single-use and it would replay a spent one for ever;
+  `socket.io-client` is imported dynamically and stays out of the route's initial JavaScript.
+  ⚠️ **The console now offers every scope to every role.** ADR 0002 amendment 4 rules an
+  unclaimed conversation visible to every agent on the tenant, and the API opens
+  `scope=unassigned` accordingly, so hiding the tab left arriving customers unanswered;
+  `scope=all` is offered too and the narrowing it gets for a principal without
+  `conversation:read_all` is said out loud rather than left to be discovered. **Claiming
+  still needs `conversation:assign`, which an agent does not hold** — the control is absent
+  for them and the reason is on screen, pending the `conversation:claim` that ADR 0004 open
+  item 2 records.
 - **The shared inbox has an API: nine routes, the 24-hour window rule, and idempotent
   sending** (TAR-68) — `ConversationsModule` implements TAR-39's Inbox surface end to end.
   Reads are keyset-paginated on `(last_message_at DESC, id DESC)` over TAR-80's three
