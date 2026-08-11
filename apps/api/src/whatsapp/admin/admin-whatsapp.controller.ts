@@ -22,6 +22,7 @@ import {
 import type { Response } from 'express';
 import { ApiExceptionFilter } from '../../common/errors/api-exception.filter';
 import { ApiException } from '../../common/errors/api.exception';
+import { PlatformRoute } from '../../common/request-pipeline/route-access';
 import { ZodValidationPipe } from '../../common/validation/zod-validation.pipe';
 import { TenantNotActiveError } from '../../prisma/prisma.errors';
 import { AdminTenantScopeService } from '../../tenancy/admin/admin-tenant-scope.service';
@@ -76,8 +77,14 @@ import {
  * downstream runs through `TenantPrisma` with RLS enforcing the boundary — the
  * same guarantee a session-authenticated request gets, from a different source
  * of truth for who the tenant is.
+ *
+ * That is also why `@PlatformRoute()` is safe here (TAR-58): it skips the global
+ * `HostTenantGuard`, so nothing is in scope until `enter()` puts it there, and a
+ * route that forgot to call it would fail closed on `TenantPrisma` rather than
+ * read whichever tenant the host happened to resolve.
  */
 @Controller({ path: 'admin/tenants/:slug/whatsapp', version: '1' })
+@PlatformRoute()
 @UseGuards(PlatformAdminGuard)
 @UseFilters(ApiExceptionFilter)
 export class AdminWhatsAppController {

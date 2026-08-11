@@ -2,11 +2,14 @@ import type { Server } from 'node:http';
 import { Readable } from 'node:stream';
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import {
   ApiErrorSchema,
   MediaObjectResponseSchema,
   MediaUploadResponseSchema,
+  permissionsForRole,
+  type SessionPrincipal,
 } from '@whatsappcrm/contracts';
 import request from 'supertest';
 import { configureApp } from '../bootstrap';
@@ -15,6 +18,9 @@ import { TenantContextMiddleware } from '../common/tenant-context/tenant-context
 import { TenantContextModule } from '../common/tenant-context/tenant-context.module';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
+import { PermissionGuard } from '../rbac/permission.guard';
+import { PrincipalGuard } from '../rbac/principal.guard';
+import { ANONYMOUS, PRINCIPAL_SOURCE, resolved } from '../rbac/principal.source';
 import {
   MediaNotFoundError,
   MediaObjectMissingError,
@@ -28,9 +34,16 @@ import { MediaUploadService } from './media-upload.service';
 /**
  * The HTTP contract of the three media routes.
  *
- * The load-bearing assertion until TAR-35 lands is the first in each block:
- * with no tenant resolved, the route answers 401 and never reaches a service.
- * There is no path from an unauthenticated request to a row or to a byte.
+ * The load-bearing assertion is the first in each block: with no session, the
+ * route answers 401 and never reaches a service. There is no path from an
+ * unauthenticated request to a row or to a byte.
+ *
+ * It is proved with the **real** `PrincipalGuard` and `PermissionGuard`,
+ * registered as `APP_GUARD` the way `RequestPipelineModule` registers them
+ * (TAR-58), and a fake principal source in place of the session read. Before
+ * that story these routes had no guards at all and stood on a hand-written
+ * tenant check. `HostTenantGuard` needs a database, so the middleware below
+ * stands in for it — one `setTenant` call, which is all it contributes.
  *
  * The rest is the error mapping — "unsupported" and "too large" are different
  * codes a client branches on — and the headers on the content route, which are
@@ -56,6 +69,18 @@ const MEDIA = {
   createdAt: CREATED_AT,
 };
 
+const PRINCIPAL: SessionPrincipal = {
+  userId: '70444444-4444-7444-8444-4444444444a1',
+  tenantId: TENANT_ID,
+  email: 'agent@example.invalid',
+  displayName: 'Ada Agent',
+  role: 'agent',
+  permissions: [...permissionsForRole('agent')],
+  teamIds: [],
+  sessionId: '70444444-4444-7444-8444-4444444444e1',
+  expiresAt: '2036-12-31T23:59:59.000Z',
+};
+
 describe('media routes', () => {
   let app: INestApplication;
   let server: Server;
@@ -63,7 +88,7 @@ describe('media routes', () => {
   let discardTemporary: jest.Mock;
   let describeMedia: jest.Mock;
   let read: jest.Mock;
-  let tenantId: string | null;
+  let signedIn: boolean;
 
   beforeAll(async () => {
     store = jest.fn();
@@ -80,21 +105,26 @@ describe('media routes', () => {
         { provide: MediaReaderService, useValue: { describe: describeMedia, read } },
         // Read by `configureApp` for the CORS allow-list; nothing here needs it.
         { provide: ConfigService, useValue: { get: () => undefined } },
+        {
+          provide: PRINCIPAL_SOURCE,
+          useValue: { resolve: () => Promise.resolve(signedIn ? resolved(PRINCIPAL) : ANONYMOUS) },
+        },
+        { provide: APP_GUARD, useClass: PrincipalGuard },
+        { provide: APP_GUARD, useClass: PermissionGuard },
       ],
     }).compile();
-
-    // Stands in for TAR-35's `AuthGuard`, which is what will eventually put a
-    // tenant on the scope the middleware opens. Spied on the prototype rather
-    // than swapping the provider, because the middleware and the error filter
-    // both need the real service.
-    jest
-      .spyOn(TenantContextService.prototype, 'tenantId', 'get')
-      .mockImplementation(() => tenantId);
 
     app = moduleRef.createNestApplication();
 
     const middleware = app.get(TenantContextMiddleware);
+    const tenantContext = app.get(TenantContextService);
+
     app.use(middleware.use.bind(middleware));
+    // Stands in for `HostTenantGuard`, which needs a database.
+    app.use((_request: unknown, _response: unknown, next: () => void) => {
+      tenantContext.setTenant(TENANT_ID);
+      next();
+    });
 
     configureApp(app);
     await app.init();
@@ -106,7 +136,7 @@ describe('media routes', () => {
   });
 
   beforeEach(() => {
-    tenantId = TENANT_ID;
+    signedIn = true;
     store.mockReset().mockResolvedValue({ id: MEDIA_ID });
     discardTemporary.mockReset().mockResolvedValue(undefined);
     describeMedia.mockReset().mockResolvedValue(MEDIA);
@@ -120,8 +150,8 @@ describe('media routes', () => {
   }
 
   describe('POST /api/v1/media', () => {
-    it('refuses a request with no tenant resolved, without reaching the service', async () => {
-      tenantId = null;
+    it('refuses a request with no session, without reaching the service', async () => {
+      signedIn = false;
 
       const response = await upload();
 
@@ -130,16 +160,19 @@ describe('media routes', () => {
       expect(store).not.toHaveBeenCalled();
     });
 
-    // Multer wrote the part before the handler ran, so the refusal owns a file
-    // on disk. Every request is unauthenticated until TAR-35 lands a guard; if
-    // this path skipped the `finally`, each one would strand up to MEDIA_MAX_BYTES
-    // in the temporary directory with nothing sweeping it.
-    it('removes the temporary part when it refuses for no tenant', async () => {
-      tenantId = null;
+    /**
+     * The guard runs before the file interceptor, so an unauthenticated upload
+     * never reaches the disk at all — there is nothing to clean up. Worth an
+     * assertion rather than a comment: it is the difference between an anonymous
+     * caller costing us a refusal and costing us `MEDIA_MAX_BYTES` of temporary
+     * storage per attempt.
+     */
+    it('refuses before multer writes anything', async () => {
+      signedIn = false;
 
       await upload();
 
-      expect(discardTemporary).toHaveBeenCalledTimes(1);
+      expect(discardTemporary).not.toHaveBeenCalled();
     });
 
     it('answers with the id the composer names in the send that follows', async () => {
@@ -202,8 +235,8 @@ describe('media routes', () => {
   });
 
   describe('GET /api/v1/media/{id}', () => {
-    it('refuses a request with no tenant resolved', async () => {
-      tenantId = null;
+    it('refuses a request with no session', async () => {
+      signedIn = false;
 
       const response = await request(server).get(`/api/v1/media/${MEDIA_ID}`);
 
@@ -251,8 +284,8 @@ describe('media routes', () => {
   });
 
   describe('GET /api/v1/media/{id}/content', () => {
-    it('refuses a request with no tenant resolved, without opening the object', async () => {
-      tenantId = null;
+    it('refuses a request with no session, without opening the object', async () => {
+      signedIn = false;
 
       const response = await request(server).get(`/api/v1/media/${MEDIA_ID}/content`);
 

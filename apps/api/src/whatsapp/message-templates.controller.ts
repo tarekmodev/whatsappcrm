@@ -7,9 +7,9 @@ import {
 } from '@whatsappcrm/contracts';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ApiException } from '../common/errors/api.exception';
-import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
+import { RequirePermission } from '../rbac/require-permission.decorator';
 import {
   InvalidCursorError,
   MessageTemplateQueryService,
@@ -32,39 +32,28 @@ import {
  * number, order by name, and publish the three fields derived from Meta's
  * component tree.
  *
- * ## Authentication and permission — read this before adding a second route
+ * ## Authentication and permission
  *
- * The published pipeline puts `AuthGuard` (TAR-35) and `PermissionGuard`
- * (TAR-22) in front of every tenant-facing route, and **neither exists yet**.
- * Until they do, this handler refuses any request that reaches it without a
- * tenant in scope, which today is every request: the tenant-context middleware
- * opens the scope with `tenantId: null` and nothing fills it in.
+ * Closed by `RequestPipelineModule` (TAR-58), like every other route: host →
+ * tenant, cookie → principal, then the permission below. Until that landed this
+ * controller stood on a hand-written `requireTenant()` check, which kept
+ * anonymous callers out but enforced no permission at all — the exact gap the
+ * global pipeline exists to make impossible to ship again.
  *
- * That is a deliberate fail-closed placeholder, not an oversight, and it is
- * worth being precise about what it does and does not give:
- *
- *   * It **does** guarantee this route cannot serve one tenant's templates to
- *     another, or to an anonymous caller. There is no code path from an
- *     unauthenticated request to a row.
- *   * It **does not** enforce `conversation:send`. When TAR-22 lands, this
- *     controller gets `@RequirePermission('conversation:send')` and nothing else
- *     changes — the permission is named here so that step is a decoration, not a
- *     decision to re-take.
+ * `conversation:send` is the permission its own comment named for this route
+ * before there was a guard to enforce it, and it is the right one: a template is
+ * only useful to someone who may send, and the picker is part of the composer.
  */
 @Controller({ path: 'message-templates', version: '1' })
 @UseFilters(ApiExceptionFilter)
 export class MessageTemplatesController {
-  constructor(
-    private readonly templates: MessageTemplateQueryService,
-    private readonly tenantContext: TenantContextService,
-  ) {}
+  constructor(private readonly templates: MessageTemplateQueryService) {}
 
   @Get()
+  @RequirePermission('conversation:send')
   async list(
     @Query(new ZodValidationPipe(MessageTemplateListQuerySchema)) query: MessageTemplateListQuery,
   ): Promise<MessageTemplatePage> {
-    this.requireTenant();
-
     const page = await this.templates
       .list({
         limit: query.limit,
@@ -76,21 +65,6 @@ export class MessageTemplatesController {
       .catch((error: unknown) => translateQueryFailure(error));
 
     return { items: page.items.map(toResponse), nextCursor: page.nextCursor };
-  }
-
-  /**
-   * Stands in for `AuthGuard` until TAR-35 lands. `TenantPrisma` would refuse
-   * the query anyway — `MissingTenantContextError`, fail-closed — but that
-   * surfaces as a 500, which tells a caller a server fault occurred when the
-   * truth is that they are not authenticated.
-   */
-  private requireTenant(): void {
-    if (this.tenantContext.tenantId === null) {
-      throw new ApiException(
-        'unauthenticated',
-        'This endpoint requires an authenticated tenant session.',
-      );
-    }
   }
 }
 

@@ -5,6 +5,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AuditModule } from './audit/audit.module';
 import { TenantContextMiddleware } from './common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
+import { RequestPipelineModule } from './common/request-pipeline/request-pipeline.module';
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
 import { IdentityModule } from './identity/identity.module';
@@ -58,6 +59,11 @@ const REPOSITORY_ENV_FILE = resolve(__dirname, '../../../.env');
     // is the order the request pipeline resolves them in.
     IdentityModule,
     RbacModule,
+    // Last of the cross-cutting modules, and after the two above on purpose: it
+    // installs the guards they provide on every route in every module below.
+    // Nothing imports it — importing it is what a feature module used to have to
+    // remember, and forgetting is the failure it exists to remove.
+    RequestPipelineModule,
     HealthModule,
     TenancyModule,
     IdentityModule,

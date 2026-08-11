@@ -7,6 +7,7 @@ import {
   type TenantRole,
 } from '@whatsappcrm/contracts';
 import { ApiException } from '../common/errors/api.exception';
+import { PlatformRoute, Public } from '../common/request-pipeline/route-access';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { PermissionGuard } from './permission.guard';
 import { AnyPrincipal, RequirePermission } from './require-permission.decorator';
@@ -138,5 +139,35 @@ describe('PermissionGuard', () => {
         () => guard.canActivate(contextFor(handlerRequiring('user:read'))),
       ),
     ).toThrow(/must be declared after PrincipalGuard/);
+  });
+
+  /**
+   * The two exemptions the global installation needs (TAR-58). Both are routes
+   * `PrincipalGuard` also skipped, so there is no caller to check — without
+   * this, every login and every health probe would be a 500 from the branch
+   * above rather than a response.
+   */
+  describe('the route-access exemptions', () => {
+    function activateExempt(decorate: (target: object) => void): boolean {
+      class ExemptController {}
+      decorate(ExemptController);
+
+      const context = {
+        getHandler: () => (): void => undefined,
+        getClass: () => ExemptController,
+      } as unknown as ExecutionContext;
+
+      return tenantContext.run(
+        { requestId: 'req_exempt', tenantId: null, userId: null, principal: null },
+        () => guard.canActivate(context),
+      );
+    }
+
+    it.each([
+      ['@Public()', Public],
+      ['@PlatformRoute()', PlatformRoute],
+    ])('admits a %s route with no permission and no principal', (_label, decorator) => {
+      expect(activateExempt(decorator() as (target: object) => void)).toBe(true);
+    });
   });
 });

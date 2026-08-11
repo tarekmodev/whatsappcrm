@@ -1,6 +1,7 @@
 import { Controller, Get, HttpStatus, Res, VERSION_NEUTRAL } from '@nestjs/common';
 import type { HealthResponse } from '@whatsappcrm/contracts';
 import type { Response } from 'express';
+import { PlatformRoute } from '../common/request-pipeline/route-access';
 import { HealthService } from './health.service';
 
 /**
@@ -9,8 +10,16 @@ import { HealthService } from './health.service';
  * container `HEALTHCHECK` and Render's own health check all point at a fixed
  * path, and moving them to `/api/v1/health` on the next API version would
  * silently break all three.
+ *
+ * `@PlatformRoute()` rather than `@Public()`, and the distinction matters here:
+ * these probes arrive at a container address or a load-balancer IP, not at a
+ * tenant's hostname, so leaving `HostTenantGuard` in front of them would answer
+ * `tenant_not_found` and take the deployment out of rotation. Neither handler
+ * touches tenant data — `HealthService` reports process and dependency state —
+ * so there is nothing for the skipped stages to protect.
  */
 @Controller({ path: 'health', version: VERSION_NEUTRAL })
+@PlatformRoute()
 export class HealthController {
   constructor(private readonly health: HealthService) {}
 
