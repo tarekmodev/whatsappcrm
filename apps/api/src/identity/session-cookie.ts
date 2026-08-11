@@ -118,7 +118,13 @@ function readCookie(request: Request, name: string): string | null {
     }
 
     if (pair.slice(0, separator).trim() === name) {
-      const value = decodeURIComponent(pair.slice(separator + 1).trim());
+      // Read raw rather than percent-decoded. The token we issue is base64url,
+      // which contains nothing that needs escaping, so decoding can only ever
+      // change a value we would reject anyway — and `decodeURIComponent` throws
+      // `URIError` on a malformed escape. That throw is not an `ApiException`,
+      // so `Cookie: wac_session=%zz` would leave the filter and answer 500
+      // instead of the 401 every other unusable cookie produces.
+      const value = pair.slice(separator + 1).trim();
 
       return value === '' ? null : value;
     }

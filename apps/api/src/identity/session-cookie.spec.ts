@@ -86,6 +86,14 @@ describe('the session cookie', () => {
     ])('answers null for %s', (_label, header) => {
       expect(sessionTokenFrom(requestWith(header))).toBeNull();
     });
+
+    it('hands a malformed percent-escape back as a token rather than throwing', () => {
+      // `decodeURIComponent('%zz')` throws `URIError`, which is not an
+      // `ApiException` and so would escape the filter as a 500. The value is
+      // returned as-is and fails to match a session row, which is the 401 every
+      // other unusable cookie already produces.
+      expect(sessionTokenFrom(requestWith(`${SESSION_COOKIE_NAME_SECURE}=%zz`))).toBe('%zz');
+    });
   });
 
   describe('writing', () => {

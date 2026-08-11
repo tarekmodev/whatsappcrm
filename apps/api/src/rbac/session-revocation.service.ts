@@ -56,6 +56,12 @@ export class SessionRevocationService {
    * `tenantId` is passed explicitly rather than read from the request scope
    * because this runs inside `$tenantTransaction`, whose client is the
    * un-extended one: the row filter has to be written, not inherited.
+   *
+   * **Calling `purgeCacheFor` once the transaction commits is mandatory, not
+   * advisory.** This method on its own leaves a window in which a concurrent
+   * request repopulates the principal cache from the row it is about to revoke,
+   * so a caller that skips the second half keeps a revoked session answering for
+   * up to `sessionCacheTtlMs`. It has already been forgotten once.
    */
   async revokeFor(
     tx: Prisma.TransactionClient,
