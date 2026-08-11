@@ -9,7 +9,7 @@ import { TENANT_ROLES, type TenantRole } from '@whatsappcrm/contracts';
  *
  * Two guards keep this from shipping as permanent:
  *   1. `webEnv.enableRoleStub` must be on, and it is off by default.
- *   2. `resolveSession()` refuses the stub in production regardless of the flag.
+ *   2. `getSession()` refuses the stub in production regardless of the flag.
  *
  * Nothing here grants access. Every request the console makes is still enforced
  * server-side by the API's `PermissionGuard`; the stub only decides which

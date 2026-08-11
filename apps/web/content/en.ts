@@ -255,6 +255,9 @@ export const content = {
     requestNewLink: 'Request a new link',
     genericFailure: 'We could not complete that. Try again in a moment.',
 
+    // --- Session ------------------------------------------------------------
+    signOut: 'Sign out',
+
     // --- Forgot password ---------------------------------------------------
     forgotTitle: 'Reset your password',
     forgotDescription:

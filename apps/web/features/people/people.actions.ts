@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { unstable_rethrow } from 'next/navigation';
 import {
   InviteCreateInputSchema,
   TeamCreateInputSchema,
@@ -12,7 +13,7 @@ import {
 import { ApiRequestError } from '@/lib/api/http';
 import { inviteUser, removeUser, updateUser } from '@/lib/api/users';
 import { createTeam, updateTeam } from '@/lib/api/teams';
-import { assertPermission, resolveSession } from '@/lib/session/session';
+import { assertPermission, verifySession } from '@/lib/session/session';
 import { routes } from '@/lib/routes';
 import { content } from '@/content/en';
 import type { ActionResult } from '@/lib/actions/result';
@@ -36,7 +37,7 @@ export async function inviteAgentAction(input: unknown): Promise<ActionResult<{ 
   return run('user:invite', InviteCreateInputSchema, input, async (parsed) => {
     // Mirrors the API's `assertMayAssign`: `user:invite` alone may invite an
     // `agent` and nothing else, or a supervisor could mint an admin.
-    const session = await resolveSession();
+    const session = await verifySession();
     const mayAssign = session.checker.can('user:set_role');
 
     if (!mayAssign && parsed.role !== 'agent') {
@@ -160,6 +161,14 @@ const PEOPLE_PATH = routes.settingsPeople().split('?')[0] ?? '/settings/people';
  * the generic line, because an internal message is not user-facing text.
  */
 function toErrorResult<T>(error: unknown): ActionResult<T> {
+  // First, and before anything else looks at it: the session guard answers a lost
+  // session with a `redirect`, which Next implements by throwing. Caught and
+  // mapped to a message, that navigation would be swallowed and the user would sit
+  // on a page they are no longer signed in to, reading "we could not save that".
+  // `unstable_rethrow` is the documented way to let a framework-controlled throw
+  // back out of a catch that also has real failures to handle.
+  unstable_rethrow(error);
+
   // Refused by this module's own invariant check rather than by the API. The
   // message is already content-layer copy, so it is shown as-is.
   if (error instanceof RoleAssignmentRefusedError) {

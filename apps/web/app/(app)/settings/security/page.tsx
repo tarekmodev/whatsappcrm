@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { content } from '@/content/en';
-import { resolveSession } from '@/lib/session/session';
+import { verifySession } from '@/lib/session/session';
 import { PageHeader } from '@/components/shell/PageHeader';
 import { Stack } from '@/components/layout/Stack';
 import { SectionErrorBoundary } from '@/components/ui/SectionErrorBoundary';
@@ -25,7 +25,7 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic';
 
 export default async function SecurityPage() {
-  const { principal } = await resolveSession();
+  const { principal } = await verifySession();
 
   return (
     <Stack gap="5">

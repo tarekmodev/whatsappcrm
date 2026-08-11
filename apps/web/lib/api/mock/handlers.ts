@@ -16,6 +16,7 @@ import {
   type CursorPage,
   type Permission,
   type SessionPrincipal,
+  type SessionResponse,
   type TeamResponse,
   type UserResponse,
 } from '@whatsappcrm/contracts';
@@ -146,6 +147,20 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/conversations$/,
     permission: 'conversation:read',
     handle: listConversations,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/auth\/session$/,
+    // Gated by no permission: this endpoint's answer *is* the caller's role, so a
+    // permission check on it could only ever be circular.
+    permission: null,
+    handle: currentSession,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/auth\/logout$/,
+    permission: null,
+    handle: logout,
   },
   {
     method: 'POST',
@@ -403,6 +418,28 @@ function updateTeam({ principal, params, body }: RouteContext): TeamResponse {
   syncUserTeamIds(updated);
 
   return toTeamResponse(updated);
+}
+
+// --- Session (TAR-56) ------------------------------------------------------
+
+/**
+ * The session bootstrap the route guard calls on every render.
+ *
+ * In mock mode the principal comes from the stub cookie, so what this returns is
+ * the stub role — which is the point: it keeps the guard on its real code path
+ * (`getSession` → `GET /v1/auth/session` → a parsed principal) instead of having a
+ * second, mock-only branch that could pass while the real one is broken.
+ *
+ * It cannot answer 401. The fixture layer has no session to expire, and faking one
+ * would make every mock-mode render a redirect to sign-in.
+ */
+function currentSession({ principal }: RouteContext): SessionResponse {
+  return { user: principal };
+}
+
+/** 204 and nothing else, exactly like the real endpoint. There is no session row to drop. */
+function logout(): null {
+  return null;
 }
 
 // --- Passwords (TAR-57) ----------------------------------------------------

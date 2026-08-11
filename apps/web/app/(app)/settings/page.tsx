@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { resolveSession } from '@/lib/session/session';
+import { verifySession } from '@/lib/session/session';
 import { settingsNavItems } from '@/components/shell/navigation';
 import { ForbiddenState } from '@/components/ui/ForbiddenState';
 
@@ -11,7 +11,7 @@ import { ForbiddenState } from '@/components/ui/ForbiddenState';
 export const dynamic = 'force-dynamic';
 
 export default async function SettingsIndexPage() {
-  const { checker } = await resolveSession();
+  const { checker } = await verifySession();
   const [first] = settingsNavItems(checker);
 
   if (first === undefined) {

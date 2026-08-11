@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { ConversationListQuerySchema } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { searchParamKeys, type ConversationStatusFilter, type InboxScope } from '@/lib/routes';
-import { resolveSession } from '@/lib/session/session';
+import { verifySession } from '@/lib/session/session';
 import { allowedConversationScopes } from '@/lib/session/permissions';
 import { Stack } from '@/components/layout/Stack';
 import { PageShell } from '@/components/shell/PageShell';
@@ -33,7 +33,7 @@ export default async function InboxPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { checker } = await resolveSession();
+  const { checker } = await verifySession();
   const params = await searchParams;
 
   const availableScopes = allowedConversationScopes(checker);
