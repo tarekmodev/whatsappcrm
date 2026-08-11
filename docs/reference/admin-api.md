@@ -54,11 +54,18 @@ rather than truncated, so an id that comes back changed did not meet the rule.
 
 ## Authentication
 
-Every request to `/api/v1/admin/*` presents a bearer token that matches
-`PLATFORM_ADMIN_TOKEN`:
+Every request to `/api/v1/admin/*` presents a bearer token that matches the **secret half**
+of an entry in `PLATFORM_ADMIN_TOKEN`:
 
 ```text
-Authorization: Bearer <PLATFORM_ADMIN_TOKEN>
+Authorization: Bearer <secret>
+```
+
+`PLATFORM_ADMIN_TOKEN` holds comma-separated `label:secret` entries, one per operator or
+automation:
+
+```text
+PLATFORM_ADMIN_TOKEN=ops-alice:<secret>,ci-provisioner:<secret>
 ```
 
 The platform operator is not a user inside any tenant, and provisioning has to work before
@@ -68,18 +75,27 @@ lookup or a per-tenant role to resolve them against.
 - **Unset means the surface is off.** With no `PLATFORM_ADMIN_TOKEN` configured, every
   request is refused with `401 unauthenticated`. That is the safe default for routes that
   create tenants.
+- **Malformed means the API does not start.** An unlabelled entry, a secret under 32
+  characters, a label outside 2–40 characters of `a-z0-9._-`, a repeated label, or one
+  secret under two labels each fail validation at boot. There is no transitional acceptance
+  of the old unlabelled form (TAR-166): a bare secret authenticates fine and writes an audit
+  row that cannot name who acted, which is the gap this closes.
 - **One answer for every failure.** A missing header, a non-`Bearer` scheme and a wrong
-  token are indistinguishable in the response. The reason is logged, not returned.
-- **Comparison is constant time.** Both sides are hashed to a fixed 32 bytes and compared
-  with `timingSafeEqual`, so neither the token's length nor how far a guess matched is
-  observable.
-- **Minimum length is 32 characters.** The API refuses to boot on a shorter value. Generate
-  one with `openssl rand -base64 48` and keep it in the platform's secret store.
+  token are indistinguishable in the response, and so is one operator's credential from
+  another's. The reason is logged, not returned.
+- **Comparison is constant time, with no early exit.** Both sides are hashed to a fixed 32
+  bytes and compared with `timingSafeEqual`, and every configured entry is compared on every
+  request even after one has matched — so neither the token's length, how far a guess
+  matched, nor an entry's position in the set is observable.
+- **The label is recorded, the secret never is.** The label of the entry that matched is
+  written to `audit_logs.actor_label` with `actor_type = 'platform_operator'`, so "everything
+  this operator did" is a query rather than an inference. Nothing logs, returns or stores the
+  secret half.
 
-A single shared secret has no identity, no per-operator revocation and no audit trail
-beyond "someone with the token". It is a deliberate placeholder for a real platform-admin
-identity, which arrives with TAR-22 and TAR-35; the guard is the only thing that has to
-change.
+What this is still not: an identity with a session, per-route authorisation or a directory
+behind it. Every entry is authorised for every tenant. It is a placeholder for a real
+platform-admin identity, which arrives with TAR-22 and TAR-35; the guard is the only thing
+that has to change.
 
 ## `POST /api/v1/admin/tenants`
 
@@ -107,7 +123,7 @@ hand a typo in a display name to DNS permanently.
 
 ```bash
 curl -X POST http://localhost:3001/api/v1/admin/tenants \
-  -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+  -H "Authorization: Bearer $PLATFORM_ADMIN_SECRET" \
   -H 'Content-Type: application/json' \
   -d '{"slug":"acme","name":"Acme Ltd","timezone":"Europe/London","locale":"en-GB"}'
 ```
@@ -219,7 +235,7 @@ field.
 
 ```bash
 curl -X POST http://localhost:3001/api/v1/admin/tenants/acme/deactivate \
-  -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+  -H "Authorization: Bearer $PLATFORM_ADMIN_SECRET" \
   -H 'Content-Type: application/json' \
   -d '{"reason":"Non-payment, ticket OPS-412"}'
 ```
@@ -317,14 +333,21 @@ data, so a half-provisioned tenant is closed by the mechanism rather than by a s
 One `audit_logs` row per call that actually deactivated something, written in the same
 transaction as the status change:
 
-| Column          | Value                                                                    |
-| --------------- | ------------------------------------------------------------------------ |
-| `action`        | `tenant.deactivated`                                                     |
-| `target_type`   | `tenant`                                                                 |
-| `target_id`     | The tenant's id                                                          |
-| `actor_user_id` | `null` — the actor is the platform operator, never a user in this tenant |
-| `metadata`      | `{ "reason": "..." }`, or absent when no reason was given                |
-| `created_at`    | The same `now()` written to `tenants.suspended_at`                       |
+| Column          | Value                                                                     |
+| --------------- | ------------------------------------------------------------------------- |
+| `action`        | `tenant.deactivated`                                                      |
+| `target_type`   | `tenant`                                                                  |
+| `target_id`     | The tenant's id                                                           |
+| `actor_type`    | `platform_operator`                                                       |
+| `actor_user_id` | `null` — the actor is the platform operator, never a user in this tenant  |
+| `actor_label`   | The label of the `PLATFORM_ADMIN_TOKEN` entry that authenticated the call |
+| `metadata`      | `{ "reason": "..." }`, or absent when no reason was given                 |
+| `created_at`    | The same `now()` written to `tenants.suspended_at`                        |
+
+`actor_type` and `actor_label` arrived with TAR-166. Before them a null `actor_user_id` said
+both "the platform acted" and "nothing recorded who"; now `SELECT * FROM audit_logs WHERE
+tenant_id = $1 AND actor_type = 'platform_operator'` answers "everything an operator did to
+this tenant", and the label says which one.
 
 Both timestamps come from the database clock, read once at transaction start. Two API
 instances a few seconds apart would otherwise be able to order the audit trail

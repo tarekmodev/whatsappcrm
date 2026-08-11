@@ -21,6 +21,20 @@ export interface TenantContext {
    * through `principal` / `requirePrincipal()` below, which normalise both.
    */
   principal?: SessionPrincipal | null;
+  /**
+   * Which platform-operator credential authenticated this request — the label
+   * half of a `PLATFORM_ADMIN_TOKEN` entry, never the secret half (TAR-166).
+   *
+   * Optional for the same reason as `principal`: `PlatformAdminGuard` is what
+   * fills it, and it runs only on `/api/v1/admin/*`, so every other path
+   * legitimately has none. Readers go through `platformActorLabel` below, which
+   * normalises absent and null.
+   *
+   * It is the operator's *identity*, not a capability: nothing authorises on it.
+   * The guard has already decided the request may proceed by the time this is
+   * set, and the only thing that reads it is the audit trail.
+   */
+  platformActorLabel?: string | null;
 }
 
 /**
@@ -66,6 +80,10 @@ export class TenantContextService {
     return this.storage.getStore()?.principal ?? null;
   }
 
+  get platformActorLabel(): string | null {
+    return this.storage.getStore()?.platformActorLabel ?? null;
+  }
+
   /** Attaches the resolved session to the active scope. */
   setTenant(tenantId: string, userId: string | null = null): void {
     const store = this.storage.getStore();
@@ -98,6 +116,24 @@ export class TenantContextService {
     store.principal = principal;
     store.tenantId = principal.tenantId;
     store.userId = principal.userId;
+  }
+
+  /**
+   * Publishes the platform-operator credential that authenticated this request,
+   * once `PlatformAdminGuard` has resolved which one it was.
+   *
+   * Deliberately does not touch `tenantId` or `userId`: the operator is not a
+   * user in any tenant, and the tenant they are acting on arrives separately,
+   * from the path, through `AdminTenantScopeService.enter()`.
+   */
+  setPlatformActor(label: string): void {
+    const store = this.storage.getStore();
+
+    if (!store) {
+      throw new Error('setPlatformActor() called outside of a tenant context scope');
+    }
+
+    store.platformActorLabel = label;
   }
 
   /** Use where an absent caller is a bug: every route behind `PrincipalGuard`. */

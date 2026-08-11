@@ -14,6 +14,28 @@ change.
 
 ### Security
 
+- **The audit trail names which operator acted, on both WhatsApp connection paths**
+  (TAR-166) — `audit_logs` had one actor column, `actor_user_id`, and a null in it said two
+  different things: the platform acted, or nothing recorded who. Connecting a WABA hands the
+  platform a credential that can message a business's customers in its name, and the row
+  recording it was indistinguishable from a row nobody attributed at all. Three changes
+  close that. `audit_logs` gains `actor_label` and an `actor_type` of `user`,
+  `platform_operator`, `system` or `unattributed`, indexed on
+  `(tenant_id, actor_type, created_at DESC)`
+  because "everything this operator did" is the query an auditor runs, and constrained by
+  `audit_logs_actor_attribution` so a label cannot land on a row attributed to a tenant user.
+  Existing rows are backfilled to `user` where they name one and `unattributed` where they do
+  not — history is read, never guessed at, and no new row can claim `unattributed`.
+  `PLATFORM_ADMIN_TOKEN` becomes a set of `label:secret` entries; `PlatformAdminGuard`
+  compares the presented value against **every** entry with no early exit, so an entry's
+  position in the set is not timing-observable, and publishes the matching label on the
+  request scope where `AuditService` writes it. And the WABA connection's audit write moves
+  out of `business-account-connection.service.ts` into `AuditService`, at the same action
+  string, so the actor comes from the request scope rather than from an argument — which is
+  what lets the tenant-facing route (TAR-168) record the tenant admin who connected it
+  without that service knowing either path exists. ⚠️ **Deploy step**: an unlabelled
+  `PLATFORM_ADMIN_TOKEN` is refused at boot, with no transitional dual-accept, so every
+  environment holding it must be updated to the labelled form in the same release.
 - **A locked account and an address with no account now answer identically** — the login
   429 was a per-tenant user-enumeration oracle in the shipped configuration.
   `LOGIN_IP_THROTTLE_ENABLED` defaults to off, so `AccountLockedError` was the only thing

@@ -32,7 +32,10 @@ import { PlatformAdminGuard } from './platform-admin.guard';
  * are stubbed — their behaviour is covered by their own specs.
  */
 
+/** The secret half of a `PLATFORM_ADMIN_TOKEN` entry — what a caller presents. */
 const TOKEN = 'a-platform-admin-token-of-at-least-32-chars';
+/** What the environment holds: the same secret, named (TAR-166). */
+const CONFIGURED = `ops-alice:${TOKEN}`;
 const TENANT_ID = '50444444-4444-7444-8444-4444444444c1';
 
 const PROVISIONED: ProvisionTenantResult = {
@@ -82,7 +85,9 @@ describe('the platform-admin tenant routes', () => {
           provide: ConfigService,
           // Keyed rather than a blanket return: `configureApp` reads
           // `WEB_ORIGIN` from the same service and must get its own default.
-          useValue: { get: (key: string) => (key === 'PLATFORM_ADMIN_TOKEN' ? TOKEN : undefined) },
+          useValue: {
+            get: (key: string) => (key === 'PLATFORM_ADMIN_TOKEN' ? CONFIGURED : undefined),
+          },
         },
       ],
     }).compile();

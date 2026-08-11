@@ -394,6 +394,24 @@ enum IdempotencyKeyState {
   @@map("idempotency_key_state")
 }
 
+/// Who an `audit_logs` row is attributed to (TAR-166). `actor_user_id` alone
+/// could not say: NULL there meant both "the platform acted" and "nothing
+/// recorded who", and those are different answers to the question this table
+/// exists to answer.
+///
+/// `unattributed` is a **backfill value only** — it belongs to rows written
+/// before attribution existed, and to any row an instance predating this release
+/// wrote during the rollout. Application code writes from `AuditActorType` in
+/// `src/audit/audit-actor.ts`, which does not include it.
+enum AuditActorType {
+  user
+  platform_operator
+  system
+  unattributed
+
+  @@map("audit_actor_type")
+}
+
 // ---------------------------------------------------------------------------
 // Tenancy — TAR-19 / TAR-29 / TAR-36
 // ---------------------------------------------------------------------------
@@ -1686,6 +1704,18 @@ model AuditLog {
   tenantId    String   @map("tenant_id") @db.Uuid
   /// Null when the actor is the platform rather than a user in this tenant.
   actorUserId String?  @map("actor_user_id") @db.Uuid
+  /// Which *kind* of actor (TAR-166), because a null `actor_user_id` alone said
+  /// both "the platform acted" and "nothing recorded who".
+  ///
+  /// The default is the rollout valve, not the application's choice: this
+  /// migration lands before the release that writes the column, and an instance
+  /// still running the previous build must keep writing valid rows. Every write
+  /// path sets this explicitly through `AuditService`.
+  actorType   AuditActorType @default(unattributed) @map("actor_type")
+  /// Names the operator credential behind a `platform_operator` row — the label
+  /// half of a `PLATFORM_ADMIN_TOKEN` entry, never the secret half. Null for
+  /// every other actor type, which `audit_logs_actor_attribution` enforces.
+  actorLabel  String?  @map("actor_label")
   action      String
   targetType  String?  @map("target_type")
   targetId    String?  @map("target_id") @db.Uuid
@@ -1700,5 +1730,15 @@ model AuditLog {
   @@index([tenantId, createdAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, actorUserId])
   @@index([tenantId, targetType, targetId])
+  /// "Everything this operator did, most recent first" — the query the
+  /// attribution columns exist to answer, kept an index scan as the table grows.
+  @@index([tenantId, actorType, createdAt(sort: Desc)])
+  /// One constraint is missing from this block on purpose:
+  /// `audit_logs_actor_attribution` is a CHECK, which Prisma's schema language
+  /// cannot express, so it lives in raw SQL in
+  /// `20260811160000_audit_actor_attribution`. Prisma's describer ignores check
+  /// constraints, so `migrate dev` proposes neither to create nor to drop it and
+  /// this is not drift — the same arrangement as the predicated indexes on
+  /// `users` and `tickets`. Nothing regenerates it from this file alone.
   @@map("audit_logs")
 }

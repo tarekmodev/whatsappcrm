@@ -1,9 +1,10 @@
-import type { TenantContextService } from '../common/tenant-context/tenant-context.service';
+import { AUDIT_ACTIONS } from '../audit/audit.actions';
+import { AuditService } from '../audit/audit.service';
+import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { Prisma } from '../generated/prisma/client';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import type { WhatsAppAccessTokenCipher } from './access-token.cipher';
 import {
-  WHATSAPP_BUSINESS_ACCOUNT_CONNECTED_ACTION,
   WhatsAppBusinessAccountConnectionService,
   type ConnectBusinessAccountCommand,
 } from './business-account-connection.service';
@@ -20,6 +21,8 @@ const WABA_ROW_ID = '60444444-4444-7444-8444-444444444401';
 const OTHER_WABA_ROW_ID = '60444444-4444-7444-8444-4444444444ff';
 const ACCOUNT_ROW_ID = '70444444-4444-7444-8444-444444444401';
 const WABA_ID = '102290129340398';
+const TENANT_USER_ID = '80444444-4444-7444-8444-444444444401';
+const OPERATOR_LABEL = 'ops-alice';
 const ACCESS_TOKEN = 'a-meta-access-token';
 const ENCRYPTED = 'v1.aaa.bbb.ccc';
 const TIMESTAMP = new Date('2026-08-10T09:00:00.000Z');
@@ -67,6 +70,7 @@ interface WriteArgs {
 describe('WhatsAppBusinessAccountConnectionService', () => {
   let tx: TransactionSpies;
   let cipher: { encrypt: jest.Mock };
+  let scope: { userId: string | null; platformActorLabel: string | null };
   let service: WhatsAppBusinessAccountConnectionService;
 
   beforeEach(() => {
@@ -93,10 +97,29 @@ describe('WhatsAppBusinessAccountConnectionService', () => {
 
     cipher = { encrypt: jest.fn().mockReturnValue(ENCRYPTED) };
 
+    // Who is acting, as the request scope would report it. Starts as the
+    // operator path, which is the one that exists today; individual tests move
+    // it to a tenant user to prove the service reads the scope rather than
+    // assuming either.
+    scope = { userId: null, platformActorLabel: OPERATOR_LABEL };
+
+    const tenantContext = {
+      requireTenantId: () => TENANT_ID,
+      get userId() {
+        return scope.userId;
+      },
+      get platformActorLabel() {
+        return scope.platformActorLabel;
+      },
+    } as unknown as TenantContextService;
+
     service = new WhatsAppBusinessAccountConnectionService(
       prisma,
-      { requireTenantId: () => TENANT_ID } as unknown as TenantContextService,
+      tenantContext,
       cipher as unknown as WhatsAppAccessTokenCipher,
+      // The real one: the shape of the row it writes is precisely what the
+      // assertions below are about.
+      new AuditService(tenantContext),
     );
   });
 
@@ -162,10 +185,43 @@ describe('WhatsAppBusinessAccountConnectionService', () => {
       expect(firstCallArgs(tx.auditLog.create).data).toMatchObject({
         tenantId: TENANT_ID,
         actorUserId: null,
-        action: WHATSAPP_BUSINESS_ACCOUNT_CONNECTED_ACTION,
+        // The action string is unchanged by moving into `AUDIT_ACTIONS`
+        // (TAR-166) — rows carrying it already exist, and an auditor filtering
+        // on it still has to find them.
+        action: 'whatsapp.business_account.connected',
         targetType: 'whatsapp_business_account',
         targetId: WABA_ROW_ID,
         metadata: { wabaId: WABA_ID, phoneNumberIds: ['15550001111'] },
+      });
+      expect(AUDIT_ACTIONS.whatsappBusinessAccountConnected).toBe(
+        'whatsapp.business_account.connected',
+      );
+    });
+
+    it('names the operator credential that connected it', async () => {
+      await service.connect(COMMAND);
+
+      // The gap TAR-166 closes: before this, the row said only that "someone
+      // with the admin token" attached a credential that can message a
+      // business's customers in its name.
+      expect(firstCallArgs(tx.auditLog.create).data).toMatchObject({
+        actorType: 'platform_operator',
+        actorLabel: OPERATOR_LABEL,
+        actorUserId: null,
+      });
+    });
+
+    it('names the tenant user instead when a session connected it', async () => {
+      // The tenant-facing route (TAR-168) reaches this same service through the
+      // ordinary pipeline, where the scope carries a user and no operator label.
+      scope = { userId: TENANT_USER_ID, platformActorLabel: null };
+
+      await service.connect(COMMAND);
+
+      expect(firstCallArgs(tx.auditLog.create).data).toMatchObject({
+        actorType: 'user',
+        actorUserId: TENANT_USER_ID,
+        actorLabel: null,
       });
     });
 
