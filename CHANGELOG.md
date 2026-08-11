@@ -14,9 +14,8 @@ change.
 
 ### Security
 
-- **A locked account and an address with no account now answer identically, to an attacker
-  who does not pause** — the login 429 was a per-tenant user-enumeration oracle in the
-  shipped configuration.
+- **A locked account and an address with no account now answer identically** — the login
+  429 was a per-tenant user-enumeration oracle in the shipped configuration.
   `LOGIN_IP_THROTTLE_ENABLED` defaults to off, so `AccountLockedError` was the only thing
   that could produce a 429 on login, and it is reachable only for an `active` account that
   has a password hash: eleven wrong passwords answered 429 for a real address and 401 for
@@ -25,8 +24,10 @@ change.
   `emailfail:{tenantId}:{sha256(email)}` counting and
   `emaillock:{tenantId}:{sha256(email)}` locking — reusing `loginFailureThreshold` and
   `loginLockoutMs` so an unknown address locks on the same attempt, for the same duration,
-  with the same code, body and `Retry-After` as a real one. Checked before the account
-  lookup, so the two cost the same as well. No feature flag: the address comes from the
+  and forgets after the same quiet period, with the same code, body and `Retry-After` as a
+  real one. Checked before the account lookup, so the two cost the same as well. All three
+  of those have to match: threshold and duration were matched from the start, and retention
+  is the durable counter's window below. No feature flag: the address comes from the
   request body rather than from a proxy-derived header, and the only account an attacker
   can lock with it is one they can already lock durably. Addresses are hashed — an email is
   PII, and free text from a request body must not reach a Redis key verbatim — and lower-
@@ -37,20 +38,26 @@ change.
   admin cleared but a Redis key still enforces is not an unlock, and a reset that still ends
   at a 429 is not a way back in. It fails open like every other Redis path here, which means
   the oracle is open again while Redis is unreachable; that is stated in the code, in ADR
-  0005 and here rather than left to be discovered.
-
-  **Two caveats, both deliberate and both stated rather than implied.** The first is that
-  Redis-down degradation. The second is that the two counters lock on the same attempt but
-  **forget on different clocks**: the email key carries `loginLockoutMs` as its TTL, while
-  `failed_login_attempts` carries none and resets only through the five paths that write
-  zero. Nine failures, a sixteen-minute pause and two more attempts therefore put them out
-  of step, and the eleventh answers 429 for a real address and 401 for one with none — the
-  oracle again, at the cost of one wait, and cheaper still against an address whose durable
-  count is already warm from its owner's own typos. This closes the eleven-request version
-  outright and leaves the paced one, so it is a clear net improvement, but "closed" is not
-  the honest word until the retention matches. **TAR-154** windows the durable count inside
-  the statement that already writes `last_failed_login_at`. (TAR-64 review)
-
+  0005 and here rather than left to be discovered — and it is the one caveat left, now that
+  the entry below has closed the other. (TAR-64 review)
+- **The durable lockout counter decays, so a pause cannot reopen that same oracle** —
+  `failed_login_attempts` accumulated until one of the five reset paths wrote a zero, while
+  the Redis counter beside it simply expired after `loginLockoutMs`. Two counters that lock
+  on the same attempt but forget on different clocks are only in step until somebody waits:
+  nine wrong passwords, sixteen minutes, and the tenth attempt locked a real account off a
+  counter still sitting at nine while the Redis one had restarted at 1 — so the eleventh
+  answered 429 for an address with an account and 401 for one without, which is the
+  enumeration oracle the entry above closes for the unpaced case. Cheaper still against any
+  address whose counter was already warm from its owner's own typos: one request. The count
+  is now windowed inside the statement that already writes `last_failed_login_at` — a
+  failure more than `loginLockoutMs` after the previous one starts the run again at 1 — so
+  the two retentions are the same period by construction rather than two numbers somebody
+  keeps equal. No new key, no extra round trip, and no migration: the columns are unchanged.
+  An attacker gains nothing, since the cumulative counter re-locked on every multiple and so
+  allowed the same ten guesses per period; what changes is that a user who fumbled nine
+  times over a year is no longer one attacker request away from being locked out, and that
+  the `failedLoginAttempts` an admin reads on `UserResponse.security` is now the current
+  window's count rather than an all-time total. (TAR-154)
 - **A cached session principal is never written before the revocation index names it** —
   `SessionService.resolve` wrote `sess:{tokenHash}` and then `SADD`ed the hash to the user's
   index as two independent calls, each swallowing its own failure. `purgeUser` deletes only

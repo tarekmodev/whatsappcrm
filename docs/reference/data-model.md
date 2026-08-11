@@ -154,6 +154,13 @@ because TAR-35 requires a lockout to be _observable to a tenant admin_, and a co
 evaporates on an eviction cannot answer "is this account locked, and since when". A Redis
 per-IP window sits alongside them and fails open; this one does not.
 
+`failed_login_attempts` counts failures **in the current window**, not all time: a failure
+more than `loginLockoutMs` after the one in `last_failed_login_at` restarts the run at 1.
+That is what keeps it decaying on the same clock as the per-email Redis counter beside it,
+whose key simply expires — two counters that lock on the same attempt but forget on
+different ones answer differently for anybody who pauses, which is an account-existence
+oracle (TAR-154, ADR 0005 decision 3).
+
 #### `sessions`
 
 Opaque server-side sessions.

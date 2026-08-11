@@ -5,7 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { AUTH_POLICY } from '@whatsappcrm/contracts';
 import { AUDIT_ACTIONS } from '../audit/audit.actions';
 import { AuditService } from '../audit/audit.service';
-import type { Prisma } from '../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { AUTH_KEY_PREFIX, AuthRedisClient } from './auth-redis.client';
 import { TooManyAttemptsError } from './identity.errors';
@@ -22,15 +22,22 @@ import { TooManyAttemptsError } from './identity.errors';
  * TAR-35 asks for a lockout that is *observable*, and a counter that vanishes
  * when a cache restarts cannot satisfy that.
  *
- * **Per email address, in Redis.** The same threshold and the same lockout
- * duration as the account layer, counted against the address that was *typed*
- * rather than against a row. It exists because the account layer can only count
- * for an address that has one: with it alone, eleven wrong passwords answer 429
- * for a real account and 401 for an address with no account, and the difference
- * is a per-tenant user-enumeration oracle that the identical bodies and the
- * dummy verify were there to close. Mirroring the numbers is what makes the two
- * cases indistinguishable to an attacker who does not pause — see
- * `assertEmailWithinLimit`, and the retention caveat below for the one who does.
+ * **Per email address, in Redis.** The same threshold, the same lockout
+ * duration and the same retention as the account layer, counted against the
+ * address that was *typed* rather than against a row. It exists because the
+ * account layer can only count for an address that has one: with it alone,
+ * eleven wrong passwords answer 429 for a real account and 401 for an address
+ * with no account, and the difference is a per-tenant user-enumeration oracle
+ * that the identical bodies and the dummy verify were there to close. Mirroring
+ * the numbers is what makes the two cases indistinguishable — see
+ * `assertEmailWithinLimit`.
+ *
+ * Retention is the third of those and the least obvious (TAR-154). This layer
+ * forgets a run of failures `loginLockoutMs` after the last of them, because
+ * that is when its key expires; the account layer windows its count on the same
+ * period for no other reason than to forget at the same moment. Two counters
+ * that lock on the same attempt but decay on different clocks are back to being
+ * an oracle for anybody willing to pause — see `recordAccountFailure`.
  *
  * **Per client address, in Redis.** A sliding window keyed by tenant *and*
  * client address, at a higher threshold. This is the layer that catches one
@@ -61,24 +68,13 @@ import { TooManyAttemptsError } from './identity.errors';
  * degraded mode, it is logged, and it is the same trade every other Redis path
  * in this module makes.
  *
- * ## The two counters still forget on different clocks (TAR-154)
- *
- * Stated here because it is the one dimension in which they do not yet match,
- * and a reader who takes "indistinguishable" at face value would be wrong about
- * a paced attacker. The email counter carries `loginLockoutMs` as its TTL;
- * `failed_login_attempts` carries none and only ever resets through one of the
- * five paths that write zero. So nine failures, a sixteen-minute pause, then two
- * more: the email counter has expired and is back at 1, while the durable one
- * reaches ten and locks — and attempt eleven answers 429 for a real address and
- * 401 for one with no account, which is the oracle again at the cost of one
- * wait. It is worse against an address whose durable count is already warm from
- * its owner's own typos.
- *
- * The layer is still a clear improvement — it closes the eleven-request version
- * outright — but "closed" is not the honest word until the retention matches.
- * TAR-154 windows the durable count inside the statement that already writes
- * `last_failed_login_at`, which makes the two identical by construction rather
- * than by two numbers somebody has to keep equal.
+ * That is now the only caveat. The counters used to forget on different clocks
+ * as well — the email key expiring after `loginLockoutMs` while
+ * `failed_login_attempts` accumulated until something wrote a zero — which put
+ * them out of step for any attacker willing to pause and reopened the oracle
+ * with them. `recordAccountFailure` windows the durable count on the same
+ * period, so with Redis up there is no pacing that separates the two answers
+ * (TAR-154).
  *
  * ## …and the client-address layer is off until the address means something
  *
@@ -110,6 +106,41 @@ export interface FailedLoginAttempt {
   /** `null` when the address matched no account able to sign in. */
   readonly userId: string | null;
 }
+
+/**
+ * `loginLockoutMs` as a Postgres interval.
+ *
+ * One fragment for both the lockout it sets and the window it decays over, so
+ * the durable layer cannot end up holding a lock for one period and forgetting
+ * over another.
+ */
+const LOCKOUT_INTERVAL = Prisma.sql`make_interval(secs => ${
+  AUTH_POLICY.loginLockoutMs / 1_000
+}::double precision)`;
+
+/**
+ * The count a failed attempt writes to `failed_login_attempts`.
+ *
+ * A run of failures is forgotten one `loginLockoutMs` after the last of them —
+ * the same moment the Redis counter's key expires — rather than accumulating
+ * until one of the reset paths writes a zero. `last_failed_login_at` is already
+ * written by the same statement, so the window costs no extra key, no extra
+ * round trip, and nothing that can drift out of step with the TTL beside it.
+ * See `LoginThrottleService.recordAccountFailure` for what a mismatch here
+ * reopens.
+ *
+ * A `NULL` reads as stale: an account with no recorded failure is at zero, so
+ * both branches answer 1 and the explicit test is there for the reader rather
+ * than for the arithmetic.
+ */
+const WINDOWED_ATTEMPTS = Prisma.sql`
+  CASE
+    WHEN users.last_failed_login_at IS NULL
+      OR users.last_failed_login_at < now() - ${LOCKOUT_INTERVAL}
+    THEN 1
+    ELSE users.failed_login_attempts + 1
+  END
+`;
 
 @Injectable()
 export class LoginThrottleService {
@@ -285,10 +316,26 @@ export class LoginThrottleService {
    * Counts one failed attempt against the account, and locks it on every
    * positive multiple of the threshold.
    *
-   * Every multiple, not only the first: an attacker who waits out one window
-   * would otherwise get a fresh allowance of ten guesses for every fifteen
-   * minutes they are willing to spend. The counter is reset only by a
-   * successful login or by an admin unlock.
+   * The count is **windowed on `loginLockoutMs`** rather than cumulative: a
+   * failure that arrives more than one lockout period after the previous one
+   * starts the run again at 1. That is not a leniency, it is the only thing
+   * that keeps this counter and the Redis one — whose key simply expires after
+   * `loginLockoutMs` — answering the same question at the same moment. Let them
+   * decay on different clocks and an attacker who pauses puts them out of step:
+   * a durable counter still sitting at nine locks a real account on their next
+   * request, while the same eleven attempts against an address with no account
+   * answer 401 throughout because only the Redis counter is live for it. That
+   * difference is exactly the account-existence oracle the email layer exists
+   * to close (TAR-154).
+   *
+   * It hands an attacker nothing they did not already have. Ten guesses per
+   * lockout period is what the cumulative counter allowed too, because it
+   * locked again on every multiple; what it also did was leave a user who
+   * fumbled nine times across a year one attacker request away from a lockout.
+   *
+   * The window is written once, as `WINDOWED_ATTEMPTS`, and read by both the
+   * count and the lock decision. Two copies of it is the same defect as two
+   * counters: it only takes one edit for them to stop agreeing.
    *
    * The whole decision is one statement, so two concurrent failed attempts
    * cannot both read "nine" and both write "ten".
@@ -297,13 +344,11 @@ export class LoginThrottleService {
     const lockedNow = await this.prisma.$tenantTransaction(async (tx) => {
       const [row] = await tx.$queryRaw<{ failed_login_attempts: number; locked: boolean }[]>`
         UPDATE users
-           SET failed_login_attempts = failed_login_attempts + 1,
+           SET failed_login_attempts = ${WINDOWED_ATTEMPTS},
                last_failed_login_at = now(),
                locked_until = CASE
-                 WHEN (failed_login_attempts + 1) % ${AUTH_POLICY.loginFailureThreshold} = 0
-                 THEN now() + make_interval(
-                        secs => ${AUTH_POLICY.loginLockoutMs / 1_000}::double precision
-                      )
+                 WHEN (${WINDOWED_ATTEMPTS}) % ${AUTH_POLICY.loginFailureThreshold} = 0
+                 THEN now() + ${LOCKOUT_INTERVAL}
                  ELSE locked_until
                END
          WHERE id = ${userId}::uuid
@@ -350,8 +395,9 @@ export class LoginThrottleService {
    *
    * The counter carries the lockout duration as its TTL rather than living
    * forever: an address nobody has guessed at for fifteen minutes is not worth
-   * a Redis key, and the durable counter is what remembers the long history for
-   * an address that has an account.
+   * a Redis key. That TTL is also the retention the durable counter windows
+   * itself on — the third number the two layers have to agree about, alongside
+   * the threshold and the duration (TAR-154).
    */
   private async recordEmailFailure(tenantId: string, email: string): Promise<void> {
     const countKey = emailFailureKey(tenantId, email);
