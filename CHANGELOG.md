@@ -14,6 +14,21 @@ change.
 
 ### Added
 
+- **Login and the session lifecycle** — `POST /api/v1/auth/login` authenticates an email
+  and password against the tenant the request `Host` resolves to and issues an opaque
+  256-bit session in a `__Host-wac_session` cookie; `GET /api/v1/auth/session` reads the
+  caller back and is also the refresh, because the idle window slides on use rather than
+  through a second endpoint; `POST /api/v1/auth/logout`, `GET /api/v1/auth/sessions` and
+  `DELETE /api/v1/auth/sessions/{id}` cover signing out and dropping one device. Every
+  authenticated request now resolves its principal from that cookie —
+  `SessionPrincipalSource` is bound to `PRINCIPAL_SOURCE`, the seam TAR-22 built its
+  guards around, so `AUTH_STUB_ENABLED` is no longer the only way to be somebody.
+  Passwords are Argon2id at `AUTH_POLICY`'s parameters, re-hashed in place when those are
+  raised; ten consecutive failures lock the account for fifteen minutes, and the response
+  is `rate_limited` rather than a code that would confirm the address exists. Sessions
+  resolve through a shared Redis cache with a 60-second TTL and fall back to Postgres when
+  it is absent. New: `SESSION_COOKIE_SECURE` (the API refuses to boot with it off under
+  `NODE_ENV=production`). (TAR-56)
 - **Backup coverage and a restore drill** — `docs/runbooks/backups.md` records what
   Render's continuous backup and point-in-time recovery actually cover per
   environment, how to restore, and the cadence for proving it. `pnpm db:restore-drill`
@@ -108,6 +123,15 @@ change.
 
 ### Changed
 
+- **Revoking a session marks it revoked rather than deleting the row.** A role, status or
+  team change — and an admin suspending or removing an agent — now writes `revoked_at` and
+  `revoked_reason` instead of `DELETE`ing, and purges the Redis principal cache on both
+  sides of the commit. Access still ends at the commit: every read path filters
+  `revoked_at IS NULL`, and the second purge closes the window in which an in-flight
+  request could repopulate the cache from the not-yet-revoked row. What it buys is a trail
+  that can say _why_ every session for one person died at 14:03, and a device list that
+  stops showing a session that is gone. Revoked and expired rows are not yet swept — see
+  the follow-up note in TAR-53's failure-modes table. (TAR-56)
 - **`conversations.last_message_at` is `NOT NULL`, defaulting to the row's insert time.**
   It leads all three inbox keyset indexes, and PostgreSQL orders NULLs first under `DESC`,
   so a message-less conversation pinned itself to page one and the resume predicate

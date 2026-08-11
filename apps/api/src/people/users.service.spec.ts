@@ -58,6 +58,8 @@ interface FakeState {
 interface Recorded {
   audits: { action: string; metadata?: unknown }[];
   revokedUserIds: string[];
+  /** The after-commit cache purge (TAR-56), which is unconditional by design. */
+  purgedUserIds: string[];
   updates: Record<string, unknown>[];
 }
 
@@ -66,7 +68,7 @@ function buildService(state: FakeState): {
   recorded: Recorded;
   tenantContext: TenantContextService;
 } {
-  const recorded: Recorded = { audits: [], revokedUserIds: [], updates: [] };
+  const recorded: Recorded = { audits: [], revokedUserIds: [], purgedUserIds: [], updates: [] };
 
   const row = {
     id: TARGET,
@@ -136,6 +138,10 @@ function buildService(state: FakeState): {
     revokeFor: (_tx: unknown, _tenantId: string, userId: string) => {
       recorded.revokedUserIds.push(userId);
       return Promise.resolve(1);
+    },
+    purgeCacheFor: (_tenantId: string, userId: string) => {
+      recorded.purgedUserIds.push(userId);
+      return Promise.resolve();
     },
   } as unknown as SessionRevocationService;
 
@@ -353,6 +359,11 @@ describe('UsersService — role write invariants', () => {
 
       expect(recorded.revokedUserIds).toEqual([TARGET]);
       expect(recorded.audits.map((entry) => entry.action)).toContain(expectedAudit);
+      // The after-commit purge (TAR-56). Without it a principal cached in the
+      // window between the pre-write purge and the commit would keep answering
+      // for up to a minute — which is the whole gap "revoked immediately, not
+      // on next expiry" exists to close.
+      expect(recorded.purgedUserIds).toEqual([TARGET]);
     });
 
     it('revokes on a team change, because teamIds is a snapshot on the session', async () => {
@@ -382,6 +393,10 @@ describe('UsersService — role write invariants', () => {
       );
 
       expect(recorded.revokedUserIds).toEqual([]);
+      // Purged anyway. It is unconditional on purpose: a purge that was not
+      // needed costs one Postgres read, while deciding per write which changes
+      // "matter" is a decision that eventually gets one case wrong.
+      expect(recorded.purgedUserIds).toEqual([TARGET]);
     });
   });
 

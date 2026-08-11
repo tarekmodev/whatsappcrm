@@ -50,4 +50,28 @@ describe('environment validation', () => {
     // the switch is broken and reaches for something worse.
     expect(() => validateEnv({ ...REQUIRED, AUTH_STUB_ENABLED: '1' })).toThrow(/AUTH_STUB_ENABLED/);
   });
+
+  describe('the session cookie kill switch (TAR-56)', () => {
+    it('defaults to secure, so an environment that says nothing gets the __Host- prefix', () => {
+      expect(validateEnv({ ...REQUIRED }).SESSION_COOKIE_SECURE).toBe(true);
+    });
+
+    it('allows it off outside production, which is the only reason it exists', () => {
+      // Safari does not treat plain-HTTP localhost as a secure context, so a
+      // `__Host-` cookie cannot be set there at all.
+      expect(
+        validateEnv({ ...REQUIRED, NODE_ENV: 'development', SESSION_COOKIE_SECURE: 'false' })
+          .SESSION_COOKIE_SECURE,
+      ).toBe(false);
+    });
+
+    it('refuses to boot with it off in production', () => {
+      // A session cookie without `Secure` travels in clear text over any
+      // plain-HTTP hop, and drops the prefix that stops a sibling tenant
+      // subdomain shadowing it.
+      expect(() =>
+        validateEnv({ ...REQUIRED, NODE_ENV: 'production', SESSION_COOKIE_SECURE: 'false' }),
+      ).toThrow(/SESSION_COOKIE_SECURE/);
+    });
+  });
 });
