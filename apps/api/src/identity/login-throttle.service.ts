@@ -29,7 +29,8 @@ import { TooManyAttemptsError } from './identity.errors';
  * for a real account and 401 for an address with no account, and the difference
  * is a per-tenant user-enumeration oracle that the identical bodies and the
  * dummy verify were there to close. Mirroring the numbers is what makes the two
- * cases indistinguishable — see `assertEmailWithinLimit`.
+ * cases indistinguishable to an attacker who does not pause — see
+ * `assertEmailWithinLimit`, and the retention caveat below for the one who does.
  *
  * **Per client address, in Redis.** A sliding window keyed by tenant *and*
  * client address, at a higher threshold. This is the layer that catches one
@@ -59,6 +60,25 @@ import { TooManyAttemptsError } from './identity.errors';
  * remaining producer of a 429 on login is a real account's lockout. It is a
  * degraded mode, it is logged, and it is the same trade every other Redis path
  * in this module makes.
+ *
+ * ## The two counters still forget on different clocks (TAR-154)
+ *
+ * Stated here because it is the one dimension in which they do not yet match,
+ * and a reader who takes "indistinguishable" at face value would be wrong about
+ * a paced attacker. The email counter carries `loginLockoutMs` as its TTL;
+ * `failed_login_attempts` carries none and only ever resets through one of the
+ * five paths that write zero. So nine failures, a sixteen-minute pause, then two
+ * more: the email counter has expired and is back at 1, while the durable one
+ * reaches ten and locks — and attempt eleven answers 429 for a real address and
+ * 401 for one with no account, which is the oracle again at the cost of one
+ * wait. It is worse against an address whose durable count is already warm from
+ * its owner's own typos.
+ *
+ * The layer is still a clear improvement — it closes the eleven-request version
+ * outright — but "closed" is not the honest word until the retention matches.
+ * TAR-154 windows the durable count inside the statement that already writes
+ * `last_failed_login_at`, which makes the two identical by construction rather
+ * than by two numbers somebody has to keep equal.
  *
  * ## …and the client-address layer is off until the address means something
  *

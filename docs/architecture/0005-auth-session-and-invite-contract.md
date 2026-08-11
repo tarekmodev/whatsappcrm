@@ -347,6 +347,21 @@ refused by a layer no admin can see would not be an unlock, and a reset that sti
 a 429 would not be a way back in. The IP window is cleared by none of them: it belongs to
 whoever was guessing rather than to the account they were guessing at.
 
+**What this does not yet close, and why the word is "narrowed" rather than "closed"
+(TAR-154).** The two counters lock on the same attempt, for the same duration, through the
+same reset paths — but they **forget on different clocks**. The email key carries
+`loginLockoutMs` as its TTL; `failed_login_attempts` carries none and only ever returns to
+zero through one of the five paths above. Nine failures, a sixteen-minute pause and two
+more attempts therefore put them out of step: the email counter has expired and is back at
+one, the durable counter reaches ten and locks, and attempt eleven answers 429 for a real
+address and 401 for one with no account. That is the oracle again, at the cost of one wait,
+and cheaper still against an address whose durable count is already warm from its owner's
+own typos. The layer closes the eleven-request version outright, which is why it ships, but
+the honest claim is that a paced attacker can still tell the two apart. TAR-154 windows the
+durable count inside the statement that already writes `last_failed_login_at`, making the
+retention identical by construction rather than by two numbers somebody has to keep equal —
+which is the principle the threshold and the duration already follow.
+
 ---
 
 ## Data Model
