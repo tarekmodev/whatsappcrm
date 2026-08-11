@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { webEnv } from '@/lib/config/env';
 import { resolveSession } from '@/lib/session/session';
-import { resolveTheme } from '@/lib/theme/resolve-theme';
+import { readTheme } from '@/lib/theme/read-theme';
 import { AppHeader } from '@/components/shell/AppHeader';
 import { NAV_ITEMS, visibleNavItems } from '@/components/shell/navigation';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
@@ -18,7 +18,7 @@ import { MAIN_CONTENT_ID } from '@/components/shell/main-content';
  */
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
-  const theme = await resolveTheme();
+  const theme = await readTheme();
   const { principal, checker, isStubbed } = await resolveSession();
   const navItems = visibleNavItems(NAV_ITEMS, checker);
 

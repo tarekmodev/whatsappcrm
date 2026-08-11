@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { AuthShell } from '@/components/shell/AuthShell';
-import { resolveTheme } from '@/lib/theme/resolve-theme';
+import { readTheme } from '@/lib/theme/read-theme';
 
 /**
  * The signed-out shell. Composition only.
@@ -11,7 +11,7 @@ import { resolveTheme } from '@/lib/theme/resolve-theme';
  */
 
 export default async function AuthLayout({ children }: { children: ReactNode }) {
-  const theme = await resolveTheme();
+  const theme = await readTheme();
 
   return <AuthShell theme={theme}>{children}</AuthShell>;
 }

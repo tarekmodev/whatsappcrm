@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
-import { resolveTheme } from '@/lib/theme/resolve-theme';
+import { readTheme } from '@/lib/theme/read-theme';
 import './globals.css';
 
 /**
@@ -25,7 +25,7 @@ export const metadata: Metadata = {
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const theme = await resolveTheme();
+  const theme = await readTheme();
 
   return (
     <html lang="en" dir="ltr" data-theme={theme}>
