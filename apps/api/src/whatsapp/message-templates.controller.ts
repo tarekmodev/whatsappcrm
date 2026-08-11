@@ -10,12 +10,11 @@ import { ApiException } from '../common/errors/api.exception';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
-import { describeTemplateComponents } from './message-template-components';
 import {
   InvalidCursorError,
   MessageTemplateQueryService,
   UnknownWhatsAppAccountError,
-  type ListedMessageTemplate,
+  type ListedTemplate,
 } from './message-template-query.service';
 
 /**
@@ -130,24 +129,26 @@ function translateQueryFailure(error: unknown): never {
  * own parser for Meta's shape, and the send path needs the arity to check
  * against before it calls Meta.
  */
-function toResponse(template: ListedMessageTemplate): MessageTemplateResponse {
-  const { bodyText, parameterCount, headerFormat, headerParameterCount } =
-    describeTemplateComponents(template.components);
-
+function toResponse({ row, summary }: ListedTemplate): MessageTemplateResponse {
   return {
-    id: template.id,
-    whatsappBusinessAccountId: template.whatsappBusinessAccountId,
-    name: template.name,
-    language: template.language,
-    category: template.category,
-    status: template.status,
-    components: template.components,
-    bodyText,
-    parameterCount,
-    headerFormat,
-    headerParameterCount,
-    providerTemplateId: template.providerTemplateId,
-    createdAt: template.createdAt.toISOString(),
-    updatedAt: template.updatedAt.toISOString(),
+    id: row.id,
+    whatsappBusinessAccountId: row.whatsappBusinessAccountId,
+    name: row.name,
+    language: row.language,
+    category: row.category,
+    status: row.status,
+    components: row.components,
+    bodyText: summary.bodyText,
+    parameterCount: summary.parameterCount,
+    headerFormat: summary.headerFormat,
+    headerParameterCount: summary.headerParameterCount,
+    // `false` for every row this endpoint returns, by construction — the page
+    // drops the rest. Published anyway, because the administration surface that
+    // has to explain "approved by Meta, not yet sendable from this product"
+    // cannot say it about a template it cannot identify.
+    requiresButtonParameters: summary.requiresButtonParameters,
+    providerTemplateId: row.providerTemplateId,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }

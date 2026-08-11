@@ -253,6 +253,14 @@ enum MessageContentType {
   interactive
   template
   system
+  /// Anything Meta sends that is not modelled yet — `reaction`, `order`,
+  /// `button`, and whatever it ships next. Added by TAR-20's ingestion pipeline
+  /// (`20260810180000_message_content_type_unsupported`) to close the drift with
+  /// `MESSAGE_TYPES` in `@whatsappcrm/contracts`, which has always published it.
+  /// Recording the message is the point: the raw payload is on `webhook_events`,
+  /// so a type the product learns to render later can be backfilled, and in the
+  /// meantime the thread shows that *something* arrived rather than a gap.
+  unsupported
 
   @@map("message_content_type")
 }
@@ -830,7 +838,16 @@ model Conversation {
   serviceWindowExpiresAt DateTime?          @map("service_window_expires_at") @db.Timestamptz(3)
   /// Denormalised from `messages` to keep the inbox list a single-table scan.
   /// Maintained in the same transaction as the message insert.
-  lastMessageAt          DateTime?          @map("last_message_at") @db.Timestamptz(3)
+  ///
+  /// NOT NULL, and that is load-bearing rather than tidiness (TAR-92): this is
+  /// the leading *sort* column of all three inbox keyset indexes below.
+  /// Postgres orders NULLs FIRST under DESC, so a message-less conversation
+  /// would pin itself to page one, and the ruled resume predicate
+  /// (`last_message_at <= $1 AND NOT (…)`) evaluates to NULL — not TRUE — for
+  /// that cursor, silently dropping every row after it. A thread with no
+  /// message yet sorts by when it was opened: the default is the row's own
+  /// insert time, matching `created_at`.
+  lastMessageAt          DateTime           @default(now()) @map("last_message_at") @db.Timestamptz(3)
   unreadCount            Int                @default(0) @map("unread_count")
   createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1002,7 +1019,7 @@ model Ticket {
 // index `tickets_one_active_per_contact`, on `(tenant_id, contact_id)`
 // `WHERE status IN ('open','pending')`. It is the DB-level guarantee behind
 // TAR-21's "one active ticket per contact" (TAR-73, decision 2) and it lives in
-// the 20260811090000_ticket_active_constraint_and_counters migration.
+// the 20260811130000_ticket_active_constraint_and_counters migration.
 //
 // Prisma's schema language has no partial-index syntax, and its Postgres
 // describer skips indexes carrying a predicate — so `migrate dev` neither

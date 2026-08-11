@@ -188,6 +188,19 @@ Everything in ADR 0001 is inherited unchanged. Only decisions this document adds
   before TAR-19 commits to it. If it turns out to be two, the fallback is a connection
   checked out per unit of work with the GUC set once — more code, same guarantee.
 
+  > **What landed, in TAR-48, TAR-49 and TAR-51.** Three differences from the two
+  > paragraphs above, each deliberate. **The extension does not inject `tenantId` into
+  > `where`/`data`** — a generic injection has to get nested writes, `connect`, `upsert` and
+  > relation filters right or it silently drops rows, and RLS already filters correctly
+  > using the same index. RLS is the only layer, not the backstop to a second one. **The
+  > policy predicate is `NULLIF(current_setting('app.tenant_id', true), '')::uuid`** — a GUC
+  > that was set and has since been reset reads back as the empty string rather than NULL,
+  > and without the `NULLIF` it reaches the cast and fails the query instead of returning
+  > zero rows. **The GUC is set through TAR-51's gate**,
+  > `set_config('app.tenant_id', public.assert_tenant_active($1), true)`, so a deactivated
+  > tenant never sets it. The round-trip question is answered in Open Questions, row 1. Full
+  > contract: [`docs/reference/tenancy.md`](../reference/tenancy.md).
+
 - **Rejected — application-level filtering only.** Cheapest and simplest, and what the
   extension alone would give us. Rejected because it is exactly the "promise every
   future query remembers" that TAR-18's isolation requirement rules out, and because
@@ -270,8 +283,13 @@ client, but is not load-bearing for the product.
 
 ## Data Model
 
-Entities, with the tenant-scoping and indexing decisions that matter. Prisma models land
-in TAR-19's migration; `apps/api/prisma/schema.prisma` is deliberately empty until then.
+Entities, with the tenant-scoping and indexing decisions that matter.
+
+> **Landed in TAR-47, corrected in TAR-52, extended by TAR-80 and TAR-92.**
+> `apps/api/prisma/schema.prisma` now holds all of this. The table below stays the
+> specification and the reasoning; for what the database actually contains — every
+> constraint, every enum, and the places the shipped schema differs from this table — read
+> [`docs/reference/data-model.md`](../reference/data-model.md).
 
 **Scoped** = carries `tenant_id`, RLS-protected.
 
@@ -280,6 +298,7 @@ in TAR-19's migration; `apps/api/prisma/schema.prisma` is deliberately empty unt
 | `tenants`                           | —        | `slug` unique; `status`; `trial_ends_at`                                                                                                              | TAR-19    |
 | `tenant_domains`                    | ✓        | `hostname` **globally** unique; `kind`; `verified_at`                                                                                                 | TAR-19/29 |
 | `tenant_branding`                   | ✓        | one row per tenant                                                                                                                                    | TAR-29    |
+| `tenant_settings`                   | ✓        | one row per tenant; `timezone`, `locale`, `business_hours JSONB` — seeded at provisioning                                                             | TAR-19    |
 | `users`                             | ✓        | `UNIQUE (tenant_id, email)` on `citext`; `role`; `status`; `password_hash`                                                                            | TAR-35    |
 | `sessions`                          | ✓        | `token_hash` unique; `expires_at`; index `(user_id)` for bulk revoke                                                                                  | TAR-35    |
 | `invites`                           | ✓        | `token_hash` unique; `expires_at`; `accepted_at`                                                                                                      | TAR-35    |
@@ -330,6 +349,15 @@ tenant-facing code. `tenant_id` is filled in during processing, for forensics.
 
 Sort keys are `(timestamp DESC, id DESC)` throughout, which is what makes UUIDv7 ids
 worth having: the id is a stable tie-breaker for two rows in the same millisecond.
+
+> **One of these did not land as written.** The SLA sweep shipped as
+> `sla_timers (tenant_id, state, due_at)`, not as the partial index above: Prisma cannot
+> express a `WHERE` on an index, and one created outside the schema shows up as drift that
+> the next `migrate dev` proposes to drop. Equality on `state` then a range scan on `due_at`
+> gives the sweep the same access path, at the cost of also indexing finished timers.
+> Revisit as a partial index once timer volume makes the size matter; the query does not
+> have to change. The indexes as they actually exist are in
+> [`docs/reference/data-model.md`](../reference/data-model.md).
 
 **Cursor encoding.** `base64url(JSON.stringify({ v: 1, k: [<sortValue>, ...], id: <uuid> }))`,
 opaque to clients. Keyset, never `OFFSET` — an offset page duplicates and skips rows in
@@ -526,8 +554,9 @@ POST   /api/v1/billing/checkout              → HostedSession              bill
 POST   /api/v1/billing/portal                → HostedSession              billing:manage
 
 # Platform operator — PlatformAdminGuard bearer token, never a session   TAR-19/51
-POST   /api/v1/admin/tenants                 → ProvisionedTenantResponse
-POST   /api/v1/admin/tenants/{slug}/deactivate → DeactivatedTenantResponse
+# Shapes, errors, idempotency and retention: docs/reference/admin-api.md
+POST   /api/v1/admin/tenants                 → ProvisionedTenantResponse   201 new · 200 existing
+POST   /api/v1/admin/tenants/{slug}/deactivate → DeactivatedTenantResponse 200
 
 # Webhooks — public, signature-verified, never cookie-authenticated
 GET    /api/webhooks/whatsapp                → hub.challenge echo

@@ -17,6 +17,11 @@
 -- adds a table — new tables need their grants and their `system_unrestricted`
 -- policy, and `verify-tenant-isolation.sql` fails until they have them.
 --
+-- Re-running is not optional for `whatsappcrm_app`. A table this file has not
+-- seen is one the app role holds no privilege on at all, by design (TAR-95):
+-- the grant is what waits for the policy, rather than arriving ahead of it. See
+-- the default-privileges block near the bottom.
+--
 -- ---------------------------------------------------------------------------
 -- Why this is not a Prisma migration
 -- ---------------------------------------------------------------------------
@@ -229,9 +234,37 @@ BEGIN
 END
 $$;
 
--- Future tables. Without this, a table created by the next migration is
--- invisible to both roles until someone remembers to re-run this file, and the
--- symptom is a permission error in production rather than at migrate time.
+-- Future tables, and the one place the two roles are treated differently
+-- (TAR-95).
+--
+-- `whatsappcrm_system` gets them automatically. It is the cross-tenant role by
+-- definition, nothing narrows what it may read, and a table it cannot reach is
+-- a bug rather than a safeguard.
+--
+-- `whatsappcrm_app` deliberately does not, because the two halves of tenant
+-- isolation are not created the same way. The grant would be automatic; the
+-- `tenant_isolation` policy is hand-written per table in the migration, because
+-- Prisma's schema language cannot express row-level security. Auto-granting the
+-- app role makes the *grant* the thing that arrives first, so a migration that
+-- adds a tenant-scoped table and forgets its RLS block ships a table that every
+-- tenant can read and write with no policy to filter it. Nothing fails; the
+-- symptom is one tenant reading another's rows.
+--
+-- Inverted, the same mistake costs a permission error on the first query and
+-- nothing else, and the fix is the step that was already skipped: re-run this
+-- file. The loop above grants the new table explicitly and the block below
+-- gives it its `system_unrestricted` policy — at which point
+-- `verify-tenant-isolation.sql` fails by name if the RLS block is still
+-- missing, which is the mistake being guarded against rather than a new one.
+--
+-- The REVOKE is not decoration. `ALTER DEFAULT PRIVILEGES` accumulates, so in
+-- an environment provisioned before this change the old grant is still on
+-- record and has to be taken back rather than merely not re-issued. Revoking a
+-- default privilege that was never granted changes nothing and is not an error.
+--
+-- Sequences stay on both roles: the schema uses none today, and a sequence
+-- holds no tenant rows — `nextval` on a table nobody may write is inert.
+--
 -- Attached to whichever role creates tables here: the database owner, and the
 -- role running this script if that is somebody else.
 DO $$
@@ -249,7 +282,12 @@ BEGIN
         EXECUTE format(
             'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA "public"'
             ' GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES'
-            ' TO "whatsappcrm_app", "whatsappcrm_system"',
+            ' TO "whatsappcrm_system"',
+            creator
+        );
+        EXECUTE format(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA "public"'
+            ' REVOKE ALL ON TABLES FROM "whatsappcrm_app"',
             creator
         );
         EXECUTE format(

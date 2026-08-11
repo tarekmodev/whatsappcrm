@@ -16,6 +16,15 @@ import {
 const WABA_ROW_ID = '60444444-4444-7444-8444-444444444401';
 const ACCOUNT_ROW_ID = '70444444-4444-7444-8444-444444444401';
 
+/**
+ * Row ids, and they are real uuids on purpose: the cursor helper refuses an id
+ * that is not one, because every id column it filters on is `@db.Uuid`. A
+ * fixture id of `'a'` would make a cursor these tests build undecodable.
+ */
+const ID_A = '80444444-4444-7444-8444-4444444444a1';
+const ID_B = '80444444-4444-7444-8444-4444444444b2';
+const ID_C = '80444444-4444-7444-8444-4444444444c3';
+
 function template(id: string, name: string, language = 'en_US', components: unknown = null) {
   return {
     id,
@@ -157,42 +166,70 @@ describe('MessageTemplateQueryService', () => {
 
     it('returns the page and a cursor when there is more', async () => {
       findMany.mockResolvedValue([
-        template('a', 'appointment_reminder'),
-        template('b', 'order_update'),
-        template('c', 'shipping_update'),
+        template(ID_A, 'appointment_reminder'),
+        template(ID_B, 'order_update'),
+        template(ID_C, 'shipping_update'),
       ]);
 
       const result = await service.list({ limit: 2 });
 
-      expect(result.items.map((item) => item.id)).toEqual(['a', 'b']);
-      expect(result.nextCursor).toBe(cursorFor('order_update', 'en_US', 'b'));
+      expect(result.items.map((item) => item.row.id)).toEqual([ID_A, ID_B]);
+      expect(result.nextCursor).toBe(cursorFor('order_update', 'en_US', ID_B));
     });
 
     it('reports the end of the feed as a null cursor', async () => {
-      findMany.mockResolvedValue([template('a', 'order_update')]);
+      findMany.mockResolvedValue([template(ID_A, 'order_update')]);
 
       await expect(service.list({ limit: 25 })).resolves.toMatchObject({ nextCursor: null });
     });
 
-    it('resumes strictly after the cursor row, with language and id breaking a tie', async () => {
-      await service.list({ limit: 25, cursor: cursorFor('order_update', 'en_US', 'b') });
+    it('resumes with an index start condition, not a nested disjunction', async () => {
+      // 0002 rules the shape as well as the result: an inclusive bound on the
+      // leading column, minus the part of its tie group already returned. The
+      // nested OR returns the same rows and cannot be an index start condition,
+      // so its cost grows with how far into the list the cursor sits.
+      await service.list({ limit: 25, cursor: cursorFor('order_update', 'en_US', ID_B) });
 
-      expect(args().where.OR).toEqual([
-        { name: { gt: 'order_update' } },
-        { name: 'order_update', language: { gt: 'en_US' } },
-        { name: 'order_update', language: 'en_US', id: { gt: 'b' } },
-      ]);
+      expect(args().where).toMatchObject({
+        name: { gte: 'order_update' },
+        NOT: {
+          name: 'order_update',
+          OR: [{ language: { lt: 'en_US' } }, { language: 'en_US', id: { lte: ID_B } }],
+        },
+      });
+    });
+
+    it('keeps the name prefix and the cursor bound on one filter', async () => {
+      // Two `name` keys in the same object and the second silently replaces the
+      // first — dropping either the search or the resume point.
+      await service.list({
+        limit: 25,
+        q: 'order',
+        cursor: cursorFor('order_update', 'en_US', ID_B),
+      });
+
+      expect(args().where.name).toEqual({ startsWith: 'order', gte: 'order_update' });
     });
 
     it.each([
       ['a cursor that is not decodable', 'not-a-cursor'],
       [
         'a cursor from a list that sorts on one column',
-        encodeKeysetCursor({ sortValues: ['2026-08-10T08:00:00.000Z'], id: 'b' }),
+        encodeKeysetCursor({ sortValues: ['2026-08-10T08:00:00.000Z'], id: ID_B }),
+      ],
+      [
+        // Otherwise it reaches `id: { lte: … }` against a `@db.Uuid` column and
+        // the driver's refusal surfaces as a 500, where every other malformed
+        // cursor answers `validation_failed`.
+        'a cursor whose id is not a uuid',
+        Buffer.from(
+          JSON.stringify({ v: 1, k: ['order_update', 'en_US'], id: 'b' }),
+          'utf8',
+        ).toString('base64url'),
       ],
       [
         'a cursor carrying more sort values than this order has columns',
-        encodeKeysetCursor({ sortValues: ['order_update', 'en_US', 'extra'], id: 'b' }),
+        encodeKeysetCursor({ sortValues: ['order_update', 'en_US', 'extra'], id: ID_B }),
       ],
     ])('rejects %s rather than silently re-reading the first page', async (_case, cursor) => {
       await expect(service.list({ limit: 25, cursor })).rejects.toBeInstanceOf(InvalidCursorError);
@@ -203,28 +240,28 @@ describe('MessageTemplateQueryService', () => {
   describe('templates the composer cannot send', () => {
     it('hides a template whose buttons take a parameter', async () => {
       findMany.mockResolvedValue([
-        template('a', 'appointment_reminder'),
-        templateWithQuickReply('b', 'order_update'),
+        template(ID_A, 'appointment_reminder'),
+        templateWithQuickReply(ID_B, 'order_update'),
       ]);
 
       const result = await service.list({ limit: 25 });
 
-      expect(result.items.map((item) => item.id)).toEqual(['a']);
+      expect(result.items.map((item) => item.row.id)).toEqual([ID_A]);
     });
 
     it('takes the cursor from the last row read, not the last row returned', async () => {
       // Otherwise the next page resumes before a row this one already
       // considered, and the hidden template comes back around forever.
       findMany.mockResolvedValue([
-        template('a', 'appointment_reminder'),
-        templateWithQuickReply('b', 'order_update'),
-        template('c', 'shipping_update'),
+        template(ID_A, 'appointment_reminder'),
+        templateWithQuickReply(ID_B, 'order_update'),
+        template(ID_C, 'shipping_update'),
       ]);
 
       const result = await service.list({ limit: 2 });
 
-      expect(result.items.map((item) => item.id)).toEqual(['a']);
-      expect(result.nextCursor).toBe(cursorFor('order_update', 'en_US', 'b'));
+      expect(result.items.map((item) => item.row.id)).toEqual([ID_A]);
+      expect(result.nextCursor).toBe(cursorFor('order_update', 'en_US', ID_B));
     });
   });
 });

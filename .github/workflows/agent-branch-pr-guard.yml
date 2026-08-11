@@ -1,0 +1,204 @@
+name: Agent branch PR guard
+
+# Work reaches `main` only through a pull request, and opening that pull request
+# is a step inside each agent's own run — nothing in this repository ever did it.
+# So when `gh` was unavailable or misauthenticated on a runtime, the push still
+# succeeded, the run still reported done, and the branch sat there. Five of them
+# did, for a day, before anyone noticed (TAR-90).
+#
+# This is the thing that notices. Once an hour it looks for a branch under
+# `agent/` that holds commits `main` does not, and for which no pull request has
+# ever been opened. For each one it opens a draft pull request and then fails,
+# so the failure is loud rather than silent.
+#
+# Deliberately narrow. A branch that has a pull request in ANY state — open,
+# merged, closed — is somebody's decision and is left alone. Only the case this
+# guard exists for, "pushed and then forgotten", is reported.
+
+on:
+  schedule:
+    # Hourly, off the hour so it does not queue behind everything else that runs
+    # at :00. Cheap: a fetch, one API call, and a few `git merge-base` checks.
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      grace_minutes:
+        description: Ignore branches whose newest commit is younger than this many minutes
+        required: false
+        default: '30'
+
+permissions:
+  contents: read
+
+concurrency:
+  # One sweep at a time. Two would race to open the same pull request.
+  group: agent-branch-pr-guard
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Only to open the draft pull request below. Nothing here writes code.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Every branch, full history: the merge-base checks below are wrong
+          # against a shallow clone.
+          fetch-depth: 0
+
+      - name: Open a draft pull request for every stranded agent branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          GRACE_MINUTES: ${{ inputs.grace_minutes || '30' }}
+        run: |
+          set -euo pipefail
+
+          git fetch --quiet --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+          now=$(date +%s)
+          grace=$(( GRACE_MINUTES * 60 ))
+
+          # Every pull request ever opened against this repository, keyed by head
+          # branch. One call, not one per branch.
+          gh pr list --state all --limit 500 \
+            --json number,headRefName,state,url > /tmp/prs.json
+
+          stranded=()
+
+          while read -r branch; do
+            # A branch whose tip is already an ancestor of `main` has nothing
+            # left to land. This is the check that matters: after a squash or a
+            # rebase the branch keeps its own commit SHAs forever, so counting
+            # commits ahead reports work that shipped days ago.
+            if git merge-base --is-ancestor "origin/$branch" origin/main; then
+              echo "merged      $branch"
+              continue
+            fi
+
+            # An agent opens its pull request moments after it pushes. Reporting
+            # inside that window would race the very step this guard is backing
+            # up, and open a duplicate.
+            tip=$(git log -1 --format=%ct "origin/$branch")
+            if [ $(( now - tip )) -lt "$grace" ]; then
+              echo "too recent  $branch"
+              continue
+            fi
+
+            pr=$(jq -r --arg b "$branch" '
+              [.[] | select(.headRefName == $b)]
+              | sort_by(.number) | last
+              | if . == null then "" else "#\(.number) \(.state)" end' /tmp/prs.json)
+            if [ -n "$pr" ]; then
+              echo "has PR      $branch -> $pr"
+              continue
+            fi
+
+            echo "STRANDED    $branch"
+            stranded+=("$branch")
+          done < <(git for-each-ref --format='%(refname:strip=3)' 'refs/remotes/origin/agent/**')
+
+          if [ ${#stranded[@]} -eq 0 ]; then
+            echo
+            echo "No stranded agent branches."
+            exit 0
+          fi
+
+          failed_to_open=()
+          for branch in "${stranded[@]}"; do
+            subject=$(git log -1 --format=%s "origin/$branch")
+            ahead=$(git rev-list --count "origin/main..origin/$branch")
+            behind=$(git rev-list --count "origin/$branch..origin/main")
+
+            # A branch that is far behind is the ambiguous case. Its commits are
+            # not ancestors of `main`, but they may still have LANDED there under
+            # different SHAs, by cherry-pick or by a rebase onto `main` — in which
+            # case this pull request proposes reverting everything `main` gained
+            # since. Git cannot tell the two apart cheaply, so the reviewer is
+            # told to look rather than the guard guessing.
+            staleness=""
+            if [ "$behind" -gt 0 ]; then
+              staleness=$(
+                printf '%s\n' \
+                  "" \
+                  "> [!WARNING]" \
+                  "> This branch is **$behind commit(s) behind \`main\`**, so the diff below" \
+                  "> reads as a revert of everything \`main\` gained in the meantime. Merge" \
+                  "> \`main\` into the branch before judging it. If its commits already landed" \
+                  "> on \`main\` under different SHAs — a rebase or a cherry-pick — then there" \
+                  "> is nothing to merge: close this and delete the branch."
+              )
+            fi
+
+            body=$(
+              printf '%s\n' \
+                "Opened automatically by \`.github/workflows/agent-branch-pr-guard.yml\`." \
+                "" \
+                "\`$branch\` holds $ahead commit(s) that are not ancestors of \`main\`, and no" \
+                "pull request had ever been opened for it. That is the failure mode TAR-90" \
+                "documented: the branch push succeeded, the step that opens the pull" \
+                "request did not, and nothing said so." \
+                "$staleness" \
+                "" \
+                "**The required checks have not run on this pull request.** GitHub does not" \
+                "start workflows for events raised by \`GITHUB_TOKEN\`, so \`Lint\`," \
+                "\`Type-check\` and \`Test\` will stay unreported until a person or an agent" \
+                "pushes a commit to the branch, or closes and reopens this pull request." \
+                "Until then \`main\`'s protection will refuse the merge, which is correct." \
+                "" \
+                "Review it like any other pull request: merge \`main\` in, confirm the checks" \
+                "go green, mark it ready, then merge. If the work is obsolete, close this and" \
+                "delete the branch — the guard will not reopen it."
+            )
+
+            if gh pr create \
+              --repo "$REPO" \
+              --base main \
+              --head "$branch" \
+              --draft \
+              --title "$subject" \
+              --body "$body"
+            then
+              echo "opened a draft pull request for $branch"
+            else
+              # Almost always "GitHub Actions is not permitted to create or
+              # approve pull requests" — a repository setting, not a bug here.
+              # The branch still gets reported in the summary below.
+              echo "::warning::could not open a pull request for $branch"
+              failed_to_open+=("$branch")
+            fi
+          done
+
+          {
+            echo "## Stranded agent branches"
+            echo
+            echo "Branches with commits not on \`main\` and no pull request in any state."
+            echo
+            for branch in "${stranded[@]}"; do
+              echo "- \`$branch\`"
+            done
+            if [ ${#failed_to_open[@]} -gt 0 ]; then
+              echo
+              echo "### Could not open a pull request"
+              echo
+              echo "Enable **Settings → Actions → General → Allow GitHub Actions to create"
+              echo "and approve pull requests**, then re-run this workflow."
+              echo
+              for branch in "${failed_to_open[@]}"; do
+                echo "- \`$branch\`"
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Red on purpose. A draft pull request nobody looks at is the same
+          # silence this guard exists to break, so the run itself carries the
+          # alert. Once the branches are handled the next sweep goes green.
+          echo
+          echo "::error::${#stranded[@]} agent branch(es) had unmerged work and no pull request. See the job summary."
+          exit 1

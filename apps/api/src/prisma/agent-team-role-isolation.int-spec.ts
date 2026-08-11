@@ -49,7 +49,7 @@ describe('agent, team and role isolation', () => {
 
   function asTenant<T>(tenantId: string, work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
-      { requestId: REQUEST_ID, tenantId, userId: null },
+      { requestId: REQUEST_ID, tenantId, userId: null, principal: null },
       async () => await work(),
     );
   }

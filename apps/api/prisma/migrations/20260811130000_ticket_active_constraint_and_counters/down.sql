@@ -1,6 +1,6 @@
--- Reverses 20260811090000_ticket_active_constraint_and_counters.
+-- Reverses 20260811130000_ticket_active_constraint_and_counters.
 --
--- Restores the schema exactly as 20260810190000 left it: no
+-- Restores the schema exactly as 20260811120000 left it: no
 -- `tickets_one_active_per_contact`, no `ticket_counters`, and no policy for it
 -- in `pg_policies`. `tickets` itself is untouched by both directions — the up
 -- migration added no column and this removes none.

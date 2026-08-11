@@ -39,6 +39,7 @@ export interface MessageTemplateComponentSummary {
   parameterCount: number;
   headerFormat: MessageTemplateHeaderFormat | null;
   headerParameterCount: number;
+  requiresButtonParameters: boolean;
 }
 
 const EMPTY_SUMMARY: MessageTemplateComponentSummary = {
@@ -46,19 +47,38 @@ const EMPTY_SUMMARY: MessageTemplateComponentSummary = {
   parameterCount: 0,
   headerFormat: null,
   headerParameterCount: 0,
+  requiresButtonParameters: false,
 };
 
 /**
- * Button types that never take a parameter at send time. A `url` button is the
- * one that depends on its own content — Meta allows a dynamic suffix, so it is
- * static only when its url carries no placeholder — and is handled separately.
+ * Button types whose behaviour is fixed at approval, so they need nothing in the
+ * send call. A `url` button is the one that depends on its own content — Meta
+ * allows a dynamic suffix — and is decided separately.
  *
- * An allowlist rather than a list of the dynamic types: Meta adds button types,
- * and one this build has never seen is far more likely to need a parameter than
- * not. Failing closed hides a sendable template from the picker; failing open
- * offers a send that dies at Meta.
+ * An allowlist rather than a list of the types that do take a parameter, because
+ * the derivation **fails closed** (0002, amendment 1): a button type this build
+ * does not recognise counts as requiring one. The two errors are not symmetric.
+ * Too narrow and an unsendable template reaches the picker and dies at Meta; too
+ * broad and a sendable one goes missing, which is visible to the tenant,
+ * explainable on the administration surface, and fixed by widening this list.
+ *
+ * **Both sides of this list are pending the same verification**, which the
+ * amendment asks for against Meta's current documentation and which no build so
+ * far has been able to reach (its pages answered 404 and 500).
+ *
+ *   * `quick_reply` is deliberately **not** here, and is the entry to revisit
+ *     first. Meta's send examples always carry a `payload` parameter for one.
+ *     Held closed until that is confirmed: quick replies are a common template
+ *     shape, so widening this is worth evidence rather than an assumption.
+ *   * `voice_call` **is** here, which is the fail-open side and therefore the
+ *     quieter risk: nothing watches for a template that was listed and should
+ *     not have been. If it turns out to take a send-time parameter, that is the
+ *     same defect as a too-narrow quick-reply rule.
+ *
+ * Both are answerable in one sitting by whoever first has live access — a
+ * connected WABA under TAR-91, or Meta's console.
  */
-const STATIC_BUTTON_TYPES: readonly string[] = ['phone_number', 'voice_call'];
+const PARAMETERLESS_BUTTON_TYPES: readonly string[] = ['phone_number', 'voice_call'];
 
 /**
  * Positional placeholders only. Meta also allows named parameters
@@ -87,6 +107,8 @@ export function describeTemplateComponents(components: unknown): MessageTemplate
   const headerFormat = header === undefined ? null : readHeaderFormat(header);
   const headerText = readText(header);
 
+  const buttons = findComponent(components, 'buttons')?.buttons;
+
   return {
     bodyText,
     parameterCount: bodyText === null ? 0 : highestPlaceholder(bodyText),
@@ -96,26 +118,18 @@ export function describeTemplateComponents(components: unknown): MessageTemplate
     // whatever a stray `{{1}}` in a caption-like field might suggest.
     headerParameterCount:
       headerFormat === 'text' && headerText !== null ? highestPlaceholder(headerText) : 0,
+    requiresButtonParameters: Array.isArray(buttons) && buttons.some(requiresParameter),
   };
 }
 
 /**
- * Whether any of this template's buttons would need a parameter the composer has
- * no way to collect — the exclusion the list applies on top of approved-only
- * (0002, amendment 1). A template with no buttons, or with only static ones, is
- * sendable and stays in the picker.
+ * The v1 exclusion predicate, stated as the invariant the contract states:
+ * a button requires a parameter in the send call, or it does not. Nothing else
+ * about a `BUTTONS` component matters, and the list drops a template whose
+ * answer is `true` for any of its buttons — the same rule as approved-only,
+ * applied to the other way a listed template turns out to be unsendable.
  */
-export function hasUnsupportedButtons(components: unknown): boolean {
-  if (!Array.isArray(components)) {
-    return false;
-  }
-
-  const buttons = findComponent(components, 'buttons')?.buttons;
-
-  return Array.isArray(buttons) && buttons.some(needsParameter);
-}
-
-function needsParameter(button: unknown): boolean {
+function requiresParameter(button: unknown): boolean {
   if (!isRecord(button) || typeof button.type !== 'string') {
     // A button this build cannot even read the type of is not one it can prove
     // is sendable.
@@ -125,13 +139,24 @@ function needsParameter(button: unknown): boolean {
   const type = button.type.toLowerCase();
 
   if (type === 'url') {
-    // Meta permits a placeholder in the last path or query segment; a url
-    // without one is a fixed link that needs nothing at send time. Excluding
-    // every url button would hide the common "visit our site" template.
-    return typeof button.url === 'string' && HAS_POSITIONAL_PLACEHOLDER.test(button.url);
+    // Meta permits a placeholder in the last path or query segment and attaches
+    // an `example` to the button when it does; either signal marks a dynamic
+    // suffix the send call has to supply. A url without one is a fixed link that
+    // needs nothing, and excluding every url button would hide the common
+    // "visit our site" template.
+    //
+    // A url this build cannot read is the unreadable-type case again, one field
+    // down: the branch cannot prove the button is static, so it does not claim
+    // it. Answering `false` here would leave one path through a fail-closed
+    // predicate that fails open.
+    if (typeof button.url !== 'string') {
+      return true;
+    }
+
+    return HAS_POSITIONAL_PLACEHOLDER.test(button.url) || button.example !== undefined;
   }
 
-  return !STATIC_BUTTON_TYPES.includes(type);
+  return !PARAMETERLESS_BUTTON_TYPES.includes(type);
 }
 
 /**

@@ -71,12 +71,14 @@
 -- same `tenant_isolation` policy TAR-48 attached to the other 33 tables, in
 -- this migration rather than a later one.
 --
--- ⚠️ **Re-run `pnpm db:roles` after applying this.** A new table has no grants
--- for `whatsappcrm_app` / `whatsappcrm_system` and no `system_unrestricted`
--- policy until `prisma/sql/app-roles.sql` runs again. `verify-tenant-isolation.sql`
--- derives its table list from the catalog, so it fails by name until both are in
--- place — that is the safety net working, not an obstacle. CI's Database job
--- already runs the two in that order.
+-- ⚠️ **Re-run `pnpm db:roles` after applying this, or `ticket_counters` is
+-- unreachable.** Since TAR-95 the app role is deliberately excluded from the
+-- schema's default privileges, so it holds *no* privilege on a table
+-- `app-roles.sql` has not seen — the grant waits for the policy rather than
+-- arriving ahead of it. The `system_unrestricted` policy is created by the same
+-- run. `verify-tenant-isolation.sql` derives its table list from the catalog and
+-- fails by name until both are in place; that is the safety net working, not an
+-- obstacle. CI's Database job already runs the two in that order.
 --
 -- ---------------------------------------------------------------------------
 -- Impact and risk
