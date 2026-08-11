@@ -19,6 +19,20 @@ export const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] a
  */
 export const DEPLOY_ENVS = ['local', 'development', 'staging', 'production'] as const;
 
+/**
+ * A configured Meta id — the app id, the Embedded Signup configuration id.
+ *
+ * Digits, held as a string: Meta's ids exceed `Number.MAX_SAFE_INTEGER`, so a
+ * value parsed as a number would silently change. The ceiling is a sanity check
+ * on a configured value rather than a claim about Meta's format.
+ *
+ * Deliberately local rather than imported from `packages/contracts`, which
+ * validates the same ids when they arrive in a request body: those are two
+ * different trust boundaries, and making the boot path depend on the wire
+ * contract for one regex couples them for no gain.
+ */
+const MetaIdSchema = z.string().regex(/^\d{1,32}$/, 'Must be a Meta id (digits only)');
+
 const envShape = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
@@ -217,6 +231,12 @@ const envShape = z.object({
    * request body under this key, and that signature is the only thing standing
    * between an unauthenticated public route and the inbox.
    *
+   * **Read on a second path since TAR-161**: it is also the `client_secret` on
+   * the Embedded Signup code exchange. One variable rather than two, because it
+   * is the same secret of the same Meta app, and a duplicate is a rotation that
+   * silently half-applies — the webhook keeps verifying while every signup
+   * fails, or the reverse. Absent, both paths fail closed independently.
+   *
    * Optional here and **absent means every inbound webhook is rejected**, on the
    * same reasoning as `PLATFORM_ADMIN_TOKEN`: an environment that was never
    * given the secret must fail closed rather than accept unsigned payloads.
@@ -295,6 +315,37 @@ const envShape = z.object({
    * unbounded wait on Meta becomes an unbounded wait on a queue worker.
    */
   META_GRAPH_API_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
+
+  // ---------------------------------------------------------------------------
+  // Embedded Signup (TAR-161, 0002 amendment 2)
+  //
+  // How a tenant connects its own WABA from the console: Meta hands the browser
+  // a code, the code is exchanged server-to-server for the business token, and
+  // nothing here is a secret — the app secret that completes the exchange is
+  // `WHATSAPP_APP_SECRET` above, reused rather than duplicated.
+  //
+  // Both are optional and **fail closed at the route**, the shape
+  // `WHATSAPP_TOKEN_ENCRYPTION_KEY` already uses: an environment that has not
+  // been configured for signup answers `whatsapp_signup_failed` /
+  // `insufficient_permissions` on that one endpoint and is otherwise untouched.
+  // Requiring them would instead stop the API booting everywhere the channel is
+  // not configured, trading a local refusal for a global outage.
+  //
+  // Both are Meta ids and therefore digits: checked here so a fat-fingered paste
+  // is a failed boot rather than a Graph call that fails per request, in the one
+  // flow whose credential expires in 30 seconds and cannot be retried.
+  // ---------------------------------------------------------------------------
+
+  /** `client_id` on the code exchange, and what the console launches `FB.login` with. */
+  META_APP_ID: MetaIdSchema.optional(),
+
+  /**
+   * The Facebook Login for Business configuration the console launches. Read by
+   * the console rather than by the API — declared here anyway, so this schema
+   * stays the one place a complete environment is described, on the precedent
+   * `DATABASE_URL` already sets.
+   */
+  META_EMBEDDED_SIGNUP_CONFIG_ID: MetaIdSchema.optional(),
 
   // ---------------------------------------------------------------------------
   // Media pipeline (TAR-20e)

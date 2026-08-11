@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ApiError, ApiErrorDetail } from './error';
 
 /**
  * The canonical error-code taxonomy. TAR-38 fixed the envelope shape in
@@ -81,6 +82,20 @@ export const API_ERROR_CODES = [
   'whatsapp_template_invalid',
   /** Meta rejected the send. `details` carries Meta's own code. */
   'whatsapp_send_failed',
+  /**
+   * Embedded Signup could not be completed into a connected WABA (TAR-161,
+   * 0002 amendment 2). `details` carries a `WhatsAppSignupFailureReason`, and it
+   * is the reason rather than the code that tells the console what to do next —
+   * every one of them is "re-run the flow", except the one that is "call
+   * support", and a single code could not carry that difference.
+   *
+   * Deliberately **not** `whatsapp_send_failed`: nothing was sent, and an
+   * operator reading that in a log would go looking for a message. Deliberately
+   * not `validation_failed` either — the body was well-formed; what failed was a
+   * grant. Meta being throttled or down keeps its own codes (`rate_limited`,
+   * `upstream_unavailable`), because those *are* retryable as-is.
+   */
+  'whatsapp_signup_failed',
   /** Webhook signature verification failed. Never returned to a browser. */
   'webhook_signature_invalid',
 
@@ -124,6 +139,13 @@ export const API_ERROR_STATUS: Record<ApiErrorCode, number> = {
   whatsapp_window_expired: 409,
   whatsapp_template_invalid: 400,
   whatsapp_send_failed: 502,
+  /**
+   * 400 rather than 502: Meta answered. What it refused was the caller's code or
+   * the grant behind it, which is a fact about the request, not about Meta's
+   * availability — `upstream_unavailable` and `rate_limited` cover that case and
+   * keep their own statuses.
+   */
+  whatsapp_signup_failed: 400,
   webhook_signature_invalid: 401,
 
   upstream_unavailable: 502,
@@ -132,4 +154,81 @@ export const API_ERROR_STATUS: Record<ApiErrorCode, number> = {
 
 export function httpStatusForErrorCode(code: ApiErrorCode): number {
   return API_ERROR_STATUS[code];
+}
+
+// ---------------------------------------------------------------------------
+// `whatsapp_signup_failed` — the reasons, and how one reaches a client
+// (TAR-161, 0002 amendment 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Why an Embedded Signup run could not be turned into a connected WABA.
+ *
+ * Published because the console's next action differs per case and the code
+ * alone cannot carry it: the first three are "re-run the flow" — with the
+ * missing permissions granted, for the third — and the fourth is "the grant does
+ * not cover this WABA", which is a support conversation and not something the
+ * tenant can fix by trying again.
+ *
+ * `insufficient_permissions` is also what an environment with no
+ * `META_APP_ID` answers. That is the fail-closed default rather than a
+ * misclassification: nothing was granted to us that we can act on, and the
+ * alternative — reporting a configuration gap to a tenant — tells the one party
+ * who cannot fix it.
+ *
+ * Additive like the code list: a reader that does not recognise a value must
+ * treat it as an unspecified failure, never crash. `whatsAppSignupFailureReason`
+ * is written that way.
+ */
+export const WHATSAPP_SIGNUP_FAILURE_REASONS = [
+  /** The 30-second code was spent before the exchange. Re-run the flow. */
+  'code_expired',
+  /** Meta rejected the code outright — malformed, already exchanged, or not ours. */
+  'code_invalid',
+  /** The grant is missing a scope the connection needs. Re-run and grant it. */
+  'insufficient_permissions',
+  /** The token cannot read the `wabaId` the caller named. Nothing is stored. */
+  'waba_mismatch',
+] as const;
+
+export const WhatsAppSignupFailureReasonSchema = z.enum(WHATSAPP_SIGNUP_FAILURE_REASONS);
+
+export type WhatsAppSignupFailureReason = (typeof WHATSAPP_SIGNUP_FAILURE_REASONS)[number];
+
+/**
+ * The `details` entry the reason travels in.
+ *
+ * 0002 writes the reason as `details.reason`, and the envelope this platform
+ * shipped in TAR-38 does not have that shape: `ApiErrorSchema.details` is an
+ * array of `{ path, message }`. Rather than widen the envelope for one code —
+ * which every existing client parses and no other code needs — the reason rides
+ * as one entry under a fixed path, and these two functions are the only place
+ * that encoding is written down. Widening `details` stays available later; this
+ * does not foreclose it.
+ */
+export const WHATSAPP_SIGNUP_FAILURE_REASON_PATH = 'reason';
+
+/** Builds the `details` an API handler attaches to `whatsapp_signup_failed`. */
+export function whatsAppSignupFailureDetails(
+  reason: WhatsAppSignupFailureReason,
+): ApiErrorDetail[] {
+  return [{ path: WHATSAPP_SIGNUP_FAILURE_REASON_PATH, message: reason }];
+}
+
+/**
+ * Reads the reason back out of an error envelope, or `null` when there is none
+ * this build knows about.
+ *
+ * `null` rather than a throw for an unrecognised value: a console running
+ * yesterday's bundle against an API that has published a fifth reason must fall
+ * back to the generic message, exactly as `ApiErrorSchema.code` staying a plain
+ * string lets it fall back on an unknown code.
+ */
+export function whatsAppSignupFailureReason(error: ApiError): WhatsAppSignupFailureReason | null {
+  const detail = error.error.details?.find(
+    (candidate) => candidate.path === WHATSAPP_SIGNUP_FAILURE_REASON_PATH,
+  );
+  const parsed = WhatsAppSignupFailureReasonSchema.safeParse(detail?.message);
+
+  return parsed.success ? parsed.data : null;
 }

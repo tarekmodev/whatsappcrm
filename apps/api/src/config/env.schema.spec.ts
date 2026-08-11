@@ -116,4 +116,51 @@ describe('environment validation', () => {
       expect(env.TRUSTED_PROXY_SECRET_PREVIOUS).toBe('b'.repeat(64));
     });
   });
+
+  describe('embedded signup configuration (TAR-161)', () => {
+    const CONFIGURED = { META_APP_ID: '1234567890', META_EMBEDDED_SIGNUP_CONFIG_ID: '9876543210' };
+
+    it('is optional, so an environment that does not use the channel still boots', () => {
+      // Blank rather than absent, which is what copying `.env.example` verbatim
+      // produces. Fail-closed happens at the route, not at boot: requiring these
+      // would trade one endpoint's refusal for a global outage.
+      const env = validateEnv({
+        ...REQUIRED,
+        META_APP_ID: '',
+        META_EMBEDDED_SIGNUP_CONFIG_ID: '',
+      });
+
+      expect(env.META_APP_ID).toBeUndefined();
+      expect(env.META_EMBEDDED_SIGNUP_CONFIG_ID).toBeUndefined();
+    });
+
+    it('leaves every other setting exactly where it was without them', () => {
+      // The absence of a signup config must not reach any other route: the
+      // webhook secret, the Graph client and the token key are untouched.
+      const withSignup = validateEnv({ ...REQUIRED, ...CONFIGURED });
+      const withoutSignup = validateEnv({ ...REQUIRED });
+
+      expect({ ...withSignup, ...CONFIGURED }).toEqual({ ...withoutSignup, ...CONFIGURED });
+    });
+
+    it('boots in production with neither of them', () => {
+      expect(() => validateEnv({ ...REQUIRED, NODE_ENV: 'production' })).not.toThrow();
+    });
+
+    it('keeps the ids as strings, because a Meta id exceeds MAX_SAFE_INTEGER', () => {
+      const env = validateEnv({ ...REQUIRED, ...CONFIGURED });
+
+      expect(env.META_APP_ID).toBe(CONFIGURED.META_APP_ID);
+      expect(env.META_EMBEDDED_SIGNUP_CONFIG_ID).toBe(CONFIGURED.META_EMBEDDED_SIGNUP_CONFIG_ID);
+    });
+
+    it('refuses a value that is not a Meta id', () => {
+      // A failed boot beats a Graph call that fails per request, in the one flow
+      // whose credential expires in 30 seconds and cannot be retried.
+      expect(() => validateEnv({ ...REQUIRED, META_APP_ID: 'my-app' })).toThrow(/META_APP_ID/);
+      expect(() => validateEnv({ ...REQUIRED, META_EMBEDDED_SIGNUP_CONFIG_ID: '98 76' })).toThrow(
+        /META_EMBEDDED_SIGNUP_CONFIG_ID/,
+      );
+    });
+  });
 });
