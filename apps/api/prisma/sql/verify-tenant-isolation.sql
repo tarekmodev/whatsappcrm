@@ -47,13 +47,24 @@
 --               nothing. `webhook_events` is unreachable by grant. The system
 --               role sees across tenants, which is what it is for.
 --
--- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74) as well
--- as the conversation tables. Phase 3a is a loop over whatever the catalog says
--- is protected, so an empty table passes it trivially — a real row in the two
--- tables that story added is what makes the assertion mean something for them.
--- The *constraint* those tables exist for is a separate property, proven in
--- `src/prisma/ticket-active-uniqueness.int-spec.ts`; this file is about
--- isolation only.
+-- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74), and
+-- one in each of the five auth tables — `teams`, `invites`, `invite_teams`,
+-- `sessions`, `password_reset_tokens` (TAR-54) — as well as the conversation
+-- tables. Phase 3a is a loop over whatever the catalog says is protected, so an
+-- empty table passes it trivially; a real row in the tables those stories added
+-- is what makes the assertion mean something for them. TAR-54's tables earn
+-- their rows twice over: they hold the credentials of the product, so "a query
+-- outside its own tenant returns nothing" is the acceptance criterion itself
+-- rather than a general property they inherit.
+--
+-- The *constraints* those tables exist for are separate properties, proven
+-- elsewhere: `src/prisma/ticket-active-uniqueness.int-spec.ts` for TAR-74's
+-- index, and TAR-55/56/57's own tests for single-use redemption and lockout.
+-- This file is about isolation only.
+--
+-- Nothing here is a credential. Every `token_hash` in the fixture is a literal
+-- string that says what it is; no value in this file is the hash of a token
+-- that exists, and no plaintext token, password or secret appears in it.
 
 \set ON_ERROR_STOP on
 
@@ -313,6 +324,15 @@ DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_a';
+-- TAR-54's tables, before the users, invites and teams they hang off. Their
+-- foreign keys cascade, so this is belt and braces — but every delete in this
+-- block is explicit and tenant-qualified, and a cascade that quietly stops
+-- being one should surface here rather than as a stray row later.
+DELETE FROM "public"."password_reset_tokens" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."sessions" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."invite_teams" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."invites" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."teams" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
@@ -323,6 +343,11 @@ DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."password_reset_tokens" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."sessions" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."invite_teams" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."invites" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."teams" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_b';
 
 DELETE FROM "public"."tenants" WHERE "id" IN (:'tenant_a', :'tenant_b');
@@ -359,6 +384,27 @@ INSERT INTO "public"."ticket_counters" ("tenant_id", "next_number")
 INSERT INTO "public"."tickets" ("id", "tenant_id", "number", "status", "conversation_id", "contact_id", "updated_at")
     VALUES ('11111111-1111-7111-8111-1111111111a6', :'tenant_a', 1, 'open',
             '11111111-1111-7111-8111-1111111111a4', '11111111-1111-7111-8111-1111111111a3', now());
+-- TAR-54's auth tables. A live session, a pending invite carrying a team, and
+-- an outstanding password reset — the three shapes an attacker would most like
+-- to read across a tenant boundary.
+--
+-- Every `token_hash` is a literal label, not the hash of anything. A real one
+-- is the SHA-256 hex of 32 random bytes; putting a plausible-looking one here
+-- would invite somebody to wonder what it decodes to.
+INSERT INTO "public"."teams" ("id", "tenant_id", "name", "updated_at")
+    VALUES ('11111111-1111-7111-8111-1111111111a7', :'tenant_a', 'Fixture A team', now());
+INSERT INTO "public"."invites" ("id", "tenant_id", "email", "role", "token_hash", "expires_at")
+    VALUES ('11111111-1111-7111-8111-1111111111a8', :'tenant_a', 'invited@tar48-fixture-a.test', 'agent',
+            'tar54-fixture-a-invite-token-hash-not-a-real-token', now() + interval '7 days');
+INSERT INTO "public"."invite_teams" ("tenant_id", "invite_id", "team_id")
+    VALUES (:'tenant_a', '11111111-1111-7111-8111-1111111111a8', '11111111-1111-7111-8111-1111111111a7');
+INSERT INTO "public"."sessions" ("id", "tenant_id", "user_id", "token_hash", "expires_at", "absolute_expires_at")
+    VALUES ('11111111-1111-7111-8111-1111111111a9', :'tenant_a', '11111111-1111-7111-8111-1111111111a1',
+            'tar54-fixture-a-session-token-hash-not-a-real-token',
+            now() + interval '12 hours', now() + interval '30 days');
+INSERT INTO "public"."password_reset_tokens" ("id", "tenant_id", "user_id", "token_hash", "expires_at")
+    VALUES ('11111111-1111-7111-8111-1111111111aa', :'tenant_a', '11111111-1111-7111-8111-1111111111a1',
+            'tar54-fixture-a-reset-token-hash-not-a-real-token', now() + interval '60 minutes');
 
 SET LOCAL app.tenant_id = :'tenant_b';
 
@@ -384,10 +430,31 @@ INSERT INTO "public"."ticket_counters" ("tenant_id", "next_number")
 INSERT INTO "public"."tickets" ("id", "tenant_id", "number", "status", "conversation_id", "contact_id", "updated_at")
     VALUES ('22222222-2222-7222-8222-2222222222b6', :'tenant_b', 1, 'open',
             '22222222-2222-7222-8222-2222222222b4', '22222222-2222-7222-8222-2222222222b3', now());
+-- TAR-54's auth tables in tenant B, at the same email address tenant A invited.
+-- Two tenants both holding a pending invite for `invited@…` is correct — auth
+-- is tenant-scoped, and the same person may hold accounts at two client orgs
+-- (TAR-35's assumptions) — so asserting it here means a future "globally unique
+-- invite address" cannot slip in unnoticed. The addresses differ only by
+-- domain because `invites.email` is the fixture's own namespace; what the
+-- partial unique index actually keys on is `(tenant_id, email)`.
+INSERT INTO "public"."teams" ("id", "tenant_id", "name", "updated_at")
+    VALUES ('22222222-2222-7222-8222-2222222222b7', :'tenant_b', 'Fixture B team', now());
+INSERT INTO "public"."invites" ("id", "tenant_id", "email", "role", "token_hash", "expires_at")
+    VALUES ('22222222-2222-7222-8222-2222222222b8', :'tenant_b', 'invited@tar48-fixture-b.test', 'agent',
+            'tar54-fixture-b-invite-token-hash-not-a-real-token', now() + interval '7 days');
+INSERT INTO "public"."invite_teams" ("tenant_id", "invite_id", "team_id")
+    VALUES (:'tenant_b', '22222222-2222-7222-8222-2222222222b8', '22222222-2222-7222-8222-2222222222b7');
+INSERT INTO "public"."sessions" ("id", "tenant_id", "user_id", "token_hash", "expires_at", "absolute_expires_at")
+    VALUES ('22222222-2222-7222-8222-2222222222b9', :'tenant_b', '22222222-2222-7222-8222-2222222222b1',
+            'tar54-fixture-b-session-token-hash-not-a-real-token',
+            now() + interval '12 hours', now() + interval '30 days');
+INSERT INTO "public"."password_reset_tokens" ("id", "tenant_id", "user_id", "token_hash", "expires_at")
+    VALUES ('22222222-2222-7222-8222-2222222222ba', :'tenant_b', '22222222-2222-7222-8222-2222222222b1',
+            'tar54-fixture-b-reset-token-hash-not-a-real-token', now() + interval '60 minutes');
 
 COMMIT;
 
-\echo 'fixture committed: 2 tenants, 8 rows each'
+\echo 'fixture committed: 2 tenants, 13 rows each'
 
 -- ---------------------------------------------------------------------------
 -- Phase 3 — behaviour, on a connection that has never set the GUC.
@@ -492,7 +559,55 @@ BEGIN
     SELECT count(*) INTO n FROM "public"."ticket_counters" WHERE "tenant_id" = tenant_b;
     IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of ticket_counters returned % rows', n; END IF;
 
-    RAISE NOTICE 'ok: tenant A sees its own 8 rows and none of tenant B''s';
+    -- TAR-54's four auth tables, read the same two ways. This is the story's
+    -- second acceptance criterion stated as an assertion: a query for another
+    -- tenant's session, invite, invited team or reset token returns nothing.
+    -- Named one table at a time rather than folded into the 3a loop because a
+    -- missing policy on any of these is the one failure that hands over an
+    -- account rather than a row of business data.
+    SELECT count(*) INTO n FROM "public"."sessions";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 session, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."sessions" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of sessions returned % rows', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."password_reset_tokens";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 password reset token, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."password_reset_tokens" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of password_reset_tokens returned % rows', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."invites";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 invite, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."invites" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of invites returned % rows', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."invite_teams";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 invite_teams row, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."invite_teams" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of invite_teams returned % rows', n; END IF;
+
+    -- The token hash is the lookup key on every one of these tables: the
+    -- application holds a token from a cookie or a link and asks which row it
+    -- belongs to. So the read that matters is not "select all" but "select by
+    -- hash", and that is the one an attacker who has somehow obtained another
+    -- tenant's token would make. It must find nothing, because the policy
+    -- filters before the unique index is consulted.
+    SELECT count(*) INTO n FROM "public"."sessions"
+        WHERE "token_hash" = 'tar54-fixture-b-session-token-hash-not-a-real-token';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s session was reachable by token hash'; END IF;
+
+    SELECT count(*) INTO n FROM "public"."password_reset_tokens"
+        WHERE "token_hash" = 'tar54-fixture-b-reset-token-hash-not-a-real-token';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s reset token was reachable by token hash'; END IF;
+
+    SELECT count(*) INTO n FROM "public"."invites"
+        WHERE "token_hash" = 'tar54-fixture-b-invite-token-hash-not-a-real-token';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s invite was reachable by token hash'; END IF;
+
+    RAISE NOTICE 'ok: tenant A sees its own 13 rows and none of tenant B''s';
 
     -- 3c. Tenant B, symmetrically. Same connection, same role — only the GUC
     -- changed, which is exactly what the client extension will do per request.
@@ -518,6 +633,23 @@ BEGIN
     EXCEPTION
         WHEN insufficient_privilege THEN
             RAISE NOTICE 'ok: insert carrying another tenant''s id rejected (SQLSTATE 42501)';
+    END;
+
+    -- The same thing on `sessions`, named separately because the consequence is
+    -- different in kind: minting a session row inside another tenant is not a
+    -- data leak, it is that tenant's account. Two mechanisms have to fail for
+    -- this to succeed — the policy's WITH CHECK, and the composite foreign key
+    -- to `users(tenant_id, id)`, which is why the fixture's own user id is used
+    -- rather than tenant B's.
+    BEGIN
+        INSERT INTO "public"."sessions" ("id", "tenant_id", "user_id", "token_hash", "expires_at", "absolute_expires_at")
+        VALUES ('11111111-1111-7111-8111-1111111111fe', tenant_b, '22222222-2222-7222-8222-2222222222b1',
+                'tar54-forged-session-token-hash-not-a-real-token',
+                now() + interval '12 hours', now() + interval '30 days');
+        RAISE EXCEPTION 'minted a session inside another tenant — WITH CHECK is not enforcing';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: session forged into another tenant rejected (SQLSTATE 42501)';
     END;
 
     -- 3e. Update and delete of another tenant's rows match nothing. No error —
@@ -598,6 +730,15 @@ DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_a';
+-- TAR-54's tables, before the users, invites and teams they hang off. Their
+-- foreign keys cascade, so this is belt and braces — but every delete in this
+-- block is explicit and tenant-qualified, and a cascade that quietly stops
+-- being one should surface here rather than as a stray row later.
+DELETE FROM "public"."password_reset_tokens" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."sessions" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."invite_teams" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."invites" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."teams" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
@@ -608,6 +749,11 @@ DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."password_reset_tokens" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."sessions" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."invite_teams" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."invites" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."teams" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_b';
 
 DELETE FROM "public"."tenants" WHERE "id" IN (:'tenant_a', :'tenant_b');

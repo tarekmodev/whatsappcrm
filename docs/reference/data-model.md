@@ -1,7 +1,7 @@
 # Data model reference
 
-The database as it stands on `main` after TAR-47, TAR-48, TAR-51, TAR-52, TAR-66, TAR-80,
-TAR-92 and TAR-20e. Written for engineers building against it.
+The database as it stands on `main` after TAR-47, TAR-48, TAR-51, TAR-52, TAR-54, TAR-66,
+TAR-74, TAR-80, TAR-92 and TAR-20e. Written for engineers building against it.
 
 `apps/api/prisma/schema.prisma` is the source of truth for columns, types and defaults,
 and carries the per-model reasoning next to each model. This document does not transcribe
@@ -43,7 +43,7 @@ Six rules hold across every model. A change that breaks one needs a reason in re
 
 ## Tenancy classification
 
-38 models. **35 are tenant-scoped**: they carry a non-null `tenant_id`, have
+40 models. **37 are tenant-scoped**: they carry a non-null `tenant_id`, have
 `ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Three are
 not, each deliberately:
 
@@ -127,7 +127,10 @@ stories add columns here rather than inventing a second settings table.
 The agents of a tenant. Identity is **tenant-scoped**, not global.
 
 - **Unique:** `(tenant_id, email)` on `citext`; `(tenant_id, id)`
-- **Indexes:** `(tenant_id, status)`
+- **Indexes:** `(tenant_id, status)`; a partial
+  `(tenant_id, locked_until) WHERE locked_until IS NOT NULL`, so the admin "who is locked
+  out" list reads an index holding only the locked rows. Raw SQL, not `schema.prisma`:
+  Prisma cannot express an index predicate
 - **Owned by:** TAR-35
 
 `role` has three values, not four: TAR-80 removed `owner`, which no code ever wrote and
@@ -145,23 +148,80 @@ architecture document records the additive migration path — keep `users` as th
 tenant-scoped membership row, add a global `identities` table, join — should that turn out
 to be wrong. `password_hash` is Argon2id and null for an invited user who has not accepted.
 
+`failed_login_attempts`, `last_failed_login_at` and `locked_until` are the lockout state
+(TAR-54, from TAR-53 decision 3). They are durable columns rather than a Redis counter
+because TAR-35 requires a lockout to be _observable to a tenant admin_, and a counter that
+evaporates on an eviction cannot answer "is this account locked, and since when". A Redis
+per-IP window sits alongside them and fails open; this one does not.
+
 #### `sessions`
 
 Opaque server-side sessions.
 
 - **Unique:** `token_hash` (globally unique)
 - **Indexes:** `(tenant_id, user_id)` for bulk revoke on a role change or password reset;
-  `(expires_at)` for the cross-tenant expiry sweep
+  `(expires_at)` and `(absolute_expires_at)` for the two halves of the cross-tenant expiry
+  sweep
 - **Owned by:** TAR-35
 
 The token itself is never stored, only its hash, so a database leak does not hand over
 live sessions.
 
+Two deadlines, not one (TAR-54). `expires_at` is the **sliding** idle window, pushed
+forward on use; `absolute_expires_at` is the **cap** it may not cross, written once at
+creation as `created_at + 30 days`. A row can therefore be past its cap while its
+`expires_at` is still in the future — which is the point of a cap, and why the sweep needs
+both indexes. `revoked_reason` records why a session died (`logout`, `password_change`,
+`deactivation`, …); it is an audit annotation and nothing branches on it, which is why it
+is text rather than an enum.
+
 #### `invites`
 
-- **Unique:** `token_hash` (globally unique)
+- **Unique:** `token_hash` (globally unique); `(tenant_id, id)`, referenced by
+  `invite_teams`; `(tenant_id, email) WHERE accepted_at IS NULL AND revoked_at IS NULL` —
+  partial unique, raw SQL, so two _live_ invites for one address are impossible
 - **Indexes:** `(tenant_id, email)`, `(tenant_id, invited_by_user_id)`
 - **Owned by:** TAR-35
+
+`revoked_at` is an admin cancelling a pending invite; `accepted_at` cannot express it,
+because "never accepted" and "withdrawn" are different states and only one should stop the
+link working.
+
+> ⚠️ **The partial unique index has no expiry term and cannot have one** — a Postgres
+> index predicate must be `IMMUTABLE`, and an expired invite is still
+> `accepted_at IS NULL AND revoked_at IS NULL`, so it keeps its slot. Invite creation is
+> therefore an **upsert**: reuse the existing unaccepted, unrevoked row, expired or not,
+> with a fresh token and expiry (TAR-53's `invites` section; TAR-55 implements it).
+> Inserting beside it makes the address un-invitable by any self-service path.
+
+#### `invite_teams`
+
+The teams an invited agent joins on acceptance.
+
+- **Primary key:** `(tenant_id, invite_id, team_id)` — the natural key is the whole row
+- **Indexes:** `(tenant_id, team_id)`, for "which pending invites reference this team"
+- **Relations:** `invites` and `teams`, both composite and `Cascade`
+- **Owned by:** TAR-35
+
+A `uuid[]` on `invites` would be one fewer table and cannot express a foreign key, so a
+team deleted between invite and acceptance would leave a dangling id that surfaces as a
+500 in the middle of onboarding.
+
+#### `password_reset_tokens`
+
+Single-use, time-limited password reset. 60-minute expiry.
+
+- **Unique:** `token_hash` (globally unique) — SHA-256 hex of 32 random bytes; the token
+  itself is never stored
+- **Indexes:** `(tenant_id, user_id)` for "invalidate this user's outstanding tokens";
+  `(expires_at)` for the cross-tenant sweep
+- **Owned by:** TAR-35
+
+A table rather than a signed stateless token, because single-use is _state_ and expiry
+alone does not give it — a stateless token needs a consumed-list to be single-use, which
+is this table with extra steps. Redemption is one conditional statement
+(`UPDATE … WHERE consumed_at IS NULL RETURNING`), so the update itself is the concurrency
+control and two simultaneous uses of one link cannot both win.
 
 #### `teams`, `team_members`
 
@@ -660,23 +720,27 @@ definitions — stays text or JSON.
 Applied in this order. Every directory carries a hand-written `down.sql` beside Prisma's
 `migration.sql`.
 
-| Migration                                               | What it does                                                                                                                                                     | Story   |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `20260810120000_baseline_extensions`                    | `pgcrypto` and `citext`. Creates no tables                                                                                                                       | TAR-42  |
-| `20260810130000_initial_data_model`                     | Every table and enum above, as TAR-47 shipped them                                                                                                               | TAR-47  |
-| `20260810140000_tenant_isolation_rls`                   | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                               | TAR-48  |
-| `20260810150000_tenant_deactivation_guard`              | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                       | TAR-51  |
-| `20260810160000_whatsapp_business_account_entity`       | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                       | TAR-52  |
-| `20260810170000_harden_tenant_deactivation_guard`       | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                      | TAR-51  |
-| `20260810180000_message_template_list_index`            | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                             | TAR-20a |
-| `20260810190000_agent_team_role_alignment`              | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes  | TAR-80  |
-| `20260811120000_conversations_last_message_at_not_null` | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                      | TAR-92  |
-| `20260811140000_media_pipeline`                         | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable | TAR-20e |
+| Migration                                               | What it does                                                                                                                                                                                                         | Story   |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `20260810120000_baseline_extensions`                    | `pgcrypto` and `citext`. Creates no tables                                                                                                                                                                           | TAR-42  |
+| `20260810130000_initial_data_model`                     | Every table and enum above, as TAR-47 shipped them                                                                                                                                                                   | TAR-47  |
+| `20260810140000_tenant_isolation_rls`                   | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                                                                                   | TAR-48  |
+| `20260810150000_tenant_deactivation_guard`              | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                                                                           | TAR-51  |
+| `20260810160000_whatsapp_business_account_entity`       | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                                                                           | TAR-52  |
+| `20260810170000_harden_tenant_deactivation_guard`       | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                                                                          | TAR-51  |
+| `20260810180000_message_content_type_unsupported`       | `ALTER TYPE message_content_type ADD VALUE 'unsupported'`                                                                                                                                                            | TAR-67  |
+| `20260810180000_message_template_list_index`            | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                                                                                 | TAR-20a |
+| `20260810190000_agent_team_role_alignment`              | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes                                                      | TAR-80  |
+| `20260811120000_conversations_last_message_at_not_null` | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                                                                          | TAR-92  |
+| `20260811130000_ticket_active_constraint_and_counters`  | `tickets_one_active_per_contact`; the `ticket_counters` allocator and the 35th policy                                                                                                                                | TAR-74  |
+| `20260811140000_media_pipeline`                         | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable                                                     | TAR-20e |
+| `20260811150000_auth_schema_and_policies`               | `password_reset_tokens` and `invite_teams` and the 37th and 38th policies; lockout columns on `users`; `absolute_expires_at` and `revoked_reason` on `sessions`; `revoked_at` and the live-invite index on `invites` | TAR-54  |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's
 migration; the 35th, `ticket_counters`, carries its policy in TAR-74's; the 36th,
-`media_objects`, carries its policy in TAR-20e's.
+`media_objects`, carries its policy in TAR-20e's; and the 37th and 38th,
+`password_reset_tokens` and `invite_teams`, carry theirs in TAR-54's.
 
 `20260810180000_message_content_type_unsupported` shares the `180000` slot with the
 template-list index and is absent from the table above only because it was added on a
@@ -686,6 +750,12 @@ TAR-52's directory takes the `160000` slot even though `170000` landed on `main`
 That is coordinated, not an accident: the two are independent — one replaces a function and
 touches no table, the other touches three tables and no function — and both orders were
 verified against a real database before either was committed.
+
+TAR-54's directory takes `150000` rather than the `140000` it was authored in, because
+TAR-20e reached `main` first and claimed that slot. Two directories sharing a timestamp
+apply in the order their names sort, which is not the order an already-migrated database
+applied them in — harmless for two independent migrations, and not a difference worth
+leaving in place when the later one has not merged yet and renaming it costs nothing.
 
 ### Adding a table
 

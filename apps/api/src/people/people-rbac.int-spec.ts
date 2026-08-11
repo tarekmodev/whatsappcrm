@@ -312,6 +312,10 @@ describe('agent, team and role management API', () => {
           userId: AGENT_A,
           tokenHash: 'tar81-fixture-session',
           expiresAt: new Date(Date.now() + 3_600_000),
+          // The 30-day cap the sliding `expiresAt` may not cross (TAR-54).
+          // Required, and deliberately so: a session row without one has no
+          // outer bound at all.
+          absoluteExpiresAt: new Date(Date.now() + 30 * 24 * 3_600_000),
         },
       });
 
@@ -590,6 +594,7 @@ describe('agent, team and role management API', () => {
           userId: AGENT_A,
           tokenHash: 'tar81-fixture-session-team',
           expiresAt: new Date(Date.now() + 3_600_000),
+          absoluteExpiresAt: new Date(Date.now() + 30 * 24 * 3_600_000),
         },
       });
 

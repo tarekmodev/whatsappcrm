@@ -270,7 +270,7 @@ what TAR-52 changed about the WhatsApp entities.
 ### Tenant isolation
 
 Isolation is enforced by the database, not by application code remembering a `where`
-clause. All 35 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
+clause. All 37 tenant-scoped tables have `FORCE ROW LEVEL SECURITY` and one policy:
 
 ```sql
 CREATE POLICY tenant_isolation ON conversations
@@ -291,7 +291,7 @@ Two roles back it up, created by `apps/api/prisma/sql/app-roles.sql`:
 | `whatsappcrm_system` | The same, plus a `system_unrestricted` policy        | Everything — five call sites only  |
 
 **`pnpm db:verify:rls` is the proof, not the documentation.** It creates two tenants,
-reconnects so the connection has genuinely never set the GUC, and asserts that all 34 tables
+reconnects so the connection has genuinely never set the GUC, and asserts that all 37 tables
 return zero rows; that each tenant then sees its own rows and none of the other's; that a
 cross-tenant insert is rejected and a cross-tenant update or delete matches nothing. It
 reads the catalog rather than a list, exits non-zero on the first failure, and cleans up

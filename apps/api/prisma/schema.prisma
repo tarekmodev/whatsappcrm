@@ -419,7 +419,9 @@ model Tenant {
   settings                 TenantSettings?
   users                    User[]
   sessions                 Session[]
+  passwordResetTokens      PasswordResetToken[]
   invites                  Invite[]
+  inviteTeams              InviteTeam[]
   teams                    Team[]
   teamMembers              TeamMember[]
   whatsappBusinessAccounts WhatsappBusinessAccount[]
@@ -548,11 +550,30 @@ model User {
   /// limited by the principal cache TTL — so this is at most one extra UPDATE
   /// per user per minute, not one per request.
   lastSeenAt   DateTime?        @map("last_seen_at") @db.Timestamptz(3)
-  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant                Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Lockout state (TAR-53, decision 3), and the reason it is three durable
+  /// columns rather than a Redis counter: TAR-35 requires a lockout to be
+  /// *observable to a tenant admin*, and a counter that evaporates on an
+  /// eviction cannot answer "is this account locked, and since when".
+  ///
+  /// `failed_login_attempts` is monotonic between successes — the lockout fires
+  /// on every positive multiple of `AUTH_POLICY.loginFailureThreshold`, so an
+  /// attacker who waits out one window does not get a fresh allowance of ten.
+  /// A successful login resets it to zero along with `locked_until`.
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  /// Distinguishes "locked right now" from "locked last March" in the admin
+  /// list. `locked_until` alone cannot: it is cleared on the next success.
+  lastFailedLoginAt   DateTime? @map("last_failed_login_at") @db.Timestamptz(3)
+  /// The lockout itself. Compared against the database's `now()`, never a
+  /// node's clock, so skew between API instances cannot end one early.
+  lockedUntil         DateTime? @map("locked_until") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant                Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sessions              Session[]
+  passwordResetTokens   PasswordResetToken[]
   invitesSent           Invite[]
   teamMemberships       TeamMember[]
   assignedConversations Conversation[]
@@ -569,22 +590,46 @@ model User {
   @@unique([tenantId, email])
   @@unique([tenantId, id])
   @@index([tenantId, status])
+  /// One index is missing from this block on purpose:
+  /// `users_tenant_id_locked_until_idx` is **partial**
+  /// (`WHERE locked_until IS NOT NULL`), so the admin list can surface locked
+  /// accounts without scanning a table where almost every row has a NULL there.
+  /// Prisma cannot express an index predicate, so it lives in raw SQL in
+  /// `20260811150000_auth_schema_and_policies` — the same arrangement as
+  /// `tickets_one_active_per_contact` (TAR-74). Prisma's describer skips
+  /// predicated indexes entirely, so `migrate dev` proposes neither to create
+  /// nor to drop it and this is not drift. Nothing regenerates it from this
+  /// file alone.
   @@map("users")
 }
 
 /// Opaque server-side sessions (TAR-39, decision 2). The token itself is never
 /// stored — only its hash — so a database leak does not hand over live sessions.
 model Session {
-  id         String    @id @default(uuid(7)) @db.Uuid
-  tenantId   String    @map("tenant_id") @db.Uuid
-  userId     String    @map("user_id") @db.Uuid
-  tokenHash  String    @unique @map("token_hash")
-  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
-  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(3)
-  lastSeenAt DateTime? @map("last_seen_at") @db.Timestamptz(3)
-  ipAddress  String?   @map("ip_address") @db.Inet
-  userAgent  String?   @map("user_agent")
-  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                String    @id @default(uuid(7)) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  tokenHash         String    @unique @map("token_hash")
+  /// The *sliding* idle deadline: `now() + AUTH_POLICY.sessionIdleMs`, pushed
+  /// forward on use but never past `absolute_expires_at`.
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz(3)
+  /// The cap the sliding window may not cross —
+  /// `created_at + AUTH_POLICY.sessionAbsoluteMs` (TAR-53, decision 1). Stored
+  /// rather than derived from `created_at` so the sweep is one index range scan
+  /// instead of a computed predicate over every row, and so the cap can be
+  /// shortened for one session (a suspicious login) without a schema change.
+  absoluteExpiresAt DateTime  @map("absolute_expires_at") @db.Timestamptz(3)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(3)
+  /// Why this session died: `logout` / `logout_all` / `password_change` /
+  /// `password_reset` / `deactivation` / `admin`. Free text rather than an enum
+  /// — it is an audit annotation nothing branches on, and TAR-57/58/59 will add
+  /// reasons; `ALTER TYPE` for a label no query filters on is cost without
+  /// benefit. Null on a live session, and on one that simply expired.
+  revokedReason     String?   @map("revoked_reason")
+  lastSeenAt        DateTime? @map("last_seen_at") @db.Timestamptz(3)
+  ipAddress         String?   @map("ip_address") @db.Inet
+  userAgent         String?   @map("user_agent")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: Cascade)
@@ -593,7 +638,46 @@ model Session {
   @@index([tenantId, userId])
   /// The expiry sweep, which runs across tenants under `SystemPrisma`.
   @@index([expiresAt])
+  /// The other half of that sweep. A row can be past its absolute cap while its
+  /// sliding `expires_at` is still in the future — that is the whole point of a
+  /// cap — so the `expires_at` index above does not find it.
+  @@index([absoluteExpiresAt])
   @@map("sessions")
+}
+
+/// Single-use, time-limited password reset (TAR-53). A table rather than a
+/// signed stateless token: single-use is *state*, and expiry alone does not
+/// give it. A stateless token needs a consumed-list to be single-use, which is
+/// this table with extra steps.
+///
+/// Redemption is one conditional statement —
+/// `UPDATE … WHERE consumed_at IS NULL RETURNING` — so the update itself is the
+/// concurrency control and two simultaneous uses of one link cannot both win.
+/// A read-then-write would let both through.
+model PasswordResetToken {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  /// SHA-256 hex of the token. The token itself is never stored, so a database
+  /// leak yields no usable link. SHA-256 rather than argon2id is correct here
+  /// specifically: the input is 256 bits of uniform entropy, not a
+  /// human-chosen password, so there is no dictionary for a KDF to slow down.
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(3)
+  consumedAt  DateTime? @map("consumed_at") @db.Timestamptz(3)
+  /// Forensics only — never a filter, never shown to a user.
+  requestedIp String?   @map("requested_ip") @db.Inet
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: Cascade)
+
+  /// "Invalidate this user's outstanding tokens", which every new request and
+  /// every completed reset does.
+  @@index([tenantId, userId])
+  /// The cross-tenant expiry sweep under `SystemPrisma`.
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
 }
 
 model Invite {
@@ -605,14 +689,55 @@ model Invite {
   invitedByUserId String?   @map("invited_by_user_id") @db.Uuid
   expiresAt       DateTime  @map("expires_at") @db.Timestamptz(3)
   acceptedAt      DateTime? @map("accepted_at") @db.Timestamptz(3)
+  /// An admin cancelling a pending invite. `accepted_at` cannot express it:
+  /// "never accepted" and "withdrawn" are different states, and only one of
+  /// them should stop the link working.
+  revokedAt       DateTime? @map("revoked_at") @db.Timestamptz(3)
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invitedBy User?  @relation(fields: [tenantId, invitedByUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invitedBy User?        @relation(fields: [tenantId, invitedByUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  teams     InviteTeam[]
 
+  /// Referenced by `invite_teams` (conventions, rule 2).
+  @@unique([tenantId, id])
   @@index([tenantId, email])
   @@index([tenantId, invitedByUserId])
+  /// A second index is missing from this block on purpose:
+  /// `invites_one_live_per_email` is a **partial unique** index over
+  /// `(tenant_id, email) WHERE accepted_at IS NULL AND revoked_at IS NULL`, so
+  /// two live invites for one address — which means two accounts — are
+  /// impossible rather than merely unlikely. Prisma cannot express an index
+  /// predicate; it lives in raw SQL in
+  /// `20260811150000_auth_schema_and_policies`, which also explains why the
+  /// predicate cannot carry an expiry term and what TAR-55 must do about it.
   @@map("invites")
+}
+
+/// The teams an invited agent joins on acceptance.
+/// `InviteCreateInputSchema` has carried `teamIds` since TAR-53 and nothing in
+/// the schema held them.
+///
+/// A `uuid[]` column on `invites` would be one fewer table and cannot express a
+/// foreign key, so a team deleted between invite and acceptance would leave a
+/// dangling id that surfaces as a 500 in the middle of onboarding. Here the
+/// database removes the row with the team.
+model InviteTeam {
+  tenantId String @map("tenant_id") @db.Uuid
+  inviteId String @map("invite_id") @db.Uuid
+  teamId   String @map("team_id") @db.Uuid
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invite Invite @relation(fields: [tenantId, inviteId], references: [tenantId, id], onDelete: Cascade)
+  team   Team   @relation(fields: [tenantId, teamId], references: [tenantId, id], onDelete: Cascade)
+
+  /// The natural key is the whole row, so it is the primary key — no surrogate
+  /// `id` that nothing would ever reference (TAR-53's data model).
+  @@id([tenantId, inviteId, teamId])
+  /// "Which pending invites reference this team", the read a team deletion
+  /// needs. The primary key leads with `invite_id` and cannot serve it.
+  @@index([tenantId, teamId])
+  @@map("invite_teams")
 }
 
 /// The routing unit of TAR-22: a conversation assigned to a team is visible to
@@ -636,6 +761,7 @@ model Team {
 
   tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   members               TeamMember[]
+  pendingInvites        InviteTeam[]
   assignedConversations Conversation[]
   assignedTickets       Ticket[]
   assignmentRules       AssignmentRule[]
