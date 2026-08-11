@@ -56,6 +56,7 @@ const USERS: UserResponse[] = [
     teamIds: [TEAMS[0]?.id ?? ''],
     occupiesSeat: true,
     lastSeenAt: null,
+    security: null,
     createdAt: '2026-07-02T10:00:00.000Z',
   },
 ];

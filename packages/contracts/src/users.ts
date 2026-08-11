@@ -52,6 +52,24 @@ export const UserWritableStatusSchema = z.enum(USER_WRITABLE_STATUSES);
 export const AGENT_AVAILABILITY = ['available', 'away', 'offline'] as const;
 export const AgentAvailabilitySchema = z.enum(AGENT_AVAILABILITY);
 
+/**
+ * Brute-force state for one account (TAR-53's lockout policy, TAR-59's
+ * enforcement).
+ *
+ * Split into its own object rather than flattened onto `UserResponse` so the
+ * whole thing can be gated with one nullable check. `GET /api/v1/users` is
+ * `user:read`, which every agent holds — flat fields would give any agent a live
+ * readout of how close a named colleague is to being locked out, and
+ * confirmation when it lands. TAR-35 asks for a lockout observable to a tenant
+ * *admin*, not to the tenant.
+ */
+export const UserSecurityStateSchema = z.object({
+  /** Non-null while the account is locked. Cleared by `POST /api/v1/users/{id}/unlock`. */
+  lockedUntil: TimestampSchema.nullable(),
+  /** Consecutive failures since the last success or admin unlock. */
+  failedLoginAttempts: z.int().min(0),
+});
+
 export const UserResponseSchema = z.object({
   id: IdSchema,
   email: z.email(),
@@ -64,6 +82,14 @@ export const UserResponseSchema = z.object({
   /** Counts toward the plan's seat limit. Invited-but-unaccepted users do not. */
   occupiesSeat: z.boolean(),
   lastSeenAt: TimestampSchema.nullable(),
+  /**
+   * `null` for a caller without `user:update` — the serializer omits it rather
+   * than the handler branching, so a new endpoint returning a `UserResponse`
+   * cannot leak it by forgetting to. Never null for a caller who does hold the
+   * permission: an admin reading `null` here could not tell "not locked" from
+   * "not allowed to know".
+   */
+  security: UserSecurityStateSchema.nullable(),
   createdAt: TimestampSchema,
 });
 
@@ -144,6 +170,7 @@ export const TeamListQuerySchema = CursorPageQuerySchema.extend({
 export type UserStatus = z.infer<typeof UserStatusSchema>;
 export type UserWritableStatus = z.infer<typeof UserWritableStatusSchema>;
 export type AgentAvailability = z.infer<typeof AgentAvailabilitySchema>;
+export type UserSecurityState = z.infer<typeof UserSecurityStateSchema>;
 export type UserResponse = z.infer<typeof UserResponseSchema>;
 export type UserListQuery = z.infer<typeof UserListQuerySchema>;
 export type UserParams = z.infer<typeof UserParamsSchema>;

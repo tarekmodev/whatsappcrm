@@ -670,7 +670,10 @@ function toPage(rows: readonly UserRow[], limit: number): CursorPage<UserRespons
   const items = rows.slice(0, limit);
 
   return {
-    items: items.map(toUserResponse),
+    // Arrow, not a bare reference: `map` would pass the index as the second
+    // argument, which is `security` (TAR-53). The list omits lockout state —
+    // `user:read` is an agent permission, and only `user:update` may see it.
+    items: items.map((row) => toUserResponse(row)),
     nextCursor: rows.length > limit ? (items.at(-1)?.id ?? null) : null,
   };
 }

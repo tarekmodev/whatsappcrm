@@ -23,7 +23,27 @@ export interface UserRow {
   teamMemberships: readonly { teamId: string }[];
 }
 
-export function toUserResponse(row: UserRow): UserResponse {
+/**
+ * Brute-force state, which TAR-54 adds to `users` and TAR-59 populates. Separate
+ * from `UserRow` because it is fetched and returned under a different condition
+ * from the rest of the record.
+ */
+export interface UserSecurityRow {
+  lockedUntil: Date | null;
+  failedLoginAttempts: number;
+}
+
+/**
+ * `security` defaults to `null`, which is what a caller **without**
+ * `user:update` must see (TAR-53). Making the argument explicit rather than
+ * reading the principal in here keeps the mapper a pure row→response function
+ * and puts the permission decision at the handler, where the principal already
+ * is. Until TAR-54 lands the columns, every call site correctly passes nothing.
+ */
+export function toUserResponse(
+  row: UserRow,
+  security: UserSecurityRow | null = null,
+): UserResponse {
   return {
     id: row.id,
     email: row.email,
@@ -40,6 +60,13 @@ export function toUserResponse(row: UserRow): UserResponse {
     // seat on suspension would let a tenant park staff to dodge the plan limit.
     occupiesSeat: row.status === 'active' || row.status === 'suspended',
     lastSeenAt: row.lastSeenAt?.toISOString() ?? null,
+    security:
+      security === null
+        ? null
+        : {
+            lockedUntil: security.lockedUntil?.toISOString() ?? null,
+            failedLoginAttempts: security.failedLoginAttempts,
+          },
     createdAt: row.createdAt.toISOString(),
   };
 }

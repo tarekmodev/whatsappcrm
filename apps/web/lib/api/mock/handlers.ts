@@ -220,6 +220,8 @@ function inviteUser({ principal, body }: RouteContext): UserResponse {
     // An invited-but-unaccepted user does not count toward the plan's seats.
     occupiesSeat: false,
     lastSeenAt: null,
+    // Lockout is not modelled in the mock transport — see `fixtures.ts`.
+    security: null,
     createdAt: MOCK_CREATED_AT,
   };
 
