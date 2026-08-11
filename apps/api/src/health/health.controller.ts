@@ -26,6 +26,8 @@ export class HealthController {
   /** `GET /api/health` — liveness. Unauthenticated by design; the platform calls it. */
   @Get()
   check(): HealthResponse {
+    // TAR-45 QA: deliberate type error to verify the CI gate blocks a broken PR.
+    const qaDeliberateTypeError: number = 'not-a-number';
     return this.health.liveness();
   }
 
