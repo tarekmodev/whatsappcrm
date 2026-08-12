@@ -140,18 +140,73 @@ export class SessionCacheService {
    * place for the second pass to read.
    */
   async purgeUser(tenantId: string, userId: string, dropIndex = false): Promise<void> {
-    await this.redis.run('session cache purge', async (client) => {
-      const key = userSessionsKey(tenantId, userId);
-      const hashes = await client.smembers(key);
+    await this.purgeUsers(tenantId, [userId], dropIndex);
+  }
 
-      if (hashes.length > 0) {
-        await client.del(...hashes.map(sessionKey));
+  /**
+   * The same eviction for a set of users, in a fixed number of round trips
+   * rather than three per person (TAR-244).
+   *
+   * A team membership change revokes everybody it touches, and the caller that
+   * looped over them turned one supervisor's `PATCH /teams/{id}` into `3N`
+   * sequential Redis commands against a 500 ms command timeout — the point at
+   * which a bounded payload stops being enough on its own.
+   *
+   * One pipelined `SMEMBERS` per user, then chunked `DEL`s: two waits in the
+   * common case, and the chunking is what keeps a single command from carrying
+   * every token hash in a large team at once.
+   */
+  async purgeUsers(tenantId: string, userIds: readonly string[], dropIndex = false): Promise<void> {
+    if (userIds.length === 0) {
+      return;
+    }
+
+    await this.redis.run('session cache purge', async (client) => {
+      const indexKeys = userIds.map((userId) => userSessionsKey(tenantId, userId));
+      const pipeline = client.pipeline();
+
+      for (const key of indexKeys) {
+        pipeline.smembers(key);
       }
 
-      if (dropIndex) {
-        await client.del(key);
+      const replies = await pipeline.exec();
+      const doomed = [...readMembers(replies).map(sessionKey), ...(dropIndex ? indexKeys : [])];
+
+      for (const chunk of chunked(doomed, DELETE_CHUNK_SIZE)) {
+        await client.del(...chunk);
       }
     });
+  }
+}
+
+/**
+ * Keys per `DEL`. A purge for a full team can name thousands of hashes, and one
+ * command carrying all of them is a single large payload and a single long
+ * server-side pause — neither of which the 500 ms command timeout leaves room
+ * for.
+ */
+const DELETE_CHUNK_SIZE = 256;
+
+/**
+ * The token hashes a pipelined batch of `SMEMBERS` returned.
+ *
+ * A failed element is skipped rather than thrown on, matching the rest of this
+ * file: an un-purged cache entry costs at most `sessionCacheTtlMs` of staleness,
+ * while a throw here would turn a Redis blip into a failed revocation.
+ */
+function readMembers(replies: [Error | null, unknown][] | null): string[] {
+  if (replies === null) {
+    return [];
+  }
+
+  return replies.flatMap(([error, value]) =>
+    error === null && Array.isArray(value) ? (value as string[]) : [],
+  );
+}
+
+function* chunked<T>(values: readonly T[], size: number): Generator<T[]> {
+  for (let index = 0; index < values.length; index += size) {
+    yield values.slice(index, index + size);
   }
 }
 
