@@ -97,6 +97,46 @@ export class SessionRevocationService {
   }
 
   /**
+   * The same revocation for a set of users, at a cost that does not grow with
+   * the size of the set (TAR-244).
+   *
+   * One `UPDATE` over every target and one `INSERT` for the audit rows, in place
+   * of the caller's loop — which was two round trips per person, sequentially,
+   * on the one connection its transaction had taken out of the pool. A team's
+   * membership is now bounded by `TEAM_MEMBERSHIP_LIMITS.membersPerTeam`, and
+   * that bound is the ceiling on the payload rather than on the work.
+   *
+   * Audits only the users who were actually signed in somewhere, exactly as
+   * `revokeFor` does: a row per no-op would bury the events that matter.
+   *
+   * Returns the total revoked, which is what a caller logs.
+   */
+  async revokeForMany(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    userIds: readonly string[],
+    reason: SessionRevocationReason,
+  ): Promise<number> {
+    const revoked = await this.sessions.revokeAllForUsers(tx, tenantId, userIds, reason);
+
+    if (revoked.size === 0) {
+      return 0;
+    }
+
+    await this.audit.recordMany(
+      tx,
+      [...revoked].map(([userId, sessionsRevoked]) => ({
+        action: AUDIT_ACTIONS.sessionRevoked,
+        targetType: 'user' as const,
+        targetId: userId,
+        metadata: { reason, sessionsRevoked },
+      })),
+    );
+
+    return [...revoked.values()].reduce((total, count) => total + count, 0);
+  }
+
+  /**
    * The after-commit half of a revocation. Call it once the transaction that
    * contained `revokeFor` has resolved.
    *
@@ -108,5 +148,16 @@ export class SessionRevocationService {
    */
   async purgeCacheFor(tenantId: string, userId: string): Promise<void> {
     await this.sessions.purgeCacheFor(tenantId, userId);
+  }
+
+  /**
+   * The after-commit half of `revokeForMany`, and unconditional for the same
+   * reason the single one is.
+   *
+   * A fixed number of Redis round trips for the whole set rather than three per
+   * person — see `SessionCacheService.purgeUsers`.
+   */
+  async purgeCacheForMany(tenantId: string, userIds: readonly string[]): Promise<void> {
+    await this.sessions.purgeCacheForUsers(tenantId, userIds);
   }
 }

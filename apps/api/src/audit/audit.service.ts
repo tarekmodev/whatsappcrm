@@ -52,4 +52,38 @@ export class AuditService {
       select: { id: true },
     });
   }
+
+  /**
+   * Several entries as one statement, for a change that touches a set of people
+   * at once — a team's membership being replaced (TAR-244).
+   *
+   * One `INSERT` rather than one per row because these run inside the caller's
+   * transaction: a row per affected user is a round trip per affected user on a
+   * connection nothing else can use until it commits. `record` above stays the
+   * single-entry path rather than delegating here, so the common case keeps the
+   * `create` its callers' tests describe.
+   *
+   * The tenant and the actor are resolved once, which is also the honest shape:
+   * every entry in a batch describes the same actor performing the same
+   * operation.
+   */
+  async recordMany(tx: Prisma.TransactionClient, entries: readonly AuditEntry[]): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+
+    const tenantId = this.tenantContext.requireTenantId();
+    const actor = resolveAuditActor(this.tenantContext);
+
+    await tx.auditLog.createMany({
+      data: entries.map((entry) => ({
+        tenantId,
+        ...actor,
+        action: entry.action,
+        targetType: entry.targetType,
+        targetId: entry.targetId,
+        ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
+      })),
+    });
+  }
 }

@@ -70,6 +70,25 @@ export const UserSecurityStateSchema = z.object({
   failedLoginAttempts: z.int().min(0),
 });
 
+/**
+ * Ceilings on the two membership arrays a request may carry.
+ *
+ * Neither is a limit a real tenant meets: 500 people in one team is already an
+ * unusual shape, and somebody in 50 teams has stopped using teams as a
+ * visibility boundary. They exist because the work a membership change does is
+ * **per member** — every affected person's sessions are revoked and their
+ * principal cache purged — so an unbounded array is an unbounded amount of work
+ * one privileged caller can ask of a shared connection pool. The repo's own
+ * "bounded payload sizes, never fetch an unbounded set" rule, applied to the one
+ * entity here whose fan-out is not naturally small.
+ */
+export const TEAM_MEMBERSHIP_LIMITS = {
+  /** Members one team may be given in a single `POST`/`PATCH /teams`. */
+  membersPerTeam: 500,
+  /** Teams one person may be placed in by a single `PATCH /users/{id}`. */
+  teamsPerUser: 50,
+} as const;
+
 export const UserResponseSchema = z.object({
   id: IdSchema,
   email: z.email(),
@@ -78,7 +97,7 @@ export const UserResponseSchema = z.object({
   role: TenantRoleSchema,
   status: UserStatusSchema,
   availability: AgentAvailabilitySchema,
-  teamIds: z.array(IdSchema),
+  teamIds: z.array(IdSchema).max(TEAM_MEMBERSHIP_LIMITS.teamsPerUser),
   /** Counts toward the plan's seat limit. Invited-but-unaccepted users do not. */
   occupiesSeat: z.boolean(),
   lastSeenAt: TimestampSchema.nullable(),
@@ -124,7 +143,7 @@ export const UserParamsSchema = z.object({
 export const UserUpdateInputSchema = z.object({
   displayName: z.string().min(1).max(120).optional(),
   role: TenantRoleSchema.optional(),
-  teamIds: z.array(IdSchema).optional(),
+  teamIds: z.array(IdSchema).max(TEAM_MEMBERSHIP_LIMITS.teamsPerUser).optional(),
   status: UserWritableStatusSchema.optional(),
 });
 
@@ -136,14 +155,24 @@ export const TeamResponseSchema = z.object({
   id: IdSchema,
   name: z.string().min(1).max(80),
   description: z.string().max(500).nullable(),
-  memberUserIds: z.array(IdSchema),
+  /**
+   * The whole membership, bounded by the ceiling the write paths enforce — so
+   * the contract publishes a maximum response size rather than implying one.
+   *
+   * A team can still pass it one person at a time through `PATCH /users/{id}`,
+   * which bounds `teamIds` rather than the far side of the relation. Making the
+   * ceiling a database invariant needs a capacity check on every path that
+   * writes `team_members`, including invite acceptance, and that is a separate
+   * change with its own failure mode.
+   */
+  memberUserIds: z.array(IdSchema).max(TEAM_MEMBERSHIP_LIMITS.membersPerTeam),
   createdAt: TimestampSchema,
 });
 
 export const TeamCreateInputSchema = z.object({
   name: z.string().min(1).max(80),
   description: z.string().max(500).nullable().optional(),
-  memberUserIds: z.array(IdSchema).default([]),
+  memberUserIds: z.array(IdSchema).max(TEAM_MEMBERSHIP_LIMITS.membersPerTeam).default([]),
 });
 
 /**
@@ -152,6 +181,10 @@ export const TeamCreateInputSchema = z.object({
  * `remove`) reads better in isolation but loses to concurrent edits — two
  * supervisors each removing one person would each succeed against a membership
  * neither of them last saw.
+ *
+ * `.partial()` only makes the fields optional, so `memberUserIds` keeps the
+ * `membersPerTeam` ceiling — a replace is the operation with the larger fan-out
+ * of the two, not the smaller.
  */
 export const TeamUpdateInputSchema = TeamCreateInputSchema.partial();
 
