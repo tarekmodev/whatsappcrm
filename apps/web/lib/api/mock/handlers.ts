@@ -131,6 +131,7 @@ const HTTP_UNAUTHORIZED = 401;
 const HTTP_FORBIDDEN = 403;
 const HTTP_NOT_FOUND = 404;
 const HTTP_GONE = 410;
+const HTTP_CONFLICT = 409;
 const HTTP_UNPROCESSABLE = 422;
 const MOCK_REQUEST_ID = 'mock-request';
 const UUID_SEGMENT = '([0-9a-fA-F-]{36})';
@@ -224,9 +225,18 @@ const ROUTES: readonly Route[] = [
   },
   {
     method: 'POST',
+    pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/claim$`),
+    // Every role. Taking work nobody holds is what a shared inbox is for
+    // (TAR-186); what it can never do is take a thread off a colleague, which
+    // the compare-and-set below enforces rather than the permission.
+    permission: 'conversation:claim',
+    handle: claimConversation,
+  },
+  {
+    method: 'POST',
     pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/assign$`),
-    // Supervisor and above. An agent may read work nobody has claimed and may
-    // not take it — ADR 0002 amendment 4, restated as a refusal here so the
+    // Supervisor and above: releasing a thread, routing it to a team, and taking
+    // one off the colleague working it. Restated as a refusal here so the
     // console's permission gate is exercised against a real 403.
     permission: 'conversation:assign',
     handle: assignConversation,
@@ -787,6 +797,9 @@ function listInternalNotes({
  */
 function createInternalNote({ principal, params, body }: RouteContext): InternalNoteResponse {
   const conversation = findConversationInTenant(principal, params[0]);
+
+  assertHeld(conversation);
+
   const parsed = InternalNoteCreateInputSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -813,11 +826,39 @@ function createInternalNote({ principal, params, body }: RouteContext): Internal
 }
 
 /**
- * `POST /v1/conversations/{id}/assign` — the claim.
+ * `POST /v1/conversations/{id}/claim` — taking a thread nobody is on (TAR-186).
+ *
+ * The compare-and-set is mirrored rather than simplified: a thread somebody else
+ * holds answers `conflict`, and the holder re-claiming gets their own thread
+ * back. Those are the two branches the console has to render, so a mock that
+ * always succeeded would leave both untested.
+ */
+function claimConversation({ principal, params }: RouteContext): ConversationResponse {
+  const conversation = findConversationInTenant(principal, params[0]);
+
+  if (conversation.assignedUserId === principal.userId) {
+    return toConversationResponse(conversation);
+  }
+
+  if (conversation.assignedUserId !== null) {
+    throw refused('conflict', 'Somebody else claimed this conversation first.', HTTP_CONFLICT);
+  }
+
+  // The team is left alone: a thread routed to Billing and picked up by one of
+  // its members is still Billing's.
+  const claimed: MockConversation = { ...conversation, assignedUserId: principal.userId };
+
+  mockState().conversations.set(claimed.id, claimed);
+
+  return toConversationResponse(claimed);
+}
+
+/**
+ * `POST /v1/conversations/{id}/assign` — routing, hand-over and release.
  *
  * Absent leaves a column alone, `null` clears it, an id sets it; the three cases
- * are what let one endpoint claim, route to a team and release. An assignee who
- * is not an active member of this tenant is refused with `validation_failed`
+ * are what let one endpoint route to a team, hand over and release. An assignee
+ * who is not an active member of this tenant is refused with `validation_failed`
  * naming the field, exactly as the API does.
  */
 function assignConversation({ principal, params, body }: RouteContext): ConversationResponse {
@@ -882,6 +923,8 @@ function sendMessage({ principal, params, body, headers }: RouteContext): Messag
   if (idempotencyKey === undefined || !IdSchema.safeParse(idempotencyKey).success) {
     throw validationFailed();
   }
+
+  assertHeld(conversation);
 
   const parsed = SendMessageInputSchema.safeParse(body);
 
@@ -1051,6 +1094,25 @@ function isServiceWindowOpen(conversation: MockConversation): boolean {
 
 function isUnclaimed(conversation: MockConversation): boolean {
   return conversation.assignedUserId === null && conversation.assignedTeamId === null;
+}
+
+/**
+ * The API's `requireHeld`, mirrored: the shared pool is readable by every agent
+ * and writable by none, so a send, a note or a status change into it is refused
+ * until somebody claims the thread (TAR-186).
+ *
+ * Modelled rather than assumed, because it is what the console's shut composer
+ * is claiming to be true — a mock that let the write through would let a
+ * regression in that gate ship looking fine.
+ */
+function assertHeld(conversation: MockConversation): void {
+  if (isUnclaimed(conversation)) {
+    throw refused(
+      'conflict',
+      'Claim this conversation before replying to it — nobody is holding it yet.',
+      HTTP_CONFLICT,
+    );
+  }
 }
 
 function isAssignedTo(conversation: MockConversation, principal: SessionPrincipal): boolean {

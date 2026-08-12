@@ -4,6 +4,7 @@ import { content } from '@/content/en';
 import { verifySession } from '@/lib/session/session';
 import { loadConversationThread } from '@/features/inbox/thread.data';
 import { nameFor } from '@/features/inbox/directory.data';
+import { isConversationUnclaimed } from '@/features/inbox/conversation-hold';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { serviceWindowAt } from '@/features/inbox/service-window';
 import { InternalNotesPanel, InternalNotesPanelSkeleton } from './InternalNotesPanel';
@@ -38,6 +39,14 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
   }
 
   const { conversation, messages, hasOlderMessages, notes, userNames, teamNames } = result.thread;
+  // The shared pool is readable by everyone and writable by nobody (TAR-186):
+  // the API refuses a send, a note and a status change on a thread nobody holds,
+  // so the console shuts both boxes rather than letting an agent type a reply
+  // into a 409. Claiming is the control directly above them.
+  const isUnclaimed = isConversationUnclaimed(
+    conversation.assignedUserId,
+    conversation.assignedTeamId,
+  );
 
   return (
     <Stack gap="4">
@@ -47,7 +56,10 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
             conversation={conversation}
             assigneeName={nameFor(userNames, conversation.assignedUserId)}
             teamName={nameFor(teamNames, conversation.assignedTeamId)}
-            canAssign={session.checker.can('conversation:assign')}
+            holdPermissions={{
+              canClaim: session.checker.can('conversation:claim'),
+              canAssign: session.checker.can('conversation:assign'),
+            }}
             currentUserId={session.principal.userId}
             query={query}
           />
@@ -65,6 +77,7 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
             serviceWindowExpiresAt={conversation.serviceWindowExpiresAt}
             initialWindow={serviceWindowAt(conversation.serviceWindowExpiresAt, new Date())}
             canSend={session.checker.can('conversation:send')}
+            isUnclaimed={isUnclaimed}
           />
         </Stack>
       </SectionCard>
@@ -75,6 +88,7 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
           notes={notes}
           authorNames={userNames}
           canWrite={session.checker.can('conversation:note')}
+          isUnclaimed={isUnclaimed}
         />
       </SectionCard>
     </Stack>

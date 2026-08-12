@@ -7,7 +7,11 @@ import { SkeletonLine, SkeletonText } from '@/components/ui/Skeleton';
 import { Cluster } from '@/components/layout/Cluster';
 import { useContent } from '@/lib/content';
 import { routes, type ConversationStatusFilter, type InboxScope } from '@/lib/routes';
-import { conversationHold } from '@/features/inbox/conversation-hold';
+import {
+  canChangeHold,
+  conversationHold,
+  type HoldPermissions,
+} from '@/features/inbox/conversation-hold';
 import { ClaimButton } from './ClaimButton';
 import { ConversationBadges } from './ConversationBadges';
 import styles from './ConversationRow.module.css';
@@ -38,8 +42,16 @@ export interface ConversationRowProps {
   isSelected: boolean;
   /** The list's current filters, carried into the link so back preserves them. */
   query: { scope: InboxScope; status: ConversationStatusFilter | undefined };
-  /** `null` for a principal without `conversation:assign`, who gets no control. */
-  claim: { currentUserId: string } | null;
+  /**
+   * Who is looking and what they may do to a hold. `null` for a principal
+   * holding neither `conversation:claim` nor `conversation:assign`, who gets no
+   * control on any row.
+   */
+  claim: ClaimContext | null;
+}
+
+export interface ClaimContext extends HoldPermissions {
+  currentUserId: string;
 }
 
 export function ConversationRow({
@@ -52,6 +64,12 @@ export function ConversationRow({
 }: ConversationRowProps) {
   const content = useContent();
   const contactName = conversation.contact.displayName;
+  // `null` when there is nobody to compute it for — a principal with no claim
+  // control gets no button on any row and no hold to describe.
+  const hold =
+    claim === null
+      ? null
+      : conversationHold(conversation.assignedUserId, claim.currentUserId, assigneeName);
 
   return (
     <li className={listStyles.row} data-selected={isSelected ? 'true' : undefined}>
@@ -82,20 +100,19 @@ export function ConversationRow({
             assigneeName={assigneeName}
             teamName={teamName}
           />
-          {claim === null ? null : (
+          {/* Shown only for the direction this reader may actually take:
+              claiming is everyone's, releasing and taking over are a
+              supervisor's. */}
+          {hold !== null && claim !== null && canChangeHold(hold, claim) ? (
             <div className={styles.action}>
               <ClaimButton
                 conversationId={conversation.id}
                 contactName={contactName}
-                hold={conversationHold(
-                  conversation.assignedUserId,
-                  claim.currentUserId,
-                  assigneeName,
-                )}
+                hold={hold}
                 size="sm"
               />
             </div>
-          )}
+          ) : null}
         </Cluster>
       </div>
     </li>

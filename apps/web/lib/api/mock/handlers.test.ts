@@ -330,7 +330,7 @@ describe('one conversation', () => {
     ).resolves.toMatchObject({ assignedUserId: null, assignedTeamId: null });
   });
 
-  it('refuses an agent the claim, which needs conversation:assign', async () => {
+  it('refuses an agent the re-assignment, which needs conversation:assign', async () => {
     asRole('agent');
 
     await expect(
@@ -340,6 +340,60 @@ describe('one conversation', () => {
         body: { userId: MOCK_IDS.users.amina },
       }),
     ).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+  });
+
+  it('lets an agent claim a conversation nobody holds', async () => {
+    // TAR-186: reading the shared pool and being unable to take anything out of
+    // it is not a shared inbox. `conversation:claim` is every role's.
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/conversations/${MOCK_IDS.conversations.unassigned}/claim`,
+      }),
+    ).resolves.toMatchObject({ assignedUserId: MOCK_IDS.users.amina });
+  });
+
+  it('refuses a claim on a thread a colleague already holds', async () => {
+    const path = `/v1/conversations/${MOCK_IDS.conversations.unassigned}`;
+
+    asRole('supervisor');
+    await handleMockRequest({
+      method: 'POST',
+      path: `${path}/assign`,
+      body: { userId: MOCK_IDS.users.priya },
+    });
+
+    // The compare-and-set, from the losing side: a claim can never take a
+    // thread off the person on it, whoever asks.
+    asRole('agent');
+    await expect(
+      handleMockRequest({ method: 'POST', path: `${path}/claim` }),
+    ).rejects.toMatchObject({ status: 409, code: 'conflict' });
+  });
+
+  it('refuses a send and a note into a thread nobody holds', async () => {
+    // The duplicate reply TAR-186 closes, as the console would meet it: the
+    // composer is shut client-side, and this is the refusal behind that.
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/conversations/${MOCK_IDS.conversations.unassigned}/messages`,
+        headers: { 'idempotency-key': '0192f004-0000-7000-8000-0000000009f1' },
+        body: { type: 'text', body: 'On it!' },
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'conflict' });
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/conversations/${MOCK_IDS.conversations.unassigned}/notes`,
+        body: { body: 'Taking this one.' },
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'conflict' });
   });
 
   it('lets a supervisor claim an unassigned conversation and release it again', async () => {

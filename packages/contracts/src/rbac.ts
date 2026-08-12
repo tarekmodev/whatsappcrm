@@ -26,6 +26,21 @@ export const PERMISSIONS = [
   'conversation:read_all',
   'conversation:send',
   'conversation:assign',
+  /**
+   * Take a conversation **nobody holds** (TAR-186). Deliberately not part of
+   * `conversation:assign`, which is the wider right to move a thread between
+   * people — including off the colleague working it.
+   *
+   * The split is what lets every role hold this one. A shared inbox whose
+   * arriving work can be read by every agent and taken by none is not a shared
+   * inbox, and the alternative — granting agents `conversation:assign` — would
+   * hand them re-assignment away from a colleague at the same time.
+   *
+   * Bounded to unassigned records by the route that checks it, not by the
+   * permission: a permission cannot express "only while the row is still null",
+   * so `ConversationCommandService.claim` compares and sets.
+   */
+  'conversation:claim',
   'conversation:note',
 
   'ticket:read',
@@ -90,6 +105,7 @@ export type Permission = (typeof PERMISSIONS)[number];
 const AGENT_PERMISSIONS = [
   'conversation:read',
   'conversation:send',
+  'conversation:claim',
   'conversation:note',
   'ticket:read',
   'ticket:update',

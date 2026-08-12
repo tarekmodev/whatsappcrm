@@ -6,7 +6,7 @@ import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { useContent } from '@/lib/content';
 import { CONVERSATIONS_PAGE_SIZE } from '@/features/people/constants';
 import type { ConversationStatusFilter, InboxScope } from '@/lib/routes';
-import { ConversationRow, ConversationRowSkeleton } from './ConversationRow';
+import { ConversationRow, ConversationRowSkeleton, type ClaimContext } from './ConversationRow';
 import styles from './ConversationList.module.css';
 
 /**
@@ -26,12 +26,12 @@ export interface ConversationListProps {
   /** The open thread, or `null` for the list-only view. */
   selectedId: string | null;
   /**
-   * Who is looking, when they hold `conversation:assign` — `null` for a
-   * principal who gets no claim control at all. TAR-71's scope puts the claim on
-   * the list as well as the thread, so picking work out of the shared pool does
-   * not cost one thread-open per conversation.
+   * Who is looking, and which directions of a hold change they may make —
+   * `null` for a principal who gets no claim control at all. TAR-71's scope puts
+   * the claim on the list as well as the thread, so picking work out of the
+   * shared pool does not cost one thread-open per conversation.
    */
-  claim: { currentUserId: string } | null;
+  claim: ClaimContext | null;
 }
 
 export function ConversationList({

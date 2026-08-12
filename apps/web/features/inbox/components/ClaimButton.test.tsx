@@ -9,8 +9,9 @@ import { ClaimButton } from './ClaimButton';
  * TAR-20's second acceptance criterion at the control level, and the finding
  * that came out of reviewing it: taking a thread off the colleague working it is
  * not the same act as picking one out of the shared pool, and must not look like
- * it. The server writes the assignment unconditionally, so the UI is the only
- * place that difference exists until TAR-186 closes the race.
+ * it. TAR-186 made them different writes as well — the claim compares and sets,
+ * the take-over stays blind — so the confirmation is now in front of the one
+ * that genuinely cannot be refused.
  */
 
 const claimConversationAction = vi.fn();
@@ -90,10 +91,12 @@ describe('ClaimButton — unclaimed', () => {
     });
   });
 
-  it('reports a refusal inline rather than only as a toast that disappears', async () => {
+  it('reports a lost race inline rather than only as a toast that disappears', async () => {
+    // The refusal an agent will actually meet since TAR-186: the claim compares
+    // and sets, so a colleague who was a moment quicker keeps the thread.
     claimConversationAction.mockResolvedValue({
       status: 'error',
-      message: 'Your role does not include conversation:assign.',
+      message: 'Somebody else claimed this conversation first.',
       requestId: 'req-1',
     });
 
@@ -102,7 +105,7 @@ describe('ClaimButton — unclaimed', () => {
     fireEvent.click(screen.getByRole('button', { name: content.inbox.claimAria(CONTACT) }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Your role does not include conversation:assign.',
+      'Somebody else claimed this conversation first.',
     );
   });
 });

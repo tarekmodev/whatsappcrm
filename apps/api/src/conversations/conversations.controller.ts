@@ -71,6 +71,16 @@ const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
  * every one of these routes makes: a thread the caller may not see answers
  * `not_found`, whatever their role.
  *
+ * ## Reading the shared pool is open; writing into it is not
+ *
+ * A tenth route joins them in TAR-186: `POST /conversations/{id}/claim`, on a
+ * `conversation:claim` every role holds. It exists because an unclaimed
+ * conversation is visible to every agent, so without an owner two of them reply
+ * to the same customer. The send, the note and the status change therefore
+ * refuse a thread nobody holds — `ConversationQueryService.requireHeld` — and
+ * claiming is the action that clears that. The list, the detail read, the
+ * message history and the read receipt are unchanged.
+ *
  * ## Ids are validated as UUIDs before anything looks them up
  *
  * A path parameter that is not a UUID names nothing, and it reaches a `@db.Uuid`
@@ -114,7 +124,31 @@ export class ConversationsController {
     return this.commands.setStatus(id, input.status).catch(translateConversationFailure);
   }
 
-  /** `POST /api/v1/conversations/{id}/assign` — claim, route to a team, or release. */
+  /**
+   * `POST /api/v1/conversations/{id}/claim` — take a thread nobody holds.
+   *
+   * Separate from `assign` because it is a narrower act with a wider audience:
+   * every role holds `conversation:claim`, it can only ever move a conversation
+   * from unassigned to the caller, and it can never take one off the colleague
+   * working it. `assign` keeps the rest — routing to a team, handing to a named
+   * agent, releasing back to the pool — and stays supervisor and above.
+   *
+   * No body: the assignee is the session's principal, never a parameter. A claim
+   * that could name somebody else would be a re-assignment wearing this
+   * permission.
+   *
+   * No `Idempotency-Key` either. The write is a compare-and-set the caller
+   * cannot repeat into a second effect — a replay by the holder answers 200 with
+   * the same conversation — so the header would guard nothing.
+   */
+  @Post(':id/claim')
+  @RequirePermission('conversation:claim')
+  @HttpCode(HttpStatus.OK)
+  claim(@Param('id', conversationIdPipe()) id: string): Promise<ConversationResponse> {
+    return this.commands.claim(id).catch(translateConversationFailure);
+  }
+
+  /** `POST /api/v1/conversations/{id}/assign` — route to a team, hand over, or release. */
   @Post(':id/assign')
   @RequirePermission('conversation:assign')
   @HttpCode(HttpStatus.OK)

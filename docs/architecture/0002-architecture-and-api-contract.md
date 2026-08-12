@@ -594,6 +594,8 @@ PATCH  /api/v1/contacts/{id}                 → ContactResponse              co
 GET    /api/v1/conversations                 → CursorPage<ConversationResponse>  conversation:read
 GET    /api/v1/conversations/{id}            → ConversationResponse
 PATCH  /api/v1/conversations/{id}/status     → ConversationResponse
+POST   /api/v1/conversations/{id}/claim      → ConversationResponse   conversation:claim
+                                                                      added by amendment 6
 POST   /api/v1/conversations/{id}/assign     → ConversationResponse   conversation:assign
 POST   /api/v1/conversations/{id}/read       → 204
 GET    /api/v1/conversations/{id}/messages   → CursorPage<MessageResponse>
@@ -1487,3 +1489,69 @@ is gone. Re-reading rather than trusting the announcement is load-bearing: a sig
 password change spares one session and `DELETE /auth/sessions/{id}` kills exactly one
 device, so "this user had a revocation" is not the same question as "is _this_ socket still
 good".
+
+### Amendment 6 — the claim, and why the shared pool is read-only (TAR-186)
+
+Amendment 4 widened the read rule so an unclaimed conversation is visible to every agent on
+the tenant, and stated the consequence it left open: claiming still needed
+`conversation:assign`, which an agent does not hold. Implementing TAR-68 that way turned out
+to carry a second consequence nobody wrote down — **every agent could also write into the
+shared pool.**
+
+**The failure.** Two agents both see the same arriving conversation under
+`scope=unassigned`, both open it, both reply. The customer gets two answers from two people
+who each believed they were the one handling it. `Idempotency-Key` cannot catch this: each
+agent sends a distinct request with a distinct key, and both are legitimate. Nothing took
+the thread out of the pool, because the only thing that could was a permission agents do not
+have.
+
+**The rule: an unclaimed conversation is readable by everyone and writable by nobody.**
+`POST /conversations/{id}/messages`, `POST /conversations/{id}/notes` and
+`PATCH /conversations/{id}/status` all refuse a conversation with no assignee and no team,
+with `conflict`. The list, `GET /conversations/{id}`, the message history and
+`POST /conversations/{id}/read` are unchanged — reading the pool is the whole point of
+amendment 4, and a read receipt reaches nobody.
+
+Uniform across roles, deliberately. A supervisor replying into the pool produces the same
+two answers; they hold `conversation:assign` and can take the thread in the same click, and
+a role branch inside a write path is what 0004 exists to forbid.
+
+**The claim: `POST /conversations/{id}/claim`, on a new `conversation:claim` every role
+holds.** This is the change to 0004 that amendment 4 said would be needed if agents should
+self-serve — recorded there as open item 2, now resolved. It takes no body: the assignee is
+the session's own principal, so the route can never be a re-assignment wearing a smaller
+permission. It is a **compare-and-set** — `UPDATE … WHERE id = ? AND assigned_user_id IS
+NULL` — so of two agents claiming at the same moment PostgreSQL picks the winner and the
+other is refused. The holder re-claiming their own thread answers 200 with it, so a
+double-click is not a lie.
+
+The loser sees one of two refusals, and which is a matter of microseconds: `conflict` when
+their visibility read still admitted the thread, `not_found` when the winner committed
+first, because by then the thread is the winner's and invisible to them like any other
+claimed conversation. Both are refusals and neither is a write. Reporting the conflict in
+both cases would mean answering from a read that bypassed visibility, which is the
+id-enumeration this contract refuses everywhere else.
+
+Bounded to records nobody is personally on, which is `assigned_user_id IS NULL` rather than
+"no assignee and no team". A conversation routed to a team is work waiting for one of its
+members, so a member claiming it is the queue working, and the team assignment is left
+alone. The other half of "bounded to the caller's teams" is the visibility check the route
+makes first: a team-routed conversation answers `not_found` to an agent outside that team.
+
+`conversation:assign` keeps everything else — routing to a team, handing to a named agent,
+releasing back to the pool, and taking a thread off the colleague working it. That last one
+is deliberately still a blind write: an assignment that refused an already-held thread could
+not do the job it exists for. The console puts a confirmation in front of it instead.
+
+**No new error code.** Both refusals are `conflict`, on the reasoning amendment 4 gave for
+`contact_opted_out`: the request conflicts with the state of the resource, and inventing a
+code here would make `error-codes.ts` something an implementation edits. A published code
+the composer could branch on — to offer "Claim" in place of "Retry" — is a contract change
+worth making when the console needs more than the message, and is recorded as a follow-up
+rather than taken now.
+
+**What is still open.** Two members of the _same team_ can both reply to a thread routed to
+that team. It is the same shape of conflict at a smaller blast radius, and a supervisor or a
+rule put that thread in front of that team on purpose, so it is left as the team queue's own
+coordination problem rather than widened into this rule. TAR-23/24's routing is where it
+would be closed.

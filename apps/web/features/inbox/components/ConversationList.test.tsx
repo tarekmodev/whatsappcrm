@@ -4,6 +4,7 @@ import type { ConversationResponse } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import { ConversationList, ConversationListSkeleton } from './ConversationList';
+import type { ClaimContext } from './ConversationRow';
 
 vi.mock('@/features/inbox/inbox.actions', () => ({
   claimConversationAction: () => Promise.resolve({ status: 'success', data: {} }),
@@ -67,7 +68,7 @@ function renderList({
   query = QUERY,
 }: {
   conversations: readonly ConversationResponse[];
-  claim?: { currentUserId: string } | null;
+  claim?: ClaimContext | null;
   selectedId?: string | null;
   query?: { scope: 'assigned' | 'unassigned' | 'all'; status: 'open' | undefined };
 }) {
@@ -154,14 +155,27 @@ describe('ConversationList', () => {
  * work out of the shared pool does not cost one thread-open per conversation.
  */
 describe('ConversationList — claiming from the list', () => {
-  it('offers no control at all to a principal without conversation:assign', () => {
+  /** A supervisor: both directions of a hold change. */
+  const supervisor: ClaimContext = { currentUserId: AMINA_ID, canClaim: true, canAssign: true };
+  /** An agent since TAR-186: may take what nobody holds, and nothing else. */
+  const agent: ClaimContext = { currentUserId: AMINA_ID, canClaim: true, canAssign: false };
+
+  it('offers no control at all to a principal holding neither permission', () => {
     renderList({ conversations: [conversation({})], claim: null });
 
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
   it('offers a claim on an unclaimed row', () => {
-    renderList({ conversations: [conversation({})], claim: { currentUserId: AMINA_ID } });
+    renderList({ conversations: [conversation({})], claim: supervisor });
+
+    expect(
+      screen.getByRole('button', { name: content.inbox.claimAria('Fatima Al-Zahra') }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers that claim to an agent too — the shared inbox is theirs to pull from', () => {
+    renderList({ conversations: [conversation({})], claim: agent });
 
     expect(
       screen.getByRole('button', { name: content.inbox.claimAria('Fatima Al-Zahra') }),
@@ -171,7 +185,7 @@ describe('ConversationList — claiming from the list', () => {
   it('offers a release on a row the reader already holds', () => {
     renderList({
       conversations: [conversation({ assignedUserId: AMINA_ID })],
-      claim: { currentUserId: AMINA_ID },
+      claim: supervisor,
     });
 
     expect(
@@ -179,10 +193,19 @@ describe('ConversationList — claiming from the list', () => {
     ).toBeInTheDocument();
   });
 
+  it('offers an agent no way to take a row off a colleague', () => {
+    // `conversation:assign` is what a take-over needs, and an agent does not
+    // hold it. The API refuses the write too; this is the control not being
+    // there in the first place.
+    renderList({ conversations: [conversation({ assignedUserId: LIANG_ID })], claim: agent });
+
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
   it('offers a take-over, never a claim, on a row somebody else holds', () => {
     renderList({
       conversations: [conversation({ assignedUserId: LIANG_ID })],
-      claim: { currentUserId: AMINA_ID },
+      claim: supervisor,
     });
 
     expect(
@@ -196,7 +219,7 @@ describe('ConversationList — claiming from the list', () => {
   });
 
   it('keeps the claim control out of the row’s link, so a click on it does not navigate', () => {
-    renderList({ conversations: [conversation({})], claim: { currentUserId: AMINA_ID } });
+    renderList({ conversations: [conversation({})], claim: supervisor });
 
     const button = screen.getByRole('button', {
       name: content.inbox.claimAria('Fatima Al-Zahra'),

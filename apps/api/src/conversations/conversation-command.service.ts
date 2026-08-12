@@ -13,23 +13,34 @@ import {
 import type { Prisma } from '../generated/prisma/client';
 import { UserStatus } from '../generated/prisma/enums';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
+import { claimableFilter } from '../rbac/visibility';
 import {
   CONVERSATION_PROJECTION,
   toConversationResponse,
   type ConversationRow,
 } from './conversation.mapper';
 import { ConversationQueryService } from './conversation-query.service';
-import { UnknownTenantMemberError } from './conversations.errors';
+import {
+  ConversationAlreadyClaimedError,
+  ConversationNotFoundError,
+  UnknownTenantMemberError,
+} from './conversations.errors';
 
 /**
- * The three writes that change a conversation without sending anything: its
- * status, who owns it, and whether it is still unread.
+ * The four writes that change a conversation without sending anything: its
+ * status, who owns it, taking one nobody owns, and whether it is still unread.
  *
  * Every one of them goes through `ConversationQueryService.require` first, so
  * the visibility rule is applied exactly once and a route cannot be the one that
  * forgets it. A conversation the principal may not see answers `not_found` here
  * as it does on a read — never `forbidden`, which would confirm the id names a
  * real thread.
+ *
+ * `setStatus` goes one further and uses `requireHeld`, because resolving a
+ * thread nobody has claimed is the same shared-pool conflict a duplicate reply
+ * is: two agents closing the same arriving conversation out from under each
+ * other. `assign` and `markRead` deliberately do not — routing an unclaimed
+ * thread is the whole point of the first, and the second reaches nobody.
  *
  * ## Not audited, deliberately
  *
@@ -62,9 +73,70 @@ export class ConversationCommandService {
     conversationId: string,
     status: ConversationStatus,
   ): Promise<ConversationResponse> {
-    await this.conversations.require(conversationId);
+    await this.conversations.requireHeld(conversationId);
 
     return this.write(conversationId, { status });
+  }
+
+  /**
+   * `POST /conversations/{id}/claim` — an agent taking a thread out of the
+   * shared pool, which is what makes it writable (TAR-186).
+   *
+   * ## Compare-and-set, because two agents are looking at the same row
+   *
+   * The whole failure this closes is a race: `scope=unassigned` shows the same
+   * arriving conversation to every agent on the tenant, and a read-then-write
+   * would let two of them both succeed and both believe they hold it. The
+   * assignment therefore goes in as an `updateMany` carrying `claimableFilter()`
+   * in its `WHERE`, so exactly one of two concurrent claims updates a row and
+   * the other matches nothing. The database decides, not the order two requests
+   * happened to arrive in.
+   *
+   * Bounded to records nobody is on by that predicate rather than by the
+   * permission. Taking a thread off the colleague working it is a different act
+   * with a different right (`conversation:assign`) and a confirmation in front
+   * of it; this one can never do that, whatever it is called with. The other
+   * bound is the visibility check above: a conversation routed to a team the
+   * caller is not in answers `not_found` before the update is reached.
+   *
+   * ## Re-claiming what you already hold is a no-op, not a conflict
+   *
+   * A double-clicked button and a retry after a dropped response both arrive as
+   * a second claim. Answering the second with 409 would tell an agent who does
+   * hold the thread that they do not. So a claim that matched nothing re-reads
+   * the row and reports a conflict only when somebody *else* is on it.
+   *
+   * ## Losing has two answers, and both are refusals
+   *
+   * `conflict` when the visibility read above still admitted the thread — the
+   * caller was looking at the shared pool and the compare-and-set is what
+   * refused them. `not_found` when the winner committed *first*, because the
+   * thread is theirs by then and invisible to everyone else, which is what every
+   * other route answers for it. Which one a losing caller sees is therefore a
+   * matter of microseconds, and the console treats them the same way: refetch.
+   * The alternative — reporting the conflict from a read that bypassed
+   * visibility — is the id-enumeration this module refuses everywhere else.
+   */
+  async claim(conversationId: string): Promise<ConversationResponse> {
+    // The row before the write, for the same reason `assign` loads one: it is
+    // what the hand-over event carries, and `require` has to read it anyway.
+    const before = await this.conversations.require(conversationId);
+    const { userId } = this.tenantContext.requirePrincipal();
+
+    const { count } = await this.prisma.conversation.updateMany({
+      where: { id: conversationId, ...claimableFilter() },
+      data: { assignedUserId: userId },
+    });
+
+    if (count === 0) {
+      return this.reportLostClaim(conversationId, userId);
+    }
+
+    const claimed = toConversationResponse(await this.read(conversationId));
+
+    this.announceHandover(before, claimed);
+
+    return claimed;
   }
 
   /**
@@ -143,6 +215,52 @@ export class ConversationCommandService {
         select: CONVERSATION_PROJECTION,
       }),
     );
+  }
+
+  /**
+   * The conversation as it stands, in the projection every response is built
+   * from. Used where the write was an `updateMany` — which returns a count
+   * rather than a row — so a compare-and-set still answers with the same shape
+   * an `update` would have.
+   */
+  private async read(conversationId: string): Promise<ConversationRow> {
+    return this.prisma.conversation.findUniqueOrThrow({
+      where: { id: conversationId },
+      select: CONVERSATION_PROJECTION,
+    });
+  }
+
+  /**
+   * What a claim that matched no row means, which is one of three things.
+   *
+   * The re-read is deliberately not `require`: by now the winner holds the
+   * thread, so it is out of this principal's shared-pool visibility and
+   * `require` would answer `not_found` — telling an agent who was looking at the
+   * conversation a moment ago that it does not exist. RLS still scopes the read
+   * to the tenant, and the caller already saw this id in the queue, so reporting
+   * the conflict leaks nothing they did not have.
+   */
+  private async reportLostClaim(
+    conversationId: string,
+    userId: string,
+  ): Promise<ConversationResponse> {
+    const current = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: CONVERSATION_PROJECTION,
+    });
+
+    if (current === null) {
+      // Deleted, or another tenant's — `require` admitted it a moment ago, so
+      // this is a race with a delete rather than an enumeration attempt.
+      throw new ConversationNotFoundError(conversationId);
+    }
+
+    if (current.assignedUserId === userId) {
+      // Already theirs: a double-click, or a retry after a dropped response.
+      return toConversationResponse(current);
+    }
+
+    throw new ConversationAlreadyClaimedError(conversationId);
   }
 
   /**

@@ -28,7 +28,9 @@ import { ConversationCommandService } from './conversation-command.service';
 import { ConversationQueryService } from './conversation-query.service';
 import { ConversationsController } from './conversations.controller';
 import {
+  ConversationAlreadyClaimedError,
   ConversationNotFoundError,
+  ConversationUnclaimedError,
   ServiceWindowExpiredError,
   TemplateNotSendableError,
 } from './conversations.errors';
@@ -37,7 +39,7 @@ import { MessageQueryService } from './message-query.service';
 import { MessageSendService } from './message-send.service';
 
 /**
- * The HTTP contract of the nine inbox routes.
+ * The HTTP contract of the ten inbox routes.
  *
  * The load-bearing assertions are the first two in each block: with no session
  * the route answers 401 and never reaches a service, and with the wrong
@@ -127,6 +129,7 @@ describe('conversation routes', () => {
   let get: jest.Mock;
   let setStatus: jest.Mock;
   let assign: jest.Mock;
+  let claim: jest.Mock;
   let markRead: jest.Mock;
   let listMessages: jest.Mock;
   let sendMessage: jest.Mock;
@@ -139,6 +142,7 @@ describe('conversation routes', () => {
     get = jest.fn();
     setStatus = jest.fn();
     assign = jest.fn();
+    claim = jest.fn();
     markRead = jest.fn();
     listMessages = jest.fn();
     sendMessage = jest.fn();
@@ -159,7 +163,7 @@ describe('conversation routes', () => {
       providers: [
         ApiExceptionFilter,
         { provide: ConversationQueryService, useValue: { list, get } },
-        { provide: ConversationCommandService, useValue: { setStatus, assign, markRead } },
+        { provide: ConversationCommandService, useValue: { setStatus, assign, claim, markRead } },
         { provide: MessageQueryService, useValue: { list: listMessages } },
         { provide: MessageSendService, useValue: { send: sendMessage } },
         { provide: InternalNotesService, useValue: { list: listNotes, create: createNote } },
@@ -255,6 +259,54 @@ describe('conversation routes', () => {
         .expect(404);
 
       expect(ApiErrorSchema.parse(response.body).error.code).toBe('not_found');
+    });
+  });
+
+  describe('POST /api/v1/conversations/{id}/claim', () => {
+    function claimRequest() {
+      return request(server).post(`/api/v1/conversations/${CONVERSATION}/claim`);
+    }
+
+    it('refuses an unauthenticated caller before reaching the service', async () => {
+      signedIn = false;
+
+      await claimRequest().expect(401);
+      expect(claim).not.toHaveBeenCalled();
+    });
+
+    it('lets an agent take a thread nobody holds', async () => {
+      // The point of the whole story: `conversation:assign` is a supervisor's,
+      // and an inbox whose arriving work every agent can read and none can take
+      // is not a shared inbox.
+      claim.mockResolvedValue({ ...CONVERSATION_RESPONSE, assignedUserId: AGENT.userId });
+
+      const response = await claimRequest().expect(200);
+
+      expect(ConversationResponseSchema.parse(response.body).assignedUserId).toBe(AGENT.userId);
+      expect(claim).toHaveBeenCalledWith(CONVERSATION);
+    });
+
+    it('names no assignee — the caller is the session, never a parameter', async () => {
+      claim.mockResolvedValue({ ...CONVERSATION_RESPONSE, assignedUserId: AGENT.userId });
+
+      // A body naming somebody else changes nothing: the route takes none, so a
+      // claim can never be a re-assignment wearing `conversation:claim`.
+      await claimRequest().send({ userId: '68444444-4444-7444-8444-4444444444d9' }).expect(200);
+
+      expect(claim).toHaveBeenCalledWith(CONVERSATION);
+    });
+
+    it('answers 409 conflict when somebody else claimed it first', async () => {
+      claim.mockRejectedValue(new ConversationAlreadyClaimedError(CONVERSATION));
+
+      const response = await claimRequest().expect(409);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('conflict');
+    });
+
+    it('answers 400 for an id that is not a UUID', async () => {
+      await request(server).post('/api/v1/conversations/not-a-uuid/claim').expect(400);
+      expect(claim).not.toHaveBeenCalled();
     });
   });
 
@@ -370,6 +422,18 @@ describe('conversation routes', () => {
       // A different fact from the one above: this one is retryable with the
       // same key, and that one never is.
       execute.mockRejectedValueOnce(new IdempotentRequestInFlightError(KEY));
+
+      const response = await send().set('Idempotency-Key', KEY).send(body).expect(409);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('conflict');
+    });
+
+    it('answers 409 conflict for a thread nobody has claimed', async () => {
+      // TAR-186: the shared pool is readable by every agent, so without this the
+      // two of them looking at the same arriving thread both reply and the
+      // customer gets two answers. An idempotency key cannot catch it — each
+      // agent sends a distinct request, with a distinct key.
+      sendMessage.mockRejectedValue(new ConversationUnclaimedError(CONVERSATION));
 
       const response = await send().set('Idempotency-Key', KEY).send(body).expect(409);
 

@@ -114,18 +114,19 @@ Legend: ✅ granted · — not granted · **Δ** a delta from the table shipped 
 
 ### Conversations and tickets — TAR-22 AC1, AC2
 
-| Permission              | agent | supervisor | admin | Notes                                    |
-| ----------------------- | :---: | :--------: | :---: | ---------------------------------------- |
-| `conversation:read`     |  ✅   |     ✅     |  ✅   | Scoped by the predicate below            |
-| `conversation:read_all` |   —   |     ✅     |  ✅   | Tenant-wide; the agent/supervisor line   |
-| `conversation:send`     |  ✅   |     ✅     |  ✅   | Only on a visible conversation           |
-| `conversation:note`     |  ✅   |     ✅     |  ✅   | Internal notes                           |
-| `conversation:assign`   |   —   |     ✅     |  ✅   | Includes re-assignment away from oneself |
-| `ticket:read`           |  ✅   |     ✅     |  ✅   | Same predicate                           |
-| `ticket:read_all`       |   —   |     ✅     |  ✅   |                                          |
-| `ticket:update`         |  ✅   |     ✅     |  ✅   | Status, priority on a visible ticket     |
-| `ticket:close`          |  ✅   |     ✅     |  ✅   |                                          |
-| `ticket:assign`         |   —   |     ✅     |  ✅   |                                          |
+| Permission              | agent | supervisor | admin | Notes                                                      |
+| ----------------------- | :---: | :--------: | :---: | ---------------------------------------------------------- |
+| `conversation:read`     |  ✅   |     ✅     |  ✅   | Scoped by the predicate below                              |
+| `conversation:read_all` |   —   |     ✅     |  ✅   | Tenant-wide; the agent/supervisor line                     |
+| `conversation:send`     |  ✅   |     ✅     |  ✅   | Only on a visible conversation                             |
+| `conversation:note`     |  ✅   |     ✅     |  ✅   | Internal notes                                             |
+| `conversation:claim`    |  ✅   |     ✅     |  ✅   | **Δ** Take a thread nobody is on; never one somebody holds |
+| `conversation:assign`   |   —   |     ✅     |  ✅   | Route to a team, release, and re-assign away from oneself  |
+| `ticket:read`           |  ✅   |     ✅     |  ✅   | Same predicate                                             |
+| `ticket:read_all`       |   —   |     ✅     |  ✅   |                                                            |
+| `ticket:update`         |  ✅   |     ✅     |  ✅   | Status, priority on a visible ticket                       |
+| `ticket:close`          |  ✅   |     ✅     |  ✅   |                                                            |
+| `ticket:assign`         |   —   |     ✅     |  ✅   |                                                            |
 
 ### Contacts — TAR-33
 
@@ -224,11 +225,13 @@ Five consequences, each of which has already caught something:
    `assigned` silently, per `ConversationListQuerySchema`. A supervisor's shared inbox URL
    renders for an agent with less in it, rather than erroring. The console shows a notice
    saying so — that notice is what stops it reading as data loss.
-3. **`scope=unassigned` requires `_all` at v1.** Consequence, stated rather than discovered
-   later: an agent cannot browse and self-serve unclaimed work; it reaches them through
-   assignment (TAR-23/24) or a supervisor. Accepted for v1. If agents do need to pull work,
-   the answer is a new `conversation:claim` bounded to their teams' unassigned records —
-   **not** widening `unassigned`, which would expose the whole tenant backlog.
+3. **`scope=unassigned` requires `_all` for tickets.** An agent cannot browse and self-serve
+   an unclaimed ticket; it reaches them through assignment (TAR-23/24) or a supervisor,
+   because that backlog is work somebody has already triaged and widening it would expose
+   the whole tenant's. **Conversations are the exception**, ruled by 0002 amendment 4: a
+   conversation is created by a customer writing in, so an unclaimed one is by construction
+   visible to nobody, and `scope=unassigned` is open to every role. TAR-186 completed that
+   with the `conversation:claim` this item used to propose — see invariant 8.
 4. **Reporting uses the same predicate.** `report:read` aggregates over exactly
    `visible(...)`; `report:read_all` is tenant-wide. If a report ever computed over a wider
    set than the list endpoint, reporting would become a read channel around the matrix —
@@ -240,6 +243,21 @@ Five consequences, each of which has already caught something:
    index plus a filter instead. **Needs verification in TAR-81** with `EXPLAIN (ANALYZE,
 BUFFERS)`: if the OR form does not use both indexes, switch to a `UNION ALL` of two
    keyset pages merged in the API. No benchmark is claimed here.
+6. **Visible is not writable, for conversations** (TAR-186, 0002 amendment 6). An unclaimed
+   conversation is readable by every role and writable by none: the send, the internal note
+   and the status change refuse it with `conflict` until somebody holds it. Without this,
+   the widening in invariant 3 means two agents both reply to the same arriving customer,
+   and no idempotency key can catch it — each of them sends a distinct request.
+7. **`conversation:claim` takes what nobody is on; `conversation:assign` moves what somebody
+   is.** The claim is granted to every role and is a compare-and-set bounded to
+   `assigned_user_id IS NULL`, so it cannot take a thread off a colleague however it is
+   called; a conversation routed to a team may be claimed by a member, and the team
+   assignment survives. `conversation:assign` stays supervisor and above and keeps routing,
+   release and hand-over — including the deliberately blind write that a take-over is.
+8. **Open item 2 is resolved.** "Agents cannot pull unclaimed work at v1" is closed by
+   invariant 7, bounded exactly as this document proposed: the caller's teams' unassigned
+   records, with the team bound coming from the visibility check rather than from widening
+   `unassigned`.
 
 ## Delta 1 — split role assignment out of user administration
 
@@ -424,7 +442,7 @@ things worth restating because they are where RBAC bugs actually come from:
 | #   | Item                                                                                       | Severity | Resolution                                                                                                                                                     |
 | --- | ------------------------------------------------------------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | OR-predicate index usage for the agent inbox — whether both partial-scope indexes are used | Medium   | Measure in TAR-81 with `EXPLAIN (ANALYZE, BUFFERS)`; fall back to `UNION ALL` keyset pages                                                                     |
-| 2   | Agents cannot pull unclaimed work at v1                                                    | Low      | Deferred. If needed: `conversation:claim` bounded to the caller's teams                                                                                        |
+| 2   | Agents cannot pull unclaimed work at v1                                                    | Low      | **Resolved in TAR-186**: `conversation:claim`, granted to every role, bounded to the caller's teams' unassigned records. See invariants 6–8                    |
 | 3   | Whether a supervisor should be able to delete a team that holds conversations              | Low      | No delete endpoint exists at v1. Invariant 4 governs the day one is added                                                                                      |
 | 4   | Tenant-configurable roles                                                                  | Low      | Out of scope. Additive: `ROLE_PERMISSIONS` becomes rows; guards do not change                                                                                  |
 | 5   | Does `contact:read` being tenant-wide leak across teams?                                   | Low      | Accepted: a contact carries no assignment, and an agent handling a conversation needs the person on it. Revisit if a tenant asks for team-partitioned contacts |

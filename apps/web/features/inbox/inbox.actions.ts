@@ -1,8 +1,7 @@
 'use server';
 
 import { InternalNoteCreateInputSchema } from '@whatsappcrm/contracts';
-import { assignConversation, createInternalNote } from '@/lib/api/conversations';
-import { verifySession } from '@/lib/session/session';
+import { assignConversation, claimConversation, createInternalNote } from '@/lib/api/conversations';
 import { routes } from '@/lib/routes';
 import type { ActionResult } from '@/lib/actions/result';
 import { runAction } from '@/lib/actions/run-action';
@@ -25,26 +24,23 @@ const INBOX_PATH = routes.inbox().split('?')[0] ?? '/inbox';
  * with a different confirmation. `teamId` is left alone — a thread routed to
  * Billing and picked up by one of its members is still Billing's.
  *
- * ⚠️ `conversation:assign` is **supervisor and above**. ADR 0002 amendment 4
- * opens an unclaimed conversation to every agent to read and rules that taking
- * one still needs this permission; ADR 0004 open item 2 records the
- * `conversation:claim` that would change that. The button is hidden for a
- * principal without it, and this assertion is why hiding it is not the gate.
+ * `conversation:claim` since TAR-186, and every role holds it: an inbox whose
+ * arriving work every agent can read and none can take is not a shared inbox.
+ * The API compares and sets, so the colleague who was a moment quicker keeps the
+ * thread and this action reports their conflict rather than overwriting them —
+ * which is also why the reply box stays shut until the claim comes back.
  */
 export async function claimConversationAction(
   conversationId: string,
 ): Promise<ActionResult<{ contactName: string }>> {
   return runAction({
-    permission: 'conversation:assign',
+    permission: 'conversation:claim',
     parser: null,
     input: undefined,
     revalidate: INBOX_PATH,
     label: 'Inbox',
     perform: async () => {
-      const session = await verifySession();
-      const conversation = await assignConversation(conversationId, {
-        userId: session.principal.userId,
-      });
+      const conversation = await claimConversation(conversationId);
 
       return { contactName: conversation.contact.displayName };
     },

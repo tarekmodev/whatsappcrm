@@ -7,7 +7,9 @@ import { TenantNotActiveError } from '../prisma/prisma.errors';
 import { UnknownWhatsAppAccountError } from '../whatsapp/message-template-query.service';
 import {
   ContactOptedOutError,
+  ConversationAlreadyClaimedError,
   ConversationNotFoundError,
+  ConversationUnclaimedError,
   InvalidConversationCursorError,
   SendMediaNotUsableError,
   ServiceWindowExpiredError,
@@ -46,6 +48,20 @@ export function translateConversationFailure(error: unknown): never {
 
   if (error instanceof ServiceWindowExpiredError) {
     throw new ApiException('whatsapp_window_expired', error.message);
+  }
+
+  if (
+    error instanceof ConversationUnclaimedError ||
+    error instanceof ConversationAlreadyClaimedError
+  ) {
+    // Both are the state of the row refusing a request the caller is otherwise
+    // entitled to make, which is what `conflict` means — never `forbidden`,
+    // which would say the role is wrong when claiming would fix it. They share
+    // a code and differ in message for the same reason `contact_opted_out` has
+    // none: inventing codes here would make `error-codes.ts` something an
+    // implementation edits. Publishing a code the composer can branch on to
+    // offer "Claim" in place of "Retry" is the recorded 0002 follow-up.
+    throw new ApiException('conflict', error.message);
   }
 
   if (error instanceof TemplateNotSendableError) {

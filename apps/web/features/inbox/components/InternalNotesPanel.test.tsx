@@ -41,7 +41,11 @@ const NAMES = new Map([
   [PRIYA_ID, 'Priya Raman'],
 ]);
 
-function renderPanel(canWrite: boolean, notes: InternalNoteResponse[] = NOTES) {
+function renderPanel(
+  canWrite: boolean,
+  notes: InternalNoteResponse[] = NOTES,
+  isUnclaimed = false,
+) {
   return render(
     <ToastProvider>
       <InternalNotesPanel
@@ -49,6 +53,7 @@ function renderPanel(canWrite: boolean, notes: InternalNoteResponse[] = NOTES) {
         notes={notes}
         authorNames={NAMES}
         canWrite={canWrite}
+        isUnclaimed={isUnclaimed}
       />
     </ToastProvider>,
   );
@@ -80,6 +85,7 @@ describe('InternalNotesPanel', () => {
           notes={NOTES}
           authorNames={new Map()}
           canWrite={false}
+          isUnclaimed={false}
         />
       </ToastProvider>,
     );
@@ -101,6 +107,22 @@ describe('InternalNotesPanel', () => {
 
     expect(screen.getByText(content.notes.emptyHeading)).toBeInTheDocument();
     expect(screen.getByText(content.notes.emptyBody)).toBeInTheDocument();
+  });
+
+  it('shuts the note box on a thread nobody has claimed, and says why', () => {
+    // The API refuses a note into the shared pool alongside the send (TAR-186):
+    // the note panel is where two agents would otherwise try to settle between
+    // themselves who is answering, which is the claim's job.
+    renderPanel(true, NOTES, true);
+
+    expect(screen.getByText(content.inbox.claimBeforeWriting)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: content.notes.addSubmit })).not.toBeInTheDocument();
+  });
+
+  it('still shows the notes themselves while unclaimed — reading is open', () => {
+    renderPanel(true, NOTES, true);
+
+    expect(screen.getByText('Refund already approved — no need to escalate.')).toBeInTheDocument();
   });
 });
 

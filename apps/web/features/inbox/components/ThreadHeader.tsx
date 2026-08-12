@@ -8,7 +8,11 @@ import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
 import { useContent } from '@/lib/content';
 import { routes, type ConversationStatusFilter, type InboxScope } from '@/lib/routes';
-import { conversationHold } from '@/features/inbox/conversation-hold';
+import {
+  canChangeHold,
+  conversationHold,
+  type HoldPermissions,
+} from '@/features/inbox/conversation-hold';
 import { ClaimButton } from './ClaimButton';
 import { ConversationBadges } from './ConversationBadges';
 import styles from './ThreadHeader.module.css';
@@ -16,7 +20,7 @@ import styles from './ThreadHeader.module.css';
 /**
  * Who the open conversation is with, who holds it, and the one control that
  * changes that. Usage:
- * `<ThreadHeader conversation={…} assigneeName={…} teamName={…} canAssign={…} currentUserId={…} query={…} />`.
+ * `<ThreadHeader conversation={…} assigneeName={…} teamName={…} holdPermissions={…} currentUserId={…} query={…} />`.
  *
  * The back link is the small-screen half of the two-pane layout: at narrow
  * widths the thread replaces the list, so there has to be a way back that is not
@@ -34,8 +38,8 @@ export interface ThreadHeaderProps {
   conversation: ConversationResponse;
   assigneeName: string | null;
   teamName: string | null;
-  /** `conversation:assign`; supervisor and above (ADR 0004). */
-  canAssign: boolean;
+  /** `conversation:claim` and `conversation:assign` — see `canChangeHold`. */
+  holdPermissions: HoldPermissions;
   currentUserId: string;
   query: ThreadQuery;
 }
@@ -44,12 +48,12 @@ export function ThreadHeader({
   conversation,
   assigneeName,
   teamName,
-  canAssign,
+  holdPermissions,
   currentUserId,
   query,
 }: ThreadHeaderProps) {
   const content = useContent();
-  const isUnclaimed = conversation.assignedUserId === null && conversation.assignedTeamId === null;
+  const hold = conversationHold(conversation.assignedUserId, currentUserId, assigneeName);
 
   return (
     <Stack gap="3">
@@ -65,11 +69,11 @@ export function ThreadHeader({
           </p>
         </div>
 
-        {canAssign ? (
+        {canChangeHold(hold, holdPermissions) ? (
           <ClaimButton
             conversationId={conversation.id}
             contactName={conversation.contact.displayName}
-            hold={conversationHold(conversation.assignedUserId, currentUserId, assigneeName)}
+            hold={hold}
           />
         ) : null}
       </Cluster>
@@ -81,10 +85,10 @@ export function ThreadHeader({
         showUnreadCount={false}
       />
 
-      {isUnclaimed && !canAssign ? (
-        // Said rather than left as a missing button: an agent can read work
-        // nobody has claimed and cannot take it (ADR 0002 amendment 4), and a
-        // console that simply showed nothing would read as a broken screen.
+      {hold.state === 'unclaimed' && !holdPermissions.canClaim ? (
+        // Said rather than left as a missing button: a console that simply
+        // showed nothing here would read as a broken screen. Rare since TAR-186
+        // gave every role `conversation:claim`.
         <Notice tone="info">{content.inbox.claimNotPermitted}</Notice>
       ) : null}
     </Stack>

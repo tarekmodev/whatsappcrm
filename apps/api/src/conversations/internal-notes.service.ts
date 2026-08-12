@@ -104,12 +104,18 @@ export class InternalNotesService {
    * The author is the principal, never a field of the request: a note is a
    * statement about who said what, and letting a client name the speaker would
    * make the whole record worthless.
+   *
+   * `requireHeld` rather than `require` (TAR-186): reading the shared pool is
+   * open to every agent and writing into it is not, and a note is a write. The
+   * customer never sees one, but two agents leaving "I'll take this" on a thread
+   * neither of them holds is the same coordination failure a duplicate reply is
+   * — and the note panel is where a team would otherwise try to fix it by hand.
    */
   async create(
     conversationId: string,
     input: InternalNoteCreateInput,
   ): Promise<InternalNoteResponse> {
-    await this.conversations.require(conversationId);
+    await this.conversations.requireHeld(conversationId);
 
     const principal = this.tenantContext.requirePrincipal();
     const mentionedUserIds = await this.resolveMentions(input.mentionedUserIds);

@@ -13,13 +13,17 @@ import {
 } from '../common/pagination/timestamp-keyset';
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
-import { isVisibleOrUnclaimed } from '../rbac/visibility';
+import { isUnclaimed, isVisibleOrUnclaimed } from '../rbac/visibility';
 import {
   CONVERSATION_PROJECTION,
   toConversationResponse,
   type ConversationRow,
 } from './conversation.mapper';
-import { ConversationNotFoundError, InvalidConversationCursorError } from './conversations.errors';
+import {
+  ConversationNotFoundError,
+  ConversationUnclaimedError,
+  InvalidConversationCursorError,
+} from './conversations.errors';
 import { inboxScopeFilter } from './inbox-scope';
 
 /**
@@ -133,6 +137,39 @@ export class ConversationQueryService {
       )
     ) {
       throw new ConversationNotFoundError(conversationId);
+    }
+
+    return conversation;
+  }
+
+  /**
+   * `require`, plus: **somebody holds this thread** (TAR-186).
+   *
+   * The check every write into a conversation makes — the send, the internal
+   * note and the status change — and the one a read does not. An unclaimed
+   * conversation is visible to every agent on the tenant, which is what a shared
+   * inbox is for; letting all of them write to it is how two agents answer the
+   * same customer twice, and no idempotency key can catch that because each of
+   * them sends a distinct request.
+   *
+   * So the shared pool is a queue, not a workspace: claiming
+   * (`POST /conversations/{id}/claim`) is the first action, and it is what makes
+   * the thread writable — by exactly one person.
+   *
+   * Uniform across roles rather than a supervisor exemption. A supervisor
+   * replying into the pool produces the same double answer, they hold
+   * `conversation:assign` and can take the thread in the same click, and a
+   * `if (role === …)` here is the branch `rbac.ts` exists to forbid.
+   *
+   * Not applied to `markRead`: reading the pool is allowed, so recording that
+   * somebody read it must be too, and an unread count is the thread's rather
+   * than anybody's — nothing reaches the customer and nothing conflicts.
+   */
+  async requireHeld(conversationId: string): Promise<ConversationRow> {
+    const conversation = await this.require(conversationId);
+
+    if (isUnclaimed(conversation)) {
+      throw new ConversationUnclaimedError(conversationId);
     }
 
     return conversation;

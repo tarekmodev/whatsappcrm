@@ -25,6 +25,7 @@ import styles from './MessageComposer.module.css';
  *   serviceWindowExpiresAt={conversation.serviceWindowExpiresAt}
  *   initialWindow={serviceWindowAt(conversation.serviceWindowExpiresAt, new Date())}
  *   canSend={session.checker.can('conversation:send')}
+ *   isUnclaimed={…}
  * />
  * ```
  *
@@ -56,6 +57,12 @@ export interface MessageComposerProps {
   initialWindow: ServiceWindow;
   /** `conversation:send`. Every role above guest has it; a reader may not. */
   canSend: boolean;
+  /**
+   * Nobody is on this thread. The API refuses every send into the shared pool
+   * (TAR-186), so the composer is shut and says why — an agent typing a reply
+   * that can only end in a 409 is worse than no composer at all.
+   */
+  isUnclaimed: boolean;
 }
 
 export function MessageComposer({
@@ -63,6 +70,7 @@ export function MessageComposer({
   serviceWindowExpiresAt,
   initialWindow,
   canSend,
+  isUnclaimed,
 }: MessageComposerProps) {
   const content = useContent();
   const window = useServiceWindow(serviceWindowExpiresAt, initialWindow);
@@ -74,6 +82,13 @@ export function MessageComposer({
     // Said rather than left as a missing box, for the reason the claim button
     // gives: a console that showed nothing here would read as a broken screen.
     return <Notice tone="info">{content.composer.sendNotPermitted}</Notice>;
+  }
+
+  if (isUnclaimed) {
+    // Before the window, because it is the earlier refusal: a claim is needed
+    // whether the 24 hours are open or shut, and offering the template picker
+    // here would be a second box that also cannot send.
+    return <Notice tone="info">{content.inbox.claimBeforeWriting}</Notice>;
   }
 
   return (
