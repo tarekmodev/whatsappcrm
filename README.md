@@ -441,8 +441,9 @@ writes anything.
 **It carries no credentials.** `POST /api/v1/auth/login` exists (TAR-56), but
 `users.password_hash` is null on every seeded row, and a user with no password can never
 sign in — so there is still nothing to sign in _with_. Setting one is invite acceptance's
-job (TAR-55). Until that lands, set `AUTH_STUB_ENABLED=true` and
-`NEXT_PUBLIC_ENABLE_ROLE_STUB=true` and the console resolves a real seeded user with the
+job (TAR-55). Until that lands, `AUTH_STUB_ENABLED=true` and
+`NEXT_PUBLIC_ENABLE_ROLE_STUB=true` — both already set in `.env.example`, so a
+`cp .env.example .env` needs no edit — make the console resolve a real seeded user with the
 role in the switcher, in the tenant the hostname resolves to. The per-WABA WhatsApp access
 token is a placeholder encrypted at rest with the local key: enough for the connection to
 read as connected, and rejected by Meta the moment anything tries to send with it, which
@@ -880,7 +881,14 @@ For the API, `.env.example` must stay in sync with
 `apps/api/src/config/env.schema.ts`, which validates the environment at boot and refuses
 to start if a required key is missing or malformed. `DATABASE_URL` and `REDIS_URL` are
 still optional there — the scaffold boots without them — and TAR-41 promotes both to
-required.
+required. For the console, the matching file is `apps/web/lib/config/env.ts`.
+
+**Declare every key exactly once.** Every reader of this format — Node's `loadEnvFile`,
+dotenv, Docker Compose — takes the _last_ occurrence of a key, so a second `KEY=` further
+down the file silently blanks the value set above it rather than being ignored as a
+duplicate. That is not hypothetical: `WHATSAPP_APP_SECRET` and
+`WHATSAPP_WEBHOOK_VERIFY_TOKEN` were declared twice, and the empty second pair won, so
+`cp .env.example .env` left the webhook route refusing every delivery (TAR-146).
 
 `PLATFORM_ADMIN_TOKEN` is optional in a different sense: leaving it unset does not disable
 validation, it disables the whole platform admin surface. Every request to
@@ -1191,7 +1199,8 @@ Two flags in `.env.example` exist because TAR-82 was built ahead of its dependen
 sessions have since landed on both sides — signing in, the API's session cookie and the
 console's route guard all work, and with the stub off the API answers `401` to anything that
 is not a real session. The flags survive as a development and test convenience only. Both
-default to off and both must stay off in a deployed environment:
+default to off in code (`lib/config/env.ts`) and both must stay off in a deployed
+environment; `.env.example` turns both on, and its comments say why:
 
 - `NEXT_PUBLIC_USE_MOCK_API` serves every API call from `lib/api/mock/` instead of HTTP.
   The mock is a _transport_, not a per-feature fake: the resource modules in `lib/api/` are
