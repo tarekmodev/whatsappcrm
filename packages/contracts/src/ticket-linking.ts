@@ -58,9 +58,22 @@ export type InboundMessageTicketTrigger = z.infer<typeof InboundMessageTicketTri
  * This is an optimisation, not the correctness mechanism: BullMQ forgets a
  * completed job's id once it leaves the completed set, and the handler's own
  * idempotency is what actually prevents duplicates.
+ *
+ * Hyphens, never a colon — the rule `media-jobs.ts` and `webhook-jobs.ts`
+ * already follow. BullMQ reserves `:` for its own Redis key structure and
+ * rejects a custom id containing one, with a single backwards-compatibility
+ * exemption for ids that split into exactly three parts. This id's first shape
+ * (TAR-73) was legal only by landing on that exemption, which BullMQ's own
+ * source marks `TODO` for removal. The rejection surfaces as one warning per
+ * inbound message out of `QueueService.enqueue` rather than a throw, so the
+ * failure mode was tickets silently not being created (TAR-249).
+ *
+ * Carries `tenantId` as well as `messageId` even though `messageId` alone is
+ * unique: it is what makes one tenant's ensure-jobs filterable in a queue
+ * dashboard while that triage is happening.
  */
 export function ticketEnsureJobId(trigger: InboundMessageTicketTrigger): string {
-  return `${TICKET_ENSURE_JOB}:${trigger.tenantId}:${trigger.messageId}`;
+  return `ticket-ensure-${trigger.tenantId}-${trigger.messageId}`;
 }
 
 // ---------------------------------------------------------------------------
