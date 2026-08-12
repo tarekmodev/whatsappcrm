@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TICKET_LINKER } from '@whatsappcrm/contracts';
 import { TicketLinkerService } from './ticket-linker.service';
+import { TicketQueueRunner } from './ticket-queue.runner';
 
 /**
  * Helpdesk ticketing (TAR-39, module map). TAR-21 opens tickets from inbound
@@ -15,15 +16,18 @@ import { TicketLinkerService } from './ticket-linker.service';
  *
  * `TICKET_LINKER` is the module's whole public surface, and it is a token rather
  * than the class so a consumer names the contract instead of the implementation.
- * Nothing calls it on production traffic yet: TAR-77 adds the queue processor
- * that turns TAR-20's inbound messages into calls, once both exist.
+ * Since TAR-77 it is driven by real traffic: `TicketQueueRunner` consumes the
+ * `ticket.ensure-for-message` jobs TAR-20's inbound writer enqueues once a
+ * message has committed. The two sides still never meet in code — only over the
+ * queue, and only through the contract's shape.
  *
  * Everything else comes from global modules — `TenantPrisma` from
  * `PrismaModule`, `TenantContextService` from `TenantContextModule`,
- * `EventEmitter2` from the root `EventEmitterModule`.
+ * `EventEmitter2` from the root `EventEmitterModule`, `QueueService` from
+ * `QueueModule`.
  */
 @Module({
-  providers: [{ provide: TICKET_LINKER, useClass: TicketLinkerService }],
+  providers: [{ provide: TICKET_LINKER, useClass: TicketLinkerService }, TicketQueueRunner],
   exports: [TICKET_LINKER],
 })
 export class TicketsModule {}

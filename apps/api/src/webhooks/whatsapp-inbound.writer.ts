@@ -1,7 +1,14 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { MESSAGE_STATUSES, isMessageStatusAdvance } from '@whatsappcrm/contracts';
+import {
+  MESSAGE_STATUSES,
+  TICKET_ENSURE_JOB,
+  TICKET_QUEUE,
+  isMessageStatusAdvance,
+  ticketEnsureJobId,
+  type InboundMessageTicketTrigger,
+} from '@whatsappcrm/contracts';
 import {
   MESSAGE_CREATED_EVENT,
   MESSAGE_STATUS_CHANGED_EVENT,
@@ -53,6 +60,25 @@ export interface InboundProfile {
 }
 
 /**
+ * What one inbound delivery turned out to be about, once its transaction has
+ * committed: the rows the ticket trigger names, plus anything to announce.
+ *
+ * `created` is null for a **replay** — a message this pipeline had already
+ * recorded. Nothing is announced and no media is owed in that case, because the
+ * first delivery did both; the ticket trigger still goes out, which is the whole
+ * reason a replay is distinguished from a no-op rather than discarded.
+ */
+interface AppliedInboundMessage {
+  readonly contactId: string;
+  readonly conversationId: string;
+  readonly messageId: string;
+  readonly created: {
+    readonly attachmentId: string | null;
+    readonly event: MessageCreatedEvent;
+  } | null;
+}
+
+/**
  * The timestamps a thread is born with.
  *
  * `serviceWindowExpiresAt` is null for a thread opened by a delivery receipt:
@@ -93,6 +119,11 @@ interface ConversationOpening {
  * media-download job is queued after the commit for the same reason, and with
  * the same consequence if the queue is down: the row is durable and says the
  * bytes are owed, so nothing is lost that a re-queue cannot recover.
+ *
+ * The ticket trigger (TAR-77) is the third thing that happens after the commit,
+ * and the one difference is worth knowing: it is enqueued for a **replay** too,
+ * not only for a message this delivery was the first to write. See
+ * `queueTicketLink` and `replayOf`.
  */
 @Injectable()
 export class WhatsAppInboundWriter {
@@ -106,6 +137,9 @@ export class WhatsAppInboundWriter {
    */
   private readonly downloadAttempts: number;
 
+  /** Retry budget for the ticket trigger. See `TICKET_LINK_MAX_ATTEMPTS`. */
+  private readonly ticketLinkAttempts: number;
+
   constructor(
     config: ConfigService,
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
@@ -113,6 +147,7 @@ export class WhatsAppInboundWriter {
     private readonly queue: QueueService,
   ) {
     this.downloadAttempts = config.getOrThrow<number>('MEDIA_DOWNLOAD_MAX_ATTEMPTS');
+    this.ticketLinkAttempts = config.getOrThrow<number>('TICKET_LINK_MAX_ATTEMPTS');
   }
 
   /**
@@ -136,7 +171,7 @@ export class WhatsAppInboundWriter {
 
     const media = toInboundMedia(message);
 
-    const created = await this.prisma.$tenantTransaction(async (tx) => {
+    const applied = await this.prisma.$tenantTransaction(async (tx) => {
       const contactId = await this.upsertContact(tx, account.tenantId, {
         phoneE164,
         displayName: profile.displayName,
@@ -171,7 +206,7 @@ export class WhatsAppInboundWriter {
       });
 
       if (stored === undefined) {
-        return null;
+        return await this.replayOf(tx, account.tenantId, message.id, contactId, conversationId);
       }
 
       await this.advanceConversation(tx, account.tenantId, conversationId, message.timestamp);
@@ -180,31 +215,153 @@ export class WhatsAppInboundWriter {
         media === null ? null : await this.recordAttachment(tx, account.tenantId, stored.id, media);
 
       return {
-        attachmentId,
-        event: {
-          tenantId: account.tenantId,
-          conversationId,
-          contactId,
-          messageId: stored.id,
-          direction: MessageDirection.inbound,
-          status: stored.status,
-          contentType: stored.contentType,
-          body: stored.body,
-          providerMessageId: message.id,
-          sentAt: message.timestamp,
-        } satisfies MessageCreatedEvent,
-      };
+        contactId,
+        conversationId,
+        messageId: stored.id,
+        created: {
+          attachmentId,
+          event: {
+            tenantId: account.tenantId,
+            conversationId,
+            contactId,
+            messageId: stored.id,
+            direction: MessageDirection.inbound,
+            status: stored.status,
+            contentType: stored.contentType,
+            body: stored.body,
+            providerMessageId: message.id,
+            sentAt: message.timestamp,
+          } satisfies MessageCreatedEvent,
+        },
+      } satisfies AppliedInboundMessage;
     });
 
-    if (created !== null) {
-      this.events.emit(MESSAGE_CREATED_EVENT, created.event);
+    if (applied === null) {
+      return true;
+    }
 
-      if (created.attachmentId !== null) {
-        await this.queueMediaDownload(account, created.attachmentId);
+    if (applied.created !== null) {
+      this.events.emit(MESSAGE_CREATED_EVENT, applied.created.event);
+
+      if (applied.created.attachmentId !== null) {
+        await this.queueMediaDownload(account, applied.created.attachmentId);
       }
     }
 
+    await this.queueTicketLink(account.tenantId, applied, message.timestamp);
+
     return true;
+  }
+
+  /**
+   * Re-reads the message a replay just declined to write, so the ticket trigger
+   * can be enqueued for it anyway.
+   *
+   * The message write and the ticket trigger are deliberately not one atomic
+   * unit (0003, decision 1), so they can disagree in exactly one direction: a
+   * worker that commits the message and then dies leaves a message with no
+   * ticket, and the webhook sweeper's replay is the only thing that will ever
+   * revisit it. On that replay `skipDuplicates` writes nothing and the id the
+   * trigger needs is not in hand — so it is read back here, which is what lets
+   * the enqueue below be unconditional. 0003 leans on exactly that:
+   * `ensureTicketForMessage` is idempotent, so a trigger for a message that
+   * already has a ticket costs one indexed read and changes nothing.
+   *
+   * Only reached on a genuine duplicate — a Meta retry of the same delivery is
+   * already absorbed by `WebhookEventsRepository.claim` and never gets here — so
+   * the extra read is rare rather than per-message.
+   *
+   * `null` means the row is not there at all, which is not a replay: a
+   * concurrent transaction's insert was visible to `ON CONFLICT` and then rolled
+   * back. There is nothing to trigger, and the next delivery writes it properly.
+   */
+  private async replayOf(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    providerMessageId: string,
+    contactId: string,
+    conversationId: string,
+  ): Promise<AppliedInboundMessage | null> {
+    const existing = await tx.message.findUnique({
+      where: { tenantId_providerMessageId: { tenantId, providerMessageId } },
+      select: { id: true },
+    });
+
+    return existing === null
+      ? null
+      : { contactId, conversationId, messageId: existing.id, created: null };
+  }
+
+  /**
+   * Hands the message to `TicketsModule`, so TAR-21's linker can put it on a
+   * ticket (0003, decision 1).
+   *
+   * A queue job rather than a call, and enqueued after the commit rather than
+   * inside it, for the reason 0003 makes the deciding one: the customer's
+   * message is the thing that must never be lost. Creating the ticket inside the
+   * message transaction would let a fault in the ticket module roll back the
+   * customer's message — the exact failure this pipeline's design exists to
+   * prevent. Separated, a broken linker produces tickets late rather than losing
+   * messages, at the cost of the ticket being eventually consistent with the
+   * message.
+   *
+   * It could not be a direct call in any case: `WebhooksModule` is L2 and
+   * `TicketsModule` is L3, so what crosses the line is the payload shape in
+   * `@whatsappcrm/contracts` — which both sides import and neither owns.
+   *
+   * Enqueued for **inbound** messages only, and for every one of them rather
+   * than only the first in a thread. Filtering to "first message" would leave a
+   * contact whose ticket was resolved last week with no ticket when they write
+   * back. The outbound placeholder `applyStatusUpdate` creates is not sent here
+   * at all — the linker would only skip it, and a job whose one possible outcome
+   * is `skipped` is a round trip that buys nothing.
+   *
+   * Never throws, exactly like `queueMediaDownload` and for the same reason: the
+   * message row is already committed, so a Redis blip costs a ticket that has
+   * not appeared yet rather than a webhook that fails and re-delivers the whole
+   * batch. The honest limitation, recorded rather than glossed: nothing sweeps
+   * for a committed message that never got a trigger, so a queue outage that
+   * outlasts the webhook row's own replay leaves that message ticketless. 0003
+   * names the failed set as the thing to monitor; a message-level sweep is the
+   * follow-up.
+   */
+  private async queueTicketLink(
+    tenantId: string,
+    applied: AppliedInboundMessage,
+    receivedAt: Date,
+  ): Promise<void> {
+    const trigger: InboundMessageTicketTrigger = {
+      tenantId,
+      contactId: applied.contactId,
+      conversationId: applied.conversationId,
+      messageId: applied.messageId,
+      // The contract types `receivedAt` as an ISO-8601 string with an offset,
+      // not a `Date`. A job payload is JSON either way, so serialising it here
+      // is what makes the value the worker validates the value this sent.
+      receivedAt: receivedAt.toISOString(),
+    };
+
+    const outcome = await this.queue.enqueue<InboundMessageTicketTrigger>(
+      TICKET_QUEUE,
+      TICKET_ENSURE_JOB,
+      trigger,
+      {
+        jobId: ticketEnsureJobId(trigger),
+        attempts: this.ticketLinkAttempts,
+        // Seconds, not the media path's tighter schedule: there is no expiring
+        // handle to race here, and the failure this backs off from is a job
+        // overtaking its own message's commit.
+        backoff: { type: 'exponential', delay: 1_000 },
+        removeOnComplete: true,
+      },
+    );
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      this.logger.warn(
+        `Message ${applied.messageId} was recorded but its ticket trigger was not queued ` +
+          `(${outcome}); it will not appear on a ticket.`,
+      );
+    }
   }
 
   /**
