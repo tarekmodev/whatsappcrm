@@ -3,6 +3,7 @@ import 'server-only';
 import {
   ConversationAssignInputSchema,
   ConversationListQuerySchema,
+  ConversationStatusUpdateInputSchema,
   CursorPageQuerySchema,
   IdSchema,
   InternalNoteCreateInputSchema,
@@ -231,6 +232,14 @@ const ROUTES: readonly Route[] = [
     // the compare-and-set below enforces rather than the permission.
     permission: 'conversation:claim',
     handle: claimConversation,
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/status$`),
+    // `conversation:read`, matching the API's own decorator: what gates a status
+    // change is the hold, not the role, and the handler enforces that below.
+    permission: 'conversation:read',
+    handle: setConversationStatus,
   },
   {
     method: 'POST',
@@ -700,16 +709,37 @@ function listConversations({ principal, query }: RouteContext): CursorPage<Conve
     throw validationFailed();
   }
 
-  const { status, limit, scope } = parsed.data;
+  const { status, limit, scope, q } = parsed.data;
 
   const items = tenantConversations(principal)
     .filter((conversation) => status === undefined || conversation.status === status)
     .filter((conversation) => matchesScope(conversation, scope, principal))
+    .filter((conversation) => matchesSearch(conversation, q))
     .sort(byLastActivityDescending)
     .slice(0, limit)
     .map(toConversationResponse);
 
   return { items, nextCursor: null };
+}
+
+/**
+ * The `?q=` the top bar's search sends. Name, phone and the last message, which
+ * is what somebody typing into an inbox search is looking for; case-insensitive,
+ * because a phone number is the only field here where case cannot vary.
+ */
+function matchesSearch(conversation: MockConversation, q: string | undefined): boolean {
+  if (q === undefined) {
+    return true;
+  }
+
+  const needle = q.trim().toLowerCase();
+  const haystack = [
+    conversation.contact.displayName,
+    conversation.contact.phone,
+    conversation.lastMessagePreview,
+  ];
+
+  return haystack.some((value) => value?.toLowerCase().includes(needle) === true);
 }
 
 function matchesScope(
@@ -851,6 +881,32 @@ function claimConversation({ principal, params }: RouteContext): ConversationRes
   mockState().conversations.set(claimed.id, claimed);
 
   return toConversationResponse(claimed);
+}
+
+/**
+ * `PATCH /v1/conversations/{id}/status`.
+ *
+ * Refused on a thread nobody holds, the same way a send and a note are
+ * (TAR-186): closing a conversation is answering for it, and a shared pool where
+ * anybody can close anybody's arriving work is not a shared pool.
+ */
+function setConversationStatus({ principal, params, body }: RouteContext): ConversationResponse {
+  const conversation = findConversationInTenant(principal, params[0]);
+  const parsed = ConversationStatusUpdateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  if (isUnclaimed(conversation)) {
+    throw refused('conflict', 'Claim this conversation before changing its status.', HTTP_CONFLICT);
+  }
+
+  const updated: MockConversation = { ...conversation, status: parsed.data.status };
+
+  mockState().conversations.set(updated.id, updated);
+
+  return toConversationResponse(updated);
 }
 
 /**

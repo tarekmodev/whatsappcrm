@@ -1,7 +1,7 @@
 'use client';
 
 import { NavLinkList } from './NavLinkList';
-import type { NavItem } from './navigation';
+import { RAIL_PRIMARY_COUNT, type NavItem } from './navigation';
 import { useRail } from './AppShell';
 
 /**
@@ -14,5 +14,12 @@ import { useRail } from './AppShell';
 export function RailNav({ items }: { items: readonly NavItem[] }) {
   const { isCollapsed } = useRail();
 
-  return <NavLinkList items={items} appearance="rail" isCollapsed={isCollapsed} />;
+  return (
+    <NavLinkList
+      items={items}
+      appearance="rail"
+      isCollapsed={isCollapsed}
+      primaryCount={RAIL_PRIMARY_COUNT}
+    />
+  );
 }

@@ -36,6 +36,25 @@ const ICON_PATHS = {
   search: ['M18 11a7 7 0 1 1-14 0 7 7 0 0 1 14 0', 'm20 20-3.7-3.7'],
   menu: ['M4 7h16', 'M4 12h16', 'M4 17h16'],
   close: ['m6 6 12 12', 'M18 6 6 18'],
+  /** One person, as opposed to `people`: a contact, not a team. */
+  contact: ['M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8', 'M20 20v-1a5 5 0 0 0-5-5H9a5 5 0 0 0-5 5v1'],
+  ticket: [
+    'M3 10V7a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v3a2 2 0 0 0 0 4v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a2 2 0 0 0 0-4',
+    'M15 7v2',
+    'M15 11v2',
+    'M15 15v2',
+  ],
+  /** An internal note — a page with lines, never the message bubble. */
+  note: [
+    'M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1',
+    'M14 4v5h5',
+    'M8 13h7',
+    'M8 17h5',
+  ],
+  info: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18', 'M12 11.5v5', 'M12 8h.01'],
+  plus: ['M12 5v14', 'M5 12h14'],
+  /** Opens a menu below its trigger; never mirrored, unlike the chevrons below. */
+  chevronDown: ['m6 9 6 6 6-6'],
   /** Points along the reading direction; mirrored under `dir="rtl"`. */
   chevronForward: ['m9 5 7 7-7 7'],
   chevronBack: ['m15 5-7 7 7 7'],

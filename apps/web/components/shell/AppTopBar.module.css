@@ -3,11 +3,12 @@
   inset-block-start: 0;
   z-index: var(--z-nav);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--space-2);
   min-block-size: var(--size-bar);
-  padding-inline: clamp(var(--space-4), 4vw, var(--space-6));
+  padding-inline: clamp(var(--space-3), 4vw, var(--space-6));
   padding-block: var(--space-2);
   padding-block-start: calc(var(--space-2) + env(safe-area-inset-top));
   background: var(--color-bar);
@@ -22,6 +23,28 @@
   min-inline-size: 0;
 }
 
+.start {
+  order: 0;
+  flex: 1 1 auto;
+}
+
+.end {
+  order: 1;
+  flex: 0 0 auto;
+}
+
+/*
+ * Below the layout breakpoint the search takes a line of its own under the two
+ * groups — a field sharing 320px with the drawer trigger, the wordmark and the
+ * quick-create is about 30px wide, which is too narrow to read back what you
+ * typed. One extra line of chrome is the cheaper answer.
+ */
+.search {
+  order: 2;
+  flex: 1 1 100%;
+  min-inline-size: 0;
+}
+
 .brand {
   color: var(--color-on-surface);
   font-size: var(--font-size-body);
@@ -30,20 +53,34 @@
   white-space: nowrap;
 }
 
-.utilities {
-  /* Duplicated into the drawer on mobile, where it is the drawer that shows them. */
+.account {
+  /* The drawer carries the identity and the same controls below the breakpoint,
+     where the bar has no room for a name, a role and a chevron. */
   display: none;
-  align-items: center;
-  gap: var(--space-2);
 }
 
 @media (min-width: 48rem) {
+  .bar {
+    gap: var(--space-3);
+  }
+
   .brand {
     /* The rail carries the wordmark from here up. */
     display: none;
   }
 
-  .utilities {
+  /* Back on the one line, between the wordmark's place and the utilities. */
+  .search {
+    order: 1;
+    flex: 1 1 auto;
+  }
+
+  .end {
+    order: 2;
+  }
+
+  .account {
     display: flex;
+    min-inline-size: 0;
   }
 }

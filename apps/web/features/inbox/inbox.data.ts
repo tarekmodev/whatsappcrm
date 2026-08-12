@@ -23,6 +23,8 @@ export interface InboxData extends Directory {
 export interface InboxQuery {
   scope: ConversationListQuery['scope'];
   status?: ConversationListQuery['status'];
+  /** The top bar's search term. Filters within the scope, never across it. */
+  q?: ConversationListQuery['q'];
 }
 
 export async function loadInbox(query: InboxQuery): Promise<InboxData> {
@@ -30,6 +32,7 @@ export async function loadInbox(query: InboxQuery): Promise<InboxData> {
     listConversations({
       scope: query.scope,
       status: query.status,
+      q: query.q,
       limit: CONVERSATIONS_PAGE_SIZE,
     }),
     loadDirectory(),

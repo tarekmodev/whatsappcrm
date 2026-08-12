@@ -83,6 +83,13 @@ function MessageMeta({ message, senderName }: MessageBubbleProps) {
           {content.messageStatuses[message.status]}
         </span>
       ) : null}
+      {/* Which channel this travelled over. One channel exists today, so it is
+          always the same word — it is on the bubble because the day a second
+          one lands, a thread that never said "WhatsApp" becomes ambiguous
+          retrospectively, and this is the row that would have to be rewritten. */}
+      <span className={styles.channel} title={content.thread.sentVia(content.channels.whatsapp)}>
+        {content.channels.whatsapp}
+      </span>
       {message.failureReason === null ? null : (
         <span className={styles.failure}>
           {content.thread.failureReason(message.failureReason)}

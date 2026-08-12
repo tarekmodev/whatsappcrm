@@ -36,3 +36,20 @@
   color: var(--color-on-surface-muted);
   font-size: var(--font-size-body-sm);
 }
+
+.created {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+/*
+ * Wraps under the identity rather than pushing past the card. `flex: 0 0 auto`
+ * here made the row's intrinsic width the sum of every control, which is 22px of
+ * horizontal page scroll at 320px — the controls wrap among themselves, so the
+ * group has to be allowed to shrink for that to ever happen.
+ */
+.controls {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  min-inline-size: 0;
+}

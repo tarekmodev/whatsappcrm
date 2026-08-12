@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { content } from '@/content/en';
 import { routes } from '@/lib/routes';
@@ -8,7 +9,8 @@ import type { NavItem } from './navigation';
 import styles from './AppSidebar.module.css';
 
 /**
- * The fixed navigation rail. Usage: `<AppSidebar items={visibleItems} />`.
+ * The fixed navigation rail. Usage:
+ * `<AppSidebar items={visibleItems} footer={<RailCard …/>} />`.
  *
  * A server component: it takes the already-filtered nav items, so the permission
  * decision happens once on the server and no client bundle ships the full nav
@@ -18,7 +20,18 @@ import styles from './AppSidebar.module.css';
  * Hidden below the layout breakpoint — that width is the mobile drawer's
  * (`MobileMenu`), which renders from the same `NavItem[]`.
  */
-export function AppSidebar({ items }: { items: readonly NavItem[] }) {
+export function AppSidebar({
+  items,
+  footer,
+}: {
+  items: readonly NavItem[];
+  /**
+   * Pinned to the foot of the rail, below the navigation. `RailCard` is the
+   * shape it expects; see that component for what belongs there and why nothing
+   * passes one today.
+   */
+  footer?: ReactNode;
+}) {
   return (
     // A plain wrapper, not `<aside>`: this holds the *primary* navigation, and
     // the complementary landmark `<aside>` implies would misfile it. The `<nav>`
@@ -42,6 +55,8 @@ export function AppSidebar({ items }: { items: readonly NavItem[] }) {
       <nav id={RAIL_NAV_ID} aria-label={content.nav.primaryLabel} className={styles.nav}>
         <RailNav items={items} />
       </nav>
+
+      {footer === undefined ? null : <div className={styles.footer}>{footer}</div>}
     </div>
   );
 }

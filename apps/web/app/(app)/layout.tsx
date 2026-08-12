@@ -7,6 +7,7 @@ import { AppShell } from '@/components/shell/AppShell';
 import { AppSidebar } from '@/components/shell/AppSidebar';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { NAV_ITEMS, visibleNavItems } from '@/components/shell/navigation';
+import { QUICK_CREATE_ITEMS, visibleQuickCreateItems } from '@/components/shell/quick-create';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
 import { RoleStubSwitcher } from '@/components/shell/RoleStubSwitcher';
 import { SignOutButton } from '@/components/shell/SignOutButton';
@@ -36,6 +37,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const railState = await readRailState();
   const { principal, checker, isStubbed } = await verifySession();
   const navItems = visibleNavItems(NAV_ITEMS, checker);
+  const quickCreateItems = visibleQuickCreateItems(QUICK_CREATE_ITEMS, checker);
 
   const utilities = (
     <>
@@ -53,7 +55,14 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       <AppShell
         initialRailState={railState}
         rail={<AppSidebar items={navItems} />}
-        bar={<AppTopBar items={navItems} principal={principal} utilities={utilities} />}
+        bar={
+          <AppTopBar
+            items={navItems}
+            principal={principal}
+            quickCreateItems={quickCreateItems}
+            utilities={utilities}
+          />
+        }
       >
         {children}
       </AppShell>

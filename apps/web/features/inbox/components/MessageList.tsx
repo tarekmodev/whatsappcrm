@@ -1,11 +1,14 @@
 'use client';
 
+import { Fragment } from 'react';
 import type { MessageResponse } from '@whatsappcrm/contracts';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { Notice } from '@/components/ui/Notice';
+import { VisuallyHidden } from '@/components/layout/VisuallyHidden';
 import { useContent } from '@/lib/content';
 import { THREAD_SKELETON_COUNT } from '@/features/inbox/constants';
+import { groupMessagesByDay } from '@/features/inbox/message-days';
 import { useStickToBottom } from '@/features/inbox/useStickToBottom';
 import { MessageBubble, MessageBubbleSkeleton } from './MessageBubble';
 import styles from './MessageList.module.css';
@@ -51,16 +54,29 @@ export function MessageList({ messages, senderNames, hasOlderMessages }: Message
         tabIndex={0}
       >
         <ol className={styles.list}>
-          {messages.map((message) => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              senderName={
-                message.sentByUserId === null
-                  ? null
-                  : (senderNames.get(message.sentByUserId) ?? null)
-              }
-            />
+          {groupMessagesByDay(messages).map((day) => (
+            <Fragment key={day.key}>
+              {/* A chip between days, in the list rather than around it: a
+                  wrapper per day would break the single `<ol>` that makes the
+                  thread one enumerable sequence to a screen reader. */}
+              <li className={styles.divider}>
+                <time className={styles.dividerLabel} dateTime={day.isoTimestamp}>
+                  <VisuallyHidden>{content.thread.dayLabel(day.label)}</VisuallyHidden>
+                  <span aria-hidden="true">{day.label}</span>
+                </time>
+              </li>
+              {day.messages.map((message) => (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  senderName={
+                    message.sentByUserId === null
+                      ? null
+                      : (senderNames.get(message.sentByUserId) ?? null)
+                  }
+                />
+              ))}
+            </Fragment>
           ))}
         </ol>
       </div>

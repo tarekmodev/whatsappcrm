@@ -102,6 +102,17 @@ export const NAV_ITEMS: readonly NavItem[] = [
 ];
 
 /**
+ * How many rail entries are shown before the More/Less boundary.
+ *
+ * Five, because 0001 rules the rail's destinations to be exactly Inbox,
+ * Contacts, Tickets, Reports and Settings. Anything a later story adds beyond
+ * that set is a destination somebody asked for rather than one everybody needs,
+ * and belongs behind the disclosure. `NavLinkList` renders no boundary while the
+ * array is shorter than this, so today — two entries — the rail shows whole.
+ */
+export const RAIL_PRIMARY_COUNT = 5;
+
+/**
  * The union of what a parent's children need — or `undefined` when any one child
  * is open to everyone, because a parent narrower than a child it contains would
  * hide a destination the principal is allowed to reach.

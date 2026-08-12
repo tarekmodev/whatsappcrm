@@ -1,0 +1,22 @@
+.trigger {
+  gap: var(--space-2);
+}
+
+.chevron {
+  flex: 0 0 auto;
+  color: var(--color-on-surface-muted);
+  transition: rotate var(--duration-fast) var(--easing-standard);
+}
+
+.trigger[aria-expanded='true'] .chevron {
+  rotate: 180deg;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Wider than the menu minimum: the theme toggle and the role stub are labelled
+     controls, not one-word entries. */
+  min-inline-size: var(--size-pane-side);
+}

@@ -40,6 +40,41 @@ export const content = {
     assignment: 'Assignment',
     whatsapp: 'WhatsApp',
     security: 'Security',
+    /** The rail's own expand/collapse boundary — not the drawer's open/close. */
+    showMore: 'More',
+    showLess: 'Less',
+    moreLabel: 'More destinations',
+    accountLabel: 'Account and preferences',
+  },
+
+  /**
+   * The one place a channel is named. One channel exists today; the group is
+   * here so the second one is a key rather than a component edit.
+   */
+  channels: {
+    whatsapp: 'WhatsApp',
+  },
+
+  /** The top bar's workspace search. It searches conversations, and says so. */
+  search: {
+    label: 'Search conversations',
+    placeholder: 'Search conversations',
+    submit: 'Search',
+    clear: 'Clear search',
+    resultsFor: (term: string) => `Conversations matching “${term}”`,
+    emptyHeading: 'Nothing matches that search',
+    emptyBody: 'Try a different name, number or phrase — search covers this filter only.',
+  },
+
+  /**
+   * The top bar's quick-create menu. Every entry is a link to a surface that
+   * exists; an entry is added by the story that builds the thing it creates.
+   */
+  quickCreate: {
+    label: 'Create',
+    invitePerson: 'Invite a teammate',
+    createTeam: 'Create a team',
+    connectWhatsApp: 'Connect a WhatsApp number',
   },
 
   theme: {
@@ -250,6 +285,55 @@ export const content = {
       'It may have been claimed by someone else, or it may be outside what your role can see. Pick another conversation from the list.',
     scopeNarrowedAllNotice:
       'You are seeing your own and your teams’ conversations plus everything nobody has claimed — not the whole workspace.',
+
+    // --- The filter column --------------------------------------------------
+    filtersHeading: 'Inbox',
+    filtersLabel: 'Inbox filters',
+    /** Small screens collapse the column into this disclosure above the list. */
+    filtersToggle: 'Change filter',
+    filterUnassigned: 'Unassigned',
+    filterAssigned: 'Assigned to me',
+    filterAllOpen: 'All open',
+    filterAll: 'All conversations',
+    filterPending: 'Pending',
+    filterResolved: 'Resolved',
+    filterClosed: 'Closed',
+    inboxSettings: 'Inbox settings',
+
+    // --- The thread column --------------------------------------------------
+    createdAt: 'Created',
+    conversationActions: 'Conversation actions',
+    closeConversation: 'Close conversation',
+    closeConversationTitle: 'Close this conversation?',
+    closeConversationBody: (contact: string) =>
+      `Closing marks the conversation with ${contact} as finished. It stays in the workspace and reopens by itself if they write in again.`,
+    closeConversationConfirm: 'Close conversation',
+    closeConversationSuccess: (contact: string) => `Conversation with ${contact} closed`,
+    reopenConversation: 'Reopen conversation',
+    reopenConversationSuccess: (contact: string) => `Conversation with ${contact} reopened`,
+    /** The composer's two destinations: the customer, or the team. */
+    composerTabReply: (channel: string) => `Reply on ${channel}`,
+    composerTabNote: 'Comment',
+    composerTabsLabel: 'Where this goes',
+
+    // --- The context column -------------------------------------------------
+    contextHeading: 'Contact',
+    contextToggle: 'Conversation details',
+    contextShow: 'Show conversation details',
+    contextHide: 'Hide conversation details',
+    ticketHeading: 'Ticket',
+    /**
+     * Tickets are opened by the auto-linking pipeline
+     * (`docs/architecture/0003-ticket-auto-linking-contract.md`), not by an
+     * agent pressing a button — so this panel reports the link rather than
+     * offering to make one.
+     */
+    ticketLinked: 'A ticket is open for this conversation.',
+    ticketLinkedBody:
+      'It was opened automatically when the customer wrote in, and everything said here is on it.',
+    ticketUnlinked: 'No ticket yet',
+    ticketUnlinkedBody:
+      'A ticket opens by itself with the customer’s next message, and this conversation joins it.',
   },
 
   thread: {
@@ -272,6 +356,10 @@ export const content = {
     sentByTeammate: 'Sent by a teammate',
     sentAt: 'Sent',
     failureReason: (reason: string) => `Not delivered: ${reason}`,
+    /** The date chip between two days of a thread. */
+    dayLabel: (date: string) => `Messages on ${date}`,
+    /** Which channel a message travelled over, on the bubble. */
+    sentVia: (channel: string) => `Sent via ${channel}`,
 
     attachmentDownloading: 'Still downloading — it will appear here when it arrives.',
     attachmentFailed: 'This attachment could not be downloaded.',

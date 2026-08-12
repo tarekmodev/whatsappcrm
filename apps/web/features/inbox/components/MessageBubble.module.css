@@ -75,6 +75,17 @@
   font-weight: var(--font-weight-medium);
 }
 
+/*
+ * The channel tag. A quiet outline rather than a `Badge`: it repeats on every
+ * bubble in the thread, and a filled pill that often reads as decoration.
+ */
+.channel {
+  padding-inline: var(--space-2);
+  border: var(--border-hairline) solid currentcolor;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-caption);
+}
+
 /* Failure is never colour alone — the word "Not delivered" carries it too. */
 .status[data-status='failed'],
 .failure {

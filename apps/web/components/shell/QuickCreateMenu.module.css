@@ -1,0 +1,14 @@
+.trigger {
+  flex: 0 0 auto;
+  justify-content: center;
+  inline-size: var(--size-touch-target);
+  color: var(--color-on-surface-muted);
+}
+
+.list {
+  composes: menuList from '../ui/MenuButton.module.css';
+}
+
+.item {
+  composes: menuItem from '../ui/MenuButton.module.css';
+}

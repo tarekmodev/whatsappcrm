@@ -1,3 +1,10 @@
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
 .list {
   display: flex;
   flex-direction: column;
@@ -5,6 +12,59 @@
   padding: 0;
   margin: 0;
   list-style: none;
+}
+
+/* --- The More/Less boundary ----------------------------------------------- */
+/*
+ * Deliberately not a `<Button>`: every Button variant is coloured for a content
+ * surface, and this control sits on the dark rail as often as on a light one.
+ * Same reasoning as `RailToggle`.
+ */
+.boundary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  inline-size: 100%;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface-muted);
+  font: inherit;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+.boundary[data-appearance='rail'] {
+  color: var(--color-on-rail-muted);
+  /* Matches the entries' reserved marker so the chevron lines up with the icons. */
+  padding-inline-start: calc(var(--space-3) - var(--size-marker));
+  border-inline-start: var(--size-marker) solid transparent;
+}
+
+@media (hover: hover) {
+  .boundary:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+
+  .boundary[data-appearance='rail']:hover {
+    background: var(--color-rail-hover);
+    color: var(--color-on-rail-strong);
+  }
+}
+
+.boundaryIcon {
+  flex: 0 0 auto;
+  transition: rotate var(--duration-fast) var(--easing-standard);
+}
+
+.boundary[aria-expanded='true'] .boundaryIcon {
+  rotate: 180deg;
 }
 
 .link {
@@ -94,11 +154,18 @@
  * Collapsed, the label is hidden from the eye and kept for the accessibility
  * tree — `display: none` would strip the links of their names.
  */
-.list[data-appearance='rail'][data-collapsed='true'] .label {
+.list[data-appearance='rail'][data-collapsed='true'] .label,
+.boundary[data-collapsed='true'] .label {
   position: absolute;
   inline-size: var(--border-hairline);
   block-size: var(--border-hairline);
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+.boundary[data-collapsed='true'] {
+  justify-content: center;
+  padding-inline: var(--space-2);
+  padding-inline-start: calc(var(--space-2) - var(--size-marker));
 }

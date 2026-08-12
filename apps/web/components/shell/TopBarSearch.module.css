@@ -1,0 +1,82 @@
+.form {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  /* Wide enough to read a phone number back, capped so it does not crowd the
+     utilities on a laptop. */
+  max-inline-size: var(--size-container-sm);
+  min-block-size: var(--size-control-md);
+  padding-inline: var(--space-3);
+  background: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-pill);
+}
+
+.form:focus-within {
+  border-color: var(--color-border-strong);
+  /* The ring belongs to the pill, which is the control the eye sees; the input
+     inside it drops its own so there are not two rings. */
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.icon {
+  flex: 0 0 auto;
+  color: var(--color-on-surface-muted);
+}
+
+.input {
+  min-inline-size: 0;
+  flex: 1 1 auto;
+  padding-block: var(--space-2);
+  background: none;
+  border: 0;
+  color: var(--color-on-surface);
+  font: inherit;
+  font-size: var(--font-size-body-sm);
+}
+
+.input:focus-visible {
+  outline: none;
+}
+
+/* The type="search" clear affordance is inconsistent across browsers and
+   unlabelled where it exists; ours is a real button beside it. */
+.input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.clear {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--color-on-surface-muted);
+  cursor: pointer;
+}
+
+/*
+ * The painted control is 32px so it fits inside the pill, but a finger needs 44.
+ * The hit area is expanded past the visual bounds rather than the control being
+ * grown, which would make the search field taller than the bar's other controls.
+ */
+.clear::before {
+  content: '';
+  position: absolute;
+  inset: calc((var(--size-touch-target) - var(--size-control-sm)) / -2);
+}
+
+@media (hover: hover) {
+  .clear:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}

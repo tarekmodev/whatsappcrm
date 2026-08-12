@@ -1,7 +1,15 @@
 'use server';
 
-import { InternalNoteCreateInputSchema } from '@whatsappcrm/contracts';
-import { assignConversation, claimConversation, createInternalNote } from '@/lib/api/conversations';
+import {
+  InternalNoteCreateInputSchema,
+  type ConversationStatus,
+} from '@whatsappcrm/contracts';
+import {
+  assignConversation,
+  claimConversation,
+  createInternalNote,
+  setConversationStatus,
+} from '@/lib/api/conversations';
 import { verifySession } from '@/lib/session/session';
 import { routes } from '@/lib/routes';
 import type { ActionResult } from '@/lib/actions/result';
@@ -111,6 +119,38 @@ export async function releaseConversationAction(
         userId: null,
         teamId: null,
       });
+
+      return { contactName: conversation.contact.displayName };
+    },
+  });
+}
+
+/**
+ * Closes an open conversation, or reopens a closed one.
+ *
+ * One action for both directions rather than two, because it is one write with a
+ * different value — and because that is what makes closing reversible in a click
+ * instead of an act needing a confirmation in front of it. The caller decides
+ * which way; `ConversationStatus` is the contract's own union, so a third value
+ * is a compile error rather than a 422.
+ *
+ * `conversation:read`, matching the endpoint: what gates this is the hold, not
+ * the role. The API refuses a status change on a thread nobody has claimed, the
+ * same way it refuses a send and a note (TAR-186), so the control is not offered
+ * on an unclaimed thread either.
+ */
+export async function setConversationStatusAction(
+  conversationId: string,
+  status: ConversationStatus,
+): Promise<ActionResult<{ contactName: string }>> {
+  return runAction({
+    permission: 'conversation:read',
+    parser: null,
+    input: undefined,
+    revalidate: INBOX_PATH,
+    label: 'Inbox',
+    perform: async () => {
+      const conversation = await setConversationStatus(conversationId, { status });
 
       return { contactName: conversation.contact.displayName };
     },
