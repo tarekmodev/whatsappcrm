@@ -2,7 +2,9 @@
 
 Status: proposed · Builds on [0002 — architecture and API contract](./0002-architecture-and-api-contract.md),
 [0003 — ticket auto-linking contract](./0003-ticket-auto-linking-contract.md) and
-[0004 — RBAC permission matrix](./0004-rbac-permission-matrix.md) ·
+[0004 — RBAC permission matrix](./0004-rbac-permission-matrix.md) · Sibling of
+[0006 — SLA timers and supervisor alerts](./0006-sla-timers-and-supervisor-alerts.md),
+which shares the business-hours question ·
 Consumed by TAR-285 (schema), TAR-288 (backend), TAR-289 (frontend), TAR-290 (QA), TAR-292 (documentation)
 
 ## Context and Problem
@@ -66,7 +68,9 @@ is a revision to this file, not a second signature published beside it.
   Routing happens once, when the ticket is created.
 - Realtime propagation of rule edits. Rules are a settings surface; a second supervisor sees a
   change on their next load.
-- Holiday and exception calendars for business hours.
+- Holiday and exception calendars for business hours. A routing rule asks whether the tenant is open
+  right now, which the interval predicate below answers. The calendar is 0006's risk 1 and stays
+  open.
 
 ---
 
@@ -246,9 +250,24 @@ TAR-289 shows the supervisor that the condition needs business hours set.
 #### Business hours, formalised
 
 `tenant_settings.business_hours` has had a documented shape since TAR-47 and no interpreter:
-`schema.prisma` says "TAR-26 owns its interpretation", and TAR-26 has not started. This document is
-its first consumer, so it publishes the schema and the predicate; TAR-26 inherits both rather than
-inventing a second reading of the same column.
+`schema.prisma` says "TAR-26 owns its interpretation". This document is its first consumer, so it
+publishes the schema and the predicate rather than inventing a private reading of a shared column.
+
+**0006 is why this lands here and not in TAR-26's document.** TAR-269 designed the SLA timers and
+put business-hours accounting out of scope: `sla_policies.business_hours_only` "exists and stays
+`false`", because turning it on "means a per-tenant holiday calendar and timezone arithmetic", and
+it carries that as its own risk 1. The two halves separate cleanly, so this document takes the one
+it needs and leaves the other alone:
+
+| Half                                                    | Owner                                                              |
+| ------------------------------------------------------- | ------------------------------------------------------------------ |
+| Timezone arithmetic — is this instant inside the hours? | Here. `isWithinBusinessHours`, used by `business_hours` conditions |
+| A holiday and exception calendar                        | Nobody yet. A non-goal here, risk 1 in 0006                        |
+
+So 0006's risk 1 narrows rather than closes: when someone picks up business-hours SLAs, the
+predicate exists and the calendar is what is left to design. Nothing here obliges TAR-26 to turn
+`business_hours_only` on, and a routing rule asking about business hours does not start an SLA
+timer against them.
 
 ```ts
 // packages/contracts/src/tenant.ts

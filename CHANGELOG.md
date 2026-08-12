@@ -169,7 +169,7 @@ change.
 
 ### Added
 
-- **Routing-rule contract** — `docs/architecture/0006-routing-rules-and-assignment-fallback.md`,
+- **Routing-rule contract** — `docs/architecture/0007-routing-rules-and-assignment-fallback.md`,
   with amendment 7 to ADR 0002 for the six `/api/v1/assignment-rules` routes. Fixes the
   condition grammar (`keyword`, `tag`, `business_hours`, `contact_attribute`, combined with
   AND inside a rule and OR across the ordered list), the evaluation order

@@ -321,7 +321,7 @@ Entities, with the tenant-scoping and indexing decisions that matter.
 | `tickets`                           | ✓        | `UNIQUE (tenant_id, number)`; `status`; `priority`; `conversation_id`; one active ticket per contact — [0003](./0003-ticket-auto-linking-contract.md) | TAR-21/25 |
 | `ticket_counters`                   | ✓        | one row per tenant; the ticket-number allocator — [0003](./0003-ticket-auto-linking-contract.md)                                                      | TAR-21    |
 | `ticket_events`                     | ✓        | append-only; `(tenant_id, ticket_id, created_at)`                                                                                                     | TAR-21/32 |
-| `assignment_rules`                  | ✓        | ordered by `position`, ties on `id`; `conditions JSONB` — grammar and schema deltas in [0006](./0006-routing-rules-and-assignment-fallback.md)        | TAR-24    |
+| `assignment_rules`                  | ✓        | ordered by `position`, ties on `id`; `conditions JSONB` — grammar and schema deltas in [0007](./0007-routing-rules-and-assignment-fallback.md)        | TAR-24    |
 | `assignment_state`                  | ✓        | round-robin cursor per team                                                                                                                           | TAR-23    |
 | `sla_policies`, `sla_timers`        | ✓        | `due_at`; partial index on unresolved timers                                                                                                          | TAR-26    |
 | `workflows`, `workflow_runs`        | ✓        | `definition JSONB`                                                                                                                                    | TAR-27    |
@@ -621,7 +621,7 @@ GET    /api/v1/tickets/{id}/events           → CursorPage<TicketEvent>
 
 # Assignment rules                                                        TAR-24
 # Shapes, condition grammar, evaluation order and the fallback seam:
-# docs/architecture/0006-routing-rules-and-assignment-fallback.md
+# docs/architecture/0007-routing-rules-and-assignment-fallback.md
 GET    /api/v1/assignment-rules              → AssignmentRuleListResponse assignment_rule:read
 POST   /api/v1/assignment-rules              → AssignmentRuleResponse     assignment_rule:write
 GET    /api/v1/assignment-rules/{id}         → AssignmentRuleResponse     assignment_rule:read
@@ -1573,7 +1573,7 @@ The published surface has no way to author a routing rule, and TAR-24's supervis
 work without one. The endpoints are ruled on here; everything they carry — the condition
 grammar, the evaluation order and its tie-break, the schema delta against TAR-47's
 `assignment_rules`, and the seam TAR-24's "no rule matched" path calls into TAR-23 — is in
-[0006 — routing rules and the assignment-fallback seam](./0006-routing-rules-and-assignment-fallback.md),
+[0007 — routing rules and the assignment-fallback seam](./0007-routing-rules-and-assignment-fallback.md),
 because it is a contract between four stories rather than a note about six routes.
 
 ```
