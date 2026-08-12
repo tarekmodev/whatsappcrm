@@ -72,6 +72,7 @@ the one that produced it.
 | [Data model reference](docs/reference/data-model.md)                                         | Every entity, which are tenant-scoped, which constraints and indexes matter   |
 | [Tenant isolation contract](docs/reference/tenancy.md)                                       | Which Prisma client to inject, and what the database refuses                  |
 | [Platform admin API](docs/reference/admin-api.md)                                            | Provisioning and deactivation: request, response, errors, retention           |
+| [People and teams API](docs/reference/people-api.md)                                         | Managing agents, teams and roles: permissions, invariants, isolation          |
 | [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                        |
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                        |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                      |
@@ -679,7 +680,8 @@ Another tenant's id is `not_found`, never `forbidden` — a 403 would confirm it
 How somebody who has never signed in gets an account. `IdentityModule` owns it, against
 the contract in
 [ADR 0005](docs/architecture/0005-auth-session-and-invite-contract.md). Login, password
-reset and the global auth guard are the rest of TAR-35 and are not here yet.
+reset and the global auth guard have since landed alongside it; what an account can do once
+it exists is [Managing agents, teams and roles](#managing-agents-teams-and-roles).
 
 ```
 POST   /api/v1/users/invites            user:invite   201 created · 200 refreshed
@@ -732,6 +734,76 @@ parameters travel with the hash and can be raised without a migration. The sessi
 is `__Host-wac_session`; set `SESSION_COOKIE_SECURE=false` for plain-HTTP local
 development, which drops the prefix and `Secure` — the API refuses to boot with it off
 under `NODE_ENV=production`.
+
+## Managing agents, teams and roles
+
+What a tenant admin does after the invitations go out. The full HTTP surface — every
+parameter, every error, the invariants and the audit trail — is
+[the people and teams API reference](docs/reference/people-api.md); this is the short
+version.
+
+**Three roles ship**, and they are tenant-scoped. There is no cross-tenant role.
+
+| Role         | What it can do                                                                      |
+| ------------ | ----------------------------------------------------------------------------------- |
+| `agent`      | Their own and their teams' conversations. No workspace settings                     |
+| `supervisor` | Every conversation in the tenant, plus assignment, teams, and inviting agents       |
+| `admin`      | Full tenant scope, including role assignment, removal, billing and channel settings |
+
+A role is only a bundle of permissions. `ROLE_PERMISSIONS` in
+`packages/contracts/src/rbac.ts` is the single place a role is ever interpreted — guards,
+the console and the tests all read it, so a change to the matrix is a change to that file
+and nothing else.
+
+### In the console
+
+**Settings → People**, at `/settings/people`. Two tabs:
+
+- **Agents** — _Invite agent_ takes an email, a role and any teams; the invitee picks their
+  own password from the emailed link. _Edit_ changes a display name, role, teams or status.
+  _Remove_ revokes access immediately and leaves their conversations unassigned.
+- **Teams** — _Create team_ takes a name, an optional description and its members. Editing a
+  team replaces its membership rather than merging.
+
+Supervisors see the same screens with the role controls disabled and no _Remove_ action.
+Agents get no Settings entry in the navigation at all — and that is presentation, not
+access control: a server action asserts the permission again, and the API asserts it a
+third time.
+
+### Over the API
+
+```bash
+# every role — the people list is tenant-wide
+curl -b cookies.txt 'http://northwind.app.localhost:3001/api/v1/users?limit=25'
+
+# admin — promote somebody and set their teams in one call
+curl -X PATCH -b cookies.txt -H 'content-type: application/json' \
+  -d '{"role":"supervisor","teamIds":["0192f002-0000-7000-8000-000000000201"]}' \
+  http://northwind.app.localhost:3001/api/v1/users/0192f001-0000-7000-8000-000000000101
+
+# supervisor or admin — create a team with its members
+curl -X POST -b cookies.txt -H 'content-type: application/json' \
+  -d '{"name":"Retention","memberUserIds":["0192f001-0000-7000-8000-000000000101"]}' \
+  http://northwind.app.localhost:3001/api/v1/teams
+```
+
+Four rules are worth knowing before you drive any of this, because each one answers with a
+refusal rather than a surprise:
+
+- **Assigning a role needs `user:set_role`, which only an admin holds.** A supervisor may
+  change a person's name, status and teams, and may invite an agent — not promote anyone.
+  Without that split, `user:update` would let a supervisor promote themselves.
+- **Nobody changes their own role**, admins included, so every escalation involves a second
+  person.
+- **The last active admin cannot be demoted, suspended or removed.** `409
+last_admin_required` — a tenant with no admin can only be recovered by platform support.
+- **Removal is a soft delete.** `DELETE /api/v1/users/{id}` sets `status: "removed"`, kills
+  the sessions, clears every routing reference and revokes any live invitation, while
+  keeping the messages, notes and audit rows that name them attributable.
+
+**A change takes effect on the next request, not the next login.** Role, status and team
+membership are materialised onto the session principal, so any change to them revokes that
+person's sessions in the same transaction. Their next call is a `401`.
 
 ## Environments
 
@@ -1115,7 +1187,10 @@ that leads to a refusal.
 
 ### Interim state: mock API and stubbed role
 
-Two flags in `.env.example` exist because TAR-82 was built ahead of its dependencies. Both
+Two flags in `.env.example` exist because TAR-82 was built ahead of its dependencies. Real
+sessions have since landed on both sides — signing in, the API's session cookie and the
+console's route guard all work, and with the stub off the API answers `401` to anything that
+is not a real session. The flags survive as a development and test convenience only. Both
 default to off and both must stay off in a deployed environment:
 
 - `NEXT_PUBLIC_USE_MOCK_API` serves every API call from `lib/api/mock/` instead of HTTP.
@@ -1124,10 +1199,15 @@ default to off and both must stay off in a deployed environment:
   same tenant scoping and permissions the real API does, and seeds a second tenant purely so
   that isolation is testable.
 - `NEXT_PUBLIC_ENABLE_ROLE_STUB` reads the role from a cookie and exposes a switcher, so the
-  agent/supervisor/admin views can be demonstrated before TAR-35's sessions exist.
+  agent/supervisor/admin views can be demonstrated without three real accounts.
   `getSession()` refuses it in production regardless of the flag, and while it is on the
   route guard stands down — there is no session cookie to look for, and no sign-out button
-  offered, because there would be nothing to end.
+  offered, because there would be nothing to end. Its API half is `AUTH_STUB_ENABLED`,
+  which binds `StubPrincipalSource` in place of the session reader and is refused under
+  `NODE_ENV=production`; the two are driven by the same `wac_role_stub` cookie so they
+  cannot disagree. What the stub replaces is the source of the principal, never a guard —
+  see
+  [Driving this surface locally](docs/reference/people-api.md#driving-this-surface-locally).
 
 ## License
 

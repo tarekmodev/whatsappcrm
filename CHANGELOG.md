@@ -510,6 +510,39 @@ change.
   production traffic yet — TAR-77 wires it to the inbound pipeline. (TAR-75)
 - **Ticket auto-linking contract** — `docs/architecture/0003-ticket-auto-linking-contract.md`
   and `packages/contracts/src/ticket-linking.ts`. (TAR-73)
+- **Agent, team and role management API** — `GET /api/v1/users` (tenant-wide, keyset
+  paginated, filterable by role, status, team and free text), `PATCH /api/v1/users/{id}`,
+  `POST /api/v1/users/{id}/unlock`, `DELETE /api/v1/users/{id}`,
+  `PATCH /api/v1/users/me/availability`, and `GET`/`POST`/`PATCH /api/v1/teams`. Every route
+  states a permission and `PermissionGuard` denies by default, including the one that needs
+  none. Two things permissions cannot express are enforced in the service and answer with
+  their own message: **nobody changes their own role** and **nobody grants a role above their
+  own** (`403`), and **the last active admin cannot be demoted, suspended or removed**
+  (`409 last_admin_required`, a locking read over the tenant's active admins rather than a
+  `count()`, so two concurrent demotions cannot both commit). `role` is gated on
+  `user:set_role` **in addition to** `user:update`, and a caller without it is refused
+  rather than served with the field silently dropped. `security` on a `UserResponse` is
+  `null` for a caller without `user:update`, so an agent cannot read how close a colleague
+  is to lockout. `DELETE` is a soft delete — `status: 'removed'`, sessions killed, team
+  memberships dropped, conversation, ticket, assignment-rule and round-robin references
+  cleared, live invitations revoked — because four of the tables referencing `users` are
+  history, and `audit_logs` among them. Removed accounts are absent from the list unless
+  asked for by name. Every mutation that changes what somebody may do revokes their sessions
+  in the same transaction and purges the principal cache after the commit, so the change
+  lands on their next request rather than their next login, and writes one audit row per
+  field that actually changed. `PATCH /api/v1/teams/{id}` is additive to TAR-39's published
+  surface: without it a supervisor could create a team and never change who is in it.
+  (TAR-81)
+- **Agent, team and role management console** — `/settings/people` invites agents with a
+  role and teams, edits a role, status or membership, removes an agent, and creates and
+  edits teams; `/settings/assignment` gives a supervisor tenant-wide agent and team
+  workload; `/inbox` caps an agent's scope at their own and their teams' conversations and
+  offers them no wider tab and no settings entry. Every permission decision asks whether the
+  principal holds a permission, never whether they are an admin, reading `ROLE_PERMISSIONS`
+  from `packages/contracts`. The gating is UX only — each server action asserts the
+  permission again and the API asserts it a third time. Landed with the frontend foundation
+  it needed: the three design-token layers, CSS Modules, the layout and UI primitives, the
+  app shell, a typed route map and a typed env module. (TAR-82)
 - **RBAC permission matrix** — `docs/architecture/0004-rbac-permission-matrix.md`, fixing
   the agent, supervisor and admin permission sets. (TAR-79)
 - **Tenant provisioning endpoint** — `POST /api/v1/admin/tenants`. Creates the tenant, its
@@ -548,6 +581,14 @@ change.
   (TAR-39, amended by TAR-20a)
 - **Documentation** — a data model reference, a platform admin API reference, the tenant
   isolation contract, and the documentation style guide this file follows. (TAR-89)
+- **People and teams API reference** — `docs/reference/people-api.md`, covering the users
+  and teams routes, the permission each needs, the four invariants, what a team does to
+  visibility, the session revocation and audit rows a change writes, and the four
+  cross-tenant attempts and their answers. The README gains a tenant-admin section on
+  managing agents, teams and roles. Every request, response and refusal on the page was
+  executed against a local stack, including with `AUTH_STUB_ENABLED=false` — session-based
+  role enforcement is confirmed live rather than pending, and the interim role stub is
+  documented as the development-only path it now is. (TAR-85)
 
 ### Changed
 
