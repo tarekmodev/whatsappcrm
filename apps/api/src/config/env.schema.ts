@@ -460,6 +460,24 @@ const envShape = z.object({
   MEDIA_DOWNLOAD_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
 
   // ---------------------------------------------------------------------------
+  // Ticketing (TAR-21)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Attempts a `ticket.ensure-for-message` job gets before it lands in the
+   * failed set.
+   *
+   * Larger than the media budget, because what it retries is the opposite kind
+   * of failure. A media download races a five-minute URL, so a late attempt is
+   * wasted; the dominant reason a ticket trigger fails is that the job overtook
+   * the transaction that wrote its message, which the very next attempt fixes.
+   * The failed set is monitored (0003) precisely because a message that never
+   * became a ticket is a support request nobody sees, so the budget is set to
+   * exhaust only on a real fault rather than on a commit-visibility blip.
+   */
+  TICKET_LINK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+
+  // ---------------------------------------------------------------------------
   // Infrastructure. Optional at scaffold time so the API boots with no backing
   // services. TAR-41 provisions these and promotes them to required.
   // ---------------------------------------------------------------------------

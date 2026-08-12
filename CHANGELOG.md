@@ -169,6 +169,36 @@ change.
 
 ### Added
 
+- **Auto-ticket creation now fires on real conversations** (TAR-77) — TAR-75 built the
+  ticket linker and proved it against fixtures; TAR-73 published the contract the two sides
+  meet over; nothing called either on production traffic. This connects them. Once an
+  inbound message has committed, `WhatsAppInboundWriter` enqueues
+  `ticket.ensure-for-message` on the `tickets` queue, and `TicketQueueRunner` — new, and the
+  only file in `TicketsModule` that knows a queue exists — hands it to the linker inside the
+  tenant scope `QueueService` opened from the job payload. A customer writing in for the
+  first time gets an open ticket linked to their conversation; their next message attaches
+  to it instead of opening a second one; a reply to a `pending` ticket reopens it, and one
+  written after the ticket was resolved correctly starts a new one.
+  **The two modules still never import each other.** `WebhooksModule` is L2 and
+  `TicketsModule` is L3, so what crosses the line is the payload shape in
+  `@whatsappcrm/contracts` — and the queue, not a call, so a fault in the ticket module
+  produces tickets late rather than rolling back the customer's message. The cost is stated
+  rather than hidden: the ticket is eventually consistent with the message, and a queue
+  outage means a message with no ticket yet.
+  **The trigger is enqueued for a replay too**, not only for a message this delivery was
+  the first to write. The message write and the trigger are deliberately not one atomic
+  unit, so a worker that commits the message and then dies leaves a message with no ticket,
+  and the webhook sweeper's replay is the only thing that will ever revisit it — on which
+  `skipDuplicates` writes nothing, so the id is read back rather than taken from the insert.
+  Without that, exactly those messages would silently never become tickets. Only inbound
+  messages are sent: the outbound placeholder a delivery receipt creates would be skipped by
+  the linker anyway, and a job whose one outcome is `skipped` buys nothing.
+  A malformed payload fails unrecoverably rather than spending five attempts on a shape that
+  cannot change; a deactivated tenant is discarded rather than retried; everything else is
+  retryable, bounded by the new `TICKET_LINK_MAX_ATTEMPTS`. Verified end to end against a
+  real PostgreSQL in `auto-ticket-pipeline.int-spec.ts`, including that the same customer
+  number writing to two tenants gets two tickets neither tenant can see the other half of.
+
 - **The inbox can reply: a composer that knows which of WhatsApp's two send modes it is in**
   (TAR-72) — the thread gains a reply box, and the interesting part is that there are two of
   them behind one control. Inside Meta's 24-hour customer service window an agent writes what
