@@ -197,14 +197,22 @@ export class TeamsService {
     return team;
   }
 
+  /**
+   * One statement for the whole set, not one per member (TAR-244).
+   *
+   * The loop this replaces put a session revocation *and* an audit insert on the
+   * wire per affected user, sequentially, inside the transaction — so a
+   * membership change held one pooled connection for as long as the team was
+   * large. `memberUserIds` is bounded now as well, and the two fixes answer
+   * different halves of the same finding: the bound caps the request, this caps
+   * the work per request.
+   */
   private async revokeFor(
     tx: Prisma.TransactionClient,
     tenantId: string,
     userIds: readonly string[],
   ): Promise<void> {
-    for (const userId of userIds) {
-      await this.sessions.revokeFor(tx, tenantId, userId, 'teams_change');
-    }
+    await this.sessions.revokeForMany(tx, tenantId, userIds, 'teams_change');
   }
 
   /**
@@ -215,9 +223,7 @@ export class TeamsService {
    * still-unrevoked row before the commit lands. See `SessionRevocationService`.
    */
   private async purgeCachesFor(tenantId: string, userIds: readonly string[]): Promise<void> {
-    for (const userId of userIds) {
-      await this.sessions.purgeCacheFor(tenantId, userId);
-    }
+    await this.sessions.purgeCacheForMany(tenantId, userIds);
   }
 }
 

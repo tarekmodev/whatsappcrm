@@ -458,6 +458,68 @@ describe('the session lifecycle, end to end', () => {
         ).resolves.toBeNull();
       }
     }, 30_000);
+
+    /**
+     * TAR-244. A team membership change logs out everybody it touches, and now
+     * does it in one statement rather than one per person — so the statement is
+     * the thing to prove, and only a real database can: a unit test asserting
+     * the SQL contains `user_id IN (` cannot say whether Postgres accepts it or
+     * whether RLS still bounds it.
+     */
+    it('revokes a set of users in one statement, and still cannot cross a tenant', async () => {
+      const agentToken = await signIn(TENANT_A);
+      const adminSignIn = await asTenant(
+        TENANT_A,
+        async () =>
+          await auth.login(
+            { email: 'tar56-admin@example.invalid', password: PASSWORD },
+            blankContext(),
+          ),
+      );
+      const neighbourToken = await signIn(TENANT_B);
+
+      // Warm both caches, so this is about revocation beating a cached
+      // principal rather than about an empty cache.
+      await asTenant(TENANT_A, async () => await sessions.resolve(agentToken, TENANT_A));
+      await asTenant(TENANT_B, async () => await sessions.resolve(neighbourToken, TENANT_B));
+
+      const revoked = await asTenant(
+        TENANT_A,
+        async () =>
+          await tenantPrisma.$tenantTransaction(
+            async (tx) =>
+              await sessions.revokeAllForUsers(
+                tx,
+                TENANT_A,
+                // The neighbour's agent is named deliberately: a batched
+                // statement is only as safe as the filter it kept.
+                [AGENT_A, ADMIN_A, AGENT_B],
+                'teams_change',
+              ),
+          ),
+      );
+
+      await asTenant(
+        TENANT_A,
+        async () => await sessions.purgeCacheForUsers(TENANT_A, [AGENT_A, ADMIN_A, AGENT_B]),
+      );
+
+      expect(revoked.get(AGENT_A)).toBe(1);
+      expect(revoked.get(ADMIN_A)).toBe(1);
+      // Tenant B's session is live and was never in reach: `tenant_id` is in
+      // the statement and RLS is under it.
+      expect(revoked.has(AGENT_B)).toBe(false);
+
+      for (const token of [agentToken, adminSignIn.issued.token]) {
+        await expect(
+          asTenant(TENANT_A, async () => await sessions.resolve(token, TENANT_A)),
+        ).resolves.toBeNull();
+      }
+
+      await expect(
+        asTenant(TENANT_B, async () => await sessions.resolve(neighbourToken, TENANT_B)),
+      ).resolves.not.toBeNull();
+    }, 30_000);
   });
 
   describe('lockout', () => {

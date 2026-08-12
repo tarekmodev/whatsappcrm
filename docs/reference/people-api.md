@@ -197,13 +197,13 @@ dropped — a privilege change that appears to have succeeded is the worse of th
 failures. That second check is in the service rather than the guard because the guard's
 metadata is static and this condition is not.
 
-| Parameter     | In   | Type   | Required | Default | Notes                                                                     |
-| ------------- | ---- | ------ | -------- | ------- | ------------------------------------------------------------------------- |
-| `id`          | path | uuid   | yes      | —       | A malformed id is `validation_failed`, not a database error               |
-| `displayName` | body | string | no       | —       | 1–120 characters                                                          |
-| `role`        | body | enum   | no       | —       | `agent` \| `supervisor` \| `admin`. Additionally requires `user:set_role` |
-| `status`      | body | enum   | no       | —       | `active` \| `suspended` **only**                                          |
-| `teamIds`     | body | uuid[] | no       | —       | Replaces the whole membership. Omitting it leaves membership alone        |
+| Parameter     | In   | Type   | Required | Default | Notes                                                                          |
+| ------------- | ---- | ------ | -------- | ------- | ------------------------------------------------------------------------------ |
+| `id`          | path | uuid   | yes      | —       | A malformed id is `validation_failed`, not a database error                    |
+| `displayName` | body | string | no       | —       | 1–120 characters                                                               |
+| `role`        | body | enum   | no       | —       | `agent` \| `supervisor` \| `admin`. Additionally requires `user:set_role`      |
+| `status`      | body | enum   | no       | —       | `active` \| `suspended` **only**                                               |
+| `teamIds`     | body | uuid[] | no       | —       | Replaces the whole membership. Omitting it leaves membership alone. At most 50 |
 
 `status` is narrower than the `user_status` column on purpose. `invited` is written by the
 invite flow and cleared by acceptance, and `removed` is written by `DELETE`, which is gated
@@ -384,7 +384,7 @@ Creates a team. `team:write` — supervisor and admin.
 | --------------- | ---- | -------------- | -------- | ------- | ------------------------------------------------------ |
 | `name`          | body | string         | yes      | —       | 1–80 characters. Unique per tenant, case-insensitively |
 | `description`   | body | string \| null | no       | `null`  | Up to 500 characters                                   |
-| `memberUserIds` | body | uuid[]         | no       | `[]`    | Must all be users in this tenant                       |
+| `memberUserIds` | body | uuid[]         | no       | `[]`    | Must all be users in this tenant. At most 500          |
 
 ```bash
 curl -X POST -b cookies.txt \
@@ -439,15 +439,21 @@ supervisor asked to manage teams could otherwise create one and never change who
 the only other way to move somebody between teams is `PATCH /users/{id}`, which needs
 `user:update`. Additive, so no existing client breaks.
 
-| Parameter       | In   | Type           | Required | Default | Notes                                                    |
-| --------------- | ---- | -------------- | -------- | ------- | -------------------------------------------------------- |
-| `id`            | path | uuid           | yes      | —       |                                                          |
-| `name`          | body | string         | no       | —       | 1–80 characters                                          |
-| `description`   | body | string \| null | no       | —       | Up to 500 characters                                     |
-| `memberUserIds` | body | uuid[]         | no       | —       | **Replaces** the membership. Omitting it leaves it alone |
+| Parameter       | In   | Type           | Required | Default | Notes                                                                 |
+| --------------- | ---- | -------------- | -------- | ------- | --------------------------------------------------------------------- |
+| `id`            | path | uuid           | yes      | —       |                                                                       |
+| `name`          | body | string         | no       | —       | 1–80 characters                                                       |
+| `description`   | body | string \| null | no       | —       | Up to 500 characters                                                  |
+| `memberUserIds` | body | uuid[]         | no       | —       | **Replaces** the membership. Omitting it leaves it alone. At most 500 |
 
 Every field is optional; `memberUserIds` replaces rather than merges, for the same reason
 `teamIds` does on a user.
+
+Both membership arrays are capped — 500 members on a team, 50 teams on a person — because
+the work behind each id is per-id: every affected person's sessions are revoked and their
+principal cache purged. The cap is on the request, and it is what keeps one call's fan-out
+off a connection pool the whole tenant shares (TAR-244). A team may still grow past 500 one
+person at a time through `PATCH /users/{id}`, which bounds the other side of the relation.
 
 | Status | Code                | Cause                                                        |
 | ------ | ------------------- | ------------------------------------------------------------ |

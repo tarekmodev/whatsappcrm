@@ -37,6 +37,10 @@ import {
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
 import {
   AvailabilityUpdateInputSchema,
+  TEAM_MEMBERSHIP_LIMITS,
+  TeamCreateInputSchema,
+  TeamResponseSchema,
+  TeamUpdateInputSchema,
   USER_STATUSES,
   UserResponseSchema,
   UserUpdateInputSchema,
@@ -202,6 +206,61 @@ describe('user lifecycle statuses', () => {
     const parsed = AvailabilityUpdateInputSchema.parse({ availability: 'away', role: 'admin' });
 
     expect(parsed).not.toHaveProperty('role');
+  });
+});
+
+/**
+ * TAR-244. Membership is the one array in this contract whose fan-out is not
+ * naturally small: every id in it costs a session revocation and a cache purge
+ * for that person, so an unbounded array was an unbounded amount of work a
+ * `team:write` caller could ask of a shared connection pool in one request.
+ */
+describe('team membership bounds', () => {
+  const ids = (count: number): string[] =>
+    Array.from(
+      { length: count },
+      (_, index) => `0192f0ff-0000-7000-8000-${(index + 1).toString(16).padStart(12, '0')}`,
+    );
+
+  const atTheCeiling = ids(TEAM_MEMBERSHIP_LIMITS.membersPerTeam);
+  const overIt = ids(TEAM_MEMBERSHIP_LIMITS.membersPerTeam + 1);
+
+  it('accepts a team at the ceiling and refuses one past it', () => {
+    expect(
+      TeamCreateInputSchema.parse({ name: 'Billing', memberUserIds: atTheCeiling }).memberUserIds,
+    ).toHaveLength(TEAM_MEMBERSHIP_LIMITS.membersPerTeam);
+    expect(() => TeamCreateInputSchema.parse({ name: 'Billing', memberUserIds: overIt })).toThrow();
+  });
+
+  it('keeps the ceiling through `.partial()` on the update', () => {
+    // A replace is the operation with the *larger* fan-out of the two — it
+    // revokes for everybody added and everybody removed — so an update that
+    // inherited optionality without the bound would be the hole.
+    expect(() => TeamUpdateInputSchema.parse({ memberUserIds: overIt })).toThrow();
+    expect(TeamUpdateInputSchema.parse({ memberUserIds: atTheCeiling })).toBeDefined();
+  });
+
+  it('publishes a maximum response size rather than implying one', () => {
+    expect(() =>
+      TeamResponseSchema.parse({
+        id: '0192f0ff-0000-7000-8000-00000000b001',
+        name: 'Billing',
+        description: null,
+        memberUserIds: overIt,
+        createdAt: '2026-08-10T00:00:00.000Z',
+      }),
+    ).toThrow();
+  });
+
+  it('bounds the other direction too, on `PATCH /users/{id}`', () => {
+    // Otherwise the cap on a team is one loop away from meaningless: the same
+    // membership rows can be written a person at a time from this side.
+    expect(() =>
+      UserUpdateInputSchema.parse({ teamIds: ids(TEAM_MEMBERSHIP_LIMITS.teamsPerUser + 1) }),
+    ).toThrow();
+    expect(
+      UserUpdateInputSchema.parse({ teamIds: ids(TEAM_MEMBERSHIP_LIMITS.teamsPerUser) }).teamIds,
+    ).toHaveLength(TEAM_MEMBERSHIP_LIMITS.teamsPerUser);
   });
 });
 

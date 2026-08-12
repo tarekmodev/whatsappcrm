@@ -10,7 +10,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { SessionRevocationReason } from '../audit/audit.actions';
 import { SESSIONS_REVOKED_EVENT, type SessionsRevokedEvent } from '../events/domain-events';
-import type { Prisma } from '../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { uuidV7 } from '../prisma/uuid-v7';
 import { SessionNotFoundError } from './identity.errors';
@@ -426,20 +426,57 @@ export class SessionService {
     reason: SessionRevocationReason,
     keepSessionId?: string,
   ): Promise<number> {
-    // Before the commit, so the common case is already cold when it lands.
-    await this.cache.purgeUser(tenantId, userId);
+    const revoked = await this.revokeAllForUsers(tx, tenantId, [userId], reason, keepSessionId);
 
-    const revoked = await tx.$queryRaw<{ token_hash: string }[]>`
+    return revoked.get(userId) ?? 0;
+  }
+
+  /**
+   * The same revocation for a set of users, as one statement (TAR-244).
+   *
+   * A team membership change affects everybody added and everybody removed, and
+   * the caller that looped over them held one pooled connection open for one
+   * round trip per person — inside a transaction, so nothing else could use it
+   * meanwhile. A bounded `memberUserIds` caps how bad that gets; this is what
+   * makes the cost independent of the team's size.
+   *
+   * Returns sessions revoked **per user**, because that is what the audit row
+   * for each of them records — and because a user who was signed in nowhere gets
+   * no audit row at all.
+   */
+  async revokeAllForUsers(
+    tx: RawClient,
+    tenantId: string,
+    userIds: readonly string[],
+    reason: SessionRevocationReason,
+    keepSessionId?: string,
+  ): Promise<Map<string, number>> {
+    const targets = [...new Set(userIds)];
+    const counts = new Map<string, number>();
+
+    if (targets.length === 0) {
+      // `IN ()` is not valid SQL, and there is nothing to purge either.
+      return counts;
+    }
+
+    // Before the commit, so the common case is already cold when it lands.
+    await this.cache.purgeUsers(tenantId, targets);
+
+    const revoked = await tx.$queryRaw<{ user_id: string }[]>`
       UPDATE sessions
          SET revoked_at = now(), revoked_reason = ${reason}
        WHERE tenant_id = ${tenantId}::uuid
-         AND user_id = ${userId}::uuid
+         AND user_id IN (${Prisma.join(targets.map((userId) => Prisma.sql`${userId}::uuid`))})
          AND revoked_at IS NULL
          AND (${keepSessionId ?? null}::uuid IS NULL OR id <> ${keepSessionId ?? null}::uuid)
-      RETURNING token_hash
+      RETURNING user_id
     `;
 
-    return revoked.length;
+    for (const row of revoked) {
+      counts.set(row.user_id, (counts.get(row.user_id) ?? 0) + 1);
+    }
+
+    return counts;
   }
 
   /**
@@ -453,8 +490,29 @@ export class SessionService {
    * extra Postgres read, not an authentication failure.
    */
   async purgeCacheFor(tenantId: string, userId: string): Promise<void> {
-    await this.cache.purgeUser(tenantId, userId, true);
-    this.announceRevocation(tenantId, userId);
+    await this.purgeCacheForUsers(tenantId, [userId]);
+  }
+
+  /**
+   * The same second purge for a set of users, in a fixed number of Redis round
+   * trips (TAR-244).
+   *
+   * The announcement stays per user because that is what the subscriber acts on
+   * — it drops the sockets one person holds — and `emit` is in-process
+   * dispatch, not a round trip.
+   */
+  async purgeCacheForUsers(tenantId: string, userIds: readonly string[]): Promise<void> {
+    const targets = [...new Set(userIds)];
+
+    if (targets.length === 0) {
+      return;
+    }
+
+    await this.cache.purgeUsers(tenantId, targets, true);
+
+    for (const userId of targets) {
+      this.announceRevocation(tenantId, userId);
+    }
   }
 
   /**

@@ -622,6 +622,21 @@ change.
 
 ### Changed
 
+- **Team membership is bounded, and a membership change costs the same whatever the team
+  size.** `memberUserIds` and `teamIds` carried no upper bound, so a caller holding
+  `team:write` could `POST /api/v1/teams` with ten thousand ids: validation passed, ten
+  thousand rows were written, and the service then revoked one user's sessions per round
+  trip — sequentially, inside the transaction, holding one pooled connection — before
+  repeating the shape as one Redis call per user after the commit. A privileged caller
+  rather than an anonymous one, but a self-inflicted availability cliff on a pool the whole
+  tenant shares. Both arrays now cap at `TEAM_MEMBERSHIP_LIMITS` (500 members per team, 50
+  teams per person), and the fan-out behind them collapses to one `UPDATE` over every
+  affected user, one `INSERT` for their audit rows, and one pipelined pass over Redis with
+  chunked deletes. Nobody loses a revocation: everybody affected is still logged out and
+  still purged on both sides of the commit. A team can still pass the published ceiling one
+  person at a time through `PATCH /users/{id}`, which bounds the other side of the relation
+  — making it a database invariant needs a capacity check on every path that writes
+  `team_members`, including invite acceptance, and that is its own change. (TAR-244)
 - **The local Postgres major matches Render's.** `docker-compose.yml` pinned
   `postgres:17-alpine` under a comment claiming it tracked the managed offering, while all
   three databases in `render.yaml` pin `postgresMajorVersion: '16'`. CI builds its database
