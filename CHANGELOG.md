@@ -704,6 +704,24 @@ change.
 
 ### Fixed
 
+- **The ticket-ensure job id no longer depends on an undocumented BullMQ exemption**
+  (TAR-249) — `ticketEnsureJobId` published `ticket.ensure-for-message:<tenant>:<message>`,
+  the one colon-bearing job id in the repo. BullMQ reserves `:` for its own Redis key
+  structure and rejects a custom id containing one, with a single backwards-compatibility
+  exemption for ids that split into exactly three parts — which is the only reason that
+  shape ever worked, and BullMQ's own source marks the exemption `TODO` for removal. The
+  failure it was one upgrade away from is a quiet one: `QueueService.enqueue` reports an
+  outcome rather than throwing, so a rejected id would have logged one warning per inbound
+  message and stopped creating tickets with nothing erroring. The id is now
+  `ticket-ensure-<tenantId>-<messageId>`, hyphenated like `media-download-` and
+  `webhook-event-` before it. It keeps `tenantId` even though `messageId` alone is unique,
+  because that substring is the handle for filtering one tenant's ensure-jobs in a queue
+  dashboard — exactly the triage being done when this class of thing goes wrong. The job
+  _name_ `ticket.ensure-for-message` is unchanged: BullMQ restricts ids, not names. No
+  migration and no queue drain — BullMQ routes by name and treats the id as opaque, so jobs
+  already queued under the old id finish normally; during a rolling deploy a Meta retry of
+  one message can produce a job under each shape, and both are `ensureTicketForMessage`
+  calls, which is idempotent by contract. Recorded in ADR 0003 as implementation rule 5.
 - **The browser's own API calls name their tenant too, and the naming is now provable**
   (TAR-64) — the `/api/*` rewrite is where the browser path loses the tenant: Next's proxy
   replaces `Host` with the API origin, and `rewrites()` cannot add a request header. So

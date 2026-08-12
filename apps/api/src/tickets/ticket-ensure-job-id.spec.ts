@@ -5,26 +5,22 @@ import { Job, type Queue } from 'bullmq';
  * One assertion, guarding one landmine: **BullMQ accepts the job id the contract
  * publishes.**
  *
- * `ticketEnsureJobId` (TAR-73) returns `ticket.ensure-for-message:<tenant>:<message>`.
- * Every other job id in this repo is hyphenated, and `media-jobs.ts` says why in
- * as many words: "BullMQ reserves `:` for its own Redis key structure and
- * rejects a custom job id containing one". That is very nearly true — the actual
- * check in BullMQ 6 rejects a colon-bearing id *unless it splits into exactly
- * three parts*, an exemption kept only for backwards compatibility with old
- * repeatable jobs, and carrying a `TODO: replace this check in next breaking
- * check with include(':')`.
+ * `ticketEnsureJobId` returns `ticket-ensure-<tenant>-<message>` — colon-free by
+ * construction, like every other job id in this repo. It was not always: TAR-73
+ * published `ticket.ensure-for-message:<tenant>:<message>`, which BullMQ 6
+ * accepted only because a colon-bearing id *that splits into exactly three
+ * parts* is exempt for backwards compatibility with old repeatable jobs, an
+ * exemption carrying a `TODO: replace this check in next breaking check with
+ * include(':')`. TAR-249 removed the dependency rather than keep betting on it.
  *
- * So the contract's id is legal today by landing exactly on that exemption, and
- * is scheduled to stop being legal. What makes this worth a test rather than a
- * comment is *how* it would fail: `QueueService.enqueue` catches everything and
- * reports an outcome, so the id being rejected would not throw anywhere. It
- * would log one warning per inbound message and quietly stop creating tickets.
+ * What makes this worth a test rather than a comment is *how* it would fail:
+ * `QueueService.enqueue` catches everything and reports an outcome, so a
+ * rejected id would not throw anywhere. It would log one warning per inbound
+ * message and quietly stop creating tickets.
  *
- * This test fails at the moment a BullMQ upgrade tightens the rule, which is
- * where that change is cheap to handle. The fix is not to patch it here: the id
- * is TAR-73's to change, and 0003's own instruction is that a contract mismatch
- * goes back through the architect rather than being worked around at the call
- * site.
+ * The control test below is what keeps the first assertion load-bearing: it
+ * proves BullMQ is still the reason a colon matters. If it ever stops throwing,
+ * BullMQ has loosened the rule and the risk is gone.
  */
 describe('the job id the ticket contract publishes', () => {
   const TRIGGER = {
@@ -66,12 +62,12 @@ describe('the job id the ticket contract publishes', () => {
     }).not.toThrow();
   });
 
-  /**
-   * Pins *why* the id above passes. If this stops rejecting, BullMQ has loosened
-   * the rule and the risk is gone; if the test above starts failing while this
-   * one still passes, BullMQ has tightened it as promised.
-   */
-  it('passes only because of the three-part exemption, not because colons are allowed', () => {
+  it('contains no colon, so it does not depend on the three-part exemption', () => {
+    expect(ticketEnsureJobId(TRIGGER)).not.toContain(':');
+  });
+
+  /** Keeps the assertion above load-bearing: this is what BullMQ still rejects. */
+  it('would be rejected by BullMQ if it carried a colon', () => {
     expect(() => {
       validate(`${TICKET_ENSURE_JOB}:${TRIGGER.messageId}`);
     }).toThrow('Custom Id cannot contain :');

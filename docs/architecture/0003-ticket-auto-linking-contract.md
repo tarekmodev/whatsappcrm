@@ -116,7 +116,9 @@ crash in between loses the job; the webhook sweeper re-runs the inbound processo
 enqueues unconditionally — even when the message upsert is a replay no-op. That is safe
 precisely because `ensureTicketForMessage` is idempotent. `ticketEnsureJobId()` gives a
 stable `jobId` so a Meta retry collapses while the first job is still queued, but that is
-an optimisation; the handler's idempotency is the correctness mechanism.
+an optimisation; the handler's idempotency is the correctness mechanism. The id is
+hyphen-separated — `ticket-ensure-<tenantId>-<messageId>` — because BullMQ rejects a custom
+job id containing `:`.
 
 **Emitted for inbound messages only,** and for every one of them — not just the first in a
 conversation. Filtering to "first message" would mean a contact whose ticket was resolved
@@ -392,6 +394,10 @@ throws a code from that list is unaffected.
    mechanism.
 4. `TicketsModule` emits `ticket.created` on the `created` path only. It does not import
    `AssignmentModule` or `SlaModule`.
+5. Job ids on this queue are hyphen-separated. `:` is reserved by BullMQ's Redis key
+   structure and a colon-bearing custom id is rejected at `add()` time — inside
+   `QueueService.enqueue`, which logs rather than throws, so a violation stops ticket
+   creation without erroring (TAR-249).
 
 ---
 
