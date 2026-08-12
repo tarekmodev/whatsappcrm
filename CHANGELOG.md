@@ -169,6 +169,17 @@ change.
 
 ### Added
 
+- **Routing-rule contract** — `docs/architecture/0006-routing-rules-and-assignment-fallback.md`,
+  with amendment 7 to ADR 0002 for the six `/api/v1/assignment-rules` routes. Fixes the
+  condition grammar (`keyword`, `tag`, `business_hours`, `contact_attribute`, combined with
+  AND inside a rule and OR across the ordered list), the evaluation order
+  (`position ASC, id ASC`, first match wins, a matched rule terminal), the five schema deltas
+  against TAR-47's `assignment_rules`, and `FallbackAssignmentResolver` — the seam TAR-24's
+  "no rule matched" path calls and TAR-23 implements behind, so the rule engine can be built
+  and tested against a stub before rotation lands. Also formalises
+  `tenant_settings.business_hours`, which has had a shape since TAR-47 and no interpreter.
+  (TAR-279)
+
 - **Auto-ticket creation now fires on real conversations** (TAR-77) — TAR-75 built the
   ticket linker and proved it against fixtures; TAR-73 published the contract the two sides
   meet over; nothing called either on production traffic. This connects them. Once an

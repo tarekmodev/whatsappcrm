@@ -321,7 +321,7 @@ Entities, with the tenant-scoping and indexing decisions that matter.
 | `tickets`                           | ✓        | `UNIQUE (tenant_id, number)`; `status`; `priority`; `conversation_id`; one active ticket per contact — [0003](./0003-ticket-auto-linking-contract.md) | TAR-21/25 |
 | `ticket_counters`                   | ✓        | one row per tenant; the ticket-number allocator — [0003](./0003-ticket-auto-linking-contract.md)                                                      | TAR-21    |
 | `ticket_events`                     | ✓        | append-only; `(tenant_id, ticket_id, created_at)`                                                                                                     | TAR-21/32 |
-| `assignment_rules`                  | ✓        | ordered by `position`; `conditions JSONB`                                                                                                             | TAR-24    |
+| `assignment_rules`                  | ✓        | ordered by `position`, ties on `id`; `conditions JSONB` — grammar and schema deltas in [0006](./0006-routing-rules-and-assignment-fallback.md)        | TAR-24    |
 | `assignment_state`                  | ✓        | round-robin cursor per team                                                                                                                           | TAR-23    |
 | `sla_policies`, `sla_timers`        | ✓        | `due_at`; partial index on unresolved timers                                                                                                          | TAR-26    |
 | `workflows`, `workflow_runs`        | ✓        | `definition JSONB`                                                                                                                                    | TAR-27    |
@@ -618,6 +618,17 @@ GET    /api/v1/tickets/{id}                  → TicketResponse
 PATCH  /api/v1/tickets/{id}                  → TicketResponse             ticket:update
 POST   /api/v1/tickets/{id}/assign           → TicketResponse             ticket:assign
 GET    /api/v1/tickets/{id}/events           → CursorPage<TicketEvent>
+
+# Assignment rules                                                        TAR-24
+# Shapes, condition grammar, evaluation order and the fallback seam:
+# docs/architecture/0006-routing-rules-and-assignment-fallback.md
+GET    /api/v1/assignment-rules              → AssignmentRuleListResponse assignment_rule:read
+POST   /api/v1/assignment-rules              → AssignmentRuleResponse     assignment_rule:write
+GET    /api/v1/assignment-rules/{id}         → AssignmentRuleResponse     assignment_rule:read
+PATCH  /api/v1/assignment-rules/{id}         → AssignmentRuleResponse     assignment_rule:write
+DELETE /api/v1/assignment-rules/{id}         → 204                        assignment_rule:write
+POST   /api/v1/assignment-rules/reorder      → AssignmentRuleListResponse assignment_rule:write
+                                                                      added by amendment 7
 
 # Billing                                                                 TAR-37
 GET    /api/v1/billing/subscription          → BillingSummaryResponse     billing:read
@@ -1555,3 +1566,42 @@ that team. It is the same shape of conflict at a smaller blast radius, and a sup
 rule put that thread in front of that team on purpose, so it is left as the team queue's own
 coordination problem rather than widened into this rule. TAR-23/24's routing is where it
 would be closed.
+
+### Amendment 7 — assignment rules (TAR-24)
+
+The published surface has no way to author a routing rule, and TAR-24's supervisor cannot
+work without one. The endpoints are ruled on here; everything they carry — the condition
+grammar, the evaluation order and its tie-break, the schema delta against TAR-47's
+`assignment_rules`, and the seam TAR-24's "no rule matched" path calls into TAR-23 — is in
+[0006 — routing rules and the assignment-fallback seam](./0006-routing-rules-and-assignment-fallback.md),
+because it is a contract between four stories rather than a note about six routes.
+
+```
+GET    /api/v1/assignment-rules            → AssignmentRuleListResponse   assignment_rule:read
+POST   /api/v1/assignment-rules            → AssignmentRuleResponse       assignment_rule:write
+GET    /api/v1/assignment-rules/{id}       → AssignmentRuleResponse       assignment_rule:read
+PATCH  /api/v1/assignment-rules/{id}       → AssignmentRuleResponse       assignment_rule:write
+DELETE /api/v1/assignment-rules/{id}       → 204                          assignment_rule:write
+POST   /api/v1/assignment-rules/reorder    → AssignmentRuleListResponse   assignment_rule:write
+```
+
+**`assignment_rule:read` / `assignment_rule:write`, and no new permission.** `rbac.ts` has
+carried both since TAR-39, granted to supervisor and admin, and `apps/web`'s
+`/settings/assignment` already gates on the read half. TAR-22's third acceptance criterion
+puts assignment settings in a supervisor's hands, so gating routing on admin-only
+`channel:manage` would be a narrowing, not a tightening.
+
+**The list does not paginate, which is the one convention this amendment breaks.** Rules are
+capped per tenant, the evaluation engine loads the whole active set for every ticket anyway,
+and a cap the server enforces is a bound it can actually promise a client —
+`TeamListQuerySchema`'s "few today is not a property the API can promise" does not apply where
+the API enforces the number. The response keeps `CursorPage`'s shape with `nextCursor` fixed
+at `null`, so pagination stays addable without a breaking change. The reasoning, and why
+keyset on a `position` column defaulting to `0` would land on the low-cardinality degradation
+this document warns about, is in 0006.
+
+**No new error code.** `validation_failed`, `not_found`, `conflict` and `forbidden` cover
+every refusal. One additive contract change lands outside `assignment.ts`:
+`assignment_deferred` joins `TICKET_EVENT_TYPES`, for the ticket that matched no rule and
+found no available agent. `ticket_events.type` is text for exactly this reason, so it is not
+a migration.
