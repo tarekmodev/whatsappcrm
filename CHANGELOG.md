@@ -14,6 +14,33 @@ change.
 
 ### Security
 
+- **Two agents can no longer both reply into the same unclaimed conversation** (TAR-186) —
+  TAR-68 made an unclaimed thread visible to every agent on the tenant, which is what a
+  shared inbox is for, and left it writable by every one of them too. Two agents looking at
+  the same arriving conversation both replied, and the customer got two answers;
+  `Idempotency-Key` cannot catch that, because each agent sends a distinct request with a
+  distinct key. The rule is now **readable by everyone, writable by nobody**: the send, the
+  internal note and the status change refuse a conversation with no assignee and no team
+  with `conflict`, uniformly across roles — a supervisor replying into the pool produces the
+  same two answers, and a role branch inside a write path is what ADR 0004 exists to forbid.
+  The list, the detail read, the message history and the read receipt are untouched.
+  Taking work out of the pool is the new `POST /conversations/{id}/claim` on a
+  `conversation:claim` **every role holds** — ADR 0004 open item 2, resolved. It takes no
+  body, so the assignee is always the session's own principal, and it is a compare-and-set
+  (`WHERE assigned_user_id IS NULL`), so of two agents claiming at the same moment PostgreSQL
+  picks the winner and the other is refused rather than silently overwriting them — with
+  `conflict` if they could still see the thread, `not_found` if the winner's claim had
+  already taken it out of their view.
+  The holder re-claiming their own thread gets it back with a 200, so a double-click is not
+  a lie. A conversation routed to a team may be claimed by one of its members and stays that
+  team's; a thread somebody is already on can never be taken through this route, whatever it
+  is called with — that is still `conversation:assign`, still supervisor and above, and still
+  deliberately a blind write, because an assignment that refused an already-held thread could
+  not do the job it exists for. The console follows: the Claim button now appears for agents,
+  and the composer and the note box are shut on an unclaimed thread with the reason on screen
+  rather than letting somebody type a reply that can only end in a 409. Recorded as ADR 0002
+  amendment 6 and ADR 0004 invariants 6–8. ⚠️ Still open, and stated rather than left to be
+  discovered: two members of the _same team_ can both reply to a thread routed to that team.
 - **The audit trail names which operator acted, on both WhatsApp connection paths**
   (TAR-166) — `audit_logs` had one actor column, `actor_user_id`, and a null in it said two
   different things: the platform acted, or nothing recorded who. Connecting a WABA hands the
@@ -222,7 +249,8 @@ change.
   typing. Claiming is three states, not two: the shared pool gets a **Claim**, a thread you
   hold gets a **Release**, and one a colleague holds gets **Take over** behind a
   confirmation that names them and says what it costs them — because the API writes the
-  assignment unconditionally (no compare-and-set until TAR-186), so presenting a takeover as
+  assignment unconditionally (TAR-186 has since made the claim a compare-and-set; a
+  take-over stays blind on purpose), so presenting a takeover as
   a claim quietly moved work off the person doing it. TAR-198 now puts the hand-over on that
   person's socket, so their inbox follows it; what the confirmation says is that nothing
   _interrupts_ them, and they may be part-way through a reply. Outbound authorship reads `MessageResponse.sentByAutomation` rather than
@@ -239,10 +267,9 @@ change.
   unclaimed conversation visible to every agent on the tenant, and the API opens
   `scope=unassigned` accordingly, so hiding the tab left arriving customers unanswered;
   `scope=all` is offered too and the narrowing it gets for a principal without
-  `conversation:read_all` is said out loud rather than left to be discovered. **Claiming
-  still needs `conversation:assign`, which an agent does not hold** — the control is absent
-  for them and the reason is on screen, pending the `conversation:claim` that ADR 0004 open
-  item 2 records.
+  `conversation:read_all` is said out loud rather than left to be discovered. Claiming
+  needed `conversation:assign` as shipped here, which an agent does not hold — TAR-186 has
+  since given every role a `conversation:claim` and the control is theirs.
 - **The shared inbox has an API: nine routes, the 24-hour window rule, and idempotent
   sending** (TAR-68) — `ConversationsModule` implements TAR-39's Inbox surface end to end.
   Reads are keyset-paginated on `(last_message_at DESC, id DESC)` over TAR-80's three

@@ -72,17 +72,18 @@ import {
  *
  * ## Every refusal happens before the row exists
  *
- * Visibility, opt-out, the service window, the template's approval and arity,
- * the media's kind: all of them are checked first, so a refused send leaves
- * nothing behind and the agent is told what to change while the composer is
- * still open. Nothing here writes and then decides.
+ * Visibility, who holds the thread, opt-out, the service window, the template's
+ * approval and arity, the media's kind: all of them are checked first, so a
+ * refused send leaves nothing behind and the agent is told what to change while
+ * the composer is still open. Nothing here writes and then decides.
  *
  * ## Isolation
  *
  * `TenantPrisma` throughout, so RLS supplies `tenant_id`. The conversation is
- * loaded through `ConversationQueryService.require`, which is the same
- * visibility check every other route in this module uses — a thread this
- * principal may not see answers `not_found` rather than sending to it.
+ * loaded through `ConversationQueryService.requireHeld`, which is the same
+ * visibility check every other route in this module uses plus the one a write
+ * adds — a thread this principal may not see answers `not_found` rather than
+ * sending to it, and one nobody has claimed answers `conflict` until they do.
  */
 @Injectable()
 export class MessageSendService {
@@ -163,13 +164,17 @@ export class MessageSendService {
    * projection does not carry — the contact's opt-out state and the number the
    * thread belongs to.
    *
-   * `require` first, so visibility is decided by the one function that decides
-   * it everywhere; this second read then loads the send-specific columns rather
-   * than widening `CONVERSATION_PROJECTION`, which every inbox row would pay
-   * for.
+   * `requireHeld` first, so visibility *and* the shared-pool write rule are
+   * decided by the one function that decides them everywhere; this second read
+   * then loads the send-specific columns rather than widening
+   * `CONVERSATION_PROJECTION`, which every inbox row would pay for.
+   *
+   * `requireHeld` rather than `require` is TAR-186: a conversation nobody has
+   * claimed is readable by every agent, and a send is the one act where that
+   * would put two answers in front of the same customer.
    */
   private async loadSendTarget(conversationId: string): Promise<SendTarget> {
-    await this.conversations.require(conversationId);
+    await this.conversations.requireHeld(conversationId);
 
     return this.prisma.conversation.findUniqueOrThrow({
       where: { id: conversationId },

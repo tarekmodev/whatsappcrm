@@ -19,17 +19,19 @@ import { LazyTakeOverDialog } from './inbox-dialogs.lazy';
  * reason this is not a boolean:
  *
  *   * **unclaimed** — "Claim". Nobody is holding it; taking it out of the shared
- *     pool needs no ceremony.
+ *     pool needs no ceremony. `conversation:claim`, which every role holds.
  *   * **mine** — "Release". Reversible in one click, so no confirmation: a modal
  *     for a reversible action is friction, not safety.
  *   * **theirs** — "Take over", behind a confirmation that names the colleague
- *     and says what it costs them. It is the same write as a claim, because the
- *     API has no compare-and-set until TAR-186 — which is exactly why the UI
- *     must not present it as the same act.
+ *     and says what it costs them. A *different write* from the claim since
+ *     TAR-186: the claim compares and sets, so it refuses a thread somebody
+ *     already holds, while a take-over is the blind assignment — which is the
+ *     whole point of it, and why it needs the confirmation instead.
  *
- * Rendered only for a principal holding `conversation:assign`. That check is the
- * caller's, and the action asserts it again: a server action is a public
- * endpoint, so a hidden button was never the gate.
+ * Rendered by a caller that has checked `canChangeHold` — `conversation:claim`
+ * for the first state, `conversation:assign` for the other two. The actions
+ * assert the same permissions again: a server action is a public endpoint, so a
+ * hidden button was never the gate.
  */
 
 export interface ClaimButtonProps {

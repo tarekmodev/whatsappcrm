@@ -36,6 +36,49 @@ export class ConversationNotFoundError extends ConversationError {
 }
 
 /**
+ * A write into a conversation nobody holds (TAR-186).
+ *
+ * The shared pool is readable by every agent, which is what makes an arriving
+ * customer message reachable at all — and it is exactly why it may not also be
+ * writable: two agents looking at the same unclaimed thread would both reply,
+ * and the customer would get two answers. `Idempotency-Key` cannot help, because
+ * each agent sends a distinct request.
+ *
+ * Claiming is the fix and the first action: `POST /conversations/{id}/claim`
+ * takes the thread out of the pool, and every write then belongs to whoever
+ * holds it — one person, or the members of the team it was routed to, who can at
+ * least see each other. Closing that narrower case belongs with the routing that
+ * creates it (TAR-23/24).
+ *
+ * `conflict` (409) rather than `forbidden`: the caller may write to this
+ * conversation, and what refused them is the state of the row — the same family
+ * `whatsapp_window_expired` sits in, and something the caller can act on by
+ * claiming. A dedicated code the console could branch on is a contract change
+ * to 0002, recorded as a follow-up rather than invented here.
+ */
+export class ConversationUnclaimedError extends ConversationError {
+  constructor(readonly conversationId: string) {
+    super('Claim this conversation before replying to it — nobody is holding it yet.');
+  }
+}
+
+/**
+ * A claim that lost the race: the thread was taken between this caller reading
+ * it and their claim landing.
+ *
+ * The colleague who won is deliberately **not** named. The loser has already
+ * seen the thread in the shared pool, so the id leaks nothing, but who holds it
+ * is the assignment they were about to have taken from them and the console
+ * refetches it on the hand-over event (TAR-198) rather than learning it from an
+ * error message.
+ */
+export class ConversationAlreadyClaimedError extends ConversationError {
+  constructor(readonly conversationId: string) {
+    super('Somebody else claimed this conversation first.');
+  }
+}
+
+/**
  * The 24-hour customer service window has closed, and the request was not an
  * approved template.
  *

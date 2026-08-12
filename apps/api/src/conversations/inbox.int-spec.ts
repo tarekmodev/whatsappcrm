@@ -19,7 +19,14 @@ import type { QueueService } from '../queue/queue.service';
 import { MessageTemplateQueryService } from '../whatsapp/message-template-query.service';
 import { ConversationQueryService } from './conversation-query.service';
 import { ConversationCommandService } from './conversation-command.service';
-import { ConversationNotFoundError, ServiceWindowExpiredError } from './conversations.errors';
+import {
+  ConversationAlreadyClaimedError,
+  ConversationError,
+  ConversationNotFoundError,
+  ConversationUnclaimedError,
+  ServiceWindowExpiredError,
+} from './conversations.errors';
+import { InternalNotesService } from './internal-notes.service';
 import { MessageSendService } from './message-send.service';
 
 /**
@@ -40,6 +47,9 @@ import { MessageSendService } from './message-send.service';
  *   * `Idempotency-Key` replay — same body replays, different body is 409;
  *   * an unclaimed conversation is visible to every agent on the tenant, and
  *     stops being once it is claimed;
+ *   * two agents cannot both reply into the same unclaimed thread (TAR-186) —
+ *     the claim is a compare-and-set PostgreSQL decides, and a send into a
+ *     thread nobody holds is refused;
  *   * tenant A cannot see, send to, or replay a key into tenant B.
  *
  * ⚠️ It writes to the database it is pointed at, and commits. Two fixture
@@ -102,6 +112,7 @@ describe('the shared inbox, end to end', () => {
   let tenantPrisma: TenantPrisma;
   let conversations: ConversationQueryService;
   let commands: ConversationCommandService;
+  let notes: InternalNotesService;
   let sends: MessageSendService;
   let idempotency: IdempotencyService;
   let enqueued: unknown[];
@@ -128,6 +139,29 @@ describe('the shared inbox, end to end', () => {
 
   function sendText(principal: SessionPrincipal, conversationId: string, body: string) {
     return as(principal, async () => await sends.send(conversationId, { type: 'text', body }));
+  }
+
+  /**
+   * Puts a thread in somebody's hands, and takes it back out.
+   *
+   * TAR-186 made an unclaimed conversation unwritable, so a block that is about
+   * the service window or an idempotency key has to hold its thread first —
+   * otherwise it would be measuring the shared-pool refusal instead. Released in
+   * the matching `afterAll` so the blocks about the pool still find one, in
+   * whatever order they run.
+   */
+  function hold(tenantId: string, userId: string, conversationId: string): Promise<unknown> {
+    return as(
+      principalFor(tenantId, userId, 'supervisor'),
+      async () => await commands.assign(conversationId, { userId }),
+    );
+  }
+
+  function release(tenantId: string, userId: string, conversationId: string): Promise<unknown> {
+    return as(
+      principalFor(tenantId, userId, 'supervisor'),
+      async () => await commands.assign(conversationId, { userId: null, teamId: null }),
+    );
   }
 
   async function removeFixture(): Promise<void> {
@@ -160,6 +194,7 @@ describe('the shared inbox, end to end', () => {
 
     conversations = new ConversationQueryService(tenantPrisma, tenantContext);
     commands = new ConversationCommandService(tenantPrisma, conversations, tenantContext, events);
+    notes = new InternalNotesService(tenantPrisma, tenantContext, conversations);
     idempotency = new IdempotencyService(tenantPrisma, tenantContext);
     sends = new MessageSendService(
       tenantPrisma,
@@ -192,6 +227,16 @@ describe('the shared inbox, end to end', () => {
   });
 
   describe('the 24-hour service window', () => {
+    beforeAll(async () => {
+      await hold(TENANT_A, AGENT_A, OPEN_THREAD);
+      await hold(TENANT_A, AGENT_A, CLOSED_THREAD);
+    });
+
+    afterAll(async () => {
+      await release(TENANT_A, AGENT_A, OPEN_THREAD);
+      await release(TENANT_A, AGENT_A, CLOSED_THREAD);
+    });
+
     it('accepts a free-form message inside the window', async () => {
       const message = await sendText(
         principalFor(TENANT_A, AGENT_A, 'agent'),
@@ -258,6 +303,16 @@ describe('the shared inbox, end to end', () => {
 
   describe('Idempotency-Key', () => {
     const body = { type: 'text', body: 'Sent once.' } as const;
+
+    beforeAll(async () => {
+      await hold(TENANT_A, AGENT_A, OPEN_THREAD);
+      await hold(TENANT_B, AGENT_B, TENANT_B_THREAD);
+    });
+
+    afterAll(async () => {
+      await release(TENANT_A, AGENT_A, OPEN_THREAD);
+      await release(TENANT_B, AGENT_B, TENANT_B_THREAD);
+    });
 
     function send(agentKey: string) {
       const principal = principalFor(TENANT_A, AGENT_A, 'agent');
@@ -387,6 +442,130 @@ describe('the shared inbox, end to end', () => {
 
       release();
       await first;
+    });
+  });
+
+  /**
+   * TAR-186, against a real row: **two agents cannot both reply into the same
+   * unclaimed thread.**
+   *
+   * The only place this can be proved. The race is decided by PostgreSQL — one
+   * `UPDATE … WHERE assigned_user_id IS NULL` matches a row and the other matches
+   * none — and a stubbed client would prove only that the code asked for a
+   * compare-and-set, not that it got one.
+   *
+   * Ordered as the failure actually happens: both agents see the thread in the
+   * pool, both try to take it, one wins, and the loser's send is refused rather
+   * than becoming the customer's second answer.
+   */
+  describe('two agents on one unclaimed thread', () => {
+    // Its own thread, released afterwards, so the visibility cases below still
+    // find the shared pool they expect whatever order Jest runs them in.
+    afterAll(async () => {
+      await as(
+        principalFor(TENANT_A, AGENT_A, 'supervisor'),
+        async () => await commands.assign(OPEN_THREAD, { userId: null, teamId: null }),
+      );
+    });
+
+    it('refuses a send into a thread nobody has claimed', async () => {
+      await expect(
+        sendText(principalFor(TENANT_A, OTHER_AGENT_A, 'agent'), OPEN_THREAD, 'On it!'),
+      ).rejects.toBeInstanceOf(ConversationUnclaimedError);
+      expect(enqueued).toHaveLength(0);
+    });
+
+    it('gives the thread to exactly one of two agents claiming at once', async () => {
+      const outcomes = await Promise.allSettled([
+        as(principalFor(TENANT_A, AGENT_A, 'agent'), async () => await commands.claim(OPEN_THREAD)),
+        as(
+          principalFor(TENANT_A, OTHER_AGENT_A, 'agent'),
+          async () => await commands.claim(OPEN_THREAD),
+        ),
+      ]);
+
+      const won = outcomes.filter((outcome) => outcome.status === 'fulfilled');
+      const lost = outcomes.filter((outcome) => outcome.status === 'rejected');
+
+      expect(won).toHaveLength(1);
+      expect(lost).toHaveLength(1);
+      // Refused, and which refusal depends on where the loser's visibility read
+      // fell relative to the winner's commit: before it, the thread was still in
+      // their shared pool and the compare-and-set reports the conflict; after
+      // it, the thread is the winner's and invisible to them, which is
+      // `not_found` by the same rule every other route follows. Both are a
+      // refusal and neither is a write — asserting the property rather than the
+      // timing is what keeps this test honest instead of flaky.
+      const refusal: unknown = (lost[0] as PromiseRejectedResult).reason;
+
+      expect(refusal).toBeInstanceOf(ConversationError);
+      expect(
+        refusal instanceof ConversationAlreadyClaimedError ||
+          refusal instanceof ConversationNotFoundError,
+      ).toBe(true);
+    });
+
+    it('lets the winner send, and refuses the loser', async () => {
+      const holder = await as(
+        principalFor(TENANT_A, AGENT_A, 'agent'),
+        async () => await conversations.get(OPEN_THREAD),
+      );
+      const winner = holder.assignedUserId;
+      const loser = winner === AGENT_A ? OTHER_AGENT_A : AGENT_A;
+
+      expect(winner).not.toBeNull();
+
+      const sent = await sendText(
+        principalFor(TENANT_A, winner as string, 'agent'),
+        OPEN_THREAD,
+        'Looking into it now.',
+      );
+
+      expect(sent).toMatchObject({ status: 'queued', direction: 'outbound' });
+
+      // The customer's second answer, refused. The loser no longer sees the
+      // thread at all, so the refusal is `not_found` rather than the unclaimed
+      // conflict — either way, nothing is queued.
+      await expect(
+        sendText(principalFor(TENANT_A, loser, 'agent'), OPEN_THREAD, 'Looking into it now.'),
+      ).rejects.toBeInstanceOf(ConversationNotFoundError);
+      expect(enqueued).toHaveLength(1);
+    });
+
+    it('answers the holder re-claiming with their own thread, not a conflict', async () => {
+      const holder = await as(
+        principalFor(TENANT_A, AGENT_A, 'agent'),
+        async () => await conversations.get(OPEN_THREAD),
+      );
+
+      await expect(
+        as(
+          principalFor(TENANT_A, holder.assignedUserId as string, 'agent'),
+          async () => await commands.claim(OPEN_THREAD),
+        ),
+      ).resolves.toMatchObject({ assignedUserId: holder.assignedUserId });
+    });
+
+    it('refuses an internal note and a status change on an unclaimed thread', async () => {
+      // CLOSED_THREAD is unclaimed at this point in the file, and the window
+      // being shut is irrelevant to either write.
+      await expect(
+        as(
+          principalFor(TENANT_A, OTHER_AGENT_A, 'agent'),
+          async () => await commands.setStatus(CLOSED_THREAD, 'closed'),
+        ),
+      ).rejects.toBeInstanceOf(ConversationUnclaimedError);
+
+      await expect(
+        as(
+          principalFor(TENANT_A, OTHER_AGENT_A, 'agent'),
+          async () =>
+            await notes.create(CLOSED_THREAD, {
+              body: 'Taking this one.',
+              mentionedUserIds: [],
+            }),
+        ),
+      ).rejects.toBeInstanceOf(ConversationUnclaimedError);
     });
   });
 

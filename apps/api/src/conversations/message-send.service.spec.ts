@@ -159,7 +159,10 @@ describe('MessageSendService', () => {
     service = new MessageSendService(
       prisma,
       tenantContext,
-      { require: jest.fn(() => Promise.resolve({})) } as unknown as ConversationQueryService,
+      // A thread this principal may see, and holds. The refusal for one nobody
+      // holds is `requireHeld`'s own (TAR-186) and is proved where that rule
+      // lives, not by re-stubbing it per send case.
+      { requireHeld: jest.fn(() => Promise.resolve({})) } as unknown as ConversationQueryService,
       { findApprovedForNumber } as unknown as MessageTemplateQueryService,
       { describeForSend } as unknown as MediaSendResolver,
       { enqueue } as unknown as QueueService,

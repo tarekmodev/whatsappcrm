@@ -62,12 +62,17 @@ export type RecordScope = 'assigned' | 'unassigned' | 'all';
  * agent with less in it rather than 403-ing, and the console shows a notice
  * saying so — that notice is what stops it reading as data loss.
  *
- * `unassigned` needs `_all` at v1. The consequence, stated rather than
- * discovered later: an agent cannot browse and self-serve unclaimed work; it
- * reaches them through assignment (TAR-23/24) or a supervisor. If agents do need
- * to pull work, the answer is a new `conversation:claim` bounded to their teams'
- * unassigned records — not widening this, which would expose the whole tenant
- * backlog.
+ * `unassigned` needs `_all` here, and this function is the **ticket** rule: an
+ * agent cannot browse and self-serve an unclaimed ticket, because that backlog
+ * is work somebody has already triaged and widening it would expose the whole
+ * tenant's. Tickets reach an agent through assignment (TAR-23/24) or a
+ * supervisor.
+ *
+ * Conversations do not use this — `inboxScopeFilter` is their scope rule and
+ * `unassigned` is open there, for the reason `isVisibleOrUnclaimed` states. The
+ * `conversation:claim` this comment used to propose shipped in TAR-186; it is
+ * bounded to unassigned records by the compare-and-set on the claim route rather
+ * than by anything here.
  */
 export function narrowScope(
   requested: RecordScope,
@@ -177,6 +182,49 @@ export function unclaimedFilter(): UnclaimedFilter {
   return { assignedUserId: null, assignedTeamId: null };
 }
 
+/**
+ * "Nobody is personally on this record" — the compare-and-set a claim writes
+ * into its `WHERE` (TAR-186).
+ *
+ * One column, not two, and the difference from `unclaimedFilter` is the point:
+ * a conversation routed to a team is work waiting for one of its members to pick
+ * up, so an agent in that team claiming it is the queue working — and the team
+ * assignment is left alone, because a thread routed to Billing and answered by
+ * one of them is still Billing's. A thread somebody already holds matches
+ * nothing here, which is what makes taking one off a colleague impossible
+ * through this route whatever it is called with.
+ *
+ * The other half of "bounded to the caller's teams' unassigned records" (ADR
+ * 0004 open item 2) is **not** here: it is the visibility check the claim makes
+ * first. A team-routed conversation is invisible to an agent outside that team,
+ * so a claim for one answers `not_found` before this predicate is reached.
+ */
+export function claimableFilter(): ClaimableFilter {
+  return { assignedUserId: null };
+}
+
+export interface ClaimableFilter {
+  assignedUserId: null;
+}
+
+/**
+ * Nobody holds this record.
+ *
+ * Two things turn on it, and the second is the one worth stating: an unclaimed
+ * conversation is **readable by every agent and writable by none** (TAR-186).
+ * Reading it is the shared inbox working as designed; replying to it is two
+ * agents answering the same customer, because the shared pool has no owner to
+ * make one of them the responder. Claiming is what makes a thread writable, and
+ * `ConversationQueryService.requireHeld` is where that is enforced — once, for
+ * the send, the note and the status change alike.
+ *
+ * Note what "held" is and is not: **both** columns null, so a conversation
+ * routed to a team counts as held and its members may all write to it. Two of
+ * them can therefore still answer the same customer — a narrower failure than
+ * the anonymous pool's, since a supervisor or a rule aimed the thread at that
+ * team and its members can see each other. Left to TAR-23/24's routing rather
+ * than folded in here.
+ */
 export function isUnclaimed(record: AssignableRecord): boolean {
   return record.assignedUserId === null && record.assignedTeamId === null;
 }
@@ -203,7 +251,16 @@ export function isUnclaimed(record: AssignableRecord): boolean {
  * What it does **not** widen: a conversation claimed by somebody else, or
  * routed to a team the principal is not in, stays invisible without
  * `conversation:read_all`. Claiming is the act that takes a thread out of the
- * shared pool, which is exactly what `POST /conversations/{id}/assign` is for.
+ * shared pool — `POST /conversations/{id}/claim` for an agent taking one nobody
+ * holds, `POST /conversations/{id}/assign` for a supervisor routing it.
+ *
+ * ## Visible is not writable
+ *
+ * This answers a read. It is **not** the check a send, a note or a status change
+ * makes: those additionally require that somebody holds the thread, because
+ * "every agent may see it" and "every agent may reply to it" are the two halves
+ * of the duplicate-reply the shared pool would otherwise invite. See
+ * `isUnclaimed` and `ConversationQueryService.requireHeld`.
  */
 export function isVisibleOrUnclaimed(
   record: AssignableRecord,

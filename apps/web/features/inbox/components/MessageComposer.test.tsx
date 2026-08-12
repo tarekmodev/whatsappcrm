@@ -28,7 +28,8 @@ const OPEN_UNTIL = '2026-08-12T13:00:00.000Z';
 function renderComposer({
   expiresAt = OPEN_UNTIL,
   canSend = true,
-}: { expiresAt?: string | null; canSend?: boolean } = {}) {
+  isUnclaimed = false,
+}: { expiresAt?: string | null; canSend?: boolean; isUnclaimed?: boolean } = {}) {
   return render(
     <ToastProvider>
       <MessageComposer
@@ -36,6 +37,7 @@ function renderComposer({
         serviceWindowExpiresAt={expiresAt}
         initialWindow={serviceWindowAt(expiresAt, NOW)}
         canSend={canSend}
+        isUnclaimed={isUnclaimed}
       />
     </ToastProvider>,
   );
@@ -327,6 +329,28 @@ describe('without conversation:send', () => {
 
     expect(screen.getByText(content.composer.sendNotPermitted)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: content.composer.send })).not.toBeInTheDocument();
+  });
+});
+
+describe('on a thread nobody has claimed', () => {
+  it('offers no way to reply, and says the claim is what opens it', () => {
+    // The API refuses this send outright (TAR-186), so a composer here would be
+    // a box whose every use ends in a 409 — and two agents typing into it is the
+    // duplicate reply the refusal exists to stop.
+    renderComposer({ isUnclaimed: true });
+
+    expect(screen.getByText(content.inbox.claimBeforeWriting)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: content.composer.send })).not.toBeInTheDocument();
+  });
+
+  it('offers no template picker either, window open or shut', () => {
+    // A template is the way through a *closed window*, not through an unclaimed
+    // thread — the API refuses both alike.
+    renderComposer({ isUnclaimed: true, expiresAt: null });
+
+    expect(
+      screen.queryByRole('button', { name: content.composer.useTemplate }),
+    ).not.toBeInTheDocument();
   });
 });
 

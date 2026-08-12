@@ -219,12 +219,20 @@ export const content = {
     /** Stands in for a holder whose name this page could not resolve. */
     unresolvedHolder: 'Another agent',
     /**
-     * Said plainly rather than left as a missing button. ADR 0002 amendment 4
-     * opens an unclaimed thread to every agent and rules that taking it still
-     * needs `conversation:assign`, which an agent does not hold.
+     * Said plainly rather than left as a missing button. Every role holds
+     * `conversation:claim` since TAR-186, so this is now the rare case — a
+     * principal whose role has had it taken away.
      */
     claimNotPermitted:
-      'Anyone can read a conversation nobody has claimed. Taking one is a supervisor’s to do — ask, and it will appear in your assigned list.',
+      'Anyone can read a conversation nobody has claimed. Your role cannot take one — ask a supervisor, and it will appear in your assigned list.',
+    /**
+     * Why the composer and the note box are shut on a thread in the shared pool
+     * (TAR-186). The reason is the customer's, not the reader's role: two agents
+     * looking at the same unclaimed thread would both reply, and claiming is
+     * what makes one of them the one answering.
+     */
+    claimBeforeWriting:
+      'Nobody is handling this conversation yet. Claim it to reply — that is what stops two of you answering the same customer.',
 
     // --- The two-pane layout ------------------------------------------------
     threadHeading: 'Conversation',

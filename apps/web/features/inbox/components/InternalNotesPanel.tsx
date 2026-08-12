@@ -15,7 +15,7 @@ import styles from './InternalNotesPanel.module.css';
 
 /**
  * What the team says to each other about a thread. Usage:
- * `<InternalNotesPanel conversationId={…} notes={…} authorNames={…} canWrite={…} />`.
+ * `<InternalNotesPanel conversationId={…} notes={…} authorNames={…} canWrite={…} isUnclaimed={…} />`.
  *
  * Notes are a **separate entity** from messages, not a message subtype,
  * specifically so no send path can pick one up by accident — the worst possible
@@ -34,6 +34,13 @@ export interface InternalNotesPanelProps {
   authorNames: ReadonlyMap<string, string>;
   /** `conversation:note`. Every role holds it today; the panel does not assume so. */
   canWrite: boolean;
+  /**
+   * Nobody is on this thread. The API refuses a note into the shared pool along
+   * with the send (TAR-186) — the note is where two agents would otherwise try
+   * to sort out between themselves who is answering, which is the coordination
+   * the claim exists to do properly.
+   */
+  isUnclaimed: boolean;
 }
 
 export function InternalNotesPanel({
@@ -41,6 +48,7 @@ export function InternalNotesPanel({
   notes,
   authorNames,
   canWrite,
+  isUnclaimed,
 }: InternalNotesPanelProps) {
   const content = useContent();
 
@@ -63,7 +71,14 @@ export function InternalNotesPanel({
         </ol>
       )}
 
-      {canWrite ? <InternalNoteForm conversationId={conversationId} /> : null}
+      {/* Permission first, then the hold — the same order `MessageComposer`
+          uses, and the honest one: a role that may not write notes at all is not
+          told that claiming would let them. */}
+      {!canWrite ? null : isUnclaimed ? (
+        <Notice tone="info">{content.inbox.claimBeforeWriting}</Notice>
+      ) : (
+        <InternalNoteForm conversationId={conversationId} />
+      )}
     </Stack>
   );
 }

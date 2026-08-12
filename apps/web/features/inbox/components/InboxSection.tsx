@@ -25,10 +25,13 @@ export async function InboxSection({ query, selectedId, isScopeNarrowed }: Inbox
     loadInbox(query),
   ]);
   // Request-cached, so this costs no extra round trip on top of the page's own
-  // session check.
-  const claim = session.checker.can('conversation:assign')
-    ? { currentUserId: session.principal.userId }
-    : null;
+  // session check. Two permissions rather than one since TAR-186: every role may
+  // claim what nobody holds, only a supervisor may release it or take it off a
+  // colleague.
+  const canClaim = session.checker.can('conversation:claim');
+  const canAssign = session.checker.can('conversation:assign');
+  const claim =
+    canClaim || canAssign ? { currentUserId: session.principal.userId, canClaim, canAssign } : null;
 
   return (
     <SectionCard id="conversations" title={content.inbox.conversationsHeading}>

@@ -330,7 +330,7 @@ describe('one conversation', () => {
     ).resolves.toMatchObject({ assignedUserId: null, assignedTeamId: null });
   });
 
-  it('refuses an agent the claim, which needs conversation:assign', async () => {
+  it('refuses an agent the re-assignment, which needs conversation:assign', async () => {
     asRole('agent');
 
     await expect(
@@ -340,6 +340,113 @@ describe('one conversation', () => {
         body: { userId: MOCK_IDS.users.amina },
       }),
     ).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+  });
+
+  it('lets an agent claim a conversation nobody holds', async () => {
+    // TAR-186: reading the shared pool and being unable to take anything out of
+    // it is not a shared inbox. `conversation:claim` is every role's.
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/conversations/${MOCK_IDS.conversations.unassigned}/claim`,
+      }),
+    ).resolves.toMatchObject({ assignedUserId: MOCK_IDS.users.amina });
+  });
+
+  /**
+   * Losing a claim has two answers, and which one a caller sees is decided by
+   * whether they can still see the thread at all — the same pair the API
+   * produces (0002 amendment 6). Both are refusals, and neither is a write.
+   */
+  it('answers not_found to an agent whose colleague took the thread first', async () => {
+    const path = `/v1/conversations/${MOCK_IDS.conversations.unassigned}`;
+
+    asRole('supervisor');
+    await handleMockRequest({
+      method: 'POST',
+      path: `${path}/assign`,
+      body: { userId: MOCK_IDS.users.priya },
+    });
+
+    // The dominant real-world case: a stale list still shows the thread in the
+    // shared pool, and by the time the agent clicks Claim it is somebody's and
+    // therefore invisible to them — `not_found`, exactly as opening it would be.
+    // Reporting the conflict here would mean answering from a read that bypassed
+    // visibility, which is the id-enumeration the taxonomy exists to prevent.
+    asRole('agent');
+    await expect(
+      handleMockRequest({ method: 'POST', path: `${path}/claim` }),
+    ).rejects.toMatchObject({ status: 404, code: 'not_found' });
+  });
+
+  it('answers conflict to a claimer who can still see the thread somebody holds', async () => {
+    // The compare-and-set, from the losing side. A supervisor holds
+    // `conversation:read_all`, so the thread stays visible and the refusal is
+    // the claim's own: it can never take a thread off the person on it.
+    const path = `/v1/conversations/${MOCK_IDS.conversations.unassigned}`;
+
+    asRole('supervisor');
+    await handleMockRequest({
+      method: 'POST',
+      path: `${path}/assign`,
+      body: { userId: MOCK_IDS.users.amina },
+    });
+
+    await expect(
+      handleMockRequest({ method: 'POST', path: `${path}/claim` }),
+    ).rejects.toMatchObject({ status: 409, code: 'conflict' });
+  });
+
+  it('lets assign take a thread off the colleague holding it — the take-over', async () => {
+    // The other side of the case above, and the reason the two are separate
+    // routes: the claim refuses a held thread and the hand-over must not, or
+    // every take-over in the console fails with "somebody else claimed this".
+    const path = `/v1/conversations/${MOCK_IDS.conversations.unassigned}/assign`;
+
+    asRole('supervisor');
+    await handleMockRequest({ method: 'POST', path, body: { userId: MOCK_IDS.users.amina } });
+
+    await expect(
+      handleMockRequest({ method: 'POST', path, body: { userId: MOCK_IDS.users.priya } }),
+    ).resolves.toMatchObject({ assignedUserId: MOCK_IDS.users.priya });
+  });
+
+  it('answers a re-claim by the holder with their own thread', async () => {
+    const path = `/v1/conversations/${MOCK_IDS.conversations.unassigned}/claim`;
+
+    asRole('agent');
+    await handleMockRequest({ method: 'POST', path });
+
+    // A double-click, or a retry after a dropped response. Telling an agent who
+    // does hold the thread that somebody else took it would be a lie.
+    await expect(handleMockRequest({ method: 'POST', path })).resolves.toMatchObject({
+      assignedUserId: MOCK_IDS.users.amina,
+    });
+  });
+
+  it('refuses a send and a note into a thread nobody holds', async () => {
+    // The duplicate reply TAR-186 closes, as the console would meet it: the
+    // composer is shut client-side, and this is the refusal behind that.
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/conversations/${MOCK_IDS.conversations.unassigned}/messages`,
+        headers: { 'idempotency-key': '0192f004-0000-7000-8000-0000000009f1' },
+        body: { type: 'text', body: 'On it!' },
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'conflict' });
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/conversations/${MOCK_IDS.conversations.unassigned}/notes`,
+        body: { body: 'Taking this one.' },
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'conflict' });
   });
 
   it('lets a supervisor claim an unassigned conversation and release it again', async () => {

@@ -69,7 +69,14 @@ export default async function InboxPage({
                   rather than leaving the previous scope's rows on screen. */}
               <Suspense
                 key={`${scope}:${status ?? ''}`}
-                fallback={<InboxSectionSkeleton hasClaim={checker.can('conversation:assign')} />}
+                fallback={
+                  // Either permission puts a control on some row, and the
+                  // skeleton reserves its height so nothing shifts when the data
+                  // lands. Since TAR-186 an agent has one too.
+                  <InboxSectionSkeleton
+                    hasClaim={checker.canAny(['conversation:claim', 'conversation:assign'])}
+                  />
+                }
               >
                 <InboxSection
                   query={{ scope, status }}

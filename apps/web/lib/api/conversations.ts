@@ -129,10 +129,32 @@ export async function createInternalNote(
 }
 
 /**
- * `POST /api/v1/conversations/{id}/assign` — claim, route to a team, or release.
+ * `POST /api/v1/conversations/{id}/claim` — take a thread nobody is on.
+ *
+ * No body: the assignee is the session's own principal, and a claim that could
+ * name somebody else would be a re-assignment. The API compares and sets, so a
+ * colleague who was a moment quicker answers `conflict` rather than being
+ * overwritten — that 409 is the point of the endpoint, not an edge case.
+ */
+export async function claimConversation(conversationId: string): Promise<ConversationResponse> {
+  const response = await authenticatedRequest({
+    method: 'POST',
+    path: `${CONVERSATIONS_PATH}/${conversationId}/claim`,
+  });
+
+  return ConversationResponseSchema.parse(response);
+}
+
+/**
+ * `POST /api/v1/conversations/{id}/assign` — route to a team, hand over, or
+ * release.
  *
  * Absent leaves a column alone, `null` clears it, an id sets it. Releasing both
  * is what puts a thread back in `scope=unassigned`, where every agent sees it.
+ *
+ * Writes blind, by design: this is how a supervisor takes a thread off the
+ * colleague working it. Picking one out of the shared pool is `claimConversation`
+ * above, and the two are deliberately different calls.
  */
 export async function assignConversation(
   conversationId: string,

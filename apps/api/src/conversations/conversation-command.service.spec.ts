@@ -1,23 +1,33 @@
 import type { EventEmitter2 } from '@nestjs/event-emitter';
+import { permissionsForRole, type SessionPrincipal } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { CONVERSATION_ASSIGNED_EVENT } from '../events/domain-events';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
+import { isUnclaimed } from '../rbac/visibility';
 import type { ConversationRow } from './conversation.mapper';
 import { ConversationCommandService } from './conversation-command.service';
 import type { ConversationQueryService } from './conversation-query.service';
+import {
+  ConversationAlreadyClaimedError,
+  ConversationUnclaimedError,
+} from './conversations.errors';
 
 /**
- * What the claim endpoint announces, and when it says nothing (TAR-198).
+ * Two things the conversation writer owns, because only it sees both sides of an
+ * update.
  *
- * The relay's own spec proves where a hand-over goes. This proves the two things
- * only the writer can get right, because only the writer sees both sides of the
- * update:
+ * **What a hand-over announces, and when it says nothing (TAR-198).** The
+ * relay's own spec proves where a hand-over goes; this proves that the event
+ * carries the assignment the thread **had** — the one thing a subscriber cannot
+ * recover after the write, and the only way the colleagues watching an unclaimed
+ * thread are in the fan-out at all — and that a write which moved no column
+ * emits nothing.
  *
- *   * the event carries the assignment the thread **had** — the one thing a
- *     subscriber cannot recover after the write, and the only way the colleagues
- *     watching an unclaimed thread are in the fan-out at all;
- *   * an assign that moved no column emits nothing, so a re-claim of a thread by
- *     the agent already holding it is not a broadcast of nothing.
+ * **That a claim is a compare-and-set (TAR-186).** The shared pool shows the same
+ * arriving conversation to every agent, so the claim has to be decided by the
+ * database rather than by which read happened first. These cases fix the three
+ * answers: the winner gets the thread, the loser gets a conflict, and the holder
+ * re-claiming gets their own thread back rather than being told they lost it.
  */
 
 const TENANT = '68444444-4444-7444-8444-444444444401';
@@ -84,8 +94,15 @@ function harnessFor(before: ConversationRow, after: ConversationRow): Harness {
     team: { findUnique: (): Promise<{ id: string }> => Promise.resolve({ id: TEAM }) },
   } as unknown as TenantPrisma;
 
+  // Both reads the writer makes, and `requireHeld` keeps its real rule rather
+  // than resolving whatever it is handed: a status change into a thread nobody
+  // holds must fail here for the same reason it fails in production.
   const conversations = {
     require: (): Promise<ConversationRow> => Promise.resolve(before),
+    requireHeld: (): Promise<ConversationRow> =>
+      isUnclaimed(before)
+        ? Promise.reject(new ConversationUnclaimedError(CONVERSATION))
+        : Promise.resolve(before),
   } as unknown as ConversationQueryService;
 
   const events = {
@@ -187,5 +204,175 @@ describe('announcing a conversation hand-over', () => {
     await asTenant(async (commands) => commands.setStatus(CONVERSATION, 'closed'));
 
     expect(emitted).toEqual([]);
+  });
+
+  it('refuses a status change on a thread nobody holds', async () => {
+    // Two agents resolving the same arriving conversation out from under each
+    // other is the shared-pool conflict a duplicate reply is. Claim first.
+    const { asTenant } = harnessFor(row(), row());
+
+    await expect(
+      asTenant(async (commands) => commands.setStatus(CONVERSATION, 'closed')),
+    ).rejects.toBeInstanceOf(ConversationUnclaimedError);
+  });
+});
+
+/**
+ * The claim, with the update's row count as the only thing that decides it —
+ * which is exactly what a real `UPDATE … WHERE assigned_user_id IS NULL` gives
+ * back, and what makes two concurrent claims resolve to one winner.
+ */
+function claimHarness(options: {
+  /** The row `require` loads before the write. */
+  readonly before: ConversationRow;
+  /** What the compare-and-set matched: 1 for the winner, 0 for everyone else. */
+  readonly updated: number;
+  /** The row as it stands after the write, for the read-back or the conflict report. */
+  readonly current: ConversationRow | null;
+}): Harness & { readonly updates: unknown[] } {
+  const emitted: Emission[] = [];
+  const updates: unknown[] = [];
+  const tenantContext = new TenantContextService();
+
+  const prisma = {
+    conversation: {
+      updateMany: (args: unknown): Promise<{ count: number }> => {
+        updates.push(args);
+
+        return Promise.resolve({ count: options.updated });
+      },
+      findUnique: (): Promise<ConversationRow | null> => Promise.resolve(options.current),
+      findUniqueOrThrow: (): Promise<ConversationRow> => {
+        if (options.current === null) {
+          throw new Error('no row');
+        }
+
+        return Promise.resolve(options.current);
+      },
+    },
+  } as unknown as TenantPrisma;
+
+  const conversations = {
+    require: (): Promise<ConversationRow> => Promise.resolve(options.before),
+  } as unknown as ConversationQueryService;
+
+  const events = {
+    emit: (event: string, payload: unknown): boolean => {
+      emitted.push({ event, payload });
+
+      return true;
+    },
+  } as unknown as EventEmitter2;
+
+  const commands = new ConversationCommandService(prisma, conversations, tenantContext, events);
+
+  return {
+    emitted,
+    updates,
+    // A principal, not just a user id: the claim writes the *session's* own
+    // assignee, and reading it from anywhere else is how a claim becomes a
+    // re-assignment.
+    asTenant: async (work) =>
+      await tenantContext.run(
+        { requestId: 'spec', tenantId: TENANT, userId: AGENT, principal: claimant() },
+        async () => await work(commands),
+      ),
+  };
+}
+
+function claimant(): SessionPrincipal {
+  return {
+    userId: AGENT,
+    tenantId: TENANT,
+    email: 'agent@example.invalid',
+    displayName: 'Ada Agent',
+    role: 'agent',
+    permissions: [...permissionsForRole('agent')],
+    teamIds: [],
+    sessionId: '68444444-4444-7444-8444-4444444444f1',
+    expiresAt: '2036-12-31T23:59:59.000Z',
+  };
+}
+
+describe('claiming a conversation', () => {
+  it('assigns the caller and announces the hand-over', async () => {
+    const { asTenant, emitted } = claimHarness({
+      before: row(),
+      updated: 1,
+      current: row({ assignedUserId: AGENT }),
+    });
+
+    const claimed = await asTenant(async (commands) => commands.claim(CONVERSATION));
+
+    expect(claimed.assignedUserId).toBe(AGENT);
+    expect(emitted[0]?.payload).toMatchObject({
+      conversationId: CONVERSATION,
+      previousAssignedUserId: null,
+      previousAssignedTeamId: null,
+    });
+  });
+
+  it('writes the claimable predicate into the update, so the database picks the winner', async () => {
+    // The load-bearing assertion of the whole story: without `assignedUserId`
+    // in the `WHERE`, a second claim overwrites the first and two agents believe
+    // they hold the same thread.
+    const { asTenant, updates } = claimHarness({
+      before: row(),
+      updated: 1,
+      current: row({ assignedUserId: AGENT }),
+    });
+
+    await asTenant(async (commands) => commands.claim(CONVERSATION));
+
+    expect(updates).toEqual([
+      { where: { id: CONVERSATION, assignedUserId: null }, data: { assignedUserId: AGENT } },
+    ]);
+  });
+
+  it('reports a conflict to the agent who lost the race, and announces nothing', async () => {
+    const { asTenant, emitted } = claimHarness({
+      before: row(),
+      updated: 0,
+      current: row({ assignedUserId: OTHER_AGENT }),
+    });
+
+    await expect(asTenant(async (commands) => commands.claim(CONVERSATION))).rejects.toBeInstanceOf(
+      ConversationAlreadyClaimedError,
+    );
+    expect(emitted).toEqual([]);
+  });
+
+  it('answers a re-claim by the holder with their own thread, not a conflict', async () => {
+    // A double-clicked button, or a retry after a dropped response. Telling an
+    // agent who does hold the thread that somebody else took it would be a lie.
+    const { asTenant, emitted } = claimHarness({
+      before: row({ assignedUserId: AGENT }),
+      updated: 0,
+      current: row({ assignedUserId: AGENT }),
+    });
+
+    const claimed = await asTenant(async (commands) => commands.claim(CONVERSATION));
+
+    expect(claimed.assignedUserId).toBe(AGENT);
+    expect(emitted).toEqual([]);
+  });
+
+  it('takes a team-routed thread without taking it off the team', async () => {
+    // A conversation routed to Billing and picked up by one of its members is
+    // still Billing's: the claim writes the assignee and never touches the team.
+    // Only a member sees it in the first place, which is the other half of
+    // "bounded to the caller's teams' unassigned records".
+    const { asTenant, updates } = claimHarness({
+      before: row({ assignedTeamId: TEAM }),
+      updated: 1,
+      current: row({ assignedUserId: AGENT, assignedTeamId: TEAM }),
+    });
+
+    const claimed = await asTenant(async (commands) => commands.claim(CONVERSATION));
+
+    expect(claimed).toMatchObject({ assignedUserId: AGENT, assignedTeamId: TEAM });
+    expect(updates).toEqual([
+      { where: { id: CONVERSATION, assignedUserId: null }, data: { assignedUserId: AGENT } },
+    ]);
   });
 });
