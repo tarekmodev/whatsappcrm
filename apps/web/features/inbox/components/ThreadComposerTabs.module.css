@@ -1,0 +1,53 @@
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-inline-size: 0;
+  padding: var(--space-3);
+  background: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  border-block-end: var(--border-hairline) solid var(--color-border);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-3);
+  background: none;
+  border: 0;
+  /* Reserved on every tab so selecting one does not move the strip. */
+  border-block-end: var(--size-marker) solid transparent;
+  color: var(--color-on-surface-muted);
+  font: inherit;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .tab:hover {
+    color: var(--color-on-surface);
+  }
+}
+
+/* Selected is a marker as well as a colour — never colour alone. */
+.tab[aria-selected='true'] {
+  border-block-end-color: var(--color-accent);
+  color: var(--color-on-surface);
+  font-weight: var(--font-weight-strong);
+}
+
+.panel {
+  min-inline-size: 0;
+}

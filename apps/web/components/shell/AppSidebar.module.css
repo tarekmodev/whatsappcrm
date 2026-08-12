@@ -89,6 +89,16 @@
     min-inline-size: 0;
   }
 
+  /*
+   * Pinned to the foot of the rail. `margin-block-start: auto` rather than
+   * `justify-content: space-between`, so a rail whose navigation is long enough
+   * to scroll pushes the card below the last entry instead of overlapping it.
+   */
+  .footer {
+    margin-block-start: auto;
+    padding-block-start: var(--space-4);
+  }
+
   /* --- Collapsed --------------------------------------------------------- */
   /*
    * `data-rail` is set by `AppShell` on the frame around this component. An

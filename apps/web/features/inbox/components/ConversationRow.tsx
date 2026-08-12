@@ -41,7 +41,7 @@ export interface ConversationRowProps {
   teamName: string | null;
   isSelected: boolean;
   /** The list's current filters, carried into the link so back preserves them. */
-  query: { scope: InboxScope; status: ConversationStatusFilter | undefined };
+  query: InboxListQuery;
   /**
    * Who is looking and what they may do to a hold. `null` for a principal
    * holding neither `conversation:claim` nor `conversation:assign`, who gets no
@@ -52,6 +52,17 @@ export interface ConversationRowProps {
 
 export interface ClaimContext extends HoldPermissions {
   currentUserId: string;
+}
+
+/**
+ * Everything about the list's current view that a link out of it has to carry
+ * back: the filter, and the search that produced it. Shared by the row, the
+ * list and the thread's back link so none of them can forget one.
+ */
+export interface InboxListQuery {
+  scope: InboxScope;
+  status: ConversationStatusFilter | undefined;
+  q?: string;
 }
 
 export function ConversationRow({

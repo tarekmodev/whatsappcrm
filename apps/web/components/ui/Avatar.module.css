@@ -1,0 +1,31 @@
+.avatar {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  font-weight: var(--font-weight-strong);
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.avatar[data-size='sm'] {
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  font-size: var(--font-size-body-sm);
+}
+
+.avatar[data-size='md'] {
+  inline-size: var(--size-control-md);
+  block-size: var(--size-control-md);
+  font-size: var(--font-size-body);
+}
+
+.avatar[data-tone='accent'] {
+  background: var(--color-accent-subtle);
+  color: var(--color-on-accent-subtle);
+}
+
+.avatar[data-tone='neutral'] {
+  background: var(--color-surface-sunken);
+  color: var(--color-on-surface-muted);
+}

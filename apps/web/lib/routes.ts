@@ -57,6 +57,8 @@ export const searchParamKeys = {
    * from (TAR-71).
    */
   inboxConversation: 'conversation',
+  /** The inbox's search term. Same spelling as `peopleQuery`, on purpose. */
+  inboxQuery: 'q',
   peopleTab: 'tab',
   peopleRole: 'role',
   peopleQuery: 'q',
@@ -143,6 +145,8 @@ export interface InboxQuery {
   status?: ConversationStatusFilter;
   /** The open thread. Omitted for the list-only view. */
   conversationId?: string;
+  /** A search term, passed through to `GET /conversations?q=`. */
+  q?: string;
 }
 
 export interface PeopleQuery {
@@ -156,6 +160,7 @@ function inboxSearchParams(query: InboxQuery | undefined): Record<string, string
     [searchParamKeys.inboxScope]: query?.scope,
     [searchParamKeys.inboxStatus]: query?.status,
     [searchParamKeys.inboxConversation]: query?.conversationId,
+    [searchParamKeys.inboxQuery]: query?.q,
   };
 }
 

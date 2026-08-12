@@ -1,16 +1,19 @@
 'use client';
 
+import { useId, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Icon } from '@/components/ui/Icon';
 import { cx } from '@/lib/cx';
+import { useContent } from '@/lib/content';
 import { isCurrentPath } from '@/lib/current-path';
 import type { NavItem } from './navigation';
 import styles from './NavLinkList.module.css';
 
 /**
  * Renders a list of nav links with the current one marked. Usage:
- * `<NavLinkList items={items} appearance="rail" isCollapsed={false} />`.
+ * `<NavLinkList items={items} appearance="rail" isCollapsed={false} />`, or with
+ * a More/Less boundary: `<NavLinkList items={items} primaryCount={5} />`.
  *
  * Shared by the rail and the mobile drawer, so the two cannot disagree about
  * which entry is current. `appearance` changes how the entries are painted,
@@ -33,6 +36,16 @@ export interface NavLinkListProps {
    * rather than being dropped, so the links keep their accessible names.
    */
   isCollapsed?: boolean;
+  /**
+   * How many entries are shown before a More/Less disclosure. Everything past
+   * it is a destination the reader asked to see, which is what keeps a rail
+   * readable once the product has more than a handful of them.
+   *
+   * The disclosure renders only when there is something behind it — a control
+   * that reveals nothing is worse than no control, and a nav short enough to
+   * show whole must not grow a button saying so.
+   */
+  primaryCount?: number;
   onNavigate?: () => void;
 }
 
@@ -40,8 +53,81 @@ export function NavLinkList({
   items,
   appearance = 'bar',
   isCollapsed = false,
+  primaryCount,
   onNavigate,
 }: NavLinkListProps) {
+  const content = useContent();
+  const [isExpanded, setIsExpanded] = useState(false);
+  const secondaryId = useId();
+
+  const limit = primaryCount ?? items.length;
+  const primary = items.slice(0, limit);
+  const secondary = items.slice(limit);
+  const hasBoundary = secondary.length > 0;
+
+  return (
+    <div className={styles.group}>
+      <List
+        items={primary}
+        appearance={appearance}
+        isCollapsed={isCollapsed}
+        onNavigate={onNavigate}
+      />
+
+      {hasBoundary ? (
+        <>
+          <button
+            type="button"
+            className={styles.boundary}
+            data-appearance={appearance}
+            data-collapsed={isCollapsed ? 'true' : undefined}
+            aria-expanded={isExpanded}
+            aria-controls={secondaryId}
+            // Collapsed, the word is off-screen and the chevron is all there is.
+            title={isCollapsed ? content.nav.moreLabel : undefined}
+            onClick={() => {
+              setIsExpanded((current) => !current);
+            }}
+          >
+            <Icon name="chevronDown" size="sm" className={styles.boundaryIcon} />
+            <span className={styles.label}>
+              {isExpanded ? content.nav.showLess : content.nav.showMore}
+            </span>
+          </button>
+
+          {/*
+            Dropped rather than hidden when collapsed: these are links, and a
+            link kept in the tree behind `hidden` is one CSS mistake away from a
+            tab stop nobody can see. `aria-controls` still names the wrapper,
+            which is always in the DOM.
+          */}
+          <div id={secondaryId}>
+            {isExpanded ? (
+              <List
+                items={secondary}
+                appearance={appearance}
+                isCollapsed={isCollapsed}
+                onNavigate={onNavigate}
+              />
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function List({
+  items,
+  appearance,
+  isCollapsed,
+  onNavigate,
+}: {
+  items: readonly NavItem[];
+  appearance: NavAppearance;
+  isCollapsed: boolean;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
 
   return (

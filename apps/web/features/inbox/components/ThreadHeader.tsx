@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import type { ConversationResponse } from '@whatsappcrm/contracts';
 import { Notice } from '@/components/ui/Notice';
+import { RelativeTime } from '@/components/ui/RelativeTime';
 import { SkeletonLine } from '@/components/ui/Skeleton';
 import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
@@ -15,6 +16,7 @@ import {
 } from '@/features/inbox/conversation-hold';
 import { ClaimButton } from './ClaimButton';
 import { ConversationBadges } from './ConversationBadges';
+import { ThreadActions } from './ThreadActions';
 import styles from './ThreadHeader.module.css';
 
 /**
@@ -32,6 +34,8 @@ import styles from './ThreadHeader.module.css';
 export interface ThreadQuery {
   scope: InboxScope;
   status: ConversationStatusFilter | undefined;
+  /** The search that produced the list, so the back link returns to it. */
+  q?: string;
 }
 
 export interface ThreadHeaderProps {
@@ -42,6 +46,8 @@ export interface ThreadHeaderProps {
   holdPermissions: HoldPermissions;
   currentUserId: string;
   query: ThreadQuery;
+  /** Nobody holds this thread; the status control is not offered on one. */
+  isUnclaimed: boolean;
 }
 
 export function ThreadHeader({
@@ -51,6 +57,7 @@ export function ThreadHeader({
   holdPermissions,
   currentUserId,
   query,
+  isUnclaimed,
 }: ThreadHeaderProps) {
   const content = useContent();
   const hold = conversationHold(conversation.assignedUserId, currentUserId, assigneeName);
@@ -67,15 +74,26 @@ export function ThreadHeader({
           <p className={styles.phone} dir="ltr">
             {conversation.contact.phone}
           </p>
+          <p className={styles.created}>
+            <RelativeTime isoTimestamp={conversation.createdAt} label={content.inbox.createdAt} />
+          </p>
         </div>
 
-        {canChangeHold(hold, holdPermissions) ? (
-          <ClaimButton
+        <Cluster gap="2" align="start" className={styles.controls}>
+          {canChangeHold(hold, holdPermissions) ? (
+            <ClaimButton
+              conversationId={conversation.id}
+              contactName={conversation.contact.displayName}
+              hold={hold}
+            />
+          ) : null}
+          <ThreadActions
             conversationId={conversation.id}
             contactName={conversation.contact.displayName}
-            hold={hold}
+            status={conversation.status}
+            isUnclaimed={isUnclaimed}
           />
-        ) : null}
+        </Cluster>
       </Cluster>
 
       <ConversationBadges
@@ -113,10 +131,16 @@ export function ThreadHeaderSkeleton({ query }: { query: ThreadQuery }) {
   return (
     <Stack gap="3">
       <BackToList query={query} />
-      <div className={styles.identity} aria-hidden="true">
-        <SkeletonLine width="12rem" height="var(--font-size-heading-sm)" />
-        <SkeletonLine width="8rem" />
-      </div>
+      <Cluster justify="between" align="start" gap="3" aria-hidden="true">
+        <div className={styles.identity}>
+          <SkeletonLine width="12rem" height="var(--font-size-heading-sm)" />
+          <SkeletonLine width="8rem" />
+          <SkeletonLine width="6rem" />
+        </div>
+        {/* Reserves the height of the status button and the details toggle, so
+            neither appearing moves the badge row below. */}
+        <SkeletonLine width="10rem" height="var(--size-touch-target)" />
+      </Cluster>
       <Cluster gap="2" aria-hidden="true">
         <SkeletonLine width="4rem" height="1.25rem" />
         <SkeletonLine width="6rem" height="1.25rem" />

@@ -1,8 +1,0 @@
-.bar {
-  inline-size: 100%;
-}
-
-.status {
-  flex: 0 1 10rem;
-  min-inline-size: 0;
-}

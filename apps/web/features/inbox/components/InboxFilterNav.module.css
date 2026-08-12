@@ -1,0 +1,193 @@
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.heading {
+  /* Below the column breakpoint the disclosure names the filter, and a heading
+     saying "Inbox" above the page's own <h1> would say it twice. */
+  display: none;
+  min-inline-size: 0;
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-strong);
+}
+
+/* --- The small-screen disclosure ------------------------------------------ */
+.disclosure {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-block-size: var(--size-touch-target);
+  min-inline-size: 0;
+  padding-inline: var(--space-2);
+  background: none;
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface);
+  font: inherit;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
+.disclosureLabel {
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.disclosureIcon {
+  flex: 0 0 auto;
+  color: var(--color-on-surface-muted);
+  transition: rotate var(--duration-fast) var(--easing-standard);
+}
+
+.disclosure[aria-expanded='true'] .disclosureIcon {
+  rotate: 180deg;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.body[data-open='false'] {
+  display: none;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.entry {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .entry:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}
+
+.entry[aria-current='page'] {
+  background: var(--color-accent-subtle);
+  color: var(--color-on-accent-subtle);
+  font-weight: var(--font-weight-strong);
+}
+
+/* Current must not be colour alone: an inline marker carries it too. */
+.entry[aria-current='page']::before {
+  content: '';
+  flex: 0 0 auto;
+  inline-size: var(--size-marker);
+  block-size: 1em;
+  background: currentcolor;
+  border-radius: var(--radius-pill);
+}
+
+.boundary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-2);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface-muted);
+  font: inherit;
+  font-size: var(--font-size-body-sm);
+  text-align: start;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .boundary:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}
+
+.boundaryIcon {
+  flex: 0 0 auto;
+  transition: rotate var(--duration-fast) var(--easing-standard);
+}
+
+.boundary[aria-expanded='true'] .boundaryIcon {
+  rotate: 180deg;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  /* Pinned to the foot of the column once it has a height to be pinned in;
+     below the breakpoint it simply follows the entries. */
+  margin-block-start: auto;
+  padding-block-start: var(--space-3);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+  font-size: var(--font-size-body-sm);
+}
+
+/*
+ * 84rem: where the filters stop being a band above the panes and become a column
+ * beside them. Matches `InboxLayout.module.css`, which moves them into their own
+ * grid track at the same width — the two describe one layout change.
+ */
+@media (min-width: 84rem) {
+  .column {
+    block-size: 100%;
+  }
+
+  .heading {
+    display: block;
+  }
+
+  .disclosure {
+    /* The column is open at this width; the button that opens it is noise. */
+    display: none;
+  }
+
+  .body {
+    flex: 1 1 auto;
+  }
+
+  .body[data-open='false'] {
+    display: flex;
+  }
+}

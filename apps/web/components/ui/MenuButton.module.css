@@ -1,0 +1,93 @@
+.wrapper {
+  position: relative;
+  display: flex;
+  min-inline-size: 0;
+}
+
+.trigger {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: var(--size-touch-target);
+  min-inline-size: 0;
+  padding-inline: var(--space-2);
+  background: none;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .trigger:hover {
+    background: var(--color-surface-hover);
+  }
+}
+
+.trigger[aria-expanded='true'] {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border);
+}
+
+.panel {
+  position: absolute;
+  inset-block-start: calc(100% + var(--space-1));
+  z-index: var(--z-nav);
+  min-inline-size: var(--size-menu);
+  padding: var(--space-2);
+  background: var(--color-surface-raised);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+}
+
+.panel[data-align='start'] {
+  inset-inline-start: 0;
+}
+
+.panel[data-align='end'] {
+  inset-inline-end: 0;
+}
+
+/*
+ * The panel's contents. Exposed for `composes` rather than applied here, because
+ * what goes in a panel is the caller's: a list of links, a form, a group of
+ * toggles. These two are the shape every caller has wanted so far, and sharing
+ * them is what stops each menu inventing its own row height.
+ */
+.menuList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  inline-size: 100%;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-2);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface);
+  font: inherit;
+  font-size: var(--font-size-body-sm);
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .menuItem:hover {
+    background: var(--color-surface-hover);
+  }
+}

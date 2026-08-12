@@ -1,0 +1,31 @@
+.actions {
+  flex: 0 0 auto;
+}
+
+.toggle {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  inline-size: var(--size-touch-target);
+  block-size: var(--size-touch-target);
+  padding: 0;
+  background: none;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface-muted);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .toggle:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}
+
+.toggle[aria-expanded='true'] {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border);
+  color: var(--color-on-surface);
+}

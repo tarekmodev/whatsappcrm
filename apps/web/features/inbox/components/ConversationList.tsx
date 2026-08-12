@@ -5,8 +5,12 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { useContent } from '@/lib/content';
 import { CONVERSATIONS_PAGE_SIZE } from '@/features/people/constants';
-import type { ConversationStatusFilter, InboxScope } from '@/lib/routes';
-import { ConversationRow, ConversationRowSkeleton, type ClaimContext } from './ConversationRow';
+import {
+  ConversationRow,
+  ConversationRowSkeleton,
+  type ClaimContext,
+  type InboxListQuery,
+} from './ConversationRow';
 import styles from './ConversationList.module.css';
 
 /**
@@ -22,7 +26,7 @@ export interface ConversationListProps {
   conversations: readonly ConversationResponse[];
   userNames: ReadonlyMap<string, string>;
   teamNames: ReadonlyMap<string, string>;
-  query: { scope: InboxScope; status: ConversationStatusFilter | undefined };
+  query: InboxListQuery;
   /** The open thread, or `null` for the list-only view. */
   selectedId: string | null;
   /**
@@ -45,6 +49,13 @@ export function ConversationList({
   const content = useContent();
 
   if (conversations.length === 0) {
+    // A search that matched nothing is a different answer from a filter with
+    // nothing in it, and telling somebody "conversations appear here" when they
+    // just searched for a phone number reads as a broken search.
+    if (query.q !== undefined) {
+      return <EmptyState heading={content.search.emptyHeading} body={content.search.emptyBody} />;
+    }
+
     return (
       <EmptyState
         heading={content.inbox.emptyHeading}

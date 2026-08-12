@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { cache } from 'react';
 import type {
   ConversationResponse,
   InternalNoteResponse,
@@ -49,7 +50,13 @@ export type ConversationThreadResult =
   /** The id names nothing this reader may see. Not an error — an answer. */
   | { readonly outcome: 'unavailable' };
 
-export async function loadConversationThread(
+/**
+ * Request-cached, so the thread pane and the context panel beside it are one
+ * read rather than two. They are separate Suspense boundaries on purpose — the
+ * thread is the expensive one and should not wait on a contact card — and
+ * without this they would each fetch the same conversation.
+ */
+export const loadConversationThread = cache(async function loadConversationThread(
   conversationId: string,
 ): Promise<ConversationThreadResult> {
   try {
@@ -81,6 +88,6 @@ export async function loadConversationThread(
 
     throw error;
   }
-}
+});
 
 const NOT_FOUND_CODE = 'not_found';

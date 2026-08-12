@@ -25,3 +25,24 @@
   margin: 0;
   list-style: none;
 }
+
+.divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Stays visible while the day's messages scroll past under it. */
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--z-sticky);
+}
+
+.dividerLabel {
+  padding-inline: var(--space-3);
+  padding-block: var(--space-1);
+  background: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-pill);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}

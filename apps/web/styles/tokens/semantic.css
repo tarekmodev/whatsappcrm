@@ -219,6 +219,9 @@
   /* The inbox's conversation list beside its thread, and the notes panel. */
   --size-pane-list: var(--scale-size-pane-md);
   --size-pane-side: var(--scale-size-pane-sm);
+  /* The inbox's filter column, and the width a dropdown menu opens to. */
+  --size-pane-filters: var(--scale-size-pane-xs);
+  --size-menu: var(--scale-size-pane-xs);
   /* How tall a scrolling region may grow before it scrolls rather than the page. */
   --size-scroll-region: var(--scale-size-viewport-tall);
   --size-media-thumb: var(--scale-size-media-sm);

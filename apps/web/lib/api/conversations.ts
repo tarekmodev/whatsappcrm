@@ -7,6 +7,7 @@ import {
   type ConversationAssignInput,
   type ConversationListQuery,
   type ConversationResponse,
+  type ConversationStatusUpdateInput,
   type CursorPage,
   type InternalNoteCreateInput,
   type InternalNoteResponse,
@@ -126,6 +127,26 @@ export async function createInternalNote(
   });
 
   return InternalNoteResponseSchema.parse(response);
+}
+
+/**
+ * `PATCH /api/v1/conversations/{id}/status` — open, pending, resolved, closed.
+ *
+ * The whole status, not a verb: closing and reopening are the same call with a
+ * different value, which is what keeps "closed" reversible in one click rather
+ * than needing a second endpoint to undo the first.
+ */
+export async function setConversationStatus(
+  conversationId: string,
+  input: ConversationStatusUpdateInput,
+): Promise<ConversationResponse> {
+  const response = await authenticatedRequest({
+    method: 'PATCH',
+    path: `${CONVERSATIONS_PATH}/${conversationId}/status`,
+    body: input,
+  });
+
+  return ConversationResponseSchema.parse(response);
 }
 
 /**

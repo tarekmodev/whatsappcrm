@@ -194,12 +194,12 @@ all of them:
 └───────────┴─────────────────────────────────────────┘
 ```
 
-| Region  | Component                                  | Notes                                                           |
-| ------- | ------------------------------------------ | --------------------------------------------------------------- |
-| Rail    | `apps/web/components/shell/AppSidebar.tsx` | Fixed, collapsible, icon + label                                |
-| Top bar | `apps/web/components/shell/AppTopBar.tsx`  | Identity and utilities; the drawer trigger below the breakpoint |
-| Canvas  | `apps/web/components/shell/PageShell.tsx`  | Gutter and vertical rhythm for the sections                     |
-| Drawer  | `apps/web/components/shell/MobileMenu.tsx` | The rail, below 48rem                                           |
+| Region  | Component                                  | Notes                                                                       |
+| ------- | ------------------------------------------ | --------------------------------------------------------------------------- |
+| Rail    | `apps/web/components/shell/AppSidebar.tsx` | Fixed, collapsible, icon + label, More/Less past five entries, footer slot  |
+| Top bar | `apps/web/components/shell/AppTopBar.tsx`  | Search, quick create, account menu; the drawer trigger below the breakpoint |
+| Canvas  | `apps/web/components/shell/PageShell.tsx`  | Gutter and vertical rhythm for the sections                                 |
+| Drawer  | `apps/web/components/shell/MobileMenu.tsx` | The rail, below 48rem                                                       |
 
 Rules that hold for all of them:
 
@@ -216,9 +216,20 @@ Rules that hold for all of them:
 - **Below 48rem there is no rail.** It is removed rather than hidden, so its links leave
   the tab order, and `MobileMenu` — focus-trapped, Escape-closable, scroll-locking — is
   the navigation.
-- **A workspace-wide search field belongs in the top bar.** It is not built yet: 0002
-  exposes no search endpoint, and a box that returns nothing is worse than a gap. It
-  lands with the story that adds the endpoint.
+- **The top bar's search searches conversations, and says so.** 0002 exposes `?q=` on
+  `GET /conversations` and on nothing else, so `TopBarSearch` submits to `/inbox?q=…` and
+  is labelled for what it does. It widens to contacts and tickets when their reads land —
+  a box labelled "search everything" that only reaches one resource is worse than a
+  narrow one that is honest.
+- **The rail shows five destinations, then a More/Less boundary.** `NavLinkList` renders
+  the disclosure only when there is something behind it, so a short nav grows no control
+  saying so. The rail also has a footer slot (`RailCard`) for a persistent card below the
+  navigation; nothing passes one today.
+- **Nothing goes in the shell for a feature this product does not have.** No notification
+  bell, no app switcher, no assistant, no call button — each is a promise the app breaks
+  the moment somebody presses it. They arrive with the stories behind them, and the same
+  rule governs the quick-create menu: `quick-create.ts` lists links to surfaces that
+  exist, filtered by permission, and an empty list renders no `+` at all.
 - **The workspace is not named in the bar.** The session contract carries a `tenantId`
   and no tenant name (`packages/contracts/src/auth.ts`); naming and branding the workspace
   is TAR-29.
@@ -252,11 +263,29 @@ The tab is a real link and the active tab is in the URL, for the same reason the
 are. Below the breakpoint the summary panel stacks above the tabbed area rather than
 sitting beside it.
 
+### The inbox
+
+Four regions inside the console frame, owned by `InboxLayout`: the filter column, the
+conversation list, the open thread, and the context panel beside it. Below 64rem one
+region is on screen at a time and the filters collapse into their own disclosure; from
+64rem the first three sit side by side with the context panel as a band under them; from
+90rem the context panel takes its own column.
+
+The filter entries are data (`features/inbox/inbox-filters.ts`), each a scope plus an
+optional status — so there is no entry the conversations endpoint cannot answer. The
+composer's destination (customer, or internal note) is a labelled tab strip, never a mode.
+
 ### Ticket status
 
 A column in the list, rendered as a `Badge`. Not a pipeline, not a board, not a drag
 target. A board is a different story and a different data shape; do not build half of one
 into a list view.
+
+A ticket is **never created by an agent pressing a button.** `TicketLinkerService` puts
+every inbound message on one ([0003](../architecture/0003-ticket-auto-linking-contract.md)),
+and 0002's endpoint table has no `POST /tickets` for that reason. The inbox's context
+panel therefore _reports_ the link rather than offering to make one. If a screen ever
+needs a "create a ticket from this" affordance, the endpoint comes first.
 
 ## What a new screen inherits
 
@@ -273,6 +302,8 @@ space:
 | Tabs                   | `Tabs`                                          |
 | Filter pills           | `FilterPills`                                   |
 | An icon                | `Icon`                                          |
+| A person's initial     | `Avatar`                                        |
+| A popup of actions     | `MenuButton`                                    |
 | Loading, empty, error  | `Skeleton`, `EmptyState`, `ErrorState`          |
 
 If a screen needs something not on that list, add it to `components/ui/` with a usage

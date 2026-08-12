@@ -1,0 +1,81 @@
+.layout {
+  display: grid;
+  gap: var(--space-4);
+  /* One column, and `minmax(0, 1fr)` rather than `1fr`: a grid track's default
+     `auto` minimum is its content, which is how a long word in a message makes
+     the whole page scroll sideways at 320px. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.filters,
+.list,
+.thread,
+.context {
+  min-inline-size: 0;
+}
+
+/* Below the two-pane breakpoint exactly one of list and thread is on screen. */
+.layout[data-has-thread='false'] .thread,
+.layout[data-has-thread='true'] .list {
+  display: none;
+}
+
+/*
+ * 64rem: the conversation list beside a thread at a readable measure. Matches
+ * `ThreadHeader.module.css`, which hides the back link at the same width — the
+ * two describe one layout change.
+ *
+ * The filter column does not appear yet. Three columns *plus* the rail leave the
+ * thread around 130px here, which is how this layout first shipped and what the
+ * responsive pass caught: the filters stay a full-width disclosure above the
+ * panes until there is room for them beside.
+ */
+@media (min-width: 64rem) {
+  .layout {
+    grid-template-columns: var(--size-pane-list) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .filters,
+  .context {
+    grid-column: 1 / -1;
+  }
+
+  .layout[data-has-thread='false'] .thread,
+  .layout[data-has-thread='true'] .list {
+    display: block;
+  }
+}
+
+/*
+ * 84rem: the first width where the filter column, the list and the thread all
+ * fit beside the rail with the thread still above 400px — `--size-rail` +
+ * `PageShell`'s gutter + `--size-pane-filters` + `--size-pane-list` + two gaps.
+ */
+@media (min-width: 84rem) {
+  .layout {
+    grid-template-columns: var(--size-pane-filters) var(--size-pane-list) minmax(0, 1fr);
+  }
+
+  .filters {
+    grid-column: auto;
+  }
+}
+
+/*
+ * 105rem: the fourth column. `PageShell` caps the canvas at
+ * `--size-container-xl`, so this is the first viewport where the container is at
+ * full width *and* has a column to spare — below it the context panel is a band
+ * under the panes instead, which reads fine because it is a short card.
+ */
+@media (min-width: 105rem) {
+  .layout {
+    grid-template-columns:
+      var(--size-pane-filters) var(--size-pane-list)
+      minmax(0, 1fr) var(--size-pane-side);
+  }
+
+  .context {
+    grid-column: auto;
+  }
+}

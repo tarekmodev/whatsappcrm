@@ -159,6 +159,9 @@
   /* Panes and media, added for the shared inbox's two-column layout. */
   --scale-size-pane-sm: 20rem;
   --scale-size-pane-md: 22rem;
+  /* Narrower than a pane: a column of filter entries, and a popup of menu
+     entries. Both are a label plus a count, never running text. */
+  --scale-size-pane-xs: 14rem;
   --scale-size-media-sm: 8rem;
   --scale-size-media-md: 18rem;
   /* A native audio control's own height, pinned so a placeholder can match it. */

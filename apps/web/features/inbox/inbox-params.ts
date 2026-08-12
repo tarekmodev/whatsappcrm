@@ -18,18 +18,37 @@ export interface InboxParams {
   status: ConversationStatusFilter | undefined;
   /** `null` when no thread is open, or when the parameter names no valid id. */
   conversationId: string | null;
+  /** The search term, or `undefined` for an unfiltered list. */
+  q: string | undefined;
 }
 
 export function parseInboxParams(raw: {
   scope: string | undefined;
   status: string | undefined;
   conversationId: string | undefined;
+  q: string | undefined;
 }): InboxParams {
   return {
     scope: parseScope(raw.scope),
     status: parseStatus(raw.status),
     conversationId: parseConversationId(raw.conversationId),
+    q: parseQuery(raw.q),
   };
+}
+
+/**
+ * The search term, bounded by the contract's own schema — a 400-character `?q=`
+ * is answered 422 by the API, and dropping it is a better answer than an error
+ * card for a URL somebody truncated or a browser autofilled.
+ */
+function parseQuery(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = ConversationListQuerySchema.shape.q.safeParse(value.trim());
+
+  return parsed.success ? parsed.data : undefined;
 }
 
 function parseScope(value: string | undefined): InboxScope {

@@ -46,7 +46,7 @@ export async function InboxSection({ query, selectedId, isScopeNarrowed }: Inbox
           conversations={conversations}
           userNames={userNames}
           teamNames={teamNames}
-          query={{ scope: query.scope, status: query.status }}
+          query={{ scope: query.scope, status: query.status, q: query.q }}
           selectedId={selectedId}
           claim={claim}
         />
