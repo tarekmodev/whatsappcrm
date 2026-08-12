@@ -399,6 +399,20 @@ describe('one conversation', () => {
     ).rejects.toMatchObject({ status: 409, code: 'conflict' });
   });
 
+  it('lets assign take a thread off the colleague holding it — the take-over', async () => {
+    // The other side of the case above, and the reason the two are separate
+    // routes: the claim refuses a held thread and the hand-over must not, or
+    // every take-over in the console fails with "somebody else claimed this".
+    const path = `/v1/conversations/${MOCK_IDS.conversations.unassigned}/assign`;
+
+    asRole('supervisor');
+    await handleMockRequest({ method: 'POST', path, body: { userId: MOCK_IDS.users.amina } });
+
+    await expect(
+      handleMockRequest({ method: 'POST', path, body: { userId: MOCK_IDS.users.priya } }),
+    ).resolves.toMatchObject({ assignedUserId: MOCK_IDS.users.priya });
+  });
+
   it('answers a re-claim by the holder with their own thread', async () => {
     const path = `/v1/conversations/${MOCK_IDS.conversations.unassigned}/claim`;
 

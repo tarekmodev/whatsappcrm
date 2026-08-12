@@ -154,7 +154,14 @@ export class ConversationQueryService {
    *
    * So the shared pool is a queue, not a workspace: claiming
    * (`POST /conversations/{id}/claim`) is the first action, and it is what makes
-   * the thread writable — by exactly one person.
+   * the thread writable.
+   *
+   * **By one person, or by one team.** A conversation routed to a team is held,
+   * so its members may all write to it — and two of them can still answer the
+   * same customer. That is a narrower failure than the anonymous pool's: a
+   * supervisor or a rule put the thread in front of that team deliberately, and
+   * they can see each other. This rule does not close it, and closing it belongs
+   * with the routing that creates it (TAR-23/24) rather than here.
    *
    * Uniform across roles rather than a supervisor exemption. A supervisor
    * replying into the pool produces the same double answer, they hold

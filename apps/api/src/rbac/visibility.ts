@@ -217,6 +217,13 @@ export interface ClaimableFilter {
  * make one of them the responder. Claiming is what makes a thread writable, and
  * `ConversationQueryService.requireHeld` is where that is enforced — once, for
  * the send, the note and the status change alike.
+ *
+ * Note what "held" is and is not: **both** columns null, so a conversation
+ * routed to a team counts as held and its members may all write to it. Two of
+ * them can therefore still answer the same customer — a narrower failure than
+ * the anonymous pool's, since a supervisor or a rule aimed the thread at that
+ * team and its members can see each other. Left to TAR-23/24's routing rather
+ * than folded in here.
  */
 export function isUnclaimed(record: AssignableRecord): boolean {
   return record.assignedUserId === null && record.assignedTeamId === null;

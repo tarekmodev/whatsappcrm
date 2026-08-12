@@ -5,7 +5,7 @@ import { FormDialog } from '@/components/ui/FormDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useActionForm } from '@/lib/hooks/useActionForm';
 import { useContent } from '@/lib/content';
-import { claimConversationAction } from '@/features/inbox/inbox.actions';
+import { takeOverConversationAction } from '@/features/inbox/inbox.actions';
 
 /**
  * Confirms taking a conversation off the colleague handling it. Usage:
@@ -38,8 +38,12 @@ export function TakeOverDialog({
   const content = useContent();
   const { showToast } = useToast();
 
+  // Deliberately **not** the claim action: the claim compares and sets, so the
+  // API would refuse it for a thread somebody holds — which is every thread this
+  // dialog is ever opened for. A take-over is the unconditional write, and the
+  // confirmation above is what it is paid for.
   const perform = useCallback(
-    async () => claimConversationAction(conversationId),
+    async () => takeOverConversationAction(conversationId),
     [conversationId],
   );
 

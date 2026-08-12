@@ -15,10 +15,13 @@ import { ClaimButton } from './ClaimButton';
  */
 
 const claimConversationAction = vi.fn();
+const takeOverConversationAction = vi.fn();
 const releaseConversationAction = vi.fn();
 
 vi.mock('@/features/inbox/inbox.actions', () => ({
   claimConversationAction: (...args: unknown[]) => claimConversationAction(...args) as unknown,
+  takeOverConversationAction: (...args: unknown[]) =>
+    takeOverConversationAction(...args) as unknown,
   releaseConversationAction: (...args: unknown[]) => releaseConversationAction(...args) as unknown,
 }));
 
@@ -34,16 +37,14 @@ function renderButton(hold: ConversationHold) {
 }
 
 beforeEach(() => {
-  claimConversationAction.mockReset();
-  releaseConversationAction.mockReset();
-  claimConversationAction.mockResolvedValue({
-    status: 'success',
-    data: { contactName: CONTACT },
-  });
-  releaseConversationAction.mockResolvedValue({
-    status: 'success',
-    data: { contactName: CONTACT },
-  });
+  for (const action of [
+    claimConversationAction,
+    takeOverConversationAction,
+    releaseConversationAction,
+  ]) {
+    action.mockReset();
+    action.mockResolvedValue({ status: 'success', data: { contactName: CONTACT } });
+  }
 });
 
 describe('ClaimButton — unclaimed', () => {
@@ -146,7 +147,7 @@ describe('ClaimButton — held by somebody else', () => {
 
     // The dialog is a lazy chunk; wait for it rather than for a fixed tick.
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(claimConversationAction).not.toHaveBeenCalled();
+    expect(takeOverConversationAction).not.toHaveBeenCalled();
   });
 
   it('says who holds it and that they will not be told', async () => {
@@ -170,11 +171,29 @@ describe('ClaimButton — held by somebody else', () => {
     fireEvent.click(screen.getByRole('button', { name: content.inbox.takeOverConfirm }));
 
     await waitFor(() => {
-      expect(claimConversationAction).toHaveBeenCalledWith(CONVERSATION_ID);
+      expect(takeOverConversationAction).toHaveBeenCalledWith(CONVERSATION_ID);
     });
     expect(
       await screen.findByText(content.inbox.takeOverSuccess(CONTACT, 'Liang Wei')),
     ).toBeInTheDocument();
+  });
+
+  it('never reaches the claim, which the API would refuse for a thread somebody holds', async () => {
+    // The regression this pins: pointing the take-over at the compare-and-set
+    // made every hand-over fail with "somebody else claimed this" — the claim's
+    // refusal working correctly on the one caller it must not apply to.
+    renderButton(HELD);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: content.inbox.takeOverAria(CONTACT, 'Liang Wei') }),
+    );
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: content.inbox.takeOverConfirm }));
+
+    await waitFor(() => {
+      expect(takeOverConversationAction).toHaveBeenCalledTimes(1);
+    });
+    expect(claimConversationAction).not.toHaveBeenCalled();
   });
 
   it('cancels without writing anything', async () => {
@@ -189,7 +208,7 @@ describe('ClaimButton — held by somebody else', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
-    expect(claimConversationAction).not.toHaveBeenCalled();
+    expect(takeOverConversationAction).not.toHaveBeenCalled();
   });
 
   it('still names a holder whose id the directory could not resolve', async () => {

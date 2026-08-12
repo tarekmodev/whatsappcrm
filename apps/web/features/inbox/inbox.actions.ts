@@ -2,6 +2,7 @@
 
 import { InternalNoteCreateInputSchema } from '@whatsappcrm/contracts';
 import { assignConversation, claimConversation, createInternalNote } from '@/lib/api/conversations';
+import { verifySession } from '@/lib/session/session';
 import { routes } from '@/lib/routes';
 import type { ActionResult } from '@/lib/actions/result';
 import { runAction } from '@/lib/actions/run-action';
@@ -9,6 +10,14 @@ import { runAction } from '@/lib/actions/run-action';
 /**
  * The two writes the shared inbox makes: who holds a conversation, and what the
  * team says to each other about it. Sending is TAR-20g's.
+ *
+ * The first of those is three actions, not one, because since TAR-186 the three
+ * directions are three different writes: a **claim** compares and sets and is
+ * every role's, a **take-over** writes unconditionally and is a supervisor's, and
+ * a **release** clears both columns. Collapsing any two of them was the bug —
+ * pointing the take-over at the claim made every hand-over fail with "somebody
+ * else claimed this", which is the claim's refusal doing its job on the one
+ * caller it must not.
  *
  * `runAction` owns the assert / validate / revalidate / report sequence.
  */
@@ -41,6 +50,40 @@ export async function claimConversationAction(
     label: 'Inbox',
     perform: async () => {
       const conversation = await claimConversation(conversationId);
+
+      return { contactName: conversation.contact.displayName };
+    },
+  });
+}
+
+/**
+ * Takes the conversation **off the colleague handling it**.
+ *
+ * The same destination as a claim and a different write, which is the whole
+ * reason it is a second action rather than the same one behind a confirmation.
+ * The claim is a compare-and-set the API refuses for a thread somebody holds —
+ * that refusal is what stops two agents both taking work out of the shared pool,
+ * and it is exactly the refusal a take-over must not meet. So this one goes
+ * through `assign`, which writes unconditionally, and pays for that with
+ * `conversation:assign` and the confirmation in front of it.
+ *
+ * `teamId` is untouched: taking a Billing thread over does not remove it from
+ * Billing.
+ */
+export async function takeOverConversationAction(
+  conversationId: string,
+): Promise<ActionResult<{ contactName: string }>> {
+  return runAction({
+    permission: 'conversation:assign',
+    parser: null,
+    input: undefined,
+    revalidate: INBOX_PATH,
+    label: 'Inbox',
+    perform: async () => {
+      const session = await verifySession();
+      const conversation = await assignConversation(conversationId, {
+        userId: session.principal.userId,
+      });
 
       return { contactName: conversation.contact.displayName };
     },

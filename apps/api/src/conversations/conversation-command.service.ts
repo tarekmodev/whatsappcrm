@@ -233,12 +233,15 @@ export class ConversationCommandService {
   /**
    * What a claim that matched no row means, which is one of three things.
    *
-   * The re-read is deliberately not `require`: by now the winner holds the
-   * thread, so it is out of this principal's shared-pool visibility and
-   * `require` would answer `not_found` — telling an agent who was looking at the
-   * conversation a moment ago that it does not exist. RLS still scopes the read
-   * to the tenant, and the caller already saw this id in the queue, so reporting
-   * the conflict leaks nothing they did not have.
+   * The re-read skips `require`, and what licenses that is the `require` this
+   * same call already made: the visibility rule admitted this id moments ago, so
+   * re-checking it would only re-ask a question already answered — and would
+   * answer `not_found` on the way, since the winner now holds the thread. The
+   * bypass is bounded to that window and to a caller who was already reading the
+   * row; RLS still scopes it to the tenant. It is not a general licence to report
+   * on a conversation nobody admitted, which is why `claim` still calls `require`
+   * first, and why a caller who loses *before* that read gets `not_found` — the
+   * two answers the method's own doc describes.
    */
   private async reportLostClaim(
     conversationId: string,

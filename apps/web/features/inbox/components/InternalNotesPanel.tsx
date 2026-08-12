@@ -71,11 +71,14 @@ export function InternalNotesPanel({
         </ol>
       )}
 
-      {isUnclaimed ? (
+      {/* Permission first, then the hold — the same order `MessageComposer`
+          uses, and the honest one: a role that may not write notes at all is not
+          told that claiming would let them. */}
+      {!canWrite ? null : isUnclaimed ? (
         <Notice tone="info">{content.inbox.claimBeforeWriting}</Notice>
-      ) : canWrite ? (
+      ) : (
         <InternalNoteForm conversationId={conversationId} />
-      ) : null}
+      )}
     </Stack>
   );
 }

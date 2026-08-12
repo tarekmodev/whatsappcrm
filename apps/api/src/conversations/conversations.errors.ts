@@ -45,8 +45,10 @@ export class ConversationNotFoundError extends ConversationError {
  * each agent sends a distinct request.
  *
  * Claiming is the fix and the first action: `POST /conversations/{id}/claim`
- * takes the thread out of the pool, and every write then belongs to the one
- * person holding it.
+ * takes the thread out of the pool, and every write then belongs to whoever
+ * holds it — one person, or the members of the team it was routed to, who can at
+ * least see each other. Closing that narrower case belongs with the routing that
+ * creates it (TAR-23/24).
  *
  * `conflict` (409) rather than `forbidden`: the caller may write to this
  * conversation, and what refused them is the state of the row — the same family
