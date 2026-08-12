@@ -50,5 +50,7 @@ export function activeInboxFilterId(
   scope: InboxScope,
   status: ConversationStatusFilter | undefined,
 ): string | null {
-  return INBOX_FILTERS.find((filter) => filter.scope === scope && filter.status === status)?.id ?? null;
+  return (
+    INBOX_FILTERS.find((filter) => filter.scope === scope && filter.status === status)?.id ?? null
+  );
 }

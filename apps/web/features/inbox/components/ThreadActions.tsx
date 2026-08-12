@@ -112,7 +112,9 @@ function DetailsToggle({ label }: { label: string }) {
       onClick={toggle}
     >
       <Icon name="info" size="sm" />
-      <VisuallyHidden>{isOpen ? content.inbox.contextHide : content.inbox.contextShow}</VisuallyHidden>
+      <VisuallyHidden>
+        {isOpen ? content.inbox.contextHide : content.inbox.contextShow}
+      </VisuallyHidden>
     </button>
   );
 }

@@ -53,9 +53,7 @@ export function ConversationList({
     // nothing in it, and telling somebody "conversations appear here" when they
     // just searched for a phone number reads as a broken search.
     if (query.q !== undefined) {
-      return (
-        <EmptyState heading={content.search.emptyHeading} body={content.search.emptyBody} />
-      );
+      return <EmptyState heading={content.search.emptyHeading} body={content.search.emptyBody} />;
     }
 
     return (

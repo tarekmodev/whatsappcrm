@@ -30,7 +30,12 @@ export interface AvatarProps {
 
 export function Avatar({ name, size = 'sm', tone = 'accent', className }: AvatarProps) {
   return (
-    <span className={cx(styles.avatar, className)} data-size={size} data-tone={tone} aria-hidden="true">
+    <span
+      className={cx(styles.avatar, className)}
+      data-size={size}
+      data-tone={tone}
+      aria-hidden="true"
+    >
       {initialOf(name)}
     </span>
   );

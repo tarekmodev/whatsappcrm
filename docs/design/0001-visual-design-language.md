@@ -196,7 +196,7 @@ all of them:
 
 | Region  | Component                                  | Notes                                                                       |
 | ------- | ------------------------------------------ | --------------------------------------------------------------------------- |
-| Rail    | `apps/web/components/shell/AppSidebar.tsx` | Fixed, collapsible, icon + label, More/Less past five entries, footer slot   |
+| Rail    | `apps/web/components/shell/AppSidebar.tsx` | Fixed, collapsible, icon + label, More/Less past five entries, footer slot  |
 | Top bar | `apps/web/components/shell/AppTopBar.tsx`  | Search, quick create, account menu; the drawer trigger below the breakpoint |
 | Canvas  | `apps/web/components/shell/PageShell.tsx`  | Gutter and vertical rhythm for the sections                                 |
 | Drawer  | `apps/web/components/shell/MobileMenu.tsx` | The rail, below 48rem                                                       |
@@ -284,7 +284,7 @@ into a list view.
 A ticket is **never created by an agent pressing a button.** `TicketLinkerService` puts
 every inbound message on one ([0003](../architecture/0003-ticket-auto-linking-contract.md)),
 and 0002's endpoint table has no `POST /tickets` for that reason. The inbox's context
-panel therefore *reports* the link rather than offering to make one. If a screen ever
+panel therefore _reports_ the link rather than offering to make one. If a screen ever
 needs a "create a ticket from this" affordance, the endpoint comes first.
 
 ## What a new screen inherits

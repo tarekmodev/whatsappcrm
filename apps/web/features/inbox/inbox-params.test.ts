@@ -36,9 +36,12 @@ describe('parseInboxParams', () => {
   });
 
   it('falls back rather than passing a scope or status the contract rejects', () => {
-    expect(
-      parseInboxParams({ ...NOTHING, scope: 'everything', status: 'archived' }),
-    ).toEqual({ scope: 'assigned', status: undefined, conversationId: null, q: undefined });
+    expect(parseInboxParams({ ...NOTHING, scope: 'everything', status: 'archived' })).toEqual({
+      scope: 'assigned',
+      status: undefined,
+      conversationId: null,
+      q: undefined,
+    });
   });
 
   it('drops a conversation id that is not an id', () => {

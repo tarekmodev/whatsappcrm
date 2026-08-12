@@ -97,7 +97,10 @@ export default async function InboxPage({
               <NoThreadSelected />
             ) : (
               <SectionErrorBoundary>
-                <Suspense key={conversationId} fallback={<ThreadSectionSkeleton query={threadQuery} />}>
+                <Suspense
+                  key={conversationId}
+                  fallback={<ThreadSectionSkeleton query={threadQuery} />}
+                >
                   <ThreadSection conversationId={conversationId} query={threadQuery} />
                 </Suspense>
               </SectionErrorBoundary>

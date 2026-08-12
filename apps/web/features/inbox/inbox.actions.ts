@@ -1,9 +1,6 @@
 'use server';
 
-import {
-  InternalNoteCreateInputSchema,
-  type ConversationStatus,
-} from '@whatsappcrm/contracts';
+import { InternalNoteCreateInputSchema, type ConversationStatus } from '@whatsappcrm/contracts';
 import {
   assignConversation,
   claimConversation,
