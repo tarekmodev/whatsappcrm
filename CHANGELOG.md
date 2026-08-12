@@ -622,6 +622,21 @@ change.
 
 ### Changed
 
+- **Team membership is bounded, and a membership change costs the same whatever the team
+  size.** `memberUserIds` and `teamIds` carried no upper bound, so a caller holding
+  `team:write` could `POST /api/v1/teams` with ten thousand ids: validation passed, ten
+  thousand rows were written, and the service then revoked one user's sessions per round
+  trip — sequentially, inside the transaction, holding one pooled connection — before
+  repeating the shape as one Redis call per user after the commit. A privileged caller
+  rather than an anonymous one, but a self-inflicted availability cliff on a pool the whole
+  tenant shares. Both arrays now cap at `TEAM_MEMBERSHIP_LIMITS` (500 members per team, 50
+  teams per person), and the fan-out behind them collapses to one `UPDATE` over every
+  affected user, one `INSERT` for their audit rows, and one pipelined pass over Redis with
+  chunked deletes. Nobody loses a revocation: everybody affected is still logged out and
+  still purged on both sides of the commit. A team can still pass the published ceiling one
+  person at a time through `PATCH /users/{id}`, which bounds the other side of the relation
+  — making it a database invariant needs a capacity check on every path that writes
+  `team_members`, including invite acceptance, and that is its own change. (TAR-244)
 - **The local Postgres major matches Render's.** `docker-compose.yml` pinned
   `postgres:17-alpine` under a comment claiming it tracked the managed offering, while all
   three databases in `render.yaml` pin `postgresMajorVersion: '16'`. CI builds its database
@@ -689,6 +704,24 @@ change.
 
 ### Fixed
 
+- **The ticket-ensure job id no longer depends on an undocumented BullMQ exemption**
+  (TAR-249) — `ticketEnsureJobId` published `ticket.ensure-for-message:<tenant>:<message>`,
+  the one colon-bearing job id in the repo. BullMQ reserves `:` for its own Redis key
+  structure and rejects a custom id containing one, with a single backwards-compatibility
+  exemption for ids that split into exactly three parts — which is the only reason that
+  shape ever worked, and BullMQ's own source marks the exemption `TODO` for removal. The
+  failure it was one upgrade away from is a quiet one: `QueueService.enqueue` reports an
+  outcome rather than throwing, so a rejected id would have logged one warning per inbound
+  message and stopped creating tickets with nothing erroring. The id is now
+  `ticket-ensure-<tenantId>-<messageId>`, hyphenated like `media-download-` and
+  `webhook-event-` before it. It keeps `tenantId` even though `messageId` alone is unique,
+  because that substring is the handle for filtering one tenant's ensure-jobs in a queue
+  dashboard — exactly the triage being done when this class of thing goes wrong. The job
+  _name_ `ticket.ensure-for-message` is unchanged: BullMQ restricts ids, not names. No
+  migration and no queue drain — BullMQ routes by name and treats the id as opaque, so jobs
+  already queued under the old id finish normally; during a rolling deploy a Meta retry of
+  one message can produce a job under each shape, and both are `ensureTicketForMessage`
+  calls, which is idempotent by contract. Recorded in ADR 0003 as implementation rule 5.
 - **The browser's own API calls name their tenant too, and the naming is now provable**
   (TAR-64) — the `/api/*` rewrite is where the browser path loses the tenant: Next's proxy
   replaces `Host` with the API origin, and `rewrites()` cannot add a request header. So

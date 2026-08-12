@@ -1,4 +1,9 @@
-import type { TeamCreateInput, TeamUpdateInput } from '@whatsappcrm/contracts';
+import {
+  TEAM_MEMBERSHIP_LIMITS,
+  TeamCreateInputSchema,
+  type TeamCreateInput,
+  type TeamUpdateInput,
+} from '@whatsappcrm/contracts';
 import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
@@ -31,6 +36,12 @@ interface Recorded {
   purgedUserIds: string[];
   /** Every call in order, so the test can assert the purge came last. */
   order: string[];
+  /**
+   * How many *calls* each half took, as opposed to how many users they covered.
+   * The whole point of TAR-244 is that this stays at one however large the team
+   * is.
+   */
+  calls: { revoke: number; purge: number };
 }
 
 function buildService(members: readonly string[]): {
@@ -38,7 +49,12 @@ function buildService(members: readonly string[]): {
   recorded: Recorded;
   tenantContext: TenantContextService;
 } {
-  const recorded: Recorded = { revokedUserIds: [], purgedUserIds: [], order: [] };
+  const recorded: Recorded = {
+    revokedUserIds: [],
+    purgedUserIds: [],
+    order: [],
+    calls: { revoke: 0, purge: 0 },
+  };
 
   const teamRow = {
     id: TEAM,
@@ -73,14 +89,16 @@ function buildService(members: readonly string[]): {
   const audit = { record: () => Promise.resolve() } as unknown as AuditService;
 
   const sessions = {
-    revokeFor: (_tx: unknown, _tenantId: string, userId: string) => {
-      recorded.revokedUserIds.push(userId);
-      recorded.order.push(`revoke:${userId}`);
-      return Promise.resolve(1);
+    revokeForMany: (_tx: unknown, _tenantId: string, userIds: readonly string[]) => {
+      recorded.calls.revoke += 1;
+      recorded.revokedUserIds.push(...userIds);
+      recorded.order.push(...userIds.map((userId) => `revoke:${userId}`));
+      return Promise.resolve(userIds.length);
     },
-    purgeCacheFor: (_tenantId: string, userId: string) => {
-      recorded.purgedUserIds.push(userId);
-      recorded.order.push(`purge:${userId}`);
+    purgeCacheForMany: (_tenantId: string, userIds: readonly string[]) => {
+      recorded.calls.purge += 1;
+      recorded.purgedUserIds.push(...userIds);
+      recorded.order.push(...userIds.map((userId) => `purge:${userId}`));
       return Promise.resolve();
     },
   } as unknown as SessionRevocationService;
@@ -137,5 +155,49 @@ describe('TeamsService — a membership change ends the affected sessions', () =
     // target, there is no user to purge here: `memberUserIds` was omitted, so
     // nobody's `teamIds` moved.
     expect(recorded.purgedUserIds).toEqual([]);
+  });
+});
+
+/**
+ * TAR-244. The finding was a supervisor `POST /teams` with a membership nobody
+ * would ever type by hand: validation let it through, and the service then
+ * walked it one revocation at a time inside the transaction, holding a pooled
+ * connection for a round trip per member — and repeated the shape as one Redis
+ * call per member afterwards.
+ *
+ * Two fixes, tested separately because they fail separately: the contract caps
+ * the payload, and the service does the work in one call regardless of size.
+ */
+describe('TeamsService — a large membership is bounded, and handled in one pass', () => {
+  const members = Array.from(
+    { length: TEAM_MEMBERSHIP_LIMITS.membersPerTeam },
+    (_, index) => `0192f0ff-0000-7000-8000-${(index + 1).toString(16).padStart(12, '0')}`,
+  );
+
+  it('refuses a membership larger than the published ceiling at the edge', () => {
+    const oversized = [...members, '0192f0ff-0000-7000-8000-0000000fffff'];
+
+    expect(() =>
+      TeamCreateInputSchema.parse({ name: 'Billing', memberUserIds: oversized }),
+    ).toThrow();
+    // …and accepts exactly the ceiling, so the bound is a limit rather than an
+    // off-by-one that quietly moved the real one.
+    expect(
+      TeamCreateInputSchema.parse({ name: 'Billing', memberUserIds: members }).memberUserIds,
+    ).toHaveLength(TEAM_MEMBERSHIP_LIMITS.membersPerTeam);
+  });
+
+  it('revokes and purges a full team in one call each, not one per member', async () => {
+    const { teams, recorded, tenantContext } = buildService(members);
+    const input: TeamCreateInput = { name: 'Billing', description: null, memberUserIds: members };
+
+    await inTenant(tenantContext, () => teams.create(input));
+
+    // Everybody is still logged out and still purged — the fan-out moved into
+    // one statement, it did not disappear.
+    expect(recorded.revokedUserIds).toEqual(members);
+    expect(recorded.purgedUserIds).toEqual(members);
+    // The property that matters: cost is independent of the team's size.
+    expect(recorded.calls).toEqual({ revoke: 1, purge: 1 });
   });
 });

@@ -61,6 +61,7 @@ interface Harness {
     track: jest.Mock;
     forget: jest.Mock;
     purgeUser: jest.Mock;
+    purgeUsers: jest.Mock;
   };
 }
 
@@ -93,6 +94,9 @@ function buildHarness(rowsFor: (sql: string) => unknown[]): Harness {
     track: jest.fn().mockResolvedValue(true),
     forget: jest.fn().mockResolvedValue(undefined),
     purgeUser: jest.fn().mockResolvedValue(undefined),
+    // Every revocation path purges through the batch entry point since TAR-244,
+    // including the single-user one.
+    purgeUsers: jest.fn().mockResolvedValue(undefined),
   };
 
   return {
@@ -297,10 +301,10 @@ describe('SessionService revocation', () => {
   });
 
   it('purges the cache before writing the revocation', async () => {
-    const harness = buildHarness(() => [{ token_hash: 'a' }, { token_hash: 'b' }]);
+    const harness = buildHarness(() => []);
 
     const revoked = await harness.sessions.revokeAllForUser(
-      { $queryRaw: () => Promise.resolve([{ token_hash: 'a' }]) } as never,
+      { $queryRaw: () => Promise.resolve([{ user_id: USER }]) } as never,
       TENANT,
       USER,
       'status_change',
@@ -310,7 +314,7 @@ describe('SessionService revocation', () => {
     // Before the commit, so the common case is already cold when it lands. The
     // caller purges again afterwards, which is what closes the window where an
     // in-flight request could repopulate it.
-    expect(harness.cache.purgeUser).toHaveBeenCalledWith(TENANT, USER);
+    expect(harness.cache.purgeUsers).toHaveBeenCalledWith(TENANT, [USER]);
   });
 
   it('drops the index only on the after-commit purge', async () => {
@@ -318,7 +322,70 @@ describe('SessionService revocation', () => {
 
     await harness.sessions.purgeCacheFor(TENANT, USER);
 
-    expect(harness.cache.purgeUser).toHaveBeenCalledWith(TENANT, USER, true);
+    expect(harness.cache.purgeUsers).toHaveBeenCalledWith(TENANT, [USER], true);
+  });
+
+  /**
+   * TAR-244: a team membership change revokes everybody it touches, and used to
+   * do it one round trip at a time inside the caller's transaction.
+   */
+  describe('revoking a set of users', () => {
+    const OTHER_USER = '56555555-5555-7555-8555-5555555555a2';
+
+    it('revokes every target in one statement and counts per user', async () => {
+      const harness = buildHarness(() => []);
+      const statements: string[] = [];
+      const tx = {
+        $queryRaw: (strings: TemplateStringsArray) => {
+          statements.push(strings.join(' ? '));
+          // Two devices for one of them, none for the other — which is what
+          // decides who gets an audit row.
+          return Promise.resolve([{ user_id: USER }, { user_id: USER }]);
+        },
+      } as never;
+
+      const revoked = await harness.sessions.revokeAllForUsers(
+        tx,
+        TENANT,
+        [USER, OTHER_USER, USER],
+        'teams_change',
+      );
+
+      expect(revoked.get(USER)).toBe(2);
+      // Signed in nowhere: absent rather than zero, so the caller writes no
+      // audit row claiming a revocation that did not happen.
+      expect(revoked.has(OTHER_USER)).toBe(false);
+      // One statement for the set, and the duplicate id did not become a second
+      // target.
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toContain('user_id IN (');
+      expect(statements[0]).toContain('tenant_id =');
+      expect(statements[0]).toContain('revoked_at IS NULL');
+      // One purge for the whole set, not one per user.
+      expect(harness.cache.purgeUsers).toHaveBeenCalledTimes(1);
+      expect(harness.cache.purgeUsers).toHaveBeenCalledWith(TENANT, [USER, OTHER_USER]);
+    });
+
+    it('touches neither Redis nor Postgres for an empty set', async () => {
+      const harness = buildHarness(() => []);
+      const tx = {
+        $queryRaw: () => Promise.reject(new Error('IN () is not valid SQL')),
+      } as never;
+
+      await expect(
+        harness.sessions.revokeAllForUsers(tx, TENANT, [], 'teams_change'),
+      ).resolves.toEqual(new Map());
+      expect(harness.cache.purgeUsers).not.toHaveBeenCalled();
+    });
+
+    it('purges the whole set once after the commit', async () => {
+      const harness = buildHarness(() => []);
+
+      await harness.sessions.purgeCacheForUsers(TENANT, [USER, OTHER_USER]);
+
+      expect(harness.cache.purgeUsers).toHaveBeenCalledTimes(1);
+      expect(harness.cache.purgeUsers).toHaveBeenCalledWith(TENANT, [USER, OTHER_USER], true);
+    });
   });
 });
 
