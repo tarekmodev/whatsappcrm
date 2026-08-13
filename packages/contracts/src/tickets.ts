@@ -41,19 +41,31 @@ export const TICKET_ACTIVE_STATUSES = TICKET_STATUSES.filter(
 );
 
 /**
- * Which moves an agent may make through `PATCH /tickets/{id}`, from (key) to
- * (value). ADR 0006 §2 decides the table; this is that table as code, so the
- * console disables the impossible options from the same constant the API refuses
- * them with rather than keeping a second copy of it.
+ * Which moves an agent may make through `PATCH /tickets/{id}` (0006, §2).
  *
- * `resolved` and `closed` are terminal-for-active: there is no reopen window at
- * v1 (ADR 0003 open question 1), and `tickets_one_active_per_contact` would
- * refuse a re-activation anyway — messily, as an `internal_error` — whenever the
- * contact has since opened a new ticket. Refusing it in the service is the same
- * answer, correctly coded.
+ * `resolved` and `closed` are terminal-for-active: nothing re-activates them.
+ * Two reasons, and the first is load-bearing — `tickets_one_active_per_contact`
+ * is a partial unique index over `status IN ('open','pending')`, and a contact
+ * whose resolved ticket is re-activated may already hold a new active one, so
+ * the UPDATE would raise a unique violation that reaches the client as
+ * `internal_error`. Refusing here is the same answer, correctly coded. The
+ * second: there is no reopen window at v1 (0003, open question 1), and adding
+ * one through an agent-initiated PATCH would ship half of it.
  *
- * A customer replying to a `pending` ticket still moves it back to `open`; that
- * is the system reopen, which does not go through this endpoint.
+ * `open → closed` is allowed and does not pass through `resolved`. Closing spam
+ * or a wrong number is not a resolution, and forcing the two-step would put a
+ * fake `resolved_at` on every one of them.
+ *
+ * Published here rather than re-typed per surface: the console disables the
+ * impossible options from this constant, which is the same argument `rbac.ts`
+ * makes for permissions. A second copy that drifts is a UI offering a move the
+ * API refuses.
+ *
+ * Note what it does **not** govern. The customer-reply reopen makes the same
+ * `pending → open` move this table allows an agent, but it is written by
+ * `TicketLinkerService` off the inbound-message queue, under a tenant and no
+ * principal — it consults nothing here and no permission check applies to it.
+ * This table is the *agent's* surface only.
  */
 export const TICKET_STATUS_TRANSITIONS: Record<TicketStatus, readonly TicketStatus[]> = {
   open: ['pending', 'resolved', 'closed'],
@@ -65,21 +77,21 @@ export const TICKET_STATUS_TRANSITIONS: Record<TicketStatus, readonly TicketStat
 /**
  * True when an agent may make this move through `PATCH /tickets/{id}`.
  *
- * Setting the value a ticket already holds is included, and deliberately: a
- * double-clicked button and a retry after a dropped response both arrive as "set
- * resolved" on a ticket that is already resolved, and `PATCH` is defined by the
- * target state rather than by the delta. The endpoint answers 200 with the
- * current ticket and writes no event (ADR 0006 §2).
+ * `from === to` is **not** a transition and answers `false`. Setting the value a
+ * ticket already has is a no-op the endpoint accepts (0006, §2) rather than a
+ * move it validates, so the caller checks equality first and never reaches this.
  */
 export function canAgentTransition(from: TicketStatus, to: TicketStatus): boolean {
-  return from === to || TICKET_STATUS_TRANSITIONS[from].includes(to);
+  return TICKET_STATUS_TRANSITIONS[from].includes(to);
 }
 
 /**
- * Statuses whose *entry* additionally requires `ticket:close` on top of
- * `ticket:update` (ADR 0006 §7). Both are in every role's set today, so no
- * behaviour changes; what it buys is that a later triage-only role can hold
- * `ticket:update` for priority without the right to finish somebody's work.
+ * Entering these additionally requires `ticket:close` (0004, 0006 §7).
+ *
+ * Both `ticket:update` and `ticket:close` sit in `AGENT_PERMISSIONS` today, so
+ * no role's behaviour changes on the day this lands. What it buys is that a
+ * later triage-only role can hold `ticket:update` — to re-prioritise a queue —
+ * without the right to finish somebody else's work.
  */
 export const TICKET_STATUS_REQUIRES_CLOSE: Record<TicketStatus, boolean> = {
   open: false,
@@ -88,6 +100,14 @@ export const TICKET_STATUS_REQUIRES_CLOSE: Record<TicketStatus, boolean> = {
   closed: true,
 };
 
+/**
+ * Declaration order is **urgent-last on purpose**: `ticket_priority` is a
+ * Postgres enum, Postgres orders one by declaration order, and the ticket queue
+ * is `ORDER BY priority DESC` (0006, §6). Reordering this array — or the enum in
+ * `schema.prisma` it mirrors — silently inverts the queue and puts `low` on top.
+ * `ticket-queue.int-spec.ts` asserts `urgent` sorts before `low` so that a
+ * reorder fails a test rather than a customer.
+ */
 export const TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 export const TicketPrioritySchema = z.enum(TICKET_PRIORITIES);
 
@@ -155,15 +175,36 @@ export const TicketListQuerySchema = CursorPageQuerySchema.extend({
   scope: z.enum(['assigned', 'unassigned', 'all']).default('assigned'),
   assignedUserId: IdSchema.optional(),
   assignedTeamId: IdSchema.optional(),
-  /** Filters to tickets whose SLA has breached — the supervisor's landing view. */
-  breachedOnly: z.boolean().default(false),
+  /**
+   * Filters to tickets whose SLA has breached — the supervisor's landing view.
+   *
+   * `stringbool`, not `boolean`, because this schema parses a **query string**:
+   * `?breachedOnly=true` arrives as the four characters `true`, and `z.boolean()`
+   * refuses it — so the one query the supervisor's landing view is built on
+   * answered `validation_failed` for every value a client could send.
+   *
+   * Not `z.coerce.boolean()` either, and that one is worse than useless here:
+   * coercion is `Boolean(value)`, so the non-empty string `"false"` is `true` and
+   * `?breachedOnly=false` would turn the filter **on**. `stringbool` reads the
+   * token — `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off` — and rejects
+   * anything else rather than guessing.
+   *
+   * `limit` above takes `z.coerce.number()` for the same reason and gets away
+   * with plain coercion because a number has no such trap.
+   */
+  breachedOnly: z.stringbool().default(false),
 });
 
 /**
- * The one mutation surface for an agent-driven status, priority or subject
- * change (ADR 0006 §1). A body with nothing in it is `validation_failed` rather
- * than a no-op 200: `{}` is a client bug with no honest answer, and enforcing it
- * on the schema means no route has to remember.
+ * The one mutation surface for an agent-driven ticket change (0006, §1). One
+ * endpoint for all three fields, because a status change and a re-prioritisation
+ * are one triage action an agent makes in one form — unlike a conversation's
+ * status, which has its own sub-route.
+ *
+ * Every field optional, and **at least one required**. `{}` is a client bug with
+ * no honest answer: accepting it as a 200 no-op would report success for a
+ * request that asked for nothing. The refinement lives on the schema rather than
+ * in a route so that no route has to remember it.
  */
 export const TicketUpdateInputSchema = z
   .object({
@@ -209,20 +250,33 @@ export const TICKET_EVENT_TYPES = [
   'unassigned',
   'first_response',
   'sla_breached',
+  /**
+   * **Reserved, and not written by anything today** (0006, §5). It belongs to
+   * the `resolved →` reopen window of 0003 open question 1, which does not exist
+   * at v1.
+   *
+   * The customer-reply reopen — `pending → open` — is a `status_changed` with
+   * `cause: 'inbound_message'`, which is what `TicketLinkerService` has written
+   * since TAR-21 and what 0003's own transition table specifies. Two event types
+   * meaning "the status moved" would make every consumer learn both, and TAR-30
+   * derives cycle time from exactly that property. Spending the name now would
+   * also leave the reopen window with nothing to add.
+   */
   'reopened',
   'bot_handoff',
 ] as const;
 export const TicketEventTypeSchema = z.enum(TICKET_EVENT_TYPES);
 
 /**
- * *What* moved the ticket, as opposed to *who* did (ADR 0006 §5). Kept out of
- * `reason`, which is agent-supplied free text surfaced in the escalation
- * history: a machine token in there would force every client to string-match.
+ * What moved a ticket, as a machine token (0006, §5).
  *
- * The distinction this exists for is `pending → open` after a customer replies.
- * That is a `status_changed` with `cause: 'inbound_message'` and a null actor —
- * *not* a `reopened` event, which stays reserved for the `resolved →` reopen
- * window of ADR 0003 open question 1 and is written by nothing at v1.
+ * Separate from `reason` rather than folded into it. `reason` is agent-supplied
+ * free text surfaced in the escalation history (TAR-32); a token hidden in it
+ * would force the console to string-match prose a human wrote.
+ *
+ * It is what distinguishes an agent reopening a ticket by hand from the customer
+ * reopening it by replying — the two write the same `status_changed` and the
+ * console renders `inbound_message` as "Reopened — customer replied".
  */
 export const TICKET_EVENT_CAUSES = ['agent', 'inbound_message', 'automation', 'sla'] as const;
 export const TicketEventCauseSchema = z.enum(TICKET_EVENT_CAUSES);
@@ -236,7 +290,7 @@ export const TicketEventSchema = z.object({
   fromValue: z.string().nullable(),
   toValue: z.string().nullable(),
   reason: z.string().nullable(),
-  /** Null on an event written before the cause was published. */
+  /** Null for the event types that predate the token, and for `created`. */
   cause: TicketEventCauseSchema.nullable(),
   createdAt: TimestampSchema,
 });

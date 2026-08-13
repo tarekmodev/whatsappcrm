@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkerForRole, isConversationScopeNarrowed } from './permissions';
+import { checkerForRole, isConversationScopeNarrowed, isTicketScopeNarrowed } from './permissions';
 import { INBOX_SCOPES } from '@/lib/routes';
 
 /**
@@ -30,6 +30,40 @@ describe('inbox scopes', () => {
 
     expect(isConversationScopeNarrowed(agent, 'assigned')).toBe(false);
     expect(isConversationScopeNarrowed(agent, 'unassigned')).toBe(false);
+  });
+});
+
+/**
+ * The ticket rule is **not** the conversation rule, and the difference is the
+ * whole reason it is a second function. These cases exist because the body was
+ * once copied from `isConversationScopeNarrowed` and lost exactly the case that
+ * makes the two different.
+ */
+describe('ticket scopes', () => {
+  it('tells an agent that `all` is narrower than it sounds', () => {
+    expect(isTicketScopeNarrowed(checkerForRole('agent'), 'all')).toBe(true);
+  });
+
+  it('also narrows `unassigned`, which is where tickets differ from conversations', () => {
+    // An unassigned ticket is triaged work rather than a shared pool, so the API
+    // narrows this scope to the caller's own. Without the notice, a supervisor's
+    // shared `?scope=unassigned` shows an agent their *own* tickets under
+    // somebody else's heading, with no pill highlighted to explain it.
+    expect(isTicketScopeNarrowed(checkerForRole('agent'), 'unassigned')).toBe(true);
+    // The conversation rule genuinely does not narrow here — the two must not
+    // be collapsed into one helper.
+    expect(isConversationScopeNarrowed(checkerForRole('agent'), 'unassigned')).toBe(false);
+  });
+
+  it('never claims a narrowing for `assigned`, which means the same to everyone', () => {
+    expect(isTicketScopeNarrowed(checkerForRole('agent'), 'assigned')).toBe(false);
+  });
+
+  it('does not claim a narrowing for a principal who may read every ticket', () => {
+    for (const scope of ['assigned', 'unassigned', 'all'] as const) {
+      expect(isTicketScopeNarrowed(checkerForRole('supervisor'), scope)).toBe(false);
+      expect(isTicketScopeNarrowed(checkerForRole('admin'), scope)).toBe(false);
+    }
   });
 });
 

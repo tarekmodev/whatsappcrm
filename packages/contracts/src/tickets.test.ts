@@ -37,11 +37,13 @@ describe('TICKET_STATUS_TRANSITIONS', () => {
 });
 
 describe('canAgentTransition', () => {
-  it('accepts setting the value the ticket already has', () => {
-    // A double-clicked button and a retry after a dropped response both arrive
-    // this way, and PATCH is defined by the target state, not by the delta.
+  it('does not treat setting the value it already has as a transition', () => {
+    // The no-op of ADR 0006 §2 is the *endpoint's* behaviour, not this
+    // predicate's: a caller filters equality out first and never reaches here,
+    // so `from === to` is simply not a move. Both this and the console's mock
+    // transport check the values differ before asking.
     for (const status of TICKET_STATUSES) {
-      expect(canAgentTransition(status, status)).toBe(true);
+      expect(canAgentTransition(status, status)).toBe(false);
     }
   });
 
@@ -55,9 +57,7 @@ describe('canAgentTransition', () => {
   it('agrees with the table for every pair', () => {
     for (const from of TICKET_STATUSES) {
       for (const to of TICKET_STATUSES) {
-        expect(canAgentTransition(from, to)).toBe(
-          from === to || TICKET_STATUS_TRANSITIONS[from].includes(to),
-        );
+        expect(canAgentTransition(from, to)).toBe(TICKET_STATUS_TRANSITIONS[from].includes(to));
       }
     }
   });

@@ -30,7 +30,12 @@ import { updateTicketAction, type TicketUpdateResult } from '@/features/tickets/
  */
 
 export interface UseTicketUpdate extends UseActionForm {
-  apply: (patch: TicketUpdateInput) => void;
+  /**
+   * Sends the patch, and reports whether it was sent. `false` means one was
+   * already in flight and this one was dropped — the caller must not leave a
+   * control showing a change nobody requested.
+   */
+  apply: (patch: TicketUpdateInput) => boolean;
   /**
    * The patch currently in flight, or `null`. Lets a panel with several controls
    * put the pending state on the one that was pressed rather than on all of
@@ -94,11 +99,27 @@ export function useTicketUpdate(ticketId: string, onApplied?: () => void): UseTi
     }
   }, [isPending]);
 
+  /**
+   * The ref has to be written *before* `submit`, because `perform` reads it
+   * synchronously — and put back if `submit` turns out to have been swallowed by
+   * the in-flight guard. Committing it unconditionally was the bug: a patch from
+   * the other control overwrote the one actually in flight, so `onSuccess`
+   * reported the wrong change and the request nobody sent looked like a success.
+   */
   const apply = useCallback(
-    (patch: TicketUpdateInput) => {
+    (patch: TicketUpdateInput): boolean => {
+      const inFlight = patchRef.current;
+
       patchRef.current = patch;
+
+      if (!submit()) {
+        patchRef.current = inFlight;
+        return false;
+      }
+
       setPendingPatch(patch);
-      submit();
+
+      return true;
     },
     [submit],
   );

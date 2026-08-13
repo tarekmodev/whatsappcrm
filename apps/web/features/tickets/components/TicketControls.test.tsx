@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
+import { useTicketUpdate } from '@/features/tickets/useTicketUpdate';
 import { TicketControls } from './TicketControls';
 
 /**
@@ -254,6 +255,109 @@ describe('a lost race', () => {
     resolve?.({ status: 'success', data: { label: LABEL, status: 'pending', priority: 'normal' } });
     await waitFor(() => {
       expect(button).not.toHaveAttribute('aria-disabled');
+    });
+  });
+
+  /**
+   * The cross-control version of the case above, which the same-button test did
+   * not reach: the two controls share one `useTicketUpdate`, so a patch started
+   * from the *other* one used to overwrite the in-flight patch's ref. The write
+   * was dropped by the hook's guard, the toast then read the overwritten ref and
+   * reported a priority change that never happened, and the select was left
+   * showing a value the server did not hold.
+   */
+  it('will not start a priority change while a status patch is in flight', async () => {
+    let resolve: ((value: unknown) => void) | undefined;
+
+    updateTicketAction.mockReturnValue(
+      new Promise((settle) => {
+        resolve = settle;
+      }),
+    );
+
+    renderControls({ status: 'open', priority: 'normal' });
+
+    const select = screen.getByRole('combobox');
+
+    fireEvent.click(screen.getByRole('button', { name: content.tickets.statusActions.pending }));
+
+    // Shut for the duration, so the race cannot be started at all.
+    await waitFor(() => {
+      expect(select).toBeDisabled();
+    });
+
+    fireEvent.change(select, { target: { value: 'urgent' } });
+
+    expect(updateTicketAction).toHaveBeenCalledTimes(1);
+    expect(updateTicketAction).toHaveBeenCalledWith(TICKET_ID, { status: 'pending' });
+
+    resolve?.({ status: 'success', data: { label: LABEL, status: 'pending', priority: 'normal' } });
+
+    // The toast names the change that actually happened, not the one that was
+    // dropped — and the select is back on the server's value.
+    expect(
+      await screen.findByText(
+        content.tickets.statusChangeSuccess(LABEL, content.ticketStatuses.pending),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        content.tickets.priorityChangeSuccess(LABEL, content.ticketPriorities.normal),
+      ),
+    ).toBeNull();
+    await waitFor(() => {
+      expect(select).toHaveValue('normal');
+    });
+  });
+
+  /**
+   * The same guarantee one layer down, where it does not depend on any control
+   * remembering to disable itself: a dropped submit is reported rather than
+   * silently swallowed, so the caller can put its own state back.
+   */
+  it('reports a dropped patch instead of swallowing it', async () => {
+    let resolve: ((value: unknown) => void) | undefined;
+
+    updateTicketAction.mockReturnValue(
+      new Promise((settle) => {
+        resolve = settle;
+      }),
+    );
+
+    const applied: boolean[] = [];
+
+    function Probe() {
+      const { apply } = useTicketUpdate(TICKET_ID);
+
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            applied.push(apply({ status: 'pending' }));
+          }}
+        >
+          probe
+        </button>
+      );
+    }
+
+    render(
+      <ToastProvider>
+        <Probe />
+      </ToastProvider>,
+    );
+
+    const probe = screen.getByRole('button', { name: 'probe' });
+
+    fireEvent.click(probe);
+    fireEvent.click(probe);
+
+    expect(applied).toEqual([true, false]);
+    expect(updateTicketAction).toHaveBeenCalledTimes(1);
+
+    resolve?.({ status: 'success', data: { label: LABEL, status: 'pending', priority: 'normal' } });
+    await waitFor(() => {
+      expect(updateTicketAction).toHaveBeenCalledTimes(1);
     });
   });
 });

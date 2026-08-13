@@ -95,8 +95,17 @@ export function TicketControls({
                 // not the colour.
                 variant={next === 'resolved' ? 'primary' : 'secondary'}
                 size="sm"
+                // The spinner marks the button that was pressed; the guard below
+                // is what stops any *other* control starting a second patch.
                 isPending={pendingPatch?.status === next}
                 onClick={() => {
+                  // One patch at a time. Both controls share a single hook, so a
+                  // second one cannot be sent — and a control that quietly did
+                  // nothing while reporting success is the bug this closes.
+                  if (isPending) {
+                    return;
+                  }
+
                   if (isTerminalStatus(next)) {
                     setConfirming(next);
                     return;
@@ -120,11 +129,12 @@ export function TicketControls({
               <PrioritySelect
                 controlId={controlId}
                 priority={priority}
-                isPending={pendingPatch?.priority !== undefined}
+                // The *shared* pending flag, not this control's own patch: a
+                // status change in flight must shut this select too, or the two
+                // controls race for one hook.
+                isPending={isPending}
                 formError={formError}
-                onSelect={(next) => {
-                  apply({ priority: next });
-                }}
+                onSelect={(next) => apply({ priority: next })}
               />
             ) : (
               <StaticFieldValue id={controlId}>
@@ -189,10 +199,10 @@ function StatusHint({
  *
  * A native `<select>` shows the agent's choice the instant they make it, and a
  * value bound straight to the server's would snap back to the old one until the
- * response landed. So the choice is held locally *and* given up in both
- * directions: released when the server's value catches up, and released on
- * failure — which is what returns the control to the truth rather than leaving a
- * success on screen that never happened.
+ * response landed. So the choice is held locally *and* given up on every ending:
+ * released when the server's value catches up, released on failure, and released
+ * when the patch was never sent at all. All three are the same rule — the
+ * control must never show a change the server does not hold.
  */
 function PrioritySelect({
   controlId,
@@ -205,7 +215,8 @@ function PrioritySelect({
   priority: TicketPriority;
   isPending: boolean;
   formError: string | null;
-  onSelect: (next: TicketPriority) => void;
+  /** Returns `false` when the patch was dropped rather than sent. */
+  onSelect: (next: TicketPriority) => boolean;
 }) {
   const [draft, setDraft] = useState<TicketPriority | null>(null);
 
@@ -233,7 +244,13 @@ function PrioritySelect({
         const next = event.target.value as TicketPriority;
 
         setDraft(next);
-        onSelect(next);
+
+        // Dropped rather than sent — nothing is coming back to release the
+        // draft, so it is released here instead of stranding the control on a
+        // value the server never heard about.
+        if (!onSelect(next)) {
+          setDraft(null);
+        }
       }}
     />
   );

@@ -65,7 +65,14 @@ export function isConversationScopeNarrowed(
  * narrows to "mine ∪ my teams'" only — an unassigned ticket is triaged work, not
  * a shared pool — so a caller reading one of these must not be able to assume it
  * means what the other one does.
+ *
+ * Which is exactly why **`unassigned` counts too**, and only here: for tickets it
+ * is gated on `ticket:read_all` and narrows to the caller's own, so a supervisor
+ * sharing `/tickets?scope=unassigned` leaves an agent looking at their own
+ * tickets under somebody else's heading. Anything but `assigned` can come back
+ * narrower than it was asked for; `assigned` is what the caller would have got
+ * regardless.
  */
 export function isTicketScopeNarrowed(checker: PermissionChecker, scope: TicketScope): boolean {
-  return scope === 'all' && !checker.can('ticket:read_all');
+  return scope !== 'assigned' && !checker.can('ticket:read_all');
 }
