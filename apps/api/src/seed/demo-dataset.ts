@@ -144,6 +144,24 @@ export interface DemoTenant {
     readonly type: TicketEventType;
   })[];
   /**
+   * SLA timers (TAR-270, against 0006). `policyId` is omitted as well as the
+   * tenant: the policy is the `Default` row `TenantProvisioningService` writes,
+   * whose id it generates, so the seed looks it up the same way it looks up a
+   * plan by key rather than pinning an id the seed does not own.
+   *
+   * `due_at` is `started_at + firstResponseMinutes`, computed here rather than
+   * left to the writer, because the demo needs one timer that is genuinely past
+   * its deadline and one that beat it — and which is which has to be legible in
+   * this file rather than emergent from arithmetic somewhere else.
+   */
+  readonly slaTimers: readonly Omit<Prisma.SlaTimerCreateManyInput, 'tenantId' | 'policyId'>[];
+  /**
+   * One row per recipient per breached timer, exactly as the sweep would have
+   * written them. Seeded so TAR-281 has a supervisor alert to render before
+   * TAR-280's sweep runs anywhere.
+   */
+  readonly slaAlerts: readonly Scoped<Prisma.SlaAlertCreateManyInput>[];
+  /**
    * What `ticket_counters` is left holding. It must be one past the highest
    * seeded `tickets.number`, or TAR-73's allocator hands out a number that
    * already exists and the next ticket created in the console fails on
@@ -236,6 +254,29 @@ const MESSAGE_IDS = {
 const TICKET_IDS = {
   fatimaInvoice: '0192f008-0000-7000-8000-000000000801',
   hectorOptOut: '0192f008-0000-7000-8000-000000000802',
+  /**
+   * The overdue one (TAR-270). Mei's only outbound message failed on Meta's
+   * closed-window error, so the customer was never actually answered — which is
+   * the shape of breach worth demonstrating: not an agent ignoring a queue, but
+   * a reply that nobody noticed had not landed.
+   */
+  meiActivation: '0192f008-0000-7000-8000-000000000803',
+} as const;
+
+const SLA_TIMER_IDS = {
+  fatimaInvoiceFirstResponse: '0192f00e-0000-7000-8000-000000000e01',
+  hectorOptOutFirstResponse: '0192f00e-0000-7000-8000-000000000e02',
+  meiActivationFirstResponse: '0192f00e-0000-7000-8000-000000000e03',
+} as const;
+
+const SLA_ALERT_IDS = {
+  /**
+   * One row, not two. Priya is the only active supervisor or admin sharing a
+   * team with Liang, who holds the breached ticket — Omar is an admin but is in
+   * no team, so decision 4's narrowing step excludes him. A seed with an alert
+   * for every supervisor would hide the rule it is meant to demonstrate.
+   */
+  meiActivationToPriya: '0192f00f-0000-7000-8000-000000000f01',
 } as const;
 
 const TAG_IDS = {
@@ -281,6 +322,8 @@ const MISC_IDS = {
   ticketEventInvoicePriority: '0192f00c-0000-7000-8000-000000000c63',
   ticketEventOptOutCreated: '0192f00c-0000-7000-8000-000000000c64',
   ticketEventOptOutResolved: '0192f00c-0000-7000-8000-000000000c65',
+  ticketEventActivationCreated: '0192f00c-0000-7000-8000-000000000c66',
+  ticketEventActivationBreached: '0192f00c-0000-7000-8000-000000000c67',
   usageSeats: '0192f00c-0000-7000-8000-000000000c71',
   usageConversations: '0192f00c-0000-7000-8000-000000000c72',
   usageSeatsSouthwind: '0192f00c-0000-7000-8000-000000000c73',
@@ -771,7 +814,9 @@ function northwind(now: Date): DemoTenant {
         assignedUserId: USER_IDS.priya,
         unreadCount: 0,
         serviceWindowExpiresAt: ago(now, 5 * DAY_MS),
-        lastMessageAt: ago(now, 6 * DAY_MS),
+        // Priya's reply is the last message on this thread, so this moves with
+        // `MESSAGE_IDS.hector2` — `demo-dataset.spec.ts` asserts the two agree.
+        lastMessageAt: ago(now, 6 * DAY_MS + 22 * MINUTE_MS),
         createdAt: ago(now, 6 * DAY_MS + HOUR_MS),
       },
     ],
@@ -925,9 +970,16 @@ function northwind(now: Date): DemoTenant {
         body: "Understood — I've opted you out. Sorry for the trouble.",
         senderUserId: USER_IDS.priya,
         providerMessageId: 'wamid.SEED.NW.0042',
-        sentAt: ago(now, 6 * DAY_MS),
-        deliveredAt: ago(now, 6 * DAY_MS - MINUTE_MS),
-        readAt: ago(now, 6 * DAY_MS - 2 * MINUTE_MS),
+        // 38 minutes after Hector's message, not 60. The gap used to be exactly
+        // the default SLA window, which made the ticket's first-response timer a
+        // coin toss between `met` and `breached` (the sweep's predicate is
+        // `due_at <= now()`, and whether the reply or the sweep lands first at
+        // that instant is a race). A seeded row must not be ambiguous about the
+        // state it is demonstrating. `tickets.first_response_at` below moves
+        // with it.
+        sentAt: ago(now, 6 * DAY_MS + 22 * MINUTE_MS),
+        deliveredAt: ago(now, 6 * DAY_MS + 21 * MINUTE_MS),
+        readAt: ago(now, 6 * DAY_MS + 20 * MINUTE_MS),
       },
     ],
 
@@ -987,7 +1039,7 @@ function northwind(now: Date): DemoTenant {
       },
     ],
 
-    // One open and one resolved, and they belong to *different* contacts —
+    // Two open and one resolved, and they belong to *different* contacts —
     // `tickets_one_active_per_contact` is a partial unique index over
     // (tenant, contact) WHERE status IN ('open','pending'), so a second active
     // ticket for Fatima would make the seed fail on insert.
@@ -1014,9 +1066,30 @@ function northwind(now: Date): DemoTenant {
         conversationId: CONVERSATION_IDS.hectorOptOut,
         contactId: CONTACT_IDS.hector,
         assignedUserId: USER_IDS.priya,
-        firstResponseAt: ago(now, 6 * DAY_MS),
+        // Moves with `MESSAGE_IDS.hector2` above, and for the reason given
+        // there: 38 minutes inside the window rather than exactly on it.
+        firstResponseAt: ago(now, 6 * DAY_MS + 22 * MINUTE_MS),
         resolvedAt: ago(now, 6 * DAY_MS - 5 * MINUTE_MS),
         createdAt: ago(now, 6 * DAY_MS + HOUR_MS),
+      },
+      {
+        // The overdue ticket (TAR-270). Nobody has replied to Mei in 30 hours —
+        // Liang's answer failed on Meta's closed-window error and was never
+        // retried — so `first_response_at` is null and its timer breached 29
+        // hours ago. This is what TAR-281's queue badge and supervisor alert
+        // render before TAR-280's sweep runs anywhere.
+        id: TICKET_IDS.meiActivation,
+        number: 3,
+        subject: 'Activation link keeps expiring',
+        status: 'open',
+        priority: 'high',
+        conversationId: CONVERSATION_IDS.meiActivation,
+        contactId: CONTACT_IDS.mei,
+        // Held by an agent who is in a team, which is what gives decision 4's
+        // narrowing step something to narrow to.
+        assignedUserId: USER_IDS.liang,
+        assignedTeamId: TEAM_IDS.onboarding,
+        createdAt: ago(now, 30 * HOUR_MS),
       },
     ],
 
@@ -1065,9 +1138,91 @@ function northwind(now: Date): DemoTenant {
         data: { from: 'open', to: 'resolved', reason: 'contact_opted_out' },
         createdAt: ago(now, 6 * DAY_MS - 5 * MINUTE_MS),
       },
+      {
+        id: MISC_IDS.ticketEventActivationCreated,
+        ticketId: TICKET_IDS.meiActivation,
+        type: 'created',
+        data: { conversationId: CONVERSATION_IDS.meiActivation, cause: 'inbound_message' },
+        createdAt: ago(now, 30 * HOUR_MS),
+      },
+      {
+        // Null actor: the sweep is not a person. Written in the same transaction
+        // as the timer's flip to `breached`, which is what bounds it to one row
+        // on an append-only log that cannot carry a unique constraint (0006,
+        // decision 3). Its `createdAt` is therefore the timer's `breached_at`.
+        id: MISC_IDS.ticketEventActivationBreached,
+        ticketId: TICKET_IDS.meiActivation,
+        type: 'sla_breached',
+        data: { kind: 'first_response' },
+        createdAt: ago(now, 29 * HOUR_MS - 20_000),
+      },
     ],
 
-    nextTicketNumber: 3,
+    // One timer per ticket, all `first_response`: the seeded policy leaves
+    // `resolutionMinutes` null, so no resolution timer exists at v1. `dueAt` is
+    // always `startedAt` + the tenant's 60-minute window; the state is what the
+    // reply, or its absence, made of it.
+    slaTimers: [
+      {
+        // Answered with five minutes to spare.
+        id: SLA_TIMER_IDS.fatimaInvoiceFirstResponse,
+        ticketId: TICKET_IDS.fatimaInvoice,
+        kind: 'first_response',
+        state: 'met',
+        startedAt: ago(now, 3 * HOUR_MS),
+        dueAt: ago(now, 2 * HOUR_MS),
+        // `stoppedAt`, not `breachedAt` — the reply is what stopped it, and it
+        // equals `tickets.first_response_at` by construction.
+        stoppedAt: ago(now, 175 * MINUTE_MS),
+      },
+      {
+        // Answered 38 minutes into the hour, on a ticket since resolved. A
+        // resolved ticket does not cancel a timer that was already met.
+        id: SLA_TIMER_IDS.hectorOptOutFirstResponse,
+        ticketId: TICKET_IDS.hectorOptOut,
+        kind: 'first_response',
+        state: 'met',
+        startedAt: ago(now, 6 * DAY_MS + HOUR_MS),
+        dueAt: ago(now, 6 * DAY_MS),
+        stoppedAt: ago(now, 6 * DAY_MS + 22 * MINUTE_MS),
+      },
+      {
+        // The breach. `breachedAt` is twenty seconds past `dueAt` rather than
+        // equal to it, because detection is a 30-second sweep and not an
+        // interrupt — the lag is a property of the design (0006, decision 1) and
+        // a seed that hides it would make the real thing look wrong.
+        //
+        // `stoppedAt` stays null: `breached` is terminal, and if Liang answers
+        // tomorrow the ticket stamps `first_response_at` while this row keeps
+        // saying the deadline was missed.
+        id: SLA_TIMER_IDS.meiActivationFirstResponse,
+        ticketId: TICKET_IDS.meiActivation,
+        kind: 'first_response',
+        state: 'breached',
+        startedAt: ago(now, 30 * HOUR_MS),
+        dueAt: ago(now, 29 * HOUR_MS),
+        breachedAt: ago(now, 29 * HOUR_MS - 20_000),
+      },
+    ],
+
+    slaAlerts: [
+      {
+        id: SLA_ALERT_IDS.meiActivationToPriya,
+        slaTimerId: SLA_TIMER_IDS.meiActivationFirstResponse,
+        ticketId: TICKET_IDS.meiActivation,
+        recipientUserId: USER_IDS.priya,
+        kind: 'first_response',
+        // Copied from the timer at write time rather than joined at read time:
+        // editing the policy later must not rewrite what Priya was told she
+        // missed.
+        dueAt: ago(now, 29 * HOUR_MS),
+        createdAt: ago(now, 29 * HOUR_MS - 20_000),
+        // Unacknowledged, so it appears in the supervisor's default view —
+        // `GET /api/v1/sla-alerts` defaults `unacknowledgedOnly` to true.
+      },
+    ],
+
+    nextTicketNumber: 4,
 
     // Four of the five users occupy a seat (`invited` does not), and five
     // conversations exist. Counted against the subscription's period, never the
@@ -1301,6 +1456,13 @@ function southwind(now: Date): DemoTenant {
     internalNotes: [],
     tickets: [],
     ticketEvents: [],
+    // No tickets, so no timers and no alerts — but Southwind still gets the
+    // `Default` SLA policy, because `TenantProvisioningService` writes one for
+    // every tenant it creates. That asymmetry is the point: an SLA alert
+    // appearing in Southwind's console would be a tenant-isolation defect, and
+    // an empty supervisor view here is what "none of Northwind's" looks like.
+    slaTimers: [],
+    slaAlerts: [],
     nextTicketNumber: null,
 
     usageCounters: [

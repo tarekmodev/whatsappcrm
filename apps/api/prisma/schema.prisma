@@ -346,6 +346,20 @@ enum SlaTimerState {
   met
   breached
   cancelled
+  /// Waiting on the customer, so the clock is not running (0006, decision on
+  /// pause accounting). `SLA_STATES` in `@whatsappcrm/contracts` has published
+  /// `paused` since TAR-73 and `TICKET_STATUS_PAUSES_SLA` names the statuses
+  /// that reach it — this enum did not carry it, so the first pause would have
+  /// reached the database as an invalid label.
+  ///
+  /// Appended rather than inserted after `running`, exactly as `closed` was on
+  /// `conversation_status`: enum order is the sort order for `ORDER BY state`,
+  /// no query sorts by it, and `BEFORE`/`AFTER` placement would make
+  /// `ADD VALUE IF NOT EXISTS` non-idempotent. Added by
+  /// `20260813120000_sla_timer_state_paused`, which is its own migration file
+  /// because PostgreSQL refuses to *use* a label in the transaction that added
+  /// it and Prisma runs one migration per transaction.
+  paused
 
   @@map("sla_timer_state")
 }
@@ -467,6 +481,7 @@ model Tenant {
   assignmentStates         AssignmentState[]
   slaPolicies              SlaPolicy[]
   slaTimers                SlaTimer[]
+  slaAlerts                SlaAlert[]
   workflows                Workflow[]
   workflowRuns             WorkflowRun[]
   aiConfig                 AiConfig?
@@ -608,6 +623,7 @@ model User {
   ticketEvents          TicketEvent[]
   assignmentRules       AssignmentRule[]
   assignmentCursors     AssignmentState[]
+  slaAlerts             SlaAlert[]
   cannedResponses       CannedResponse[]
   auditLogs             AuditLog[]
 
@@ -1151,29 +1167,29 @@ model Message {
 /// staleness surfaces as a failed send. The bytes are uploaded per send
 /// instead; see `MediaSendResolver`.
 model MediaObject {
-  id       String      @id @default(uuid(7)) @db.Uuid
-  tenantId String      @map("tenant_id") @db.Uuid
-  kind     MediaKind
-  source   MediaSource
+  id               String      @id @default(uuid(7)) @db.Uuid
+  tenantId         String      @map("tenant_id") @db.Uuid
+  kind             MediaKind
+  source           MediaSource
   /// Where the bytes are in the object store, namespaced by tenant. Unique per
   /// tenant so two rows can never point at one blob and a delete of either
   /// orphan the other.
-  storageKey      String   @map("storage_key")
-  mimeType        String   @map("mime_type")
-  sizeBytes       Int      @map("size_bytes")
+  storageKey       String      @map("storage_key")
+  mimeType         String      @map("mime_type")
+  sizeBytes        Int         @map("size_bytes")
   /// SHA-256 of the stored bytes, lower-case hex. Written on the way in, so a
   /// corrupted or truncated object can be proven rather than suspected — and so
   /// an inbound download can be checked against the digest Meta publishes.
-  checksumSha256  String   @map("checksum_sha256")
+  checksumSha256   String      @map("checksum_sha256")
   /// What the recipient sees, and what a download is named. Documents only in
   /// practice; null when the source supplied none.
-  fileName        String?  @map("file_name")
+  fileName         String?     @map("file_name")
   /// Meta's handle for an inbound object. Retrieval only — it is not a handle
   /// this platform may send with, and it stops resolving after Meta expires it.
-  providerMediaId String?  @map("provider_media_id")
+  providerMediaId  String?     @map("provider_media_id")
   /// The agent who uploaded it. Null for inbound and for automation.
-  uploadedByUserId String? @map("uploaded_by_user_id") @db.Uuid
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  uploadedByUserId String?     @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
 
   tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   uploadedBy  User?               @relation(fields: [tenantId, uploadedByUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
@@ -1285,6 +1301,7 @@ model Ticket {
   assignedTeam Team?         @relation(fields: [tenantId, assignedTeamId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
   events       TicketEvent[]
   slaTimers    SlaTimer[]
+  slaAlerts    SlaAlert[]
 
   @@unique([tenantId, number])
   @@unique([tenantId, id])
@@ -1446,22 +1463,47 @@ model SlaPolicy {
 }
 
 model SlaTimer {
-  id        String        @id @default(uuid(7)) @db.Uuid
-  tenantId  String        @map("tenant_id") @db.Uuid
-  ticketId  String        @map("ticket_id") @db.Uuid
-  policyId  String        @map("policy_id") @db.Uuid
-  kind      SlaTargetKind
-  state     SlaTimerState @default(running)
-  startedAt DateTime      @default(now()) @map("started_at") @db.Timestamptz(3)
-  dueAt     DateTime      @map("due_at") @db.Timestamptz(3)
-  stoppedAt DateTime?     @map("stopped_at") @db.Timestamptz(3)
+  id         String        @id @default(uuid(7)) @db.Uuid
+  tenantId   String        @map("tenant_id") @db.Uuid
+  ticketId   String        @map("ticket_id") @db.Uuid
+  policyId   String        @map("policy_id") @db.Uuid
+  kind       SlaTargetKind
+  state      SlaTimerState @default(running)
+  startedAt  DateTime      @default(now()) @map("started_at") @db.Timestamptz(3)
+  /// The single authoritative wall-clock deadline, and the only thing the sweep
+  /// compares. A pause does not stop it; a resume moves it forward by however
+  /// long the pause lasted (0006, pause and resume arithmetic). Keeping the
+  /// deadline here rather than deriving it from an elapsed counter is what lets
+  /// the sweep stay one comparison against one index.
+  dueAt      DateTime      @map("due_at") @db.Timestamptz(3)
+  stoppedAt  DateTime?     @map("stopped_at") @db.Timestamptz(3)
+  /// When the current pause started. Null while running, and cleared on resume —
+  /// it is the operand of the `due_at` arithmetic, not a history of pauses.
+  pausedAt   DateTime?     @map("paused_at") @db.Timestamptz(3)
+  /// Accumulated paused time across every pause. Never read by the sweep: it
+  /// exists so that a `due_at` sitting three hours past `started_at + window`
+  /// can be explained, and so TAR-30 can report working time rather than
+  /// wall-clock. Milliseconds, to match what the timestamps here can represent.
+  pausedMs   Int           @default(0) @map("paused_ms")
+  /// When the sweep flipped this timer to `breached`. Separate from
+  /// `stopped_at`, which is overloaded across `met` and `cancelled`: a supervisor
+  /// asking "when did we miss it" and a report asking "when did the clock stop"
+  /// are different questions, and `breached` is terminal even if a late reply
+  /// arrives afterwards.
+  breachedAt DateTime?     @map("breached_at") @db.Timestamptz(3)
 
-  tenant Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticket Ticket    @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
-  policy SlaPolicy @relation(fields: [tenantId, policyId], references: [tenantId, id], onDelete: Cascade)
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket Ticket     @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
+  policy SlaPolicy  @relation(fields: [tenantId, policyId], references: [tenantId, id], onDelete: Cascade)
+  alerts SlaAlert[]
 
-  /// One timer per target per ticket.
+  /// One timer per target per ticket. Also what serves the `breachedOnly` ticket
+  /// filter's `EXISTS` (0006, `tickets` section).
   @@unique([tenantId, ticketId, kind])
+  /// The composite key `sla_alerts` references, per convention 2 — a plain
+  /// `sla_timer_id uuid REFERENCES sla_timers(id)` would accept a timer id
+  /// belonging to another tenant.
+  @@unique([tenantId, id])
   /// The timer sweep. TAR-39 specifies a partial index
   /// `(tenant_id, due_at) WHERE state = 'running'`; Prisma cannot express a
   /// `WHERE` on an index, and an index created outside the schema shows up as
@@ -1471,8 +1513,81 @@ model SlaTimer {
   /// timers. Revisit as a partial index once timer volume makes the size
   /// matter; the query does not have to change.
   @@index([tenantId, state, dueAt])
+  /// Phase 1 of the breach sweep, and **the one composite index in this file
+  /// that does not lead with `tenant_id`** (0006, decision 2). It is deliberate,
+  /// not an oversight of convention 3 above.
+  ///
+  /// The sweep has to find due timers across every tenant, because no request
+  /// context exists inside a queue worker: its predicate is
+  /// `state = 'running' AND due_at <= now()` with no tenant term at all, so the
+  /// index above leaves the planner a full scan. Everything the sweep then
+  /// *does* with the rows it finds runs under RLS, one `$tenantTransaction` per
+  /// tenant — this index serves a two-column read of `(tenant_id, id)` pairs and
+  /// nothing else.
+  ///
+  /// It is not partial (`WHERE state = 'running'`) for the same reason the index
+  /// above is not: Prisma cannot express an index predicate, and one created
+  /// outside this file is drift the next `migrate dev` proposes to drop. Leading
+  /// with `state` gives the same access path at the cost of also indexing
+  /// finished timers. 0006 names making it partial as the second step once timer
+  /// volume makes the size matter, ahead of sharding phase 1 by tenant.
+  @@index([state, dueAt], map: "sla_timers_state_due_at_idx")
   @@index([tenantId, policyId])
   @@map("sla_timers")
+}
+
+/// One supervisor alert, per recipient, per breached timer (TAR-26, 0006
+/// decision 5). Three things at once, and each is load-bearing:
+///
+///   * **The delivery record.** It survives a restart, a missed socket and a
+///     supervisor who was asleep. The `sla.breached` realtime event is an
+///     accelerator; this row is what makes "the supervisor is notified" true.
+///   * **The read model** behind `GET /api/v1/sla-alerts`, keyset-paginated by
+///     `(created_at DESC, id DESC)` and narrowed to the calling principal.
+///   * **The idempotency ledger.** `UNIQUE (tenant_id, sla_timer_id,
+///     recipient_user_id)` is the second of the three layers that make one
+///     breach produce exactly one alert; the load-bearing one is the conditional
+///     `UPDATE ... WHERE state = 'running'` that flips the timer in the same
+///     transaction (0006, decision 3).
+///
+/// Recipients are derived, not configured: the tenant's active supervisors and
+/// admins, narrowed to those sharing a team with whoever holds the ticket, and
+/// falling back to all of them when that yields nobody. TAR-22's model has no
+/// manager link, and 0006 decision 4 records why v1 does not add one.
+model SlaAlert {
+  id              String        @id @default(uuid(7)) @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  slaTimerId      String        @map("sla_timer_id") @db.Uuid
+  ticketId        String        @map("ticket_id") @db.Uuid
+  recipientUserId String        @map("recipient_user_id") @db.Uuid
+  /// Denormalised from the timer so the supervisor's list needs no join.
+  kind            SlaTargetKind
+  /// The deadline that was missed, copied at write time. Not read through the
+  /// timer: a later policy edit or a resume must not be able to rewrite what the
+  /// supervisor was told they missed.
+  dueAt           DateTime      @map("due_at") @db.Timestamptz(3)
+  /// When the breach was *detected*, not when it was due — the sweep's own
+  /// clock. `NOT NULL` because it is a keyset sort column.
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// Set by `POST /api/v1/sla-alerts/{id}/acknowledge`. First write wins; a
+  /// second call is not a conflict.
+  acknowledgedAt  DateTime?     @map("acknowledged_at") @db.Timestamptz(3)
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  slaTimer  SlaTimer @relation(fields: [tenantId, slaTimerId], references: [tenantId, id], onDelete: Cascade)
+  ticket    Ticket   @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
+  /// `NoAction`, matching every other user reference in this file: removing a
+  /// user is a status change, never a row delete (convention 4).
+  recipient User     @relation(fields: [tenantId, recipientUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  /// The second idempotency layer. A retry after a partial failure re-inserts
+  /// nothing.
+  @@unique([tenantId, slaTimerId, recipientUserId])
+  /// The recipient's alert list and its keyset pagination.
+  @@index([tenantId, recipientUserId, createdAt(sort: Desc), id(sort: Desc)])
+  /// "What alerts did this ticket raise" — TAR-32's escalation log.
+  @@index([tenantId, ticketId])
+  @@map("sla_alerts")
 }
 
 // ---------------------------------------------------------------------------
@@ -1715,10 +1830,10 @@ model IdempotencyKey {
 /// Role changes, invites, session revocation, branding and billing changes
 /// (TAR-39, security). Append-only: no `updated_at`.
 model AuditLog {
-  id          String   @id @default(uuid(7)) @db.Uuid
-  tenantId    String   @map("tenant_id") @db.Uuid
+  id          String         @id @default(uuid(7)) @db.Uuid
+  tenantId    String         @map("tenant_id") @db.Uuid
   /// Null when the actor is the platform rather than a user in this tenant.
-  actorUserId String?  @map("actor_user_id") @db.Uuid
+  actorUserId String?        @map("actor_user_id") @db.Uuid
   /// Which *kind* of actor (TAR-166), because a null `actor_user_id` alone said
   /// both "the platform acted" and "nothing recorded who".
   ///
@@ -1730,14 +1845,14 @@ model AuditLog {
   /// Names the operator credential behind a `platform_operator` row — the label
   /// half of a `PLATFORM_ADMIN_TOKEN` entry, never the secret half. Null for
   /// every other actor type, which `audit_logs_actor_attribution` enforces.
-  actorLabel  String?  @map("actor_label")
+  actorLabel  String?        @map("actor_label")
   action      String
-  targetType  String?  @map("target_type")
-  targetId    String?  @map("target_id") @db.Uuid
+  targetType  String?        @map("target_type")
+  targetId    String?        @map("target_id") @db.Uuid
   /// Never PII and never a secret value — a redacted before/after at most.
   metadata    Json?
-  ipAddress   String?  @map("ip_address") @db.Inet
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  ipAddress   String?        @map("ip_address") @db.Inet
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   actor  User?  @relation(fields: [tenantId, actorUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)

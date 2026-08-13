@@ -15,6 +15,21 @@ const DEFAULT_TIMEZONE = 'UTC';
 const DEFAULT_LOCALE = 'en';
 
 /**
+ * The tenant's SLA configuration (0006, decision 6). One `sla_policies` row per
+ * tenant, named `Default`, with `priority: null` so it is the catch-all policy
+ * resolution falls back to for a ticket of any priority.
+ *
+ * 60 minutes is TAR-26's stated assumption, "first response within 1 hour".
+ * `resolutionMinutes` stays null, so only the first-response timer exists at v1.
+ *
+ * Stated here rather than imported because `packages/contracts/src/sla.ts` is
+ * TAR-280's to publish; when `SLA_DEFAULTS` lands there, this constant and the
+ * literal in the backfill's sibling migration both become references to it.
+ */
+const DEFAULT_SLA_POLICY_NAME = 'Default';
+const DEFAULT_SLA_FIRST_RESPONSE_MINUTES = 60;
+
+/**
  * Namespace for the advisory lock, so the hash cannot collide with a lock some
  * other feature takes on the same slug.
  */
@@ -56,18 +71,37 @@ export interface ProvisionTenantResult {
 /**
  * Admin-triggered tenant provisioning (TAR-19, first acceptance criterion).
  *
- * Creates the three rows that make a tenant exist and be reachable:
+ * Creates the four rows that make a tenant exist, be reachable, and behave:
  *
  *   `tenants`         the tenant itself
  *   `tenant_settings` its operational defaults — timezone, locale
  *   `tenant_domains`  its platform subdomain, so host → tenant resolution can
  *                     find it. A tenant with no domain is unreachable by every
  *                     entry point in TAR-39's request pipeline.
+ *   `sla_policies`    its default first-response window (TAR-270, against 0006
+ *                     decision 6). See below for why this one is here.
  *
  * and nothing else. In particular it creates no users (TAR-35 invites the first
  * one), no branding row (TAR-29 owns branding, including whether that row is
  * written eagerly) and no subscription (TAR-37). Seeding a table another story
  * owns would fix its defaults here, in the wrong place.
+ *
+ * ## Why the SLA policy is not that mistake
+ *
+ * 0006 decision 6 rejects an `sla_first_response_minutes` column on
+ * `tenant_settings` and makes the `sla_policies` row itself the configuration
+ * surface — because the table already exists with priority scoping, `is_active`
+ * and the business-hours flag, and a settings column would have to be migrated
+ * into it the first time a tenant asks for "urgent tickets get 15 minutes".
+ * So this row *is* an operational default of the kind this service already
+ * writes; it just lives in a table of its own rather than a column of
+ * `tenant_settings`. The alternative is a settings column that a later story
+ * deletes.
+ *
+ * The window it seeds is the platform default, not a runtime fallback. A tenant
+ * that edits the row, or turns SLA off with `is_active: false`, has decided
+ * something, and nothing here reasserts the default over that decision — the
+ * repair path below only writes when the tenant has no policy at all.
  *
  * ## Why `SystemPrisma`
  *
@@ -187,6 +221,11 @@ function findProvisionedTenant(tx: Prisma.TransactionClient, slug: string) {
         orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
         take: 1,
       },
+      // "Has this tenant any SLA policy at all", which is deliberately a wider
+      // question than "has it the one named Default": a tenant that configured
+      // its own must not be given a second (0006, decision 6). One row is enough
+      // to answer it, and none of its columns are needed.
+      slaPolicies: { select: { id: true }, take: 1 },
     },
   });
 }
@@ -223,6 +262,7 @@ async function createTenant(
           verifiedAt: new Date(),
         },
       },
+      slaPolicies: { create: defaultSlaPolicy() },
     },
     select: { id: true, slug: true, name: true, status: true, createdAt: true },
   });
@@ -266,6 +306,20 @@ async function completeTenant(
       select: { hostname: true },
     }));
 
+  // Nothing is read back from this one: the policy is not part of
+  // `ProvisionedTenant`, because a provisioning response is about reaching the
+  // tenant rather than about how it is configured. It is written here so that a
+  // tenant provisioned before TAR-270 converges on the same shape as one
+  // provisioned after it — which is the same repair the two statements above
+  // perform, and the reason the backfill migration and this branch can both
+  // exist without racing: both are guarded by "has no policy at all".
+  if (existing.slaPolicies.length === 0) {
+    await tx.slaPolicy.create({
+      data: { tenantId: existing.id, ...defaultSlaPolicy() },
+      select: { id: true },
+    });
+  }
+
   return {
     id: existing.id,
     slug: existing.slug,
@@ -275,5 +329,25 @@ async function completeTenant(
     primaryHostname: platformDomain.hostname,
     timezone: settings.timezone,
     locale: settings.locale,
+  };
+}
+
+/**
+ * The tenant's starting SLA configuration. Every column stated, including the
+ * two that match a database default: `businessHoursOnly` is modelled but not
+ * implemented at v1 (0006, risk 1) and `isActive` is what a tenant flips to turn
+ * SLA off, so both are values this service is deciding rather than inheriting.
+ */
+function defaultSlaPolicy() {
+  return {
+    name: DEFAULT_SLA_POLICY_NAME,
+    // "Any priority" — the catch-all. A tenant that later wants "urgent tickets
+    // get 15 minutes" adds a second row with `priority: 'urgent'`, and
+    // resolution prefers the matching priority over this one.
+    priority: null,
+    firstResponseMinutes: DEFAULT_SLA_FIRST_RESPONSE_MINUTES,
+    resolutionMinutes: null,
+    businessHoursOnly: false,
+    isActive: true,
   };
 }

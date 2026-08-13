@@ -47,15 +47,19 @@
 --               nothing. `webhook_events` is unreachable by grant. The system
 --               role sees across tenants, which is what it is for.
 --
--- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74), and
--- one in each of the five auth tables — `teams`, `invites`, `invite_teams`,
--- `sessions`, `password_reset_tokens` (TAR-54) — as well as the conversation
--- tables. Phase 3a is a loop over whatever the catalog says is protected, so an
--- empty table passes it trivially; a real row in the tables those stories added
--- is what makes the assertion mean something for them. TAR-54's tables earn
--- their rows twice over: they hold the credentials of the product, so "a query
--- outside its own tenant returns nothing" is the acceptance criterion itself
--- rather than a general property they inherit.
+-- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74), one in
+-- each of the five auth tables — `teams`, `invites`, `invite_teams`, `sessions`,
+-- `password_reset_tokens` (TAR-54) — one in each of the three SLA tables
+-- (TAR-270), and the conversation tables. Phase 3a is a loop over whatever the
+-- catalog says is protected, so an empty table passes it trivially; a real row
+-- in the tables those stories added is what makes the assertion mean something
+-- for them. TAR-54's tables earn their rows twice over: they hold the
+-- credentials of the product, so "a query outside its own tenant returns
+-- nothing" is the acceptance criterion itself rather than a general property
+-- they inherit. `sla_alerts` earns its own for a narrower reason: 0006 requires
+-- an isolation test to ship with the migration that adds it, because the sweep
+-- that writes it is the one code path in the product that reads across tenants
+-- at all.
 --
 -- The *constraints* those tables exist for are separate properties, proven
 -- elsewhere: `src/prisma/ticket-active-uniqueness.int-spec.ts` for TAR-74's
@@ -316,6 +320,12 @@ SET LOCAL lock_timeout = '3s';
 -- leave to chance.
 SET LOCAL app.tenant_id = :'tenant_a';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_a';
+-- TAR-270's three tables, before the ticket they hang off. They cascade from
+-- `tickets`, so this is belt and braces — but alerts before timers before
+-- policies is the order their own foreign keys require.
+DELETE FROM "public"."sla_alerts" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_a';
 -- Before the conversation and contact they reference: those foreign keys are
 -- NoAction, so the parents cannot go first.
 DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_a';
@@ -337,6 +347,9 @@ DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."sla_alerts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
@@ -405,6 +418,20 @@ INSERT INTO "public"."sessions" ("id", "tenant_id", "user_id", "token_hash", "ex
 INSERT INTO "public"."password_reset_tokens" ("id", "tenant_id", "user_id", "token_hash", "expires_at")
     VALUES ('11111111-1111-7111-8111-1111111111aa', :'tenant_a', '11111111-1111-7111-8111-1111111111a1',
             'tar54-fixture-a-reset-token-hash-not-a-real-token', now() + interval '60 minutes');
+-- TAR-270's three tables: the tenant's SLA configuration, a timer that has
+-- already breached, and the supervisor alert it raised. The timer is `breached`
+-- rather than `running` on purpose — it is the state that has an alert row
+-- hanging off it, and an alert is the row here that names a person.
+INSERT INTO "public"."sla_policies" ("id", "tenant_id", "name", "first_response_minutes", "updated_at")
+    VALUES ('11111111-1111-7111-8111-1111111111ab', :'tenant_a', 'tar48-fixture-a-policy', 60, now());
+INSERT INTO "public"."sla_timers" ("id", "tenant_id", "ticket_id", "policy_id", "kind", "state", "due_at", "breached_at")
+    VALUES ('11111111-1111-7111-8111-1111111111ac', :'tenant_a', '11111111-1111-7111-8111-1111111111a6',
+            '11111111-1111-7111-8111-1111111111ab', 'first_response', 'breached',
+            now() - interval '30 minutes', now() - interval '29 minutes');
+INSERT INTO "public"."sla_alerts" ("id", "tenant_id", "sla_timer_id", "ticket_id", "recipient_user_id", "kind", "due_at")
+    VALUES ('11111111-1111-7111-8111-1111111111ad', :'tenant_a', '11111111-1111-7111-8111-1111111111ac',
+            '11111111-1111-7111-8111-1111111111a6', '11111111-1111-7111-8111-1111111111a1',
+            'first_response', now() - interval '30 minutes');
 
 SET LOCAL app.tenant_id = :'tenant_b';
 
@@ -451,10 +478,24 @@ INSERT INTO "public"."sessions" ("id", "tenant_id", "user_id", "token_hash", "ex
 INSERT INTO "public"."password_reset_tokens" ("id", "tenant_id", "user_id", "token_hash", "expires_at")
     VALUES ('22222222-2222-7222-8222-2222222222ba', :'tenant_b', '22222222-2222-7222-8222-2222222222b1',
             'tar54-fixture-b-reset-token-hash-not-a-real-token', now() + interval '60 minutes');
+-- Tenant B's SLA rows, mirroring tenant A's. Both tenants holding a breached
+-- timer and an alert is what makes the cross-tenant assertions below mean
+-- something: with rows on only one side, "saw 0 of the other's" is trivially
+-- true.
+INSERT INTO "public"."sla_policies" ("id", "tenant_id", "name", "first_response_minutes", "updated_at")
+    VALUES ('22222222-2222-7222-8222-2222222222bb', :'tenant_b', 'tar48-fixture-b-policy', 60, now());
+INSERT INTO "public"."sla_timers" ("id", "tenant_id", "ticket_id", "policy_id", "kind", "state", "due_at", "breached_at")
+    VALUES ('22222222-2222-7222-8222-2222222222bc', :'tenant_b', '22222222-2222-7222-8222-2222222222b6',
+            '22222222-2222-7222-8222-2222222222bb', 'first_response', 'breached',
+            now() - interval '30 minutes', now() - interval '29 minutes');
+INSERT INTO "public"."sla_alerts" ("id", "tenant_id", "sla_timer_id", "ticket_id", "recipient_user_id", "kind", "due_at")
+    VALUES ('22222222-2222-7222-8222-2222222222bd', :'tenant_b', '22222222-2222-7222-8222-2222222222bc',
+            '22222222-2222-7222-8222-2222222222b6', '22222222-2222-7222-8222-2222222222b1',
+            'first_response', now() - interval '30 minutes');
 
 COMMIT;
 
-\echo 'fixture committed: 2 tenants, 13 rows each'
+\echo 'fixture committed: 2 tenants, 16 rows each'
 
 -- ---------------------------------------------------------------------------
 -- Phase 3 — behaviour, on a connection that has never set the GUC.
@@ -607,7 +648,47 @@ BEGIN
         WHERE "token_hash" = 'tar54-fixture-b-invite-token-hash-not-a-real-token';
     IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s invite was reachable by token hash'; END IF;
 
-    RAISE NOTICE 'ok: tenant A sees its own 13 rows and none of tenant B''s';
+    -- TAR-270's three tables. `sla_alerts` is named twice over, the way TAR-54's
+    -- tables are: it is the only table in the schema whose rows are written by a
+    -- job that has *just finished* reading across every tenant (0006, decision
+    -- 2), so "the phase-2 write landed in the tenant it was grouped under" is
+    -- the acceptance criterion rather than a property it inherits. A row also
+    -- names a supervisor, a ticket number and a missed deadline.
+    SELECT count(*) INTO n FROM "public"."sla_policies";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 SLA policy, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."sla_policies" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of sla_policies returned % rows', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."sla_timers";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 SLA timer, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."sla_timers" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of sla_timers returned % rows', n; END IF;
+
+    -- The sweep's own phase-1 predicate, run as the app role: it carries no
+    -- tenant term at all, and RLS is the only thing between it and every
+    -- tenant's due timers. That is precisely why 0006 confines it to
+    -- SystemPrisma — and why this asserts that the app role, if it ever issued
+    -- the same query, would still see one row rather than two.
+    SELECT count(*) INTO n FROM "public"."sla_timers"
+        WHERE "state" = 'breached' AND "due_at" <= now();
+    IF n <> 1 THEN RAISE EXCEPTION 'the unscoped sweep predicate returned % rows to a scoped role', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."sla_alerts";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 SLA alert, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."sla_alerts" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of sla_alerts returned % rows', n; END IF;
+
+    -- By id, which is the read `GET /api/v1/sla-alerts/{id}` and the acknowledge
+    -- endpoint make. It must find nothing, so the endpoint answers 404 on the
+    -- policy rather than on an application check that could be forgotten.
+    SELECT count(*) INTO n FROM "public"."sla_alerts"
+        WHERE "id" = '22222222-2222-7222-8222-2222222222bd';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s SLA alert was reachable by id'; END IF;
+
+    RAISE NOTICE 'ok: tenant A sees its own 16 rows and none of tenant B''s';
 
     -- 3c. Tenant B, symmetrically. Same connection, same role — only the GUC
     -- changed, which is exactly what the client extension will do per request.
@@ -671,6 +752,14 @@ BEGIN
     GET DIAGNOSTICS n = ROW_COUNT;
     IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant UPDATE of ticket_counters modified % rows', n; END IF;
 
+    -- Acknowledging another tenant's alert. The endpoint is a plain UPDATE by
+    -- id, so if the policy did not filter it, one tenant's supervisor could
+    -- silence another's — quietly, with no error and nothing in the audit log.
+    UPDATE "public"."sla_alerts" SET "acknowledged_at" = now()
+        WHERE "id" = '22222222-2222-7222-8222-2222222222bd';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant acknowledge of an SLA alert modified % rows', n; END IF;
+
     RAISE NOTICE 'ok: cross-tenant UPDATE and DELETE match 0 rows';
 
     -- 3f. The reset path. This is the empty-string case the NULLIF in the
@@ -722,6 +811,12 @@ SET LOCAL lock_timeout = '3s';
 
 SET LOCAL app.tenant_id = :'tenant_a';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_a';
+-- TAR-270's three tables, before the ticket they hang off. They cascade from
+-- `tickets`, so this is belt and braces — but alerts before timers before
+-- policies is the order their own foreign keys require.
+DELETE FROM "public"."sla_alerts" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_a';
 -- Before the conversation and contact they reference: those foreign keys are
 -- NoAction, so the parents cannot go first.
 DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_a';
@@ -743,6 +838,9 @@ DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."sla_alerts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
@@ -775,6 +873,9 @@ BEGIN
 
     SELECT count(*) INTO n FROM "public"."ticket_counters" WHERE "tenant_id" IN (tenant_a, tenant_b);
     IF n <> 0 THEN RAISE EXCEPTION 'fixture ticket counters survived cleanup: %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."sla_alerts" WHERE "tenant_id" IN (tenant_a, tenant_b);
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture SLA alerts survived cleanup: %', n; END IF;
 
     SELECT count(*) INTO n FROM "public"."tenants" WHERE "id" IN (tenant_a, tenant_b);
     IF n <> 0 THEN RAISE EXCEPTION 'fixture tenants survived cleanup: %', n; END IF;

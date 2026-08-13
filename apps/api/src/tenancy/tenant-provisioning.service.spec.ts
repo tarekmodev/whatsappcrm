@@ -23,6 +23,16 @@ interface TenantCreateArgs {
     status: string;
     settings: { create: { timezone: string; locale: string } };
     domains: { create: { hostname: string; kind: string; isPrimary: boolean } };
+    slaPolicies: {
+      create: {
+        name: string;
+        priority: string | null;
+        firstResponseMinutes: number;
+        resolutionMinutes: number | null;
+        businessHoursOnly: boolean;
+        isActive: boolean;
+      };
+    };
   };
 }
 
@@ -31,6 +41,7 @@ interface TransactionSpies {
   tenant: { findUnique: jest.Mock; create: jest.Mock };
   tenantSettings: { create: jest.Mock };
   tenantDomain: { create: jest.Mock };
+  slaPolicy: { create: jest.Mock };
 }
 
 describe('TenantProvisioningService', () => {
@@ -43,6 +54,7 @@ describe('TenantProvisioningService', () => {
       tenant: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn() },
       tenantSettings: { create: jest.fn() },
       tenantDomain: { create: jest.fn() },
+      slaPolicy: { create: jest.fn() },
     };
 
     const systemPrisma = {
@@ -87,13 +99,34 @@ describe('TenantProvisioningService', () => {
       const { data } = tenantCreateArgs();
 
       expect(data).toMatchObject({ slug: 'acme', name: 'Acme Ltd', status: 'active' });
-      // Nested, so a failure on either child rolls the tenant back with it.
+      // Nested, so a failure on any child rolls the tenant back with it.
       expect(data.settings.create).toMatchObject({ timezone: 'UTC', locale: 'en' });
       expect(data.domains.create).toMatchObject({
         hostname: 'acme.app.example.com',
         kind: 'platform',
         isPrimary: true,
       });
+    });
+
+    it('seeds the default SLA policy, as the catch-all for any priority', async () => {
+      await service.provision({ slug: 'acme', name: 'Acme Ltd' });
+
+      const { data } = tenantCreateArgs();
+
+      // Nested with the other two, so a tenant never exists without the policy
+      // its first ticket's timer resolves against (0006, decision 6). `priority`
+      // null is the catch-all; a null `resolutionMinutes` is what keeps v1 to
+      // the first-response timer only.
+      expect(data.slaPolicies.create).toEqual({
+        name: 'Default',
+        priority: null,
+        firstResponseMinutes: 60,
+        resolutionMinutes: null,
+        businessHoursOnly: false,
+        isActive: true,
+      });
+      // Written with the tenant, never as a follow-up statement.
+      expect(tx.slaPolicy.create).not.toHaveBeenCalled();
     });
 
     it('derives the hostname from the slug, never from the caller', async () => {
@@ -146,6 +179,7 @@ describe('TenantProvisioningService', () => {
         createdAt: CREATED_AT,
         settings: { timezone: 'Europe/London', locale: 'en-GB' },
         domains: [{ hostname: 'acme.app.example.com' }],
+        slaPolicies: [{ id: 'e1444444-4444-7444-8444-444444444490' }],
       });
     });
 
@@ -166,6 +200,7 @@ describe('TenantProvisioningService', () => {
       expect(tx.tenant.create).not.toHaveBeenCalled();
       expect(tx.tenantSettings.create).not.toHaveBeenCalled();
       expect(tx.tenantDomain.create).not.toHaveBeenCalled();
+      expect(tx.slaPolicy.create).not.toHaveBeenCalled();
     });
 
     it('does not rename it, and does not reset its settings, to match the request', async () => {
@@ -197,6 +232,7 @@ describe('TenantProvisioningService', () => {
         createdAt: CREATED_AT,
         settings: null,
         domains: [],
+        slaPolicies: [],
       });
       tx.tenantSettings.create.mockResolvedValue({ timezone: 'UTC', locale: 'en' });
       tx.tenantDomain.create.mockResolvedValue({ hostname: 'acme.app.example.com' });
@@ -206,11 +242,34 @@ describe('TenantProvisioningService', () => {
       expect(result.created).toBe(false);
       expect(tx.tenantSettings.create).toHaveBeenCalledTimes(1);
       expect(tx.tenantDomain.create).toHaveBeenCalledTimes(1);
+      // A tenant provisioned before TAR-270 converges on the same shape as one
+      // provisioned after it, rather than waiting for TAR-280's lazy creation.
+      expect(tx.slaPolicy.create).toHaveBeenCalledTimes(1);
       expect(result.tenant).toMatchObject({
         timezone: 'UTC',
         locale: 'en',
         primaryHostname: 'acme.app.example.com',
       });
+    });
+
+    it('leaves a tenant that already configured its own SLA policy alone', async () => {
+      // Not keyed on the name `Default`: a tenant whose only policy is called
+      // "Gold" has configured one, and a second row would silently become the
+      // catch-all the resolver falls back to (0006, decision 6).
+      tx.tenant.findUnique.mockResolvedValue({
+        id: TENANT_ID,
+        slug: 'acme',
+        name: 'Acme Ltd',
+        status: 'active',
+        createdAt: CREATED_AT,
+        settings: { timezone: 'UTC', locale: 'en' },
+        domains: [{ hostname: 'acme.app.example.com' }],
+        slaPolicies: [{ id: 'e1444444-4444-7444-8444-444444444491' }],
+      });
+
+      await service.provision({ slug: 'acme', name: 'Acme Ltd' });
+
+      expect(tx.slaPolicy.create).not.toHaveBeenCalled();
     });
 
     it('keeps an existing platform domain even when PLATFORM_DOMAIN has moved on', async () => {
@@ -222,6 +281,7 @@ describe('TenantProvisioningService', () => {
         createdAt: CREATED_AT,
         settings: { timezone: 'UTC', locale: 'en' },
         domains: [{ hostname: 'acme.old-platform.example.com' }],
+        slaPolicies: [{ id: 'e1444444-4444-7444-8444-444444444492' }],
       });
 
       const result = await service.provision({ slug: 'acme', name: 'Acme Ltd' });

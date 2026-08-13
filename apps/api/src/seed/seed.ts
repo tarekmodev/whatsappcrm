@@ -108,6 +108,8 @@ interface SeededTenantSummary {
   conversations: number;
   messages: number;
   tickets: number;
+  /** Tickets whose first-response timer has already breached (TAR-270). */
+  overdue: number;
 }
 
 async function main(): Promise<void> {
@@ -191,6 +193,7 @@ async function main(): Promise<void> {
         conversations: tenant.conversations.length,
         messages: tenant.messages.length,
         tickets: tenant.tickets.length,
+        overdue: tenant.slaTimers.filter((timer) => timer.state === 'breached').length,
       });
     }
 
@@ -280,6 +283,7 @@ async function writeTenantData(
 
       await tx.ticket.createMany({ data: scope(tenant.tickets) });
       await tx.ticketEvent.createMany({ data: scope(tenant.ticketEvents) });
+      await writeSlaTimersAndAlerts(tx, tenant, tenantId);
 
       if (tenant.nextTicketNumber !== null) {
         // Left one past the highest seeded number. TAR-73's allocator reads this
@@ -296,6 +300,55 @@ async function writeTenantData(
     },
     { timeout: TENANT_TRANSACTION_TIMEOUT_MS },
   );
+}
+
+/**
+ * The SLA timers on the seeded tickets, and the supervisor alert one of them
+ * raised (TAR-270, against 0006).
+ *
+ * The policy is looked up rather than named, for the same reason the plan is
+ * below: `TenantProvisioningService` writes the `Default` row and generates its
+ * id, so the dataset cannot carry one without the seed having two ways to create
+ * a tenant's SLA configuration. Looked up by "the tenant's only policy" rather
+ * than by name, because "has this tenant any policy at all" is the question
+ * provisioning and TAR-280's lazy creation both ask.
+ *
+ * Returns early for a tenant with no timers, so a tenant with no tickets does
+ * not need a policy read it has no use for.
+ */
+async function writeSlaTimersAndAlerts(
+  tx: Prisma.TransactionClient,
+  tenant: DemoTenant,
+  tenantId: string,
+): Promise<void> {
+  if (tenant.slaTimers.length === 0) {
+    return;
+  }
+
+  const policy = await tx.slaPolicy.findFirst({
+    orderBy: { createdAt: 'asc' },
+    select: { id: true },
+  });
+
+  if (policy === null) {
+    // Thrown rather than `fail()`ed: this runs inside the tenant's transaction,
+    // and exiting the process here would leave the rollback to the server's
+    // disconnect handling instead of happening because we asked for it.
+    throw new Error(
+      `Tenant "${tenant.slug}" has no SLA policy. TenantProvisioningService seeds one ` +
+        'per tenant; if this fires, either that changed or ' +
+        '20260813130000_sla_pause_accounting_and_alerts has not been applied.',
+    );
+  }
+
+  await tx.slaTimer.createMany({
+    data: tenant.slaTimers.map((timer) => ({ ...timer, tenantId, policyId: policy.id })),
+  });
+  // After the timers: `sla_alerts.sla_timer_id` is half of a composite foreign
+  // key to one, checked at insert.
+  await tx.slaAlert.createMany({
+    data: tenant.slaAlerts.map((alert) => ({ ...alert, tenantId })),
+  });
 }
 
 /**
@@ -431,10 +484,11 @@ async function verify(
     }
 
     await tenantContext.run({ requestId: REQUEST_ID, tenantId, userId: null }, async () => {
-      const [users, conversations, messages] = await Promise.all([
+      const [users, conversations, messages, slaAlerts] = await Promise.all([
         tenantPrisma.user.count(),
         tenantPrisma.conversation.count(),
         tenantPrisma.message.count(),
+        tenantPrisma.slaAlert.count(),
       ]);
 
       // Counts, not a sample: seeing the tenant's own rows and seeing *only*
@@ -443,6 +497,12 @@ async function verify(
       expectRowCount(users, tenant.slug, 'users', tenant.users.length);
       expectRowCount(conversations, tenant.slug, 'conversations', tenant.conversations.length);
       expectRowCount(messages, tenant.slug, 'messages', tenant.messages.length);
+      // `sla_alerts` is the newest table here and the one whose leak would be
+      // worst: a row names a ticket, a deadline and a supervisor by id, so the
+      // tenant with none must see none (TAR-270). Zero is the assertion that
+      // matters for Southwind, and it is only meaningful because Northwind has
+      // one.
+      expectRowCount(slaAlerts, tenant.slug, 'sla_alerts', tenant.slaAlerts.length);
     });
   }
 
@@ -470,6 +530,7 @@ function report(summaries: readonly SeededTenantSummary[]): void {
           plural(summary.conversations, 'conversation'),
           plural(summary.messages, 'message'),
           plural(summary.tickets, 'ticket'),
+          `${summary.overdue} overdue`,
         ].join(', '),
     );
   }
