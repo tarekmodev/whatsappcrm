@@ -21,8 +21,9 @@
 
 .link {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-2);
+  gap: 0 var(--space-2);
   min-inline-size: 0;
   color: var(--color-on-surface);
   font-size: var(--font-size-body-sm);
@@ -39,10 +40,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Wraps rather than truncating. There are two of these strings and both are
+ * short; on a 375px phone the panel is 343px wide, which is enough for the
+ * whole of "No first response in time" over two lines and not enough for it on
+ * one — and an ellipsis on the only line that says what went wrong is the worst
+ * place in the row to save space.
+ */
 .kind {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
 }
 
 .meta {
