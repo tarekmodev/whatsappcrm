@@ -1,0 +1,31 @@
+-- Reverses 20260813120000_sla_timer_state_paused.
+--
+-- Prisma does not generate down migrations; every migration directory carries a
+-- hand-written one, per docs/adr/0001-stack-decision.md (decision 6).
+--
+-- ---------------------------------------------------------------------------
+-- This one is deliberately a no-op, and that is the safe answer
+-- ---------------------------------------------------------------------------
+--
+-- PostgreSQL has no `ALTER TYPE ... DROP VALUE`. Removing an enum label means
+-- creating a replacement type, rewriting every dependent column, re-pointing
+-- defaults and dropping the old type — a full rewrite of `sla_timers` holding an
+-- ACCESS EXCLUSIVE lock for its duration, to undo an addition that costs nothing
+-- to leave in place.
+--
+-- It would also lose data once TAR-280 ships: a timer paused because its ticket
+-- is waiting on the customer has no other legal value to move to, so the rewrite
+-- would either fail on those rows or silently restart clocks that were correctly
+-- stopped — which is a false breach, the failure 0006 rates as more damaging
+-- than a late one.
+--
+-- An unused enum label is inert: no query filters on it, no index is affected,
+-- and the catalogue row is a few bytes. Rolling the application back is
+-- therefore complete on its own — code that predates TAR-270 never writes the
+-- value, and code that follows it needs the value present.
+--
+-- If the label genuinely has to go, that is its own forward migration with a
+-- verified backup, a maintenance window sized against `sla_timers`, and a
+-- recorded decision for the rows already carrying it. It is not a rollback step.
+
+SELECT 1;

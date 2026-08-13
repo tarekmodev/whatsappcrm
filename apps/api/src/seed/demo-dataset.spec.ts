@@ -74,6 +74,8 @@ describe('demo dataset', () => {
         ...idsOf(tenant.internalNotes),
         ...idsOf(tenant.tickets),
         ...idsOf(tenant.ticketEvents),
+        ...idsOf(tenant.slaTimers),
+        ...idsOf(tenant.slaAlerts),
         ...idsOf(tenant.usageCounters),
         ...idsOf(tenant.auditLogs),
       ]),
@@ -163,6 +165,90 @@ describe('demo dataset', () => {
     }
     for (const log of tenant.auditLogs) {
       expectOptionalMember(log.actorUserId, users);
+    }
+
+    const timers = new Set(idsOf(tenant.slaTimers));
+
+    for (const timer of tenant.slaTimers) {
+      expect(tickets).toContain(timer.ticketId);
+    }
+    for (const alert of tenant.slaAlerts) {
+      expect(timers).toContain(alert.slaTimerId);
+      expect(tickets).toContain(alert.ticketId);
+      // The recipient is a real user of *this* tenant. `sla_alerts` is the one
+      // table whose rows are written by a job that has just read across every
+      // tenant, so a recipient from the other side is the mistake worth naming.
+      expect(users).toContain(alert.recipientUserId);
+    }
+  });
+
+  it('gives each ticket at most one timer per target', () => {
+    for (const tenant of dataset) {
+      const keys = tenant.slaTimers.map((timer) => `${timer.ticketId}:${timer.kind}`);
+
+      // `UNIQUE (tenant_id, ticket_id, kind)`.
+      expect(new Set(keys).size).toBe(keys.length);
+    }
+  });
+
+  it('states a deadline that agrees with the state the timer is in', () => {
+    for (const tenant of dataset) {
+      for (const timer of tenant.slaTimers) {
+        const startedAt = at(timer.startedAt);
+        const dueAt = at(timer.dueAt);
+
+        // The seeded policy is a 60-minute first-response window, and `due_at`
+        // is authoritative rather than derived at read time — so a timer that
+        // does not sit one window past its start is demonstrating a pause that
+        // the dataset does not otherwise carry.
+        expect(dueAt - startedAt).toBe(60 * 60 * 1000);
+
+        if (timer.state === 'breached') {
+          // Detection is a sweep, not an interrupt, so `breached_at` is at or
+          // after the deadline — never before it, which would be a false breach.
+          expect(at(timer.breachedAt)).toBeGreaterThanOrEqual(dueAt);
+          // `breached` is terminal and does not stop the clock the way a reply
+          // does; `stopped_at` is for `met` and `cancelled`.
+          expect(timer.stoppedAt ?? null).toBeNull();
+        }
+
+        if (timer.state === 'met') {
+          // Met means the reply landed strictly inside the window. Exactly on
+          // the deadline is a race between the reply and the sweep, and a
+          // seeded row must not be ambiguous about which it is.
+          expect(at(timer.stoppedAt)).toBeLessThan(dueAt);
+          expect(timer.breachedAt ?? null).toBeNull();
+        }
+      }
+    }
+  });
+
+  it('raises an alert for exactly the timers that breached', () => {
+    for (const tenant of dataset) {
+      const breached = new Set(
+        tenant.slaTimers.filter((timer) => timer.state === 'breached').map((timer) => timer.id),
+      );
+      const alerted = new Set(tenant.slaAlerts.map((alert) => alert.slaTimerId));
+
+      // Both directions. An alert on a timer that did not breach is a false
+      // alarm; a breached timer with no alert is the supervisor never being
+      // told, which is TAR-26's whole acceptance criterion.
+      expect([...alerted].sort()).toEqual([...breached].sort());
+
+      for (const alert of tenant.slaAlerts) {
+        const timer = tenant.slaTimers.find((candidate) => candidate.id === alert.slaTimerId);
+
+        // The deadline is copied onto the alert at write time so a later policy
+        // edit cannot rewrite history. Copied means equal, here and now.
+        expect(at(alert.dueAt)).toBe(at(timer?.dueAt));
+        expect(alert.kind).toBe(timer?.kind);
+      }
+
+      // One row per recipient per timer — `UNIQUE (tenant_id, sla_timer_id,
+      // recipient_user_id)`, the second of the three idempotency layers.
+      const keys = tenant.slaAlerts.map((alert) => `${alert.slaTimerId}:${alert.recipientUserId}`);
+
+      expect(new Set(keys).size).toBe(keys.length);
     }
   });
 
@@ -291,4 +377,19 @@ function expectOptionalMember(
   if (value !== null && value !== undefined) {
     expect(allowed).toContain(value);
   }
+}
+
+/**
+ * A timestamp as milliseconds. Prisma widens every date input to `Date | string`
+ * and makes the ones with a column default optional; the dataset only ever
+ * writes a `Date`, and a missing one is a defect rather than a case to handle,
+ * so this throws instead of returning a sentinel that comparisons would silently
+ * pass.
+ */
+function at(value: Date | string | null | undefined): number {
+  if (value === null || value === undefined) {
+    throw new Error('expected a timestamp, and the dataset supplied none');
+  }
+
+  return new Date(value).getTime();
 }

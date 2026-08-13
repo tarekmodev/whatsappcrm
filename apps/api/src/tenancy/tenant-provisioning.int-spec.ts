@@ -132,6 +132,41 @@ describe('tenant provisioning, end to end', () => {
 
       expect(tenant).toMatchObject({ timezone: 'UTC', locale: 'en' });
     });
+
+    it('seeds the default SLA policy, readable by the tenant itself', async () => {
+      const { tenant } = await provisioning.provision({
+        slug: SLUG_DEFAULTS,
+        name: 'TAR-50 defaults',
+      });
+
+      // Read through `TenantPrisma` rather than `SystemPrisma`: provisioning
+      // writes this row unscoped, and what has to be true is that the tenant can
+      // then see it under its own `app.tenant_id`. A row written with the wrong
+      // `tenant_id` would still be found by the system client.
+      const policies = await asTenant(tenant.id, () =>
+        tenantPrisma.slaPolicy.findMany({
+          select: {
+            name: true,
+            priority: true,
+            firstResponseMinutes: true,
+            resolutionMinutes: true,
+            businessHoursOnly: true,
+            isActive: true,
+          },
+        }),
+      );
+
+      expect(policies).toEqual([
+        {
+          name: 'Default',
+          priority: null,
+          firstResponseMinutes: 60,
+          resolutionMinutes: null,
+          businessHoursOnly: false,
+          isActive: true,
+        },
+      ]);
+    });
   });
 
   describe('idempotency', () => {
@@ -155,26 +190,32 @@ describe('tenant provisioning, end to end', () => {
       expect(tenant.name).toBe('TAR-50 repeat');
     });
 
-    it('creates exactly one settings row and one domain however often it runs', async () => {
+    it('creates exactly one settings row, one domain and one SLA policy however often it runs', async () => {
       for (let run = 0; run < 3; run += 1) {
         await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
       }
 
       const where = { tenant: { slug: SLUG_REPEAT } };
-      const [settings, domains] = await Promise.all([
+      const [settings, domains, policies] = await Promise.all([
         systemPrisma.tenantSettings.count({ where }),
         systemPrisma.tenantDomain.count({ where }),
+        systemPrisma.slaPolicy.count({ where }),
       ]);
 
       expect(settings).toBe(1);
       expect(domains).toBe(1);
+      // Two would be worse than none: policy resolution prefers the ticket's own
+      // priority and then falls back to `priority IS NULL`, so a duplicate
+      // catch-all makes which window applies depend on `created_at`.
+      expect(policies).toBe(1);
     });
 
-    it('repairs a tenant that is missing its settings and its domain', async () => {
+    it('repairs a tenant that is missing its settings, its domain and its SLA policy', async () => {
       const { tenant } = await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
 
       await systemPrisma.tenantSettings.deleteMany({ where: { tenantId: tenant.id } });
       await systemPrisma.tenantDomain.deleteMany({ where: { tenantId: tenant.id } });
+      await systemPrisma.slaPolicy.deleteMany({ where: { tenantId: tenant.id } });
 
       const repaired = await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
 
@@ -183,6 +224,32 @@ describe('tenant provisioning, end to end', () => {
       await expect(
         systemPrisma.tenantSettings.count({ where: { tenantId: tenant.id } }),
       ).resolves.toBe(1);
+      await expect(systemPrisma.slaPolicy.count({ where: { tenantId: tenant.id } })).resolves.toBe(
+        1,
+      );
+    });
+
+    it('does not add a second policy to a tenant that configured its own', async () => {
+      const { tenant } = await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
+
+      await systemPrisma.slaPolicy.deleteMany({ where: { tenantId: tenant.id } });
+      await systemPrisma.slaPolicy.create({
+        data: {
+          tenantId: tenant.id,
+          name: 'Gold',
+          priority: 'urgent',
+          firstResponseMinutes: 15,
+        },
+      });
+
+      await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
+
+      const policies = await systemPrisma.slaPolicy.findMany({
+        where: { tenantId: tenant.id },
+        select: { name: true },
+      });
+
+      expect(policies).toEqual([{ name: 'Gold' }]);
     });
   });
 
