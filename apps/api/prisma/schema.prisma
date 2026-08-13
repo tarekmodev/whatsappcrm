@@ -361,6 +361,13 @@ enum TicketRoutingDeferredReason {
   @@map("ticket_routing_deferred_reason")
 }
 
+/// ⚠️ **The declaration order is the queue order.** Postgres sorts an enum by
+/// the order its labels were declared, and the ticket queue is
+/// `ORDER BY priority DESC` with no sort parameter (0006, §6) — so `urgent`
+/// being declared last is the whole of "urgent tickets sort to the top".
+/// Reordering these labels silently inverts the queue, with no error anywhere.
+/// `TICKET_PRIORITIES` in `packages/contracts/src/tickets.ts` mirrors this list
+/// and `ticket-queue.int-spec.ts` asserts the ordering against a real database.
 enum TicketPriority {
   low
   normal
@@ -1368,11 +1375,17 @@ model Ticket {
   /// into `deferred` only, so a redelivered routing job does not reset it.
   routingDeferredSince  DateTime?                    @map("routing_deferred_since") @db.Timestamptz(3)
 
-  firstResponseAt DateTime? @map("first_response_at") @db.Timestamptz(3)
-  resolvedAt      DateTime? @map("resolved_at") @db.Timestamptz(3)
-  closedAt        DateTime? @map("closed_at") @db.Timestamptz(3)
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  /// Named for the contract's `firstRespondedAt`, not for the column (0003,
+  /// open question 4). The column keeps `first_response_at`, so this is a
+  /// client-side rename with no migration behind it: the published field is the
+  /// fixed artifact the console types against, and the mapper stops needing a
+  /// translation line. Nothing writes it yet — TAR-26 owns first-response
+  /// tracking, and the mapper emits `null` until it does.
+  firstRespondedAt DateTime? @map("first_response_at") @db.Timestamptz(3)
+  resolvedAt       DateTime? @map("resolved_at") @db.Timestamptz(3)
+  closedAt         DateTime? @map("closed_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversation Conversation? @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
@@ -1431,6 +1444,24 @@ model Ticket {
 // `contact_id` stays nullable and that is load-bearing: Postgres does not
 // collide NULLs in a unique index, so TAR-25's manual ticket with no contact
 // never conflicts. Making the column `NOT NULL` to tidy it would break that.
+//
+// ⚠️ And a second one this file cannot express: `tickets_active_queue_idx`, on
+// `(tenant_id, priority DESC, created_at DESC, id DESC)`
+// `WHERE status IN ('open','pending')`, in the
+// 20260813150000_ticket_active_queue_index migration. It serves `GET /tickets`
+// — active-only, `ORDER BY priority DESC, created_at DESC, id DESC` (0006, §6).
+//
+// The `(tenant_id, status, priority, created_at DESC)` index declared above
+// cannot: a btree yields `priority DESC` only on a backward scan, which flips
+// `created_at` to ASC; `status IN ('open','pending')` is two ranges on a column
+// sitting *before* `priority`, so no single scan delivers a priority-ordered
+// stream across both; and it carries no `id`, so the keyset has no total order
+// to resume on. It stays because supervisor dashboards filter by an explicit
+// status, which is the shape it does serve.
+//
+// Same caveat as the index above: Prisma's describer skips predicated indexes,
+// so **nothing in this file will ever regenerate it** and its absence is not
+// drift. `ticket-queue-shape.int-spec.ts` is what catches that.
 
 /// Append-only audit trail for a single ticket (TAR-32). `type` is text, not an
 /// enum: every later story adds event types, and an enum would make each of

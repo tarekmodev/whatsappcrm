@@ -34,6 +34,15 @@ import {
   TENANT_STATUSES,
   TENANT_STATUS_EFFECTS,
 } from './tenant';
+import {
+  canAgentTransition,
+  TICKET_EVENT_CAUSES,
+  TICKET_PRIORITIES,
+  TICKET_STATUS_REQUIRES_CLOSE,
+  TICKET_STATUSES,
+  TicketEventSchema,
+  TicketUpdateInputSchema,
+} from './tickets';
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
 import {
   AvailabilityUpdateInputSchema,
@@ -897,5 +906,90 @@ describe('usage metrics', () => {
   it('treats seats as a gauge and conversations as a counter', () => {
     expect(USAGE_METRIC_KINDS.seats_active).toBe('gauge');
     expect(USAGE_METRIC_KINDS.conversations_opened).toBe('counter');
+  });
+});
+
+describe('the ticket transition table', () => {
+  it('is terminal-for-active on resolved and closed', () => {
+    // The invariant `tickets_one_active_per_contact` depends on: nothing an
+    // agent can send re-activates a finished ticket, so the partial unique
+    // index can never be the thing that refuses a PATCH.
+    for (const status of TICKET_STATUSES) {
+      expect(canAgentTransition('closed', status), status).toBe(false);
+    }
+
+    expect(canAgentTransition('resolved', 'open')).toBe(false);
+    expect(canAgentTransition('resolved', 'pending')).toBe(false);
+    expect(canAgentTransition('resolved', 'closed')).toBe(true);
+  });
+
+  it('lets an active ticket be closed without passing through resolved', () => {
+    // Closing spam or a wrong number is not a resolution, and forcing the
+    // two-step would put a fake `resolved_at` on every one of them.
+    expect(canAgentTransition('open', 'closed')).toBe(true);
+    expect(canAgentTransition('pending', 'closed')).toBe(true);
+  });
+
+  it('never lists a status as a transition to itself', () => {
+    // Setting the value a ticket already has is a no-op the endpoint accepts,
+    // not a move it validates — so it must never reach this table.
+    for (const status of TICKET_STATUSES) {
+      expect(canAgentTransition(status, status), status).toBe(false);
+    }
+  });
+
+  it('asks for ticket:close on exactly the two terminal statuses', () => {
+    expect(TICKET_STATUS_REQUIRES_CLOSE).toEqual({
+      open: false,
+      pending: false,
+      resolved: true,
+      closed: true,
+    });
+  });
+
+  it('declares urgent last, which is what makes priority DESC urgent-first', () => {
+    // Postgres orders an enum by declaration order and the queue is
+    // `ORDER BY priority DESC`. Reordering this array inverts the queue.
+    expect(TICKET_PRIORITIES.at(-1)).toBe('urgent');
+    expect(TICKET_PRIORITIES.at(0)).toBe('low');
+  });
+});
+
+describe('the ticket update input', () => {
+  it('refuses a body with no field set', () => {
+    // `{}` is a client bug with no honest answer; accepting it would report
+    // success for a request that asked for nothing.
+    expect(TicketUpdateInputSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts any one field on its own', () => {
+    expect(TicketUpdateInputSchema.safeParse({ status: 'resolved' }).success).toBe(true);
+    expect(TicketUpdateInputSchema.safeParse({ priority: 'urgent' }).success).toBe(true);
+    expect(TicketUpdateInputSchema.safeParse({ subject: 'Refund' }).success).toBe(true);
+  });
+});
+
+describe('ticket event causes', () => {
+  it('publishes the token that tells an agent reopen from a customer reply', () => {
+    expect(TICKET_EVENT_CAUSES).toContain('agent');
+    expect(TICKET_EVENT_CAUSES).toContain('inbound_message');
+  });
+
+  it('carries the cause on a published event, nullable for the types that predate it', () => {
+    const event = {
+      id: '25444444-4444-7444-8444-4444444444e1',
+      ticketId: '25444444-4444-7444-8444-4444444444f1',
+      type: 'status_changed',
+      actorUserId: null,
+      fromValue: 'pending',
+      toValue: 'open',
+      reason: null,
+      cause: 'inbound_message',
+      createdAt: '2026-08-13T09:00:00.000Z',
+    };
+
+    expect(TicketEventSchema.parse(event)).toMatchObject({ cause: 'inbound_message' });
+    expect(TicketEventSchema.parse({ ...event, cause: null }).cause).toBeNull();
+    expect(() => TicketEventSchema.parse({ ...event, cause: 'telepathy' })).toThrow();
   });
 });
