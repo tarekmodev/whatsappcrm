@@ -1004,7 +1004,9 @@ a concatenated class string. Layout uses logical properties (`margin-inline-star
 2. Colocate `Component.tsx` + `Component.module.css` (+ `Component.test.tsx`). One component
    per file, named the same as the file.
 3. Copy goes in `content/en.ts` and is read through `useContent()`. Route paths come from
-   `lib/routes.ts`. Neither belongs inline.
+   `lib/routes.ts`. Neither belongs inline. Anything `Intl` _phrases_ rather than translates —
+   a list, a plural, a date — takes its locale from `content.locale`, never from the browser,
+   so the server and the client format identically.
 4. **Export the skeleton from the same file**, as `ComponentSkeleton`. Build it from the
    _same_ structure as the real thing — reuse the same layout primitives and column
    metadata rather than hand-drawing boxes. `AgentsTable` and `AgentsTableSkeleton` both
@@ -1104,6 +1106,37 @@ the preview through the contract's own `renderTemplateBody` — the same functio
 on the message row, so the sentence an agent approves is the sentence the record shows. The
 picker itself is behind `next/dynamic`: most replies are free-form, and a tenant's approved
 template set has no business in the inbox's initial JavaScript.
+
+### Routing rules: the order is the meaning
+
+`/settings/assignment` carries two unrelated halves, gated and streamed separately: the
+workload report, and the routing-rule builder in `features/routing-rules/`. A principal
+holding only `report:read_all` sees the report and no rule list at all — the rules need
+`assignment_rule:read`, which
+[ADR 0007](docs/architecture/0007-routing-rules-and-assignment-fallback.md) assigns instead
+of the admin-only `channel:manage`, so routing stays in a supervisor's hands.
+
+Three things about the surface are decided by that contract rather than by taste:
+
+- **Rules are an `<ol>`, not a table.** They are evaluated top-first and the first match
+  wins, so the order _is_ the data; an ordered list says that to a screen reader without a
+  column for it. Reordering is two buttons per row, not drag-and-drop — TAR-24 puts a canvas
+  out of scope, and buttons are keyboard-operable for free.
+- **Reorder sends the whole set, and nothing is optimistic.** `POST /assignment-rules/reorder`
+  takes the tenant's complete rule set, which is also its optimistic concurrency: a set that
+  no longer matches the server's means somebody else edited the list, and the answer is
+  `conflict` rather than a partial reorder. Showing a reordering that the engine is not
+  actually using would be worse than a round trip.
+- **A rule can outlive its target.** Removing an agent clears `target_user_id` and leaves the
+  rule inactive, so the supervisor finds a rule needing a new target instead of finding it
+  gone. The list renders that state explicitly and refuses to offer the on switch until a
+  target is chosen — the API refuses it too.
+
+`lib/api/contact-schema.ts` reads the tags and custom-field definitions the condition builder
+offers. ⚠️ Both shapes are in the merged contract but **neither endpoint is in TAR-39's
+published table yet** — `ContactsModule` owns them and TAR-33 builds their editors — so a
+`not_found`, and only a `not_found`, is read as "this workspace has no vocabulary yet". Every
+other status still reaches the section's error boundary.
 
 ### Route groups: signed in and signed out
 

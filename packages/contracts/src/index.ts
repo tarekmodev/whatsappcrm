@@ -23,6 +23,9 @@ export * from './users';
 // --- Platform administration ------------------------------------------------
 export * from './admin';
 
+// --- Routing and assignment -------------------------------------------------
+export * from './assignment';
+
 // --- CRM, inbox and helpdesk ------------------------------------------------
 export * from './contacts';
 export * from './conversations';

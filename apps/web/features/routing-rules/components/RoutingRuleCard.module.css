@@ -1,0 +1,56 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-inline-size: 0;
+  padding: var(--space-4);
+  background: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+/* A rule that is off still has to be readable — it is the thing the supervisor
+   came to turn back on — so it is dimmed by its border, not by its text. */
+.card[data-inactive='true'] {
+  border-style: dashed;
+}
+
+.identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.position {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.name {
+  font-size: var(--font-size-body);
+  overflow-wrap: anywhere;
+}
+
+.label {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.target {
+  font-size: var(--font-size-body-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Never colour alone: the text itself reads "No target — this rule needs one". */
+.target[data-missing='true'] {
+  color: var(--color-danger);
+  font-weight: var(--font-weight-medium);
+}
+
+.actions {
+  padding-block-start: var(--space-2);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}

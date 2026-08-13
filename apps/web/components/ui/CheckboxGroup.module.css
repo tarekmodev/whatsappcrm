@@ -18,6 +18,12 @@
   font-size: var(--font-size-caption);
 }
 
+/* Composed from the same rule `Field` uses, so a group's error and a control's
+   error cannot drift apart visually. */
+.error {
+  composes: error from './Field.module.css';
+}
+
 .list {
   display: flex;
   flex-direction: column;
