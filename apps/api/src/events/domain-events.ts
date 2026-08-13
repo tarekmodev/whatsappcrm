@@ -3,6 +3,8 @@ import type {
   MessageContentType,
   MessageDirection,
   MessageStatus,
+  TicketPriority,
+  TicketStatus,
 } from '../generated/prisma/enums';
 
 /**
@@ -26,6 +28,7 @@ export const MESSAGE_CREATED_EVENT = 'message.created';
 export const MESSAGE_STATUS_CHANGED_EVENT = 'message.status_changed';
 export const MESSAGE_ATTACHMENT_SETTLED_EVENT = 'message.attachment_settled';
 export const TICKET_CREATED_EVENT = 'ticket.created';
+export const TICKET_UPDATED_EVENT = 'ticket.updated';
 export const CONVERSATION_ASSIGNED_EVENT = 'conversation.assigned';
 
 /**
@@ -153,6 +156,53 @@ export interface TicketCreatedEvent {
   readonly contactId: string;
   /** The conversation the ticket was opened from. */
   readonly conversationId: string;
+}
+
+/**
+ * A ticket an agent changed through `PATCH /api/v1/tickets/{id}` — its status,
+ * its priority or its subject (TAR-25).
+ *
+ * Emitted **after** the transaction commits, like everything here, and only when
+ * a column actually moved: a request setting a ticket to the status it already
+ * holds writes nothing and announces nothing.
+ *
+ * ## Nothing subscribes yet, and that is the decision rather than the gap
+ *
+ * `realtime.ts` already publishes a `ticket.updated` server event carrying a
+ * whole `TicketResponse`. TAR-25 deliberately does not connect the two: a
+ * ticket's audience is `isVisible` as rooms, which is **not**
+ * `conversationAudienceRooms` — there is no unclaimed branch, and the readers
+ * room would have to be a ticket one keyed to `ticket:read_all` rather than
+ * `conversation:read_all`. That is a rooms amendment, and a rooms amendment
+ * reviewed under a status-change story is how an authorization bypass ships.
+ * The console refetches on view and after its own mutation instead; an
+ * auto-reopen becomes visible on the next refetch.
+ *
+ * This event exists so that relay is a subscriber away rather than a rewrite.
+ *
+ * ## The system reopen does not emit it
+ *
+ * `TicketLinkerService` moves a `pending` ticket to `open` on the customer's
+ * reply and stays silent, as it has since TAR-21 — its own path already emits
+ * `ticket.created` for the case a subscriber must not miss. Adding a second
+ * producer here would mean auditing that path's after-commit shape under a story
+ * whose realtime answer is "refetch". Recorded so the asymmetry is a decision a
+ * reader can see rather than one they have to infer.
+ *
+ * Both priority fields are carried even though a subscriber that re-reads the
+ * row can see the current one: a client deciding whether a queue needs
+ * re-sorting cares whether the *band* moved, and that is not recoverable after
+ * the write.
+ */
+export interface TicketUpdatedEvent {
+  readonly tenantId: string;
+  readonly ticketId: string;
+  readonly previousStatus: TicketStatus;
+  readonly status: TicketStatus;
+  readonly previousPriority: TicketPriority;
+  readonly priority: TicketPriority;
+  /** Null when the writer was the system — the reopen path, which does not emit today. */
+  readonly actorUserId: string | null;
 }
 
 /**

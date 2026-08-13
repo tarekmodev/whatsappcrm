@@ -1709,3 +1709,60 @@ Amendment 1 gave the send contract its header slot and TAR-72 built the fields f
 formats, so no header format is excluded from the picker and there is no such state to
 report. It is deliberately **not** in the blocker vocabulary: a blocker that can never fire
 is a promise that this list is complete, kept by a branch nothing reaches.
+
+### Amendment 9 — the ticket queue and the status write (TAR-25)
+
+The endpoint table above already publishes `GET /api/v1/tickets`,
+`GET /api/v1/tickets/{id}` and `PATCH /api/v1/tickets/{id}`, and TAR-284 implemented them.
+**No route is added or changed here.** What this amendment records is the behaviour a client
+cannot read off the table and would otherwise have to discover — ruled in full by
+_0006 — ticket status, priority and auto-reopen_, TAR-278's decision record.
+
+⚠️ That document is not in this repository yet: it is published as an attachment on TAR-278
+and its own number collides with
+[0006 — SLA timers and supervisor alerts](./0006-sla-timers-and-supervisor-alerts.md).
+Renumbering somebody else's ADR is theirs to do, so this amendment cites it by title and the
+link lands when it is filed.
+
+**`GET /api/v1/tickets` defaults to the active queue.** With no `status` parameter it returns
+`status IN ('open','pending')`, ordered `priority DESC, created_at DESC, id DESC`, with no
+sort parameter. Three consequences worth stating rather than leaving to be found:
+
+- Resolving a ticket removes it from the list with no client change, which is what makes
+  TAR-25's first acceptance criterion true. A client that wants a finished ticket asks for
+  `status=resolved` or `status=closed`.
+- There is deliberately no way to ask for _every_ status at once. Widening
+  `TicketListQuerySchema.status` to an array, or adding `status=all`, is additive and is the
+  recorded follow-up for when a "closed tickets" view is asked for.
+- `priority DESC` is urgent-first because `ticket_priority` is declared
+  `low, normal, high, urgent` and Postgres orders an enum by declaration order. Reordering
+  those labels inverts the queue silently; `schema.prisma` carries the warning and
+  `ticket-queue.int-spec.ts` asserts the ordering.
+
+**`PATCH /api/v1/tickets/{id}` requires `ticket:close` in addition to `ticket:update`** for a
+transition into `resolved` or `closed`. Checked in the service rather than in the guard,
+because the guard is per-route and this is per-body — the same endpoint re-prioritises a
+ticket, and that needs `ticket:update` alone. Both permissions are already in
+`AGENT_PERMISSIONS`, so no role's behaviour changes; what it buys is a future triage-only
+role that may re-prioritise without finishing somebody's work.
+
+**The transition table is published as code, not prose.** `TICKET_STATUS_TRANSITIONS` and
+`canAgentTransition` in `packages/contracts/src/tickets.ts` are the single copy, so the
+console disables what the API refuses rather than keeping a second table in step —
+the same argument `rbac.ts` makes for permissions. `resolved` and `closed` are
+terminal-for-active: re-activating either is `conflict`, because
+`tickets_one_active_per_contact` would refuse the row anyway and 0003 has no reopen window
+at v1.
+
+**Setting the value a ticket already has is a 200 no-op, not a `conflict`,** and it writes no
+`ticket_events` row. A double-clicked button and a retry after a dropped response both arrive
+as "set resolved" on a ticket that is already resolved; `PATCH` is defined by the target
+state, and the repo already ruled this shape in `ConversationCommandService.claim`.
+
+**No new error code.** `not_found`, `conflict`, `forbidden` and `validation_failed` cover
+every refusal, including the lost compare-and-set that answers `conflict` when a customer's
+reply reopened the ticket underneath the request. One additive contract change lands in
+`tickets.ts`: `cause` joins `TicketEventSchema`, carrying `TICKET_EVENT_CAUSES`
+(`agent`, `inbound_message`, `automation`, `sla`) — which is how a client tells an agent
+reopening a ticket by hand from the customer reopening it by replying. `ticket_events.data`
+is JSON for exactly this reason, so it is not a migration.
