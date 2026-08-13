@@ -6,6 +6,9 @@ import type {
   MessageTemplateResponse,
   TeamResponse,
   TenantRole,
+  TicketResponse,
+  TicketRouting,
+  TicketSla,
   UserResponse,
 } from '@whatsappcrm/contracts';
 import { MOCK_AUDIO_URL, MOCK_DOCUMENT_URL, MOCK_IMAGE_URL } from '@/lib/api/mock/media-fixtures';
@@ -61,6 +64,20 @@ const CONVERSATION_IDS = {
   otherTenant: '0192f004-0000-7000-8000-000000000499',
 } as const;
 
+const TICKET_IDS = {
+  /** Fatima's live issue: the urgent one, so the queue's sort is visible. */
+  fatimaUrgent: '0192f00a-0000-7000-8000-000000000a01',
+  /** Waiting on Jonas, routed to Billing and held by nobody in particular. */
+  jonasPending: '0192f00a-0000-7000-8000-000000000a02',
+  /** Nobody's: what `scope=unassigned` is for, and only a supervisor sees it. */
+  meiUnassigned: '0192f00a-0000-7000-8000-000000000a03',
+  /** Terminal, so it is absent from the active queue rather than merely marked. */
+  fatimaResolved: '0192f00a-0000-7000-8000-000000000a04',
+  /** Closed without a resolution: `closedAt` set, `resolvedAt` deliberately null. */
+  meiClosed: '0192f00a-0000-7000-8000-000000000a05',
+  otherTenant: '0192f00a-0000-7000-8000-000000000a99',
+} as const;
+
 const WHATSAPP_ACCOUNT_ID = '0192f005-0000-7000-8000-000000000501';
 const WHATSAPP_BUSINESS_ACCOUNT_ID = '0192f005-0000-7000-8000-000000000502';
 
@@ -90,6 +107,7 @@ export type MockTeam = TeamResponse & TenantScoped;
 export type MockConversation = ConversationResponse & TenantScoped;
 export type MockMessage = MessageResponse & TenantScoped;
 export type MockInternalNote = InternalNoteResponse & TenantScoped;
+export type MockTicket = TicketResponse & TenantScoped;
 
 function contact(id: string, displayName: string, phone: string): ConversationResponse['contact'] {
   return {
@@ -241,7 +259,9 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     status: 'open',
     assignedUserId: USER_IDS.amina,
     assignedTeamId: TEAM_IDS.billing,
-    ticketId: null,
+    // The contact's *active* ticket. It goes null the moment that ticket is
+    // resolved, which is what empties the inbox context panel's ticket section.
+    ticketId: TICKET_IDS.fatimaUrgent,
     unreadCount: 2,
     // The one open window in the set; every other thread here is outside it, so
     // both halves of the composer can be walked without editing a fixture.
@@ -260,7 +280,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     status: 'pending',
     assignedUserId: null,
     assignedTeamId: TEAM_IDS.billing,
-    ticketId: null,
+    ticketId: TICKET_IDS.jonasPending,
     unreadCount: 0,
     serviceWindowExpiresAt: '2026-08-11T06:30:00.000Z',
     botHandling: false,
@@ -277,7 +297,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     status: 'open',
     assignedUserId: USER_IDS.liang,
     assignedTeamId: TEAM_IDS.onboarding,
-    ticketId: null,
+    ticketId: TICKET_IDS.meiUnassigned,
     unreadCount: 5,
     serviceWindowExpiresAt: null,
     botHandling: false,
@@ -647,12 +667,162 @@ export const MOCK_MESSAGE_TEMPLATES: readonly MockMessageTemplate[] = [
   }),
 ];
 
+// --- Tickets (TAR-25) ------------------------------------------------------
+//
+// Five in the main tenant, chosen so every branch of the queue and the ticket
+// view is reachable without editing a fixture: the sort (urgent above high above
+// normal), the active-only default (two terminal tickets that must not appear in
+// it), `scope=unassigned` (which needs `ticket:read_all`), and a ticket closed
+// without a resolution.
+//
+// They also respect `tickets_one_active_per_contact`: Fatima and Mei each hold
+// exactly one *active* ticket, and their second one is terminal. A fixture set
+// that broke the invariant would let a bug through that the database refuses.
+
+/**
+ * The placeholder ADR 0006 §8.3 fixes for the mapper until TAR-26 writes real
+ * timers. `not_applicable` is the honest answer for a tenant with no SLA policy,
+ * and the response shape does not change when TAR-26 fills it in.
+ */
+const NO_SLA: TicketSla = {
+  policyId: null,
+  firstResponseState: 'not_applicable',
+  firstResponseDueAt: null,
+  resolutionState: 'not_applicable',
+  resolutionDueAt: null,
+};
+
+/**
+ * What routing says about a ticket it has not reached a conclusion on (ADR 0008
+ * decision 3). Every fixture below is `pending` because nothing writes the
+ * column until TAR-288's router does; TAR-274's supervisor view overrides it to
+ * `deferred` with a reason on the tickets it needs stuck.
+ */
+const NOT_ROUTED: TicketRouting = {
+  state: 'pending',
+  deferredReason: null,
+  deferredSince: null,
+};
+
+function ticket(
+  overrides: Partial<MockTicket> &
+    Pick<MockTicket, 'id' | 'number' | 'status' | 'priority' | 'createdAt'>,
+): MockTicket {
+  return {
+    tenantId: MOCK_TENANT_ID,
+    conversationId: null,
+    contactId: null,
+    // Null on every auto-created ticket: the first inbound message is as likely
+    // to be a photo as a sentence, so there is nothing honest to derive a
+    // subject from. The console falls back to the number.
+    subject: null,
+    assignedUserId: null,
+    assignedTeamId: null,
+    routing: NOT_ROUTED,
+    sla: NO_SLA,
+    // Nothing writes this column yet; TAR-26 owns the first-response timer.
+    firstRespondedAt: null,
+    resolvedAt: null,
+    closedAt: null,
+    updatedAt: overrides.createdAt,
+    ...overrides,
+  };
+}
+
+export const MOCK_TICKETS: readonly MockTicket[] = [
+  ticket({
+    id: TICKET_IDS.fatimaUrgent,
+    number: 1042,
+    conversationId: CONVERSATION_IDS.assignedToAmina,
+    contactId: CONTACT_IDS.fatima,
+    subject: 'July invoice never arrived',
+    status: 'open',
+    priority: 'urgent',
+    assignedUserId: USER_IDS.amina,
+    assignedTeamId: TEAM_IDS.billing,
+    createdAt: '2026-08-09T14:05:00.000Z',
+    updatedAt: '2026-08-10T08:45:00.000Z',
+  }),
+  ticket({
+    id: TICKET_IDS.jonasPending,
+    number: 1039,
+    conversationId: CONVERSATION_IDS.billingTeam,
+    contactId: CONTACT_IDS.jonas,
+    // No subject, so the queue's `Ticket #1039` fallback is reachable.
+    status: 'pending',
+    priority: 'normal',
+    assignedTeamId: TEAM_IDS.billing,
+    createdAt: '2026-08-08T11:05:00.000Z',
+    updatedAt: '2026-08-10T06:30:00.000Z',
+  }),
+  ticket({
+    id: TICKET_IDS.meiUnassigned,
+    number: 1036,
+    conversationId: CONVERSATION_IDS.assignedToLiang,
+    contactId: CONTACT_IDS.mei,
+    subject: 'Activation link keeps expiring',
+    status: 'open',
+    priority: 'high',
+    // Held by nobody: triaged work, which is why `unassigned` needs
+    // `ticket:read_all` rather than being open to every agent the way an
+    // unclaimed *conversation* is.
+    createdAt: '2026-08-07T09:05:00.000Z',
+    updatedAt: '2026-08-09T22:10:00.000Z',
+  }),
+  ticket({
+    id: TICKET_IDS.fatimaResolved,
+    number: 1011,
+    conversationId: CONVERSATION_IDS.assignedToAmina,
+    contactId: CONTACT_IDS.fatima,
+    subject: 'Refund for the duplicate charge',
+    status: 'resolved',
+    priority: 'normal',
+    assignedUserId: USER_IDS.amina,
+    assignedTeamId: TEAM_IDS.billing,
+    createdAt: '2026-08-01T09:00:00.000Z',
+    resolvedAt: '2026-08-05T15:20:00.000Z',
+    updatedAt: '2026-08-05T15:20:00.000Z',
+  }),
+  ticket({
+    id: TICKET_IDS.meiClosed,
+    number: 1004,
+    conversationId: CONVERSATION_IDS.assignedToLiang,
+    contactId: CONTACT_IDS.mei,
+    subject: 'Wrong number',
+    status: 'closed',
+    priority: 'low',
+    assignedUserId: USER_IDS.liang,
+    assignedTeamId: TEAM_IDS.onboarding,
+    createdAt: '2026-07-20T08:00:00.000Z',
+    // `resolvedAt` stays null on purpose: closing a wrong number is not a
+    // resolution, and back-filling one would manufacture a cycle time that never
+    // happened (ADR 0006 §3).
+    closedAt: '2026-07-25T10:30:00.000Z',
+    updatedAt: '2026-07-25T10:30:00.000Z',
+  }),
+  ticket({
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: TICKET_IDS.otherTenant,
+    number: 7,
+    conversationId: CONVERSATION_IDS.otherTenant,
+    contactId: CONTACT_IDS.otherTenant,
+    subject: 'This must never appear in another tenant’s queue',
+    status: 'open',
+    priority: 'urgent',
+    assignedUserId: USER_IDS.otherTenant,
+    createdAt: '2026-06-02T09:05:00.000Z',
+  }),
+];
+
 export const MOCK_IDS = {
   teams: TEAM_IDS,
   users: USER_IDS,
+  contacts: CONTACT_IDS,
   conversations: CONVERSATION_IDS,
   messages: MESSAGE_IDS,
   notes: NOTE_IDS,
   templates: TEMPLATE_IDS,
+  tickets: TICKET_IDS,
   whatsappAccount: WHATSAPP_ACCOUNT_ID,
 } as const;

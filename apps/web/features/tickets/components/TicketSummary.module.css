@@ -1,0 +1,40 @@
+/*
+ * The ticket's facts. An auto-fit grid rather than a breakpoint: the list holds
+ * four entries on an open ticket and six on a closed one, and `minmax` lets it
+ * find its own column count instead of being told one per width.
+ */
+
+.reference {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+  gap: var(--space-4);
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.term {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+.value {
+  /* A `dd` carries a user-agent indent that would break the grid's alignment. */
+  margin-inline-start: 0;
+  overflow-wrap: anywhere;
+}
+
+.note {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  max-inline-size: var(--measure-body);
+}

@@ -1,0 +1,101 @@
+-- The ticket queue's index (TAR-284, implementing 0006 §6).
+--
+-- One statement, additive, no column change: a partial btree serving
+-- `GET /api/v1/tickets` — the active queue, ordered `priority DESC,
+-- created_at DESC, id DESC`, paged by keyset.
+--
+-- ---------------------------------------------------------------------------
+-- Why the index `tickets` already carries cannot serve it
+-- ---------------------------------------------------------------------------
+--
+-- `tickets_tenant_id_status_priority_created_at_idx` is
+-- `(tenant_id, status, priority, created_at DESC)`. Three separate reasons it
+-- does not answer this query, and none of them is fixable by rewriting the
+-- query:
+--
+--   * a btree yields `priority DESC` only on a **backward** scan, and a
+--     backward scan flips `created_at` to ASC — the opposite of the declared
+--     order;
+--   * `status IN ('open','pending')` is two ranges on a column that sits
+--     *before* `priority`, so no single scan delivers a priority-ordered stream
+--     across both;
+--   * it carries no `id`, so a keyset cursor has no total order to resume on.
+--
+-- The result without this index is a Bitmap Heap Scan plus a top-N Sort over
+-- the tenant's whole active set on **every** page. That is invisible at
+-- hundreds of active tickets and becomes the queue's dominant cost by the low
+-- thousands — the cost scales with the tenant's backlog, not with the page.
+-- `ticket-queue-shape.int-spec.ts` asserts the property rather than a number:
+-- the queue page must not carry a Sort node over the tenant-wide active set.
+--
+-- The old index stays. Supervisor dashboards filter by an explicit status,
+-- which is the shape it does serve.
+--
+-- ---------------------------------------------------------------------------
+-- Not CONCURRENTLY, and the ADR says otherwise — here is why
+-- ---------------------------------------------------------------------------
+--
+-- 0006 §6 specifies `CREATE INDEX CONCURRENTLY`. Prisma runs each migration
+-- file inside one transaction and Postgres forbids `CREATE INDEX CONCURRENTLY`
+-- there, so the statement as written cannot be applied by
+-- `prisma migrate deploy` at all. Same constraint, same resolution, and the
+-- same reasoning as `tickets_one_active_per_contact` in
+-- 20260811130000_ticket_active_constraint_and_counters: `tickets` is empty or
+-- near-empty in every environment this will reach, so a plain `CREATE INDEX`
+-- takes ACCESS EXCLUSIVE for roughly no time.
+--
+-- ⚠️ If this ever has to reach a populated `tickets` — a tenant fleet with a
+-- real backlog — it belongs in an out-of-band step instead:
+--
+--   CREATE INDEX CONCURRENTLY tickets_active_queue_idx
+--     ON tickets (tenant_id, priority DESC, created_at DESC, id DESC)
+--     WHERE status IN ('open','pending');
+--
+-- run outside a transaction, followed by a check for `indisvalid = false` — a
+-- concurrent build that fails leaves an INVALID index behind that has to be
+-- dropped and rebuilt rather than retried.
+--
+-- ---------------------------------------------------------------------------
+-- `urgent` is last in the enum, and that is what "urgent first" means
+-- ---------------------------------------------------------------------------
+--
+-- Postgres orders an enum by declaration order, so `priority DESC` puts
+-- `urgent` on top only because `ticket_priority` is declared
+-- `low, normal, high, urgent`. Reordering those labels silently inverts this
+-- index and the queue with it. `schema.prisma` carries the warning beside the
+-- enum and `ticket-queue.int-spec.ts` asserts the ordering against a real
+-- database.
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+--   Duration     Milliseconds on every current environment; `tickets` holds
+--                nothing but seed data. On a populated table, seconds per
+--                100k active rows — use the CONCURRENTLY path above instead.
+--   Locks        ACCESS EXCLUSIVE on `tickets` for the build. `lock_timeout`
+--                caps the wait at three seconds so a long-running transaction
+--                aborts this migration cleanly rather than queueing ahead of
+--                every new query. Re-run once it clears.
+--   Blocking     Reads and writes to `tickets` for the duration of the build.
+--   Write cost   One more index maintained on insert and on any update that
+--                moves `priority`, `created_at` or `status` — and only for rows
+--                in `open`/`pending`, so a resolved ticket leaves the index
+--                instead of sitting in it. That is the same shape as
+--                `tickets_one_active_per_contact` and the reason the predicate
+--                is there rather than indexing the whole table.
+--   Data loss    None. Purely additive.
+--   Rollback     `down.sql` beside this file. Dropping it costs the queue its
+--                access path and nothing else — no data, no constraint.
+--
+-- Prisma cannot express a partial index, so `schema.prisma` does not contain
+-- this one; its describer also skips predicated indexes, so `migrate dev`
+-- proposes neither to create nor to drop it and its absence is not reported as
+-- drift. **Nothing in that file will ever regenerate it.**
+
+SET LOCAL lock_timeout = '3s';
+
+-- CreateIndex
+CREATE INDEX "tickets_active_queue_idx"
+    ON "public"."tickets" ("tenant_id", "priority" DESC, "created_at" DESC, "id" DESC)
+    WHERE "status" IN ('open', 'pending');

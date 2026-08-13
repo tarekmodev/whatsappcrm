@@ -4,7 +4,7 @@ import {
   type SessionPrincipal,
   type TenantRole,
 } from '@whatsappcrm/contracts';
-import type { InboxScope } from '@/lib/routes';
+import type { InboxScope, TicketScope } from '@/lib/routes';
 
 /**
  * Permission helpers. The UI asks "may this principal do X", never "is this
@@ -54,4 +54,25 @@ export function isConversationScopeNarrowed(
   scope: InboxScope,
 ): boolean {
   return scope === 'all' && !checker.can('conversation:read_all');
+}
+
+/**
+ * The same question for the ticket queue, against the ticket permission.
+ *
+ * Deliberately a second function rather than a parameterised one: the two rules
+ * are not the same rule. A conversation's `all` narrows to "mine ∪ my teams' ∪
+ * unclaimed", because an unclaimed thread is visible to every agent. A ticket's
+ * narrows to "mine ∪ my teams'" only — an unassigned ticket is triaged work, not
+ * a shared pool — so a caller reading one of these must not be able to assume it
+ * means what the other one does.
+ *
+ * Which is exactly why **`unassigned` counts too**, and only here: for tickets it
+ * is gated on `ticket:read_all` and narrows to the caller's own, so a supervisor
+ * sharing `/tickets?scope=unassigned` leaves an agent looking at their own
+ * tickets under somebody else's heading. Anything but `assigned` can come back
+ * narrower than it was asked for; `assigned` is what the caller would have got
+ * regardless.
+ */
+export function isTicketScopeNarrowed(checker: PermissionChecker, scope: TicketScope): boolean {
+  return scope !== 'assigned' && !checker.can('ticket:read_all');
 }

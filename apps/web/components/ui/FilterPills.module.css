@@ -1,3 +1,11 @@
+/* Only rendered for `isLabelVisible`; a lone strip needs no heading. */
+.label {
+  margin-block-end: var(--space-2);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
 .list {
   display: flex;
   flex-wrap: wrap;

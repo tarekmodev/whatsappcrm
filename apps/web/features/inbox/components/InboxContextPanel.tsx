@@ -4,9 +4,11 @@ import { Badge } from '@/components/ui/Badge';
 import { Notice } from '@/components/ui/Notice';
 import { SectionCard } from '@/components/ui/SectionCard';
 import { SkeletonLine, SkeletonText } from '@/components/ui/Skeleton';
+import { TextLink } from '@/components/ui/TextLink';
 import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
 import { content } from '@/content/en';
+import { routes } from '@/lib/routes';
 import styles from './InboxContextPanel.module.css';
 
 /**
@@ -28,8 +30,12 @@ import styles from './InboxContextPanel.module.css';
  * `ticketId`, a ticket is open and everything said here is on it; without one,
  * a ticket opens by itself with the customer's next message. A button here would
  * either call an endpoint that does not exist or duplicate work the pipeline
- * already did — and the ticket read that would let this name and link the ticket
- * (`GET /tickets/{id}`) is not implemented either. Both land together.
+ * already did.
+ *
+ * Since TAR-286 it also *links* to that ticket, which is where its status and
+ * priority are changed. `conversation.ticketId` names the **active** ticket, so
+ * resolving one empties this section as well as removing the row from the queue
+ * — the panel reporting nothing to link is the correct answer, not a gap.
  */
 export function InboxContextPanel({ conversation }: { conversation: ConversationResponse }) {
   return (
@@ -87,6 +93,7 @@ function TicketLink({ ticketId }: { ticketId: string | null }) {
     <Stack gap="2">
       <Notice tone="info">{content.inbox.ticketLinked}</Notice>
       <p className={styles.detail}>{content.inbox.ticketLinkedBody}</p>
+      <TextLink href={routes.ticket(ticketId)}>{content.inbox.ticketOpen}</TextLink>
     </Stack>
   );
 }

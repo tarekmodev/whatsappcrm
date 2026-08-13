@@ -1054,7 +1054,7 @@ function northwind(now: Date): DemoTenant {
         contactId: CONTACT_IDS.fatima,
         assignedUserId: USER_IDS.amina,
         assignedTeamId: TEAM_IDS.billing,
-        firstResponseAt: ago(now, 175 * MINUTE_MS),
+        firstRespondedAt: ago(now, 175 * MINUTE_MS),
         createdAt: ago(now, 3 * HOUR_MS),
       },
       {
@@ -1068,7 +1068,7 @@ function northwind(now: Date): DemoTenant {
         assignedUserId: USER_IDS.priya,
         // Moves with `MESSAGE_IDS.hector2` above, and for the reason given
         // there: 38 minutes inside the window rather than exactly on it.
-        firstResponseAt: ago(now, 6 * DAY_MS + 22 * MINUTE_MS),
+        firstRespondedAt: ago(now, 6 * DAY_MS + 22 * MINUTE_MS),
         resolvedAt: ago(now, 6 * DAY_MS - 5 * MINUTE_MS),
         createdAt: ago(now, 6 * DAY_MS + HOUR_MS),
       },

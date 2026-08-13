@@ -53,6 +53,27 @@ interface LinkAttempt {
   readonly created: TicketCreatedEvent | null;
 }
 
+/**
+ * An attempt that has to be repeated in a **new** transaction, because a
+ * compare-and-set matched nothing.
+ *
+ * Two of them, and they are distinguished only so the log line names the race
+ * that actually happened — the loop treats both the same way, which is the only
+ * correct treatment: read the contact's active ticket again and act on what the
+ * database says *now*.
+ *
+ *   * `create` — another job inserted the contact's ticket first. The winner is
+ *     there to attach to on the next read.
+ *   * `reopen` — the ticket was `pending` when this transaction read it and is
+ *     not any more, because an agent's `PATCH /tickets/{id}` committed in
+ *     between. If they resolved or closed it, the next read finds no active
+ *     ticket and this message opens a new one; if they merely moved it to
+ *     `open`, the next read attaches to it with nothing to reopen.
+ */
+interface LostRace {
+  readonly lost: 'create' | 'reopen';
+}
+
 /** What the create statement hands back when it wins. */
 interface AllocatedTicket {
   readonly id: string;
@@ -120,13 +141,14 @@ export class TicketLinkerService implements TicketLinker {
         this.linkOnce(tx, tenantId, target),
       );
 
-      if (linked === null) {
-        // Lost the insert, and the winner was gone by the time it was read back.
-        // Rare enough to be worth a line when it happens; loud enough to alert on
-        // if it happens three times.
+      if ('lost' in linked) {
+        // A compare-and-set matched nothing: either another job created the
+        // contact's ticket first, or an agent moved this one out of `pending`
+        // while the reopen was in flight. Rare enough to be worth a line when it
+        // happens; loud enough to alert on if it happens three times.
         this.logger.warn(
-          `Ticket create for contact ${target.contactId} lost the race and found no ticket to attach to ` +
-            `(attempt ${attempt} of ${MAX_LINK_ATTEMPTS})`,
+          `Ticket link for contact ${target.contactId} lost the ${linked.lost} race ` +
+            `(attempt ${attempt} of ${MAX_LINK_ATTEMPTS}); re-reading and trying again`,
         );
         continue;
       }
@@ -192,16 +214,16 @@ export class TicketLinkerService implements TicketLinker {
   /**
    * One transaction: attach to the contact's active ticket, or create one.
    *
-   * Returns `null` when the insert lost the race, which is the caller's cue to
-   * try again in a **new** transaction. It has to be a new one — Prisma's
-   * interactive transactions expose no savepoint, so a transaction that has seen
-   * a conflict has nowhere to roll back to.
+   * Returns a `LostRace` when either compare-and-set matched nothing, which is
+   * the caller's cue to try again in a **new** transaction. It has to be a new
+   * one — Prisma's interactive transactions expose no savepoint, so a
+   * transaction that has seen a conflict has nowhere to roll back to.
    */
   private async linkOnce(
     tx: Prisma.TransactionClient,
     tenantId: string,
     target: InboundTarget,
-  ): Promise<LinkAttempt | null> {
+  ): Promise<LinkAttempt | LostRace> {
     const active = await tx.ticket.findFirst({
       // `tenantId` alongside the RLS predicate so the planner uses
       // `tickets_one_active_per_contact` — the same partial index that enforces
@@ -229,15 +251,29 @@ export class TicketLinkerService implements TicketLinker {
    *     tenant running more than one WhatsApp number. The link is recorded and
    *     `conversation_id` is deliberately left pointing at the conversation the
    *     ticket was opened from (0003, open question 2).
+   *
+   * ## A reopen that loses its race abandons the whole attach
+   *
+   * TAR-25 made `PATCH /tickets/{id}` a second writer on this row, so a ticket
+   * read as `pending` can be `resolved` a millisecond later. Reporting
+   * `attached` against it would be two lies at once: the customer's reply would
+   * be recorded against a finished ticket, leaving the contact with **no** active
+   * ticket until they wrote again, and `previousStatus: 'pending'` would hand
+   * TAR-26 a resume cue for a transition that never happened.
+   *
+   * So the loss returns before anything else is written and the caller reads the
+   * contact's ticket again. Returning early also matters for ordering: the
+   * `conversation_linked` write below would otherwise commit against a ticket
+   * this attempt is about to abandon.
    */
   private async attach(
     tx: Prisma.TransactionClient,
     tenantId: string,
     active: ActiveTicket,
     target: InboundTarget,
-  ): Promise<LinkAttempt> {
-    if (active.status === 'pending') {
-      await this.reopen(tx, tenantId, active);
+  ): Promise<LinkAttempt | LostRace> {
+    if (active.status === 'pending' && !(await this.reopen(tx, tenantId, active))) {
+      return { lost: 'reopen' };
     }
 
     if (active.conversationId !== target.conversationId) {
@@ -268,19 +304,24 @@ export class TicketLinkerService implements TicketLinker {
    * the write are one statement rather than a read-modify-write two workers can
    * interleave. The event is appended only if this transaction is the one that
    * moved it, so the log never claims a transition that did not happen.
+   *
+   * **True when this transaction is the one that moved it.** `false` is not a
+   * quiet no-op the caller may ignore: it means the row is no longer `pending`,
+   * so every conclusion the caller drew from reading it is stale. `attach`
+   * abandons the attempt on it — see the reasoning there.
    */
   private async reopen(
     tx: Prisma.TransactionClient,
     tenantId: string,
     active: ActiveTicket,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { count } = await tx.ticket.updateMany({
       where: { tenantId, id: active.id, status: 'pending' },
       data: { status: 'open' },
     });
 
     if (count === 0) {
-      return;
+      return false;
     }
 
     await tx.ticketEvent.create({
@@ -291,11 +332,13 @@ export class TicketLinkerService implements TicketLinker {
         data: { from: 'pending', to: 'open', cause: INBOUND_MESSAGE_CAUSE },
       },
     });
+
+    return true;
   }
 
   /**
    * The create path: allocate a number and insert the ticket in one statement
-   * that cannot produce a duplicate. Returns `null` when another job won.
+   * that cannot produce a duplicate. Returns a `LostRace` when another job won.
    *
    * Raw SQL because the Prisma client can express neither half of it — a
    * data-modifying CTE, and `ON CONFLICT … WHERE` naming a partial index. This
@@ -319,7 +362,7 @@ export class TicketLinkerService implements TicketLinker {
     tx: Prisma.TransactionClient,
     tenantId: string,
     target: InboundTarget,
-  ): Promise<LinkAttempt | null> {
+  ): Promise<LinkAttempt | LostRace> {
     const ticketId = uuidV7();
 
     const [ticket] = await tx.$queryRaw<AllocatedTicket[]>`
@@ -338,7 +381,7 @@ export class TicketLinkerService implements TicketLinker {
     `;
 
     if (ticket === undefined) {
-      return null;
+      return { lost: 'create' };
     }
 
     await tx.ticketEvent.create({

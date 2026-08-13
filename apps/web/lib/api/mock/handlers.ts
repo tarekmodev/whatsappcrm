@@ -14,11 +14,17 @@ import {
   PasswordResetConfirmInputSchema,
   PasswordResetRequestInputSchema,
   SendMessageInputSchema,
+  TICKET_ACTIVE_STATUSES,
+  TICKET_PRIORITIES,
+  TICKET_STATUS_REQUIRES_CLOSE,
   TeamCreateInputSchema,
   TeamUpdateInputSchema,
+  TicketListQuerySchema,
+  TicketUpdateInputSchema,
   UserListQuerySchema,
   UserUpdateInputSchema,
   WhatsAppEmbeddedSignupInputSchema,
+  canAgentTransition,
   isRoleWithin,
   renderTemplateBody,
   roleHasPermission,
@@ -35,6 +41,8 @@ import {
   type SessionPrincipal,
   type SessionResponse,
   type TeamResponse,
+  type TicketListQuery,
+  type TicketResponse,
   type UserResponse,
 } from '@whatsappcrm/contracts';
 import { ApiRequestError, type ApiRequest } from '@/lib/api/http';
@@ -46,6 +54,7 @@ import type {
   MockMessage,
   MockMessageTemplate,
   MockTeam,
+  MockTicket,
   MockUser,
   TenantScoped,
 } from '@/lib/api/mock/fixtures';
@@ -249,6 +258,26 @@ const ROUTES: readonly Route[] = [
     // console's permission gate is exercised against a real 403.
     permission: 'conversation:assign',
     handle: assignConversation,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/tickets$/,
+    permission: 'ticket:read',
+    handle: listTickets,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}$`),
+    permission: 'ticket:read',
+    handle: getTicket,
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}$`),
+    // `ticket:update` at the guard; the terminal transitions additionally need
+    // `ticket:close`, which is per-body and so is checked in the handler.
+    permission: 'ticket:update',
+    handle: updateTicket,
   },
   {
     method: 'GET',
@@ -954,6 +983,239 @@ function assignConversation({ principal, params, body }: RouteContext): Conversa
   return toConversationResponse(updated);
 }
 
+// --- Tickets (TAR-25, ADR 0006) --------------------------------------------
+
+/**
+ * `GET /v1/tickets` — the queue.
+ *
+ * Three rules mirrored rather than simplified, because each one is something the
+ * console claims to be true:
+ *
+ *   1. **No `status` means the active queue** (`open` and `pending`). That
+ *      default is what makes "resolving a ticket moves it out of the queue" true
+ *      with no client change, so a mock that returned everything would leave the
+ *      whole acceptance criterion untested.
+ *   2. **One order: `priority DESC, createdAt DESC, id DESC`.** There is no sort
+ *      parameter. Urgent-first depends on the *declaration order* of
+ *      `TICKET_PRIORITIES`, which is load-bearing and invisible — `orderIndex`
+ *      below is where that dependency is written down.
+ *   3. **`unassigned` needs `ticket:read_all`.** Unlike an unclaimed
+ *      conversation, an unassigned ticket is triaged work rather than a shared
+ *      pool, so a caller without the permission is narrowed to their own rather
+ *      than refused.
+ */
+function listTickets({ principal, query }: RouteContext): CursorPage<TicketResponse> {
+  const parsed = TicketListQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { status, priority, scope, assignedUserId, assignedTeamId, limit } = parsed.data;
+
+  const items = tenantTickets(principal)
+    .filter((item) =>
+      status === undefined ? TICKET_ACTIVE_STATUSES.includes(item.status) : item.status === status,
+    )
+    .filter((item) => priority === undefined || item.priority === priority)
+    .filter((item) => assignedUserId === undefined || item.assignedUserId === assignedUserId)
+    .filter((item) => assignedTeamId === undefined || item.assignedTeamId === assignedTeamId)
+    .filter((item) => matchesTicketScope(item, scope, principal))
+    .sort(byQueueOrder)
+    .slice(0, limit)
+    .map(toTicketResponse);
+
+  return { items, nextCursor: null };
+}
+
+function getTicket({ principal, params }: RouteContext): TicketResponse {
+  return toTicketResponse(findTicketInTenant(principal, params[0]));
+}
+
+/**
+ * `PATCH /v1/tickets/{id}` — one transaction over status, priority and subject.
+ *
+ * The four answers the console is built around, all reachable here:
+ *
+ *   * a move the transition table refuses — `conflict`, naming the current
+ *     status, exactly as the service does when its compare-and-set matches
+ *     nothing;
+ *   * a terminal transition without `ticket:close` — `forbidden`;
+ *   * an empty body — `validation_failed`, from the schema's own `.refine`;
+ *   * **setting the value it already has — 200 and no timestamp touched.** That
+ *     is the no-op of ADR 0006 §2, not a conflict: a double-clicked button and a
+ *     retry after a dropped response both arrive that way.
+ */
+function updateTicket({ principal, params, body }: RouteContext): TicketResponse {
+  const current = findTicketInTenant(principal, params[0]);
+  const parsed = TicketUpdateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { status, priority, subject } = parsed.data;
+
+  if (status !== undefined && status !== current.status) {
+    if (!canAgentTransition(current.status, status)) {
+      throw refused(
+        'conflict',
+        `This ticket is ${current.status} and cannot be moved to ${status}.`,
+        HTTP_CONFLICT,
+      );
+    }
+
+    if (
+      TICKET_STATUS_REQUIRES_CLOSE[status] &&
+      !roleHasPermission(principal.role, 'ticket:close')
+    ) {
+      throw refused('forbidden', 'Your role does not include ticket:close.');
+    }
+  }
+
+  const hasChange =
+    (status !== undefined && status !== current.status) ||
+    (priority !== undefined && priority !== current.priority) ||
+    (subject !== undefined && subject !== current.subject);
+
+  if (!hasChange) {
+    return toTicketResponse(current);
+  }
+
+  const now = new Date().toISOString();
+  const isEntering = (target: MockTicket['status']) =>
+    status === target && current.status !== target;
+
+  const updated: MockTicket = {
+    ...current,
+    status: status ?? current.status,
+    priority: priority ?? current.priority,
+    subject: subject ?? current.subject,
+    // Written on the transition *into* the state, never derived from it and
+    // never cleared. `open`/`pending` → `closed` leaves `resolvedAt` null
+    // deliberately: that is the honest signal for "closed unworked".
+    resolvedAt: isEntering('resolved') ? now : current.resolvedAt,
+    closedAt: isEntering('closed') ? now : current.closedAt,
+    updatedAt: now,
+  };
+
+  mockState().tickets.set(updated.id, updated);
+  syncConversationTicketLink(updated);
+
+  return toTicketResponse(updated);
+}
+
+/**
+ * Keeps `conversation.ticketId` — the contact's *active* ticket — in step with a
+ * status change.
+ *
+ * Modelled rather than left alone because it is what the inbox context panel
+ * renders: resolving a ticket has to empty that section as well as remove the row
+ * from the queue, and a fixture layer that kept the link would let a stale panel
+ * ship looking fine.
+ */
+function syncConversationTicketLink(ticket: MockTicket): void {
+  if (ticket.conversationId === null) {
+    return;
+  }
+
+  const state = mockState();
+  const conversation = state.conversations.get(ticket.conversationId);
+
+  if (conversation === undefined) {
+    return;
+  }
+
+  const isActive = TICKET_ACTIVE_STATUSES.includes(ticket.status);
+
+  if (isActive === (conversation.ticketId === ticket.id)) {
+    return;
+  }
+
+  state.conversations.set(conversation.id, {
+    ...conversation,
+    ticketId: isActive ? ticket.id : null,
+  });
+}
+
+/**
+ * `priority DESC, createdAt DESC, id DESC`.
+ *
+ * `orderIndex` reads the position in `TICKET_PRIORITIES`, which is declared
+ * `low, normal, high, urgent` — the same declaration order Postgres sorts the
+ * enum by. Reordering that array silently inverts the queue, which is why the
+ * dependency is named here rather than assumed.
+ */
+function byQueueOrder(left: MockTicket, right: MockTicket): number {
+  return (
+    orderIndex(right.priority) - orderIndex(left.priority) ||
+    right.createdAt.localeCompare(left.createdAt) ||
+    right.id.localeCompare(left.id)
+  );
+}
+
+function orderIndex(priority: MockTicket['priority']): number {
+  return TICKET_PRIORITIES.indexOf(priority);
+}
+
+function isTicketAssignedTo(ticket: MockTicket, principal: SessionPrincipal): boolean {
+  return (
+    ticket.assignedUserId === principal.userId ||
+    (ticket.assignedTeamId !== null && principal.teamIds.includes(ticket.assignedTeamId))
+  );
+}
+
+/**
+ * Mirrors the API's `narrowScope(scope, principal, 'ticket:read_all')`: a caller
+ * without the permission gets their own and their teams' tickets whatever scope
+ * they asked for, rather than a refusal — so a supervisor's shared link still
+ * renders for an agent, with less in it.
+ */
+function matchesTicketScope(
+  ticket: MockTicket,
+  scope: TicketListQuery['scope'],
+  principal: SessionPrincipal,
+): boolean {
+  if (!roleHasPermission(principal.role, 'ticket:read_all')) {
+    return isTicketAssignedTo(ticket, principal);
+  }
+
+  if (scope === 'assigned') {
+    return isTicketAssignedTo(ticket, principal);
+  }
+
+  if (scope === 'unassigned') {
+    return ticket.assignedUserId === null && ticket.assignedTeamId === null;
+  }
+
+  return true;
+}
+
+/**
+ * The API's `isVisible` — **not** `isVisibleOrUnclaimed`. Tickets keep the narrow
+ * rule: an unassigned ticket is triaged work, not something every agent may pick
+ * up, so it is visible only to a principal holding `ticket:read_all`.
+ *
+ * A ticket outside that set answers `not_found`, never `forbidden`, on the PATCH
+ * exactly as on the GET.
+ */
+function findTicketInTenant(principal: SessionPrincipal, id: string | undefined): MockTicket {
+  const ticket = tenantTickets(principal).find((candidate) => candidate.id === id);
+
+  if (ticket === undefined) {
+    throw notFound();
+  }
+
+  if (
+    !roleHasPermission(principal.role, 'ticket:read_all') &&
+    !isTicketAssignedTo(ticket, principal)
+  ) {
+    throw notFound();
+  }
+
+  return ticket;
+}
+
 // --- Sending, and the templates that survive a closed window (TAR-20g) ------
 
 /**
@@ -1239,6 +1501,12 @@ function tenantNotes(principal: SessionPrincipal): MockInternalNote[] {
   );
 }
 
+function tenantTickets(principal: SessionPrincipal): MockTicket[] {
+  return [...mockState().tickets.values()].filter(
+    (ticket) => ticket.tenantId === principal.tenantId,
+  );
+}
+
 function tenantTemplates(principal: SessionPrincipal): MockMessageTemplate[] {
   return [...mockState().messageTemplates.values()].filter(
     (item) => item.tenantId === principal.tenantId,
@@ -1372,6 +1640,10 @@ function toInternalNoteResponse(note: MockInternalNote): InternalNoteResponse {
 
 function toMessageTemplateResponse(item: MockMessageTemplate): MessageTemplateResponse {
   return stripTenant(item);
+}
+
+function toTicketResponse(ticket: MockTicket): TicketResponse {
+  return stripTenant(ticket);
 }
 
 // --- Helpers ---------------------------------------------------------------

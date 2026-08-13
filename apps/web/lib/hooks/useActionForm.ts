@@ -26,7 +26,17 @@ export interface UseActionFormOptions<T> {
 }
 
 export interface UseActionForm {
-  submit: () => void;
+  /**
+   * Runs the action, and reports **whether it actually ran**: `false` means the
+   * double-submit guard swallowed it because one is already in flight.
+   *
+   * Most callers are a single button and can ignore the answer — the guard is
+   * doing its job and there is nothing else to say. A caller that mutates state
+   * of its own before submitting cannot: a swallowed submit leaves that state
+   * describing a request nobody sent. Returning it is what lets such a caller
+   * put itself back (`useTicketUpdate`, where two controls share one hook).
+   */
+  submit: () => boolean;
   isPending: boolean;
   /** Form-level failure, rendered above the actions. Field errors are separate. */
   formError: string | null;
@@ -42,9 +52,9 @@ export function useActionForm<T>({ perform, onSuccess }: UseActionFormOptions<T>
   // `isPending === false`.
   const inFlightRef = useRef(false);
 
-  const submit = useCallback(() => {
+  const submit = useCallback((): boolean => {
     if (inFlightRef.current) {
-      return;
+      return false;
     }
 
     inFlightRef.current = true;
@@ -74,6 +84,8 @@ export function useActionForm<T>({ perform, onSuccess }: UseActionFormOptions<T>
         inFlightRef.current = false;
         setIsPending(false);
       });
+
+    return true;
   }, [perform, onSuccess]);
 
   const clearError = useCallback(() => {
