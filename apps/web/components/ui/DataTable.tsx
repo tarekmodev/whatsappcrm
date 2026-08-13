@@ -14,6 +14,15 @@ import styles from './DataTable.module.css';
  * screen-reader table commands. Below the layout breakpoint each row re-flows into
  * a stacked card, with the column header repeated per cell through
  * `data-label` — no duplicate mobile markup and no horizontal scroll at 320px.
+ *
+ * **That breakpoint is a container query, not a media query**, and the wrapper
+ * below is what it measures. A table's space is the viewport *minus the console's
+ * navigation rail*, and the rail appears at exactly the width the table used to
+ * un-stack at: on a 768px screen the table was told it had 768px and given 528,
+ * so it laid out as a real table and pushed the whole page into horizontal
+ * scroll. Measuring the space it actually has is the only version of this that
+ * cannot be wrong, and it also makes the component correct inside a dialog or a
+ * side panel, neither of which the viewport knows about.
  */
 
 export interface DataTableColumn<Row> {
@@ -27,6 +36,15 @@ export interface DataTableColumn<Row> {
   isNarrow?: boolean;
 }
 
+/**
+ * Row flags this table can draw, as a rule down the row's inline start.
+ *
+ * A deliberately short list — the same two the `Badge` tones mean here — because
+ * a table where several rows are flagged in different colours has flagged
+ * nothing. `undefined` is the ordinary row.
+ */
+export type DataTableRowTone = 'danger' | 'warning';
+
 export interface DataTableProps<Row> {
   /** The table's accessible name. Visually hidden unless `isCaptionVisible`. */
   caption: string;
@@ -34,6 +52,16 @@ export interface DataTableProps<Row> {
   rows: readonly Row[];
   getRowKey: (row: Row) => string;
   isCaptionVisible?: boolean;
+  /**
+   * Draws a coloured rule down a row that needs the eye. **Decoration only**:
+   * the same fact must already be readable in one of the row's own cells, or the
+   * flag would be meaning conveyed by colour alone — which fails at AA and
+   * disappears entirely in forced-colors mode.
+   *
+   * The ticket queue uses it for a breached SLA, beside a cell that says
+   * "Overdue" in words.
+   */
+  getRowTone?: (row: Row) => DataTableRowTone | undefined;
 }
 
 export function DataTable<Row>({
@@ -42,48 +70,51 @@ export function DataTable<Row>({
   rows,
   getRowKey,
   isCaptionVisible = false,
+  getRowTone,
 }: DataTableProps<Row>) {
   return (
-    <table className={styles.table}>
-      <caption className={styles.caption} data-visible={isCaptionVisible ? 'true' : undefined}>
-        {caption}
-      </caption>
-      <thead className={styles.head}>
-        <tr>
-          {columns.map((column) => (
-            <th
-              key={column.key}
-              scope="col"
-              className={styles.headerCell}
-              data-narrow={column.isNarrow ? 'true' : undefined}
-            >
-              {column.isHeaderHidden === true ? (
-                <VisuallyHidden>{column.header}</VisuallyHidden>
-              ) : (
-                column.header
-              )}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={getRowKey(row)} className={styles.row}>
+    <div className={styles.container}>
+      <table className={styles.table}>
+        <caption className={styles.caption} data-visible={isCaptionVisible ? 'true' : undefined}>
+          {caption}
+        </caption>
+        <thead className={styles.head}>
+          <tr>
             {columns.map((column) => (
-              <td
+              <th
                 key={column.key}
-                className={styles.cell}
-                // Repeats the header beside the value once the table stacks.
-                data-label={column.isHeaderHidden === true ? undefined : column.header}
+                scope="col"
+                className={styles.headerCell}
                 data-narrow={column.isNarrow ? 'true' : undefined}
               >
-                {column.render(row)}
-              </td>
+                {column.isHeaderHidden === true ? (
+                  <VisuallyHidden>{column.header}</VisuallyHidden>
+                ) : (
+                  column.header
+                )}
+              </th>
             ))}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={getRowKey(row)} className={styles.row} data-tone={getRowTone?.(row)}>
+              {columns.map((column) => (
+                <td
+                  key={column.key}
+                  className={styles.cell}
+                  // Repeats the header beside the value once the table stacks.
+                  data-label={column.isHeaderHidden === true ? undefined : column.header}
+                  data-narrow={column.isNarrow ? 'true' : undefined}
+                >
+                  {column.render(row)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

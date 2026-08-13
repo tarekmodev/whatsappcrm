@@ -46,6 +46,7 @@ export function TicketQueueFilters({ params, canReadAll }: TicketQueueFiltersPro
         label={content.tickets.priorityFilterLabel}
         items={priorityItems(params)}
       />
+      <FilterPills isLabelVisible label={content.sla.filterLabel} items={slaItems(params)} />
     </div>
   );
 }
@@ -103,6 +104,29 @@ function priorityItems(params: TicketQueueParams): FilterPillItem[] {
       href: href(params, { priority }),
       isCurrent: params.priority === priority,
     })),
+  ];
+}
+
+/**
+ * Two pills rather than a checkbox, so the whole bar stays one kind of control
+ * and the filter stays a link — which is what puts it in the URL and makes a
+ * supervisor's "everything that has breached" view something they can send
+ * somebody (TAR-26).
+ */
+function slaItems(params: TicketQueueParams): FilterPillItem[] {
+  return [
+    {
+      id: 'sla-any',
+      label: content.common.all,
+      href: href(params, { isOverdueOnly: false }),
+      isCurrent: !params.isOverdueOnly,
+    },
+    {
+      id: 'sla-overdue',
+      label: content.sla.filterOverdue,
+      href: href(params, { isOverdueOnly: true }),
+      isCurrent: params.isOverdueOnly,
+    },
   ];
 }
 

@@ -6,6 +6,7 @@ import type {
   MessageAttachment,
   MessageResponse,
   MessageTemplateResponse,
+  SlaAlertResponse,
   Tag,
   TeamResponse,
   TenantRole,
@@ -140,6 +141,14 @@ export type MockConversation = ConversationResponse & TenantScoped;
 export type MockMessage = MessageResponse & TenantScoped;
 export type MockInternalNote = InternalNoteResponse & TenantScoped;
 export type MockTicket = TicketResponse & TenantScoped;
+
+/**
+ * `SlaAlertResponse` names no recipient — the API narrows to the caller, so the
+ * column never crosses the wire. The fixture keeps it, because a transport that
+ * could not tell one supervisor's alerts from another's could not exercise the
+ * narrowing this feature's role-scoping rests on.
+ */
+export type MockSlaAlert = SlaAlertResponse & TenantScoped & { readonly recipientUserId: string };
 
 function contact(id: string, displayName: string, phone: string): ConversationResponse['contact'] {
   return {
@@ -712,9 +721,9 @@ export const MOCK_MESSAGE_TEMPLATES: readonly MockMessageTemplate[] = [
 // that broke the invariant would let a bug through that the database refuses.
 
 /**
- * The placeholder ADR 0006 §8.3 fixes for the mapper until TAR-26 writes real
- * timers. `not_applicable` is the honest answer for a tenant with no SLA policy,
- * and the response shape does not change when TAR-26 fills it in.
+ * `not_applicable` — the honest answer for a tenant with no active SLA policy,
+ * and for a timer cancelled with its ticket (ADR 0006's lifecycle). Kept as the
+ * default so a fixture that says nothing about SLA still renders a valid state.
  */
 const NO_SLA: TicketSla = {
   policyId: null,
@@ -735,6 +744,42 @@ const NOT_ROUTED: TicketRouting = {
   deferredReason: null,
   deferredSince: null,
 };
+
+/** `…010`, continuing the one-prefix-per-entity-type rule; see `SLA_ALERT_IDS`. */
+const SLA_POLICY_ID = '0192f010-0000-7000-8000-000000001001';
+
+/**
+ * A deadline that has not passed, so `running` and `paused` are reachable in
+ * mock mode.
+ *
+ * Same reasoning — and the same visible consequence — as `OPEN_SERVICE_WINDOW`
+ * above: a deadline is *relative to now* by definition, and a literal is either
+ * near enough to have passed by the time somebody looks or far enough not to,
+ * which is this. It has to stay a literal, because a generated timestamp would
+ * make server and client render different markup.
+ *
+ * ⚠️ The consequence is visible and is **not a bug in the countdown**: the
+ * queue's SLA column reads "Due · in 26,440 days" in mock mode. A real
+ * first-response window is 60 minutes and reads in minutes.
+ */
+const SLA_DEADLINE_AHEAD = '2099-01-01T01:00:00.000Z';
+
+/** One hour after the ticket was opened, and missed. The breach the sweep found. */
+const SLA_DEADLINE_MISSED = '2026-08-09T15:05:00.000Z';
+
+/** Met with time to spare, on the ticket that was resolved. */
+const SLA_DEADLINE_MET = '2026-08-01T10:00:00.000Z';
+
+/** `first_response` only: the seeded policy leaves `resolutionMinutes` null. */
+function firstResponseSla(state: TicketSla['firstResponseState'], dueAt: string | null): TicketSla {
+  return {
+    policyId: SLA_POLICY_ID,
+    firstResponseState: state,
+    firstResponseDueAt: dueAt,
+    resolutionState: 'not_applicable',
+    resolutionDueAt: null,
+  };
+}
 
 function ticket(
   overrides: Partial<MockTicket> &
@@ -772,6 +817,10 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     priority: 'urgent',
     assignedUserId: USER_IDS.amina,
     assignedTeamId: TEAM_IDS.billing,
+    // The overdue one, and the only one: a queue where every row is flagged has
+    // flagged nothing. It is what `?overdue=true` narrows to, what the row rule
+    // is drawn beside, and what the supervisor's alert below points at.
+    sla: firstResponseSla('breached', SLA_DEADLINE_MISSED),
     createdAt: '2026-08-09T14:05:00.000Z',
     updatedAt: '2026-08-10T08:45:00.000Z',
   }),
@@ -784,6 +833,9 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     status: 'pending',
     priority: 'normal',
     assignedTeamId: TEAM_IDS.billing,
+    // `pending` pauses the timer (`TICKET_STATUS_PAUSES_SLA`), so this is the
+    // one row that proves a waiting-on-customer ticket does not quietly breach.
+    sla: firstResponseSla('paused', SLA_DEADLINE_AHEAD),
     createdAt: '2026-08-08T11:05:00.000Z',
     updatedAt: '2026-08-10T06:30:00.000Z',
   }),
@@ -798,6 +850,7 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     // Held by nobody: triaged work, which is why `unassigned` needs
     // `ticket:read_all` rather than being open to every agent the way an
     // unclaimed *conversation* is.
+    sla: firstResponseSla('running', SLA_DEADLINE_AHEAD),
     createdAt: '2026-08-07T09:05:00.000Z',
     updatedAt: '2026-08-09T22:10:00.000Z',
   }),
@@ -811,6 +864,9 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     priority: 'normal',
     assignedUserId: USER_IDS.amina,
     assignedTeamId: TEAM_IDS.billing,
+    // Answered in time. `met` is terminal too, and stays visible under
+    // `?status=resolved` so the success case is not only inferable from absence.
+    sla: firstResponseSla('met', SLA_DEADLINE_MET),
     createdAt: '2026-08-01T09:00:00.000Z',
     resolvedAt: '2026-08-05T15:20:00.000Z',
     updatedAt: '2026-08-05T15:20:00.000Z',
@@ -843,6 +899,8 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     status: 'open',
     priority: 'urgent',
     assignedUserId: USER_IDS.otherTenant,
+    // Breached, so `?overdue=true` has something to leak if the scoping is wrong.
+    sla: firstResponseSla('breached', SLA_DEADLINE_MISSED),
     createdAt: '2026-06-02T09:05:00.000Z',
   }),
 ];
@@ -969,6 +1027,84 @@ export const MOCK_ASSIGNMENT_RULES: readonly MockAssignmentRule[] = [
   },
 ];
 
+// --- SLA alerts (TAR-26) ----------------------------------------------------
+//
+// One row per recipient per breached timer, which is what makes them the
+// delivery record *and* the idempotency ledger (ADR 0006 decision 5). Three
+// here, chosen so the two rules the console rests on are testable:
+//
+//   1. **Narrowing to the caller.** Priya and Omar each hold their own row for
+//      the same breach — decision 4 resolves *every* active supervisor and
+//      admin, not one of them — so a panel that forgot to narrow would show
+//      Priya somebody else's copy.
+//   2. **Tenant scoping**, via the row in the second tenant.
+//
+// The prefixes continue the file's one-per-entity-type rule from routing's
+// `…00d`: alerts take `…00e` and the timers behind them `…00f`. They were
+// `…00c`/`…00d` before TAR-289 landed and claimed those for custom fields and
+// assignment rules — a collision git merges without a word, and the whole point
+// of the convention is that an id in a failing assertion says which fixture it
+// came from.
+
+const SLA_ALERT_IDS = {
+  priyaFatimaUrgent: '0192f00e-0000-7000-8000-000000000e01',
+  omarFatimaUrgent: '0192f00e-0000-7000-8000-000000000e02',
+  otherTenant: '0192f00e-0000-7000-8000-000000000e99',
+} as const;
+
+/** The timer the alerts were raised from. One timer, two recipients, two rows. */
+const SLA_TIMER_IDS = {
+  fatimaUrgentFirstResponse: '0192f00f-0000-7000-8000-000000000f01',
+  otherTenantFirstResponse: '0192f00f-0000-7000-8000-000000000f99',
+} as const;
+
+export const MOCK_SLA_ALERTS: readonly MockSlaAlert[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: SLA_ALERT_IDS.priyaFatimaUrgent,
+    recipientUserId: USER_IDS.priya,
+    ticketId: TICKET_IDS.fatimaUrgent,
+    ticketNumber: 1042,
+    slaTimerId: SLA_TIMER_IDS.fatimaUrgentFirstResponse,
+    kind: 'first_response',
+    dueAt: SLA_DEADLINE_MISSED,
+    assignedUserId: USER_IDS.amina,
+    assignedTeamId: TEAM_IDS.billing,
+    acknowledgedAt: null,
+    // Detected on the sweep after the deadline, not at the deadline.
+    createdAt: '2026-08-09T15:05:30.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: SLA_ALERT_IDS.omarFatimaUrgent,
+    recipientUserId: USER_IDS.omar,
+    ticketId: TICKET_IDS.fatimaUrgent,
+    ticketNumber: 1042,
+    slaTimerId: SLA_TIMER_IDS.fatimaUrgentFirstResponse,
+    kind: 'first_response',
+    dueAt: SLA_DEADLINE_MISSED,
+    assignedUserId: USER_IDS.amina,
+    assignedTeamId: TEAM_IDS.billing,
+    acknowledgedAt: null,
+    createdAt: '2026-08-09T15:05:30.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: SLA_ALERT_IDS.otherTenant,
+    recipientUserId: USER_IDS.otherTenant,
+    ticketId: TICKET_IDS.otherTenant,
+    ticketNumber: 7,
+    slaTimerId: SLA_TIMER_IDS.otherTenantFirstResponse,
+    kind: 'first_response',
+    dueAt: SLA_DEADLINE_MISSED,
+    assignedUserId: USER_IDS.otherTenant,
+    assignedTeamId: null,
+    acknowledgedAt: null,
+    createdAt: '2026-06-02T10:05:30.000Z',
+  },
+];
+
 export const MOCK_IDS = {
   teams: TEAM_IDS,
   users: USER_IDS,
@@ -981,5 +1117,6 @@ export const MOCK_IDS = {
   tags: TAG_IDS,
   customFields: CUSTOM_FIELD_IDS,
   assignmentRules: ASSIGNMENT_RULE_IDS,
+  slaAlerts: SLA_ALERT_IDS,
   whatsappAccount: WHATSAPP_ACCOUNT_ID,
 } as const;

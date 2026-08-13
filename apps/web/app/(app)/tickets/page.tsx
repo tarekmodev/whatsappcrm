@@ -52,6 +52,7 @@ export default async function TicketsPage({
     scope: firstSearchParam(params[searchParamKeys.ticketScope]),
     status: firstSearchParam(params[searchParamKeys.ticketStatus]),
     priority: firstSearchParam(params[searchParamKeys.ticketPriority]),
+    overdue: firstSearchParam(params[searchParamKeys.ticketOverdue]),
   });
 
   return (
@@ -65,7 +66,7 @@ export default async function TicketsPage({
           {/* Keyed on the filters so a filter change shows the skeleton again
               rather than leaving the previous scope's rows on screen. */}
           <Suspense
-            key={`${query.scope}:${query.status ?? ''}:${query.priority ?? ''}`}
+            key={`${query.scope}:${query.status ?? ''}:${query.priority ?? ''}:${String(query.isOverdueOnly)}`}
             fallback={<TicketQueueSectionSkeleton />}
           >
             <TicketQueueSection

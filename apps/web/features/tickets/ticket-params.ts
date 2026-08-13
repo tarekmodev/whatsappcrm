@@ -18,18 +18,34 @@ export interface TicketQueueParams {
   /** `undefined` is the active queue (`open` and `pending`), the API's default. */
   status: TicketStatusFilter | undefined;
   priority: TicketPriorityFilter | undefined;
+  /** Narrows to breached tickets — `TicketListQuery.breachedOnly` (TAR-26). */
+  isOverdueOnly: boolean;
 }
 
 export function parseTicketQueueParams(raw: {
   scope: string | undefined;
   status: string | undefined;
   priority: string | undefined;
+  overdue: string | undefined;
 }): TicketQueueParams {
   return {
     scope: parseScope(raw.scope),
     status: parseStatus(raw.status),
     priority: parsePriority(raw.priority),
+    isOverdueOnly: parseOverdue(raw.overdue),
   };
+}
+
+/**
+ * Only the exact string `'true'` turns the filter on.
+ *
+ * Deliberately stricter than the contract's `z.coerce.boolean()`, which treats
+ * every non-empty string as true — including `'false'`. A hand-edited or
+ * truncated `?overdue=` must fall back to the full queue rather than silently
+ * hiding every ticket that is on time.
+ */
+function parseOverdue(value: string | undefined): boolean {
+  return value === 'true';
 }
 
 function parseScope(value: string | undefined): TicketScope {

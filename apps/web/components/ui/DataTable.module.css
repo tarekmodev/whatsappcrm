@@ -1,3 +1,13 @@
+/*
+ * The query container the stacked/table switch below measures. A table's space
+ * is the viewport minus the navigation rail, and the rail arrives at exactly the
+ * width the table used to un-stack at — so a media query told a 528px column it
+ * had 768px and pushed the page into horizontal scroll.
+ */
+.container {
+  container-type: inline-size;
+}
+
 .table {
   inline-size: 100%;
   border-collapse: collapse;
@@ -55,6 +65,26 @@
   margin-block-end: var(--space-3);
 }
 
+/*
+ * A flagged row (`getRowTone`). Decoration on top of a cell that already says
+ * the same thing in words — never the only signal — so losing the colour in
+ * forced-colors mode loses nothing.
+ *
+ * `border-inline-start` rather than a box-shadow, so it lands on the correct
+ * edge under `dir="rtl"` without a mirrored rule.
+ */
+.row[data-tone='danger'] {
+  --row-tone: var(--color-danger);
+}
+
+.row[data-tone='warning'] {
+  --row-tone: var(--color-warning);
+}
+
+.row[data-tone] {
+  border-inline-start: var(--size-marker) solid var(--row-tone);
+}
+
 .cell {
   display: flex;
   flex-direction: column;
@@ -73,8 +103,17 @@
   font-weight: var(--font-weight-medium);
 }
 
-/* From tablet up it is a real table again. */
-@media (min-width: 48rem) {
+/*
+ * Once the space around it is wide enough, it is a real table again.
+ *
+ * 40rem rather than the 48rem this was as a media query, because the two numbers
+ * measure different things: 48rem of *viewport* is 26rem of column once the rail
+ * takes its share, which is where the old rule went wrong. 40rem is measured —
+ * the widest table in the console (the ticket queue, six columns) lays out
+ * inside it — and it keeps the un-stacking point at roughly the screen width it
+ * used to be, so nothing that fitted before now stacks.
+ */
+@container (min-width: 40rem) {
   .head {
     position: static;
     width: auto;
@@ -116,6 +155,16 @@
     border-block-end: var(--border-hairline) solid var(--color-border);
   }
 
+  /* A `tr` is no longer a box here, so the rule moves to the first cell — which
+     is the inline-start one in both directions, because the table itself flips. */
+  .row[data-tone] {
+    border-inline-start: 0;
+  }
+
+  .row[data-tone] .cell:first-child {
+    border-inline-start: var(--size-marker) solid var(--row-tone);
+  }
+
   /*
    * Row hover, so a wide row is readable across its full width. Decoration
    * only: it marks nothing and carries no state, which is why there is no
@@ -132,6 +181,14 @@
     padding-inline: var(--space-3);
     padding-block: var(--space-3);
     vertical-align: middle;
+    /*
+     * `anywhere` is right for a stacked card, whose width is fixed, and wrong
+     * here: it also shrinks the cell's *min-content* to a single character, so
+     * the table's auto layout hands a text column almost nothing and breaks
+     * "Activation" into "Activatio / n". `break-word` keeps the guard against a
+     * single unbreakable string without volunteering the column's width away.
+     */
+    overflow-wrap: break-word;
   }
 
   .cell[data-label]::before {

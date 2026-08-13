@@ -1,0 +1,28 @@
+.panel {
+  /* Wider than the shell's menus: a row carries a reference, a holder and a
+     deadline, and at menu width all three wrap onto separate lines.
+     `MenuButton`'s own `max-inline-size` caps this to the viewport, so 22rem is
+     a target rather than a promise. */
+  inline-size: 22rem;
+  max-inline-size: 100%;
+  max-block-size: var(--size-scroll-region);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.more {
+  margin: 0;
+  padding-inline: var(--space-3);
+  padding-block: var(--space-2);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}

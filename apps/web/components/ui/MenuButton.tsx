@@ -1,6 +1,14 @@
 'use client';
 
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { usePathname } from 'next/navigation';
 import { cx } from '@/lib/cx';
 import styles from './MenuButton.module.css';
@@ -19,6 +27,20 @@ import styles from './MenuButton.module.css';
  *
  * Nothing here traps focus. A menu is not modal: tabbing past its last entry
  * should leave it, and it closes when it loses focus.
+ *
+ * ## Staying on screen
+ *
+ * `align` says which edge of the *trigger* the panel hangs from, and on a narrow
+ * screen that is not enough: the top bar's controls wrap onto their own line at
+ * the inline start, so a panel anchored to a trigger's end edge grows away from
+ * the viewport. It is clipped rather than scrolled — overflow past the inline
+ * start produces no scrollbar — so it reads as a panel that lost half its
+ * contents rather than as a layout that is too wide.
+ *
+ * CSS alone cannot express "flip if it would not fit" portably yet, so this
+ * measures the opened panel and nudges it back inside. Measured geometry rather
+ * than a breakpoint, because where a trigger sits depends on the bar's wrapping,
+ * which depends on how long the signed-in user's name is.
  */
 
 export const MENU_ALIGNMENTS = ['start', 'end'] as const;
@@ -77,6 +99,42 @@ export function MenuButton({
 
     lastPathnameRef.current = pathname;
   }, [pathname]);
+
+  // Measured before paint, so the panel never appears in the wrong place first.
+  const keepOnScreen = useCallback(() => {
+    const panel = panelRef.current;
+
+    if (panel === null) {
+      return;
+    }
+
+    // Reset before measuring: the shift is part of the geometry being read.
+    panel.style.setProperty('--menu-shift', '0px');
+
+    const box = panel.getBoundingClientRect();
+    const overflowStart = VIEWPORT_MARGIN_PX - box.left;
+    const overflowEnd = box.right - (window.innerWidth - VIEWPORT_MARGIN_PX);
+    // Only one can be positive: `max-inline-size` already caps the panel at the
+    // viewport, so it cannot be too wide to fit once moved.
+    const shift = overflowStart > 0 ? overflowStart : Math.min(0, -overflowEnd);
+
+    panel.style.setProperty('--menu-shift', `${String(Math.round(shift))}px`);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    keepOnScreen();
+
+    // A rotation or a resized window moves the trigger under an open panel.
+    window.addEventListener('resize', keepOnScreen);
+
+    return () => {
+      window.removeEventListener('resize', keepOnScreen);
+    };
+  }, [isOpen, keepOnScreen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -155,6 +213,9 @@ export function MenuButton({
     </div>
   );
 }
+
+/** How much of the viewport edge the panel keeps clear of. */
+const VIEWPORT_MARGIN_PX = 8;
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input, select, textarea, [tabindex]';
 

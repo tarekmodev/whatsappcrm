@@ -52,6 +52,12 @@ const ICON_PATHS = {
     'M8 17h5',
   ],
   info: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18', 'M12 11.5v5', 'M12 8h.01'],
+  /**
+   * The SLA alert bell (TAR-26). A bell rather than a warning triangle: the
+   * triangle is this set's shape for "something is wrong with the page you are
+   * on", and a breached ticket is somebody else's work needing attention.
+   */
+  alert: ['M18 9.5a6 6 0 1 0-12 0c0 5-2 6.5-2 6.5h16s-2-1.5-2-6.5', 'M13.8 20a2 2 0 0 1-3.6 0'],
   plus: ['M12 5v14', 'M5 12h14'],
   /** Opens a menu below its trigger; never mirrored, unlike the chevrons below. */
   chevronDown: ['m6 9 6 6 6-6'],

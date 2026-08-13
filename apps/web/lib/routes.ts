@@ -77,6 +77,13 @@ export const searchParamKeys = {
   ticketScope: 'scope',
   ticketStatus: 'status',
   ticketPriority: 'priority',
+  /**
+   * The supervisor's "show me only what has breached" view (TAR-26). Named
+   * `overdue` in the URL rather than `breachedOnly`: a shared link is read by
+   * people, and "breached" is the contract's word for it, not theirs. The query
+   * this becomes is `TicketListQuery.breachedOnly`.
+   */
+  ticketOverdue: 'overdue',
   peopleTab: 'tab',
   peopleRole: 'role',
   peopleQuery: 'q',
@@ -191,6 +198,12 @@ export interface TicketQueueQuery {
    */
   status?: TicketStatusFilter;
   priority?: TicketPriorityFilter;
+  /**
+   * Narrows to tickets whose SLA has breached. Absent and `false` are the same
+   * view, so only `true` is ever written to the URL — a `?overdue=false` in a
+   * shared link says nothing and looks like a filter that is switched off.
+   */
+  isOverdueOnly?: boolean;
 }
 
 export const PEOPLE_TABS = ['agents', 'teams'] as const;
@@ -227,6 +240,9 @@ function ticketSearchParams(
     [searchParamKeys.ticketScope]: query?.scope,
     [searchParamKeys.ticketStatus]: query?.status,
     [searchParamKeys.ticketPriority]: query?.priority,
+    // Only ever `'true'`. `withQuery` drops an `undefined`, which is what keeps
+    // the default view's URL clean.
+    [searchParamKeys.ticketOverdue]: query?.isOverdueOnly === true ? 'true' : undefined,
   };
 }
 

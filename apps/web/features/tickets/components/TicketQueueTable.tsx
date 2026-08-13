@@ -8,6 +8,8 @@ import { content } from '@/content/en';
 import { routes } from '@/lib/routes';
 import { TICKETS_PAGE_SIZE } from '@/features/tickets/constants';
 import { assigneeLabelFor, ticketLabel } from '@/features/tickets/presentation';
+import { SlaIndicator } from '@/features/sla/components/SlaIndicator';
+import { firstResponseIndicator, ticketRowTone } from '@/features/sla/presentation';
 import { TicketPriorityBadge, TicketStatusBadge } from './TicketBadges';
 import { ticketColumnMeta } from './ticket-columns';
 import styles from './TicketQueueTable.module.css';
@@ -24,7 +26,10 @@ import styles from './TicketQueueTable.module.css';
  *
  * **Rows are rendered in the order the API returned them.** That order is
  * `priority DESC, createdAt DESC, id DESC` — urgent first — and the console does
- * not re-sort it (ADR 0006 §6).
+ * not re-sort it (ADR 0006 §6). An overdue ticket is therefore *flagged* rather
+ * than floated to the top: a second ordering rule applied here would disagree
+ * with the cursor the API paged by, and the Overdue filter is how a supervisor
+ * asks for only those.
  */
 
 export interface TicketQueueTableProps {
@@ -66,6 +71,10 @@ export function TicketQueueTable({
       columns={columns}
       rows={tickets}
       getRowKey={(ticket) => ticket.id}
+      // Decoration beside the SLA cell, which says "Overdue" in words. The rule
+      // down the row is what makes a breach findable while scrolling; the badge
+      // is what makes it readable.
+      getRowTone={(ticket) => ticketRowTone(ticket.sla)}
     />
   );
 }
@@ -94,6 +103,12 @@ function renderCell(
       return <TicketPriorityBadge priority={ticket.priority} />;
     case 'status':
       return <TicketStatusBadge status={ticket.status} />;
+    case 'sla':
+      // The first-response timer only. The resolution timer is null on every
+      // seeded policy (ADR 0006 decision 6), and a column that showed both would
+      // be two badges wide for a value that is always half empty. The ticket
+      // view carries both.
+      return <SlaIndicator indicator={firstResponseIndicator(ticket.sla)} />;
     case 'assignee':
       return (
         <span className={styles.assignee}>{assigneeLabelFor(ticket, userNames, teamNames)}</span>

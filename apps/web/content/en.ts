@@ -3,6 +3,7 @@ import type {
   ConversationStatus,
   MessageStatus,
   MessageType,
+  SlaTargetKind,
   TenantRole,
   TicketPriority,
   TicketStatus,
@@ -511,6 +512,60 @@ export const content = {
      * be worse than saying who actually did it, which is the customer.
      */
     reopenedByCustomer: 'Reopened — customer replied',
+  },
+
+  /**
+   * SLA timers and the supervisor alerts they raise (TAR-26,
+   * `docs/architecture/0006-sla-timers-and-supervisor-alerts.md`).
+   */
+  sla: {
+    // --- The indicator ------------------------------------------------------
+    columnSla: 'SLA',
+    firstResponse: 'First response',
+    resolution: 'Resolution',
+    /**
+     * The state, in one word, beside the deadline it refers to. "Overdue" rather
+     * than "Breached": breach is the contract's word for it and a supervisor's
+     * word is late.
+     */
+    stateRunning: 'Due',
+    statePaused: 'Paused',
+    stateMet: 'Met',
+    stateBreached: 'Overdue',
+    /**
+     * Shown where a ticket has no SLA at all — a tenant with no active policy,
+     * or a timer that was cancelled with the ticket. Not an error, and not blank:
+     * a stacked table row on a phone repeats its column header beside the value,
+     * and an empty one reads as missing data.
+     */
+    notApplicable: 'No SLA',
+    /** Screen-reader prefixes, so a relative time is never a bare figure. */
+    firstResponseDeadline: 'First response due',
+    resolutionDeadline: 'Resolution due',
+    missedDeadline: 'Deadline missed',
+
+    // --- The queue filter ---------------------------------------------------
+    filterLabel: 'SLA',
+    filterOverdue: 'Overdue',
+
+    // --- The supervisor's alert bell ----------------------------------------
+    alertsAria: (count: number) => `SLA alerts, ${String(count)} unacknowledged`,
+    alertsNoneAria: 'SLA alerts, none unacknowledged',
+    alertsLoading: 'Loading SLA alerts',
+    kinds: {
+      first_response: 'No first response in time',
+      resolution: 'Not resolved in time',
+    } satisfies Record<SlaTargetKind, string>,
+    acknowledge: 'Mark seen',
+    acknowledgeAria: (reference: string) => `Mark the alert for ticket ${reference} as seen`,
+    acknowledgeSuccess: (reference: string) => `Alert for ticket ${reference} marked seen`,
+    emptyHeading: 'Nothing is overdue',
+    emptyBody: 'Tickets that miss their SLA window appear here, and your team is notified.',
+    /**
+     * The API answers one page. Saying "and more" rather than a total is the
+     * honest version: the console would have to page the whole table to know one.
+     */
+    moreAlerts: 'More alerts are waiting. Open the ticket queue and filter by Overdue.',
   },
 
   thread: {

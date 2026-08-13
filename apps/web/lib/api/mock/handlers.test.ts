@@ -7,6 +7,7 @@ import {
   type CursorPage,
   type MessageResponse,
   type MessageTemplateResponse,
+  type SlaAlertResponse,
   type TeamResponse,
   type TenantRole,
   type TicketResponse,
@@ -1031,5 +1032,119 @@ describe('changing a ticket', () => {
     })) as { ticketId: string | null };
 
     expect(conversation.ticketId).toBeNull();
+  });
+
+  it('narrows to breached tickets when asked, and only then (TAR-26)', async () => {
+    const all = await listTickets('?scope=all&limit=100');
+    const overdue = await listTickets('?scope=all&limit=100&breachedOnly=true');
+
+    expect(overdue.items.map((item) => item.id)).toEqual([MOCK_IDS.tickets.fatimaUrgent]);
+    expect(all.items.length).toBeGreaterThan(overdue.items.length);
+  });
+
+  it('accepts `breachedOnly` as the query string it actually arrives as', async () => {
+    // A bare `z.boolean()` answers 400 for `?breachedOnly=true` — the request the
+    // contract's own documentation shows. `BooleanQueryParamSchema` is why it
+    // does not, and this is the regression that would catch a revert.
+    await expect(listTickets('?breachedOnly=true')).resolves.toBeDefined();
+  });
+
+  it('reads `breachedOnly=false` as the full queue, not as every ticket', async () => {
+    // `z.coerce.boolean()` would make this `true`: it is `Boolean('false')`.
+    const page = await listTickets('?scope=all&limit=100&breachedOnly=false');
+
+    expect(page.items.length).toBeGreaterThan(1);
+  });
+
+  it('still scopes to the tenant when the overdue filter is on', async () => {
+    const page = await listTickets('?scope=all&limit=100&breachedOnly=true');
+
+    expect(page.items.map((item) => item.id)).not.toContain(MOCK_IDS.tickets.otherTenant);
+  });
+});
+
+async function listSlaAlerts(query = ''): Promise<CursorPage<SlaAlertResponse>> {
+  return (await handleMockRequest({
+    method: 'GET',
+    path: `/v1/sla-alerts${query}`,
+  })) as CursorPage<SlaAlertResponse>;
+}
+
+async function acknowledgeSlaAlert(id: string): Promise<SlaAlertResponse> {
+  return (await handleMockRequest({
+    method: 'POST',
+    path: `/v1/sla-alerts/${id}/acknowledge`,
+  })) as SlaAlertResponse;
+}
+
+describe('supervisor SLA alerts (TAR-26)', () => {
+  it('returns only the calling principal’s own alerts', async () => {
+    // Priya and Omar each hold a row for the *same* breach — ADR 0006 decision 4
+    // resolves every active supervisor and admin, not one of them — so a handler
+    // that filtered on tenant alone would hand Priya Omar's copy.
+    asRole('supervisor');
+
+    const page = await listSlaAlerts();
+
+    expect(page.items.map((alert) => alert.id)).toEqual([MOCK_IDS.slaAlerts.priyaFatimaUrgent]);
+  });
+
+  it('never returns another tenant’s alerts', async () => {
+    asRole('admin');
+
+    const page = await listSlaAlerts();
+
+    expect(page.items.map((alert) => alert.id)).not.toContain(MOCK_IDS.slaAlerts.otherTenant);
+  });
+
+  it('answers an agent with an empty page rather than a refusal', async () => {
+    // The endpoint is `ticket:read`, which every role holds: the narrowing is the
+    // protection, not the permission. An agent is simply never a recipient.
+    asRole('agent');
+
+    await expect(listSlaAlerts()).resolves.toMatchObject({ items: [] });
+  });
+
+  it('never publishes who an alert was addressed to', async () => {
+    asRole('supervisor');
+
+    const [alert] = (await listSlaAlerts()).items;
+
+    expect(alert).toBeDefined();
+    expect(alert).not.toHaveProperty('recipientUserId');
+    expect(alert).not.toHaveProperty('tenantId');
+  });
+
+  it('drops an acknowledged alert from the default view, and keeps it otherwise', async () => {
+    asRole('supervisor');
+
+    await acknowledgeSlaAlert(MOCK_IDS.slaAlerts.priyaFatimaUrgent);
+
+    await expect(listSlaAlerts()).resolves.toMatchObject({ items: [] });
+    await expect(listSlaAlerts('?unacknowledgedOnly=false')).resolves.toMatchObject({
+      items: [{ id: MOCK_IDS.slaAlerts.priyaFatimaUrgent }],
+    });
+  });
+
+  it('acknowledges idempotently, keeping the first timestamp', async () => {
+    // The panel removes the row optimistically and retries on failure; a second
+    // call answering `conflict` would turn a dropped response into a rollback the
+    // supervisor cannot explain.
+    asRole('supervisor');
+
+    const first = await acknowledgeSlaAlert(MOCK_IDS.slaAlerts.priyaFatimaUrgent);
+    const again = await acknowledgeSlaAlert(MOCK_IDS.slaAlerts.priyaFatimaUrgent);
+
+    expect(first.acknowledgedAt).not.toBeNull();
+    expect(again.acknowledgedAt).toBe(first.acknowledgedAt);
+  });
+
+  it('answers 404, not 403, for somebody else’s alert', async () => {
+    // A 403 would confirm the id exists (0002's rule).
+    asRole('supervisor');
+
+    await expect(acknowledgeSlaAlert(MOCK_IDS.slaAlerts.omarFatimaUrgent)).rejects.toMatchObject({
+      code: 'not_found',
+    });
   });
 });

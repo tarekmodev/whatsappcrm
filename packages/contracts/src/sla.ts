@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { IdSchema, TimestampSchema } from './common';
 import { CursorPageQuerySchema } from './pagination';
-import { TicketPrioritySchema } from './tickets';
+import { TicketPrioritySchema, type TicketSla } from './tickets';
 
 /**
  * SLA timers and supervisor alerts (TAR-26). The transport constants, the
@@ -202,3 +202,27 @@ export type SlaPolicyResponse = z.infer<typeof SlaPolicyResponseSchema>;
 export type SlaPolicyUpdateInput = z.infer<typeof SlaPolicyUpdateInputSchema>;
 export type SlaAlertResponse = z.infer<typeof SlaAlertResponseSchema>;
 export type SlaAlertListQuery = z.infer<typeof SlaAlertListQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// Reading a breach off a ticket (TAR-281)
+// ---------------------------------------------------------------------------
+
+/**
+ * True when either of a ticket's timers has breached — what
+ * `TicketListQuery.breachedOnly` selects, read off a `TicketResponse` rather
+ * than off the database.
+ *
+ * Here rather than in the console because two very different things have to
+ * agree about it: the API's `EXISTS (… state = 'breached')`, and the overdue
+ * flag the ticket queue draws on the row beside the filter. A queue that
+ * filtered by one rule and drew the badge from another would be wrong in
+ * exactly the case the filter exists for — and the mock transport, which is a
+ * `lib/` module and may not import from `features/`, needs the same predicate.
+ *
+ * `breached` is terminal by design: a ticket answered after it breached still
+ * stamps its first response, but the timer stays breached, because the
+ * supervisor's record of the miss is not erased by a late reply.
+ */
+export function isSlaBreached(sla: TicketSla): boolean {
+  return sla.firstResponseState === 'breached' || sla.resolutionState === 'breached';
+}

@@ -24,7 +24,12 @@ export default function TicketsLoading() {
       <Stack gap="5">
         <PageHeader title={content.tickets.title} subtitle={content.tickets.subtitle} />
         <TicketQueueFilters
-          params={{ scope: 'assigned', status: undefined, priority: undefined }}
+          params={{
+            scope: 'assigned',
+            status: undefined,
+            priority: undefined,
+            isOverdueOnly: false,
+          }}
           canReadAll={false}
         />
         <TicketQueueSectionSkeleton />
