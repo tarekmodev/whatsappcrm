@@ -71,11 +71,35 @@ describe('RoutingRuleCard', () => {
     expect(screen.getByRole('button', { name: copy.moveDownAria(RULE.name) })).toBeEnabled();
   });
 
-  it('stands both moves down while a write is in flight anywhere in the list', () => {
+  it('stands both moves down while another row’s write is in flight', () => {
     renderCard({ isReordering: true });
 
     expect(screen.getByRole('button', { name: copy.moveUpAria(RULE.name) })).toBeDisabled();
     expect(screen.getByRole('button', { name: copy.moveDownAria(RULE.name) })).toBeDisabled();
+  });
+
+  it('keeps the row that was clicked focusable, and still refuses a second press', () => {
+    // `disabled` would drop the button out of the tab order the instant it fired,
+    // so a keyboard user would lose their place mid-move. The acting row blocks
+    // by `aria-disabled` instead, which the click guard in `Button` backs up.
+    renderCard({ isReordering: true, isPending: true });
+
+    const moveDown = screen.getByRole('button', { name: copy.moveDownAria(RULE.name) });
+
+    expect(moveDown).toBeEnabled();
+    expect(moveDown).toHaveAttribute('aria-disabled', 'true');
+
+    moveDown.focus();
+    expect(moveDown).toHaveFocus();
+  });
+
+  it('does not swallow a press once nothing is in flight', () => {
+    const onMove = vi.fn();
+
+    renderCard({ onMove });
+    screen.getByRole('button', { name: copy.moveDownAria(RULE.name) }).click();
+
+    expect(onMove).toHaveBeenCalledWith('down');
   });
 
   it('still disables the move that would take a rule off the end', () => {

@@ -54,6 +54,9 @@ export function RoutingRuleCard({
    * order on screen, which does not update until revalidation lands, so a second
    * move started before the first returns would be computed from the stale order
    * and overwrite it. Every row's move controls stand down together.
+   *
+   * How they stand down differs by row, and that difference is a keyboard
+   * concern rather than a visual one — see the move buttons below.
    */
   isReordering: boolean;
   onMove: (direction: RuleMoveDirection) => void;
@@ -94,7 +97,13 @@ export function RoutingRuleCard({
           <Button
             variant="ghost"
             size="sm"
-            disabled={isFirst || isReordering}
+            // `isPending` rather than `disabled` on the row that was actually
+            // clicked: `disabled` drops the button out of the tab order, so a
+            // keyboard user who pressed this one would lose their place the
+            // instant it fired. `Button` answers `isPending` with `aria-disabled`
+            // and a click guard, which blocks the second press without moving
+            // focus — the same trade the component makes for a pending submit.
+            disabled={isFirst || (isReordering && !isPending)}
             isPending={isPending}
             aria-label={copy.moveUpAria(rule.name)}
             onClick={() => {
@@ -106,7 +115,7 @@ export function RoutingRuleCard({
           <Button
             variant="ghost"
             size="sm"
-            disabled={isLast || isReordering}
+            disabled={isLast || (isReordering && !isPending)}
             isPending={isPending}
             aria-label={copy.moveDownAria(rule.name)}
             onClick={() => {
