@@ -1,7 +1,8 @@
 # Data model reference
 
 The database as it stands on `main` after TAR-47, TAR-48, TAR-51, TAR-52, TAR-54, TAR-66,
-TAR-74, TAR-80, TAR-92, TAR-20e and TAR-270. Written for engineers building against it.
+TAR-74, TAR-80, TAR-92, TAR-20e, TAR-270 and TAR-272. Written for engineers building
+against it.
 
 `apps/api/prisma/schema.prisma` is the source of truth for columns, types and defaults,
 and carries the per-model reasoning next to each model. This document does not transcribe
@@ -120,6 +121,14 @@ bucketing; stored timestamps stay `timestamptz` regardless. `business_hours` is 
 because its shape is presentation-driven, and TAR-26 owns its interpretation. Feature
 stories add columns here rather than inventing a second settings table.
 
+`default_max_concurrent_tickets` (TAR-272) is how many active tickets one agent may hold
+before auto-assignment skips them, tenant-wide. It defaults to 5 so a newly provisioned
+tenant routes correctly with nothing configured, is bounded 1–1000 by
+`tenant_settings_default_max_concurrent_tickets_range`, and is overridden per agent by
+`users.max_concurrent_tickets`. Five is defensible rather than measured — ADR 0008
+decision 4 says so, and names `ASSIGNMENT_POLICY` as the constant that has to agree with
+it.
+
 ### Identity and access — TAR-22 / TAR-35
 
 #### `users`
@@ -153,6 +162,17 @@ to be wrong. `password_hash` is Argon2id and null for an invited user who has no
 because TAR-35 requires a lockout to be _observable to a tenant admin_, and a counter that
 evaporates on an eviction cannot answer "is this account locked, and since when". A Redis
 per-IP window sits alongside them and fails open; this one does not.
+
+`max_concurrent_tickets` (TAR-272) is a per-agent override of
+`tenant_settings.default_max_concurrent_tickets`, and **null means inherit** rather than
+"no cap": a supervisor raising the tenant default should move everyone who has not been
+singled out, which copying the default onto each user at creation would silently prevent.
+`users_max_concurrent_tickets_range` bounds a non-null value to 1–1000 — the floor is 1
+because "route nothing to me" is what `availability = 'away'` already says, and a second
+way to say it is a second thing to keep in step. Writing it requires
+`assignment_rule:write` and not merely `user:update`, because setting a colleague's cap to
+1 is deciding how much work reaches them (ADR 0008 decision 4). The CHECK lives in the
+migration; Prisma's schema language has no CHECK at all.
 
 `failed_login_attempts` counts failures **in the current window**, not all time: a failure
 more than `loginLockoutMs` after the one in `last_failed_login_at` restarts the run at 1.
@@ -475,9 +495,11 @@ with the note, and never queried the other way round.
   `ticket:read` (no `_all`) queue, carrying its own sort key for the same reason the inbox
   ones do; `(tenant_id, conversation_id)`, `(tenant_id, contact_id)`;
   **`tickets_one_active_per_contact`** — `UNIQUE (tenant_id, contact_id)`
-  `WHERE status IN ('open','pending')`
+  `WHERE status IN ('open','pending')`; **`tickets_routing_deferred_idx`** —
+  `(tenant_id, routing_deferred_since) WHERE routing_state = 'deferred'`
+- **Checks:** `tickets_routing_deferred_consistent`
 - **Owned by:** TAR-21 / TAR-25, sort keys added by TAR-80, the partial unique index by
-  TAR-74
+  TAR-74, the routing columns by TAR-272
 
 `number` is allocated by [`ticket_counters`](#ticket_counters); the unique constraint is
 what makes a racy allocator fail loudly instead of duplicating.
@@ -498,6 +520,27 @@ enforced by the database rather than by whichever call site remembers to check
   in anything `migrate dev` would regenerate.
   `src/prisma/ticket-active-uniqueness.int-spec.ts` asserts the index definition for that
   reason.
+
+`routing_state`, `routing_deferred_reason` and `routing_deferred_since` (TAR-272) are what
+auto-assignment decided, and are separate from `status` on purpose: `status` is the
+ticket's **lifecycle**, and overloading it with a routing outcome would break
+`TICKET_STATUS_IS_ACTIVE`, `TICKET_STATUS_PAUSES_SLA` and every status filter (ADR 0008
+decision 3).
+
+- `pending` is the default, so no create path writes it; `assigned` is routing having
+  placed the ticket; `deferred` is TAR-23's "flagged for supervisor attention"; `manual` is
+  **terminal for routing**, and stops a background job overruling a supervisor who parked a
+  ticket deliberately.
+- The two deferred columns are non-null exactly when `routing_state = 'deferred'`, enforced
+  by `tickets_routing_deferred_consistent` in both directions. `routing_deferred_since` is
+  not derivable from `created_at`: a ticket assigned, released and then deferred would
+  report an age that is a lie.
+- The flag is a column rather than only the `assignment_deferred` ticket event because an
+  event records _that it happened_ and a supervisor's list has to filter on _what is still
+  true_. Both are written; the event log keeps the audit trail.
+- Neither `tickets_routing_deferred_idx` nor the CHECK exists in `schema.prisma` — Prisma
+  can express neither an index predicate nor a CHECK.
+  `src/prisma/assignment-workload-schema.int-spec.ts` asserts both by definition.
 
 #### `ticket_counters`
 
@@ -543,11 +586,28 @@ migration.
 
 #### `assignment_state`
 
-Round-robin cursor, one row per team.
+Round-robin cursor, one row per **routing scope** — a team, or the tenant pool when
+`team_id` is null. It was one row per team until TAR-272; a tenant that has never created a
+team is the ordinary starting state and has to rotate too.
 
-- **Unique:** `team_id` (globally); `(tenant_id, team_id)`
+- **Unique:** `assignment_state_tenant_scope_key` — `(tenant_id, team_id)`
+  **`NULLS NOT DISTINCT`**
 - **Indexes:** `(tenant_id, last_assigned_user_id)`
-- **Owned by:** TAR-23
+- **Owned by:** TAR-23, widened to the tenant pool by TAR-272
+
+**`NULLS NOT DISTINCT` is load-bearing and invisible to Prisma.** PostgreSQL treats NULLs
+as distinct in a unique index by default, so the plain form would let one tenant hold
+several pool cursors quite happily and rotation would read a different one each time —
+which does not fail, it just silently stops rotating and sends every ticket to whoever
+sorts first. Prisma sees only a unique index on the pair, matches `@@unique` against it and
+reports no drift, so a `migrate dev` that ever recreates the index will recreate it
+NULL-distinct. `src/prisma/assignment-workload-schema.int-spec.ts` is the only thing that
+would notice. Requires PostgreSQL 15+; the cluster is pinned to 16.
+
+The single-column unique on `team_id` was dropped by TAR-272: redundant with the composite
+while the column was `NOT NULL`, and wrong once it is nullable.
+`last_assigned_user_id` may name a removed user and that is harmless by construction — it
+is only ever compared with `>`, never dereferenced, so do not "fix" it into a join.
 
 ### SLA — TAR-26
 
@@ -743,41 +803,43 @@ never a secret value; a redacted before/after at most.
 
 ## Enums
 
-27 native PostgreSQL enums rather than text plus a `CHECK`. They are the closed sets in the
+29 native PostgreSQL enums rather than text plus a `CHECK`. They are the closed sets in the
 contract, and a typo becomes an error at write time instead of a filter that silently
 matches nothing. The trade-off is that adding a value is cheap (`ALTER TYPE ... ADD VALUE`)
 and removing one is not, so anything genuinely open-ended — `ticket_events.type`, workflow
 definitions — stays text or JSON.
 
-| Enum                                    | Values                                                                                                                               |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `tenant_status`                         | `pending`, `active`, `suspended`, `cancelled`                                                                                        |
-| `tenant_domain_kind`                    | `platform`, `custom`                                                                                                                 |
-| `user_role`                             | `admin`, `supervisor`, `agent` — `owner` removed by TAR-80; it is exactly `TENANT_ROLES` in `packages/contracts/src/rbac.ts`         |
-| `user_status`                           | `invited`, `active`, `suspended`, `removed`                                                                                          |
-| `user_availability`                     | `available`, `away`, `offline`                                                                                                       |
-| `whatsapp_business_verification_status` | `not_verified`, `pending`, `verified`, `rejected`                                                                                    |
-| `whatsapp_account_status`               | `connected`, `disconnected`, `error`                                                                                                 |
-| `whatsapp_quality_rating`               | `green`, `yellow`, `red`, `unknown`                                                                                                  |
-| `message_template_status`               | `pending`, `approved`, `rejected`, `paused`, `disabled`                                                                              |
-| `custom_field_type`                     | `text`, `number`, `date`, `boolean`, `select`, `multi_select`                                                                        |
-| `conversation_status`                   | `open`, `pending`, `resolved`, `closed` — `closed` added by TAR-68; it is exactly `CONVERSATION_STATUSES` in `packages/contracts`    |
-| `message_direction`                     | `inbound`, `outbound`                                                                                                                |
-| `message_status`                        | `received`, `queued`, `sent`, `delivered`, `read`, `failed`                                                                          |
-| `message_content_type`                  | `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `system`, `unsupported` |
-| `media_kind`                            | `image`, `video`, `audio`, `document`, `sticker` — narrower than `message_content_type` on purpose: none of these is not a file      |
-| `media_source`                          | `inbound`, `upload`                                                                                                                  |
-| `media_download_state`                  | `pending`, `stored`, `failed`                                                                                                        |
-| `ticket_status`                         | `open`, `pending`, `resolved`, `closed`                                                                                              |
-| `ticket_priority`                       | `low`, `normal`, `high`, `urgent`                                                                                                    |
-| `sla_target_kind`                       | `first_response`, `resolution`                                                                                                       |
-| `sla_timer_state`                       | `running`, `met`, `breached`, `cancelled`, `paused`                                                                                  |
-| `workflow_run_status`                   | `pending`, `running`, `succeeded`, `failed`                                                                                          |
-| `knowledge_document_status`             | `pending`, `indexed`, `failed`                                                                                                       |
-| `billing_interval`                      | `month`, `year`                                                                                                                      |
-| `subscription_status`                   | `trialing`, `active`, `past_due`, `cancelled`, `incomplete`                                                                          |
-| `webhook_event_status`                  | `received`, `processing`, `processed`, `failed`                                                                                      |
-| `idempotency_key_state`                 | `in_progress`, `completed`                                                                                                           |
+| Enum                                    | Values                                                                                                                                                                                                    |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tenant_status`                         | `pending`, `active`, `suspended`, `cancelled`                                                                                                                                                             |
+| `tenant_domain_kind`                    | `platform`, `custom`                                                                                                                                                                                      |
+| `user_role`                             | `admin`, `supervisor`, `agent` — `owner` removed by TAR-80; it is exactly `TENANT_ROLES` in `packages/contracts/src/rbac.ts`                                                                              |
+| `user_status`                           | `invited`, `active`, `suspended`, `removed`                                                                                                                                                               |
+| `user_availability`                     | `available`, `away`, `offline`                                                                                                                                                                            |
+| `whatsapp_business_verification_status` | `not_verified`, `pending`, `verified`, `rejected`                                                                                                                                                         |
+| `whatsapp_account_status`               | `connected`, `disconnected`, `error`                                                                                                                                                                      |
+| `whatsapp_quality_rating`               | `green`, `yellow`, `red`, `unknown`                                                                                                                                                                       |
+| `message_template_status`               | `pending`, `approved`, `rejected`, `paused`, `disabled`                                                                                                                                                   |
+| `custom_field_type`                     | `text`, `number`, `date`, `boolean`, `select`, `multi_select`                                                                                                                                             |
+| `conversation_status`                   | `open`, `pending`, `resolved`, `closed` — `closed` added by TAR-68; it is exactly `CONVERSATION_STATUSES` in `packages/contracts`                                                                         |
+| `message_direction`                     | `inbound`, `outbound`                                                                                                                                                                                     |
+| `message_status`                        | `received`, `queued`, `sent`, `delivered`, `read`, `failed`                                                                                                                                               |
+| `message_content_type`                  | `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `system`, `unsupported`                                                                      |
+| `media_kind`                            | `image`, `video`, `audio`, `document`, `sticker` — narrower than `message_content_type` on purpose: none of these is not a file                                                                           |
+| `media_source`                          | `inbound`, `upload`                                                                                                                                                                                       |
+| `media_download_state`                  | `pending`, `stored`, `failed`                                                                                                                                                                             |
+| `ticket_status`                         | `open`, `pending`, `resolved`, `closed`                                                                                                                                                                   |
+| `ticket_priority`                       | `low`, `normal`, `high`, `urgent`                                                                                                                                                                         |
+| `ticket_routing_state`                  | `pending`, `assigned`, `deferred`, `manual` — what auto-assignment decided, **not** the ticket's lifecycle (TAR-272)                                                                                      |
+| `ticket_routing_deferred_reason`        | `all_at_capacity`, `none_available`, `no_candidate_pool` — `FALLBACK_ASSIGNMENT_REASONS` (ADR 0007) verbatim, so the column, the decision object and the `assignment_deferred` event speak one vocabulary |
+| `sla_target_kind`                       | `first_response`, `resolution`                                                                                                                                                                            |
+| `sla_timer_state`                       | `running`, `met`, `breached`, `cancelled`, `paused`                                                                                                                                                       |
+| `workflow_run_status`                   | `pending`, `running`, `succeeded`, `failed`                                                                                                                                                               |
+| `knowledge_document_status`             | `pending`, `indexed`, `failed`                                                                                                                                                                            |
+| `billing_interval`                      | `month`, `year`                                                                                                                                                                                           |
+| `subscription_status`                   | `trialing`, `active`, `past_due`, `cancelled`, `incomplete`                                                                                                                                               |
+| `webhook_event_status`                  | `received`, `processing`, `processed`, `failed`                                                                                                                                                           |
+| `idempotency_key_state`                 | `in_progress`, `completed`                                                                                                                                                                                |
 
 `message_status` is ordered, and the order is load-bearing: TAR-20's
 `isMessageStatusAdvance` reads it so a late `sent` webhook cannot un-read a message.
@@ -787,24 +849,25 @@ definitions — stays text or JSON.
 Applied in this order. Every directory carries a hand-written `down.sql` beside Prisma's
 `migration.sql`.
 
-| Migration                                               | What it does                                                                                                                                                                                                         | Story   |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `20260810120000_baseline_extensions`                    | `pgcrypto` and `citext`. Creates no tables                                                                                                                                                                           | TAR-42  |
-| `20260810130000_initial_data_model`                     | Every table and enum above, as TAR-47 shipped them                                                                                                                                                                   | TAR-47  |
-| `20260810140000_tenant_isolation_rls`                   | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                                                                                   | TAR-48  |
-| `20260810150000_tenant_deactivation_guard`              | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                                                                           | TAR-51  |
-| `20260810160000_whatsapp_business_account_entity`       | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                                                                           | TAR-52  |
-| `20260810170000_harden_tenant_deactivation_guard`       | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                                                                          | TAR-51  |
-| `20260810180000_message_content_type_unsupported`       | `ALTER TYPE message_content_type ADD VALUE 'unsupported'`                                                                                                                                                            | TAR-67  |
-| `20260810180000_message_template_list_index`            | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                                                                                 | TAR-20a |
-| `20260810190000_agent_team_role_alignment`              | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes                                                      | TAR-80  |
-| `20260811120000_conversations_last_message_at_not_null` | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                                                                          | TAR-92  |
-| `20260811130000_ticket_active_constraint_and_counters`  | `tickets_one_active_per_contact`; the `ticket_counters` allocator and the 35th policy                                                                                                                                | TAR-74  |
-| `20260811140000_media_pipeline`                         | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable                                                     | TAR-20e |
-| `20260811150000_auth_schema_and_policies`               | `password_reset_tokens` and `invite_teams` and the 37th and 38th policies; lockout columns on `users`; `absolute_expires_at` and `revoked_reason` on `sessions`; `revoked_at` and the live-invite index on `invites` | TAR-54  |
-| `20260811170000_conversation_status_closed`             | `ALTER TYPE conversation_status ADD VALUE 'closed'`                                                                                                                                                                  | TAR-68  |
-| `20260813120000_sla_timer_state_paused`                 | `ALTER TYPE sla_timer_state ADD VALUE 'paused'`, alone in its own migration                                                                                                                                          | TAR-270 |
-| `20260813130000_sla_pause_accounting_and_alerts`        | `paused_at`, `paused_ms`, `breached_at` and the `(state, due_at)` sweep index on `sla_timers`; adds `sla_alerts` and the 39th policy; backfills the default `sla_policies` row for existing tenants                  | TAR-270 |
+| Migration                                               | What it does                                                                                                                                                                                                                                                                                        | Story   |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `20260810120000_baseline_extensions`                    | `pgcrypto` and `citext`. Creates no tables                                                                                                                                                                                                                                                          | TAR-42  |
+| `20260810130000_initial_data_model`                     | Every table and enum above, as TAR-47 shipped them                                                                                                                                                                                                                                                  | TAR-47  |
+| `20260810140000_tenant_isolation_rls`                   | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                                                                                                                                                                  | TAR-48  |
+| `20260810150000_tenant_deactivation_guard`              | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                                                                                                                                                          | TAR-51  |
+| `20260810160000_whatsapp_business_account_entity`       | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                                                                                                                                                          | TAR-52  |
+| `20260810170000_harden_tenant_deactivation_guard`       | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                                                                                                                                                         | TAR-51  |
+| `20260810180000_message_content_type_unsupported`       | `ALTER TYPE message_content_type ADD VALUE 'unsupported'`                                                                                                                                                                                                                                           | TAR-67  |
+| `20260810180000_message_template_list_index`            | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                                                                                                                                                                | TAR-20a |
+| `20260810190000_agent_team_role_alignment`              | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes                                                                                                                                     | TAR-80  |
+| `20260811120000_conversations_last_message_at_not_null` | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                                                                                                                                                         | TAR-92  |
+| `20260811130000_ticket_active_constraint_and_counters`  | `tickets_one_active_per_contact`; the `ticket_counters` allocator and the 35th policy                                                                                                                                                                                                               | TAR-74  |
+| `20260811140000_media_pipeline`                         | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable                                                                                                                                    | TAR-20e |
+| `20260811150000_auth_schema_and_policies`               | `password_reset_tokens` and `invite_teams` and the 37th and 38th policies; lockout columns on `users`; `absolute_expires_at` and `revoked_reason` on `sessions`; `revoked_at` and the live-invite index on `invites`                                                                                | TAR-54  |
+| `20260811170000_conversation_status_closed`             | `ALTER TYPE conversation_status ADD VALUE 'closed'`                                                                                                                                                                                                                                                 | TAR-68  |
+| `20260813120000_sla_timer_state_paused`                 | `ALTER TYPE sla_timer_state ADD VALUE 'paused'`, alone in its own migration                                                                                                                                                                                                                         | TAR-270 |
+| `20260813130000_sla_pause_accounting_and_alerts`        | `paused_at`, `paused_ms`, `breached_at` and the `(state, due_at)` sweep index on `sla_timers`; adds `sla_alerts` and the 39th policy; backfills the default `sla_policies` row for existing tenants                                                                                                 | TAR-270 |
+| `20260813150000_assignment_workload_and_routing_state`  | `ticket_routing_state` and `ticket_routing_deferred_reason`; the three routing columns and `tickets_routing_deferred_idx` on `tickets`; the workload cap on `users` and `tenant_settings`; `assignment_state.team_id` nullable under `UNIQUE … NULLS NOT DISTINCT`. Adds no table, so no new policy | TAR-272 |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's
