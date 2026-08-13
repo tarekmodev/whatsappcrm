@@ -1,7 +1,7 @@
 import { encodeKeysetCursor } from '../common/pagination/keyset-cursor';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
+import { InvalidCursorError } from './message-template-cursor';
 import {
-  InvalidCursorError,
   MessageTemplateQueryService,
   UnknownWhatsAppAccountError,
 } from './message-template-query.service';

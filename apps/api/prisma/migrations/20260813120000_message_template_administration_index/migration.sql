@@ -1,0 +1,70 @@
+-- Index for the template administration surface (TAR-91).
+--
+-- `GET /api/v1/whatsapp/message-templates` answers "every template this tenant
+-- holds, whatever Meta thinks of it", which — keeping amendment 1's ordering so
+-- the two template lists agree on where a row sits — is:
+--
+--   WHERE tenant_id = <RLS> [AND status = ?] [AND name LIKE 'q%']
+--   ORDER BY name, language, id
+--   LIMIT n
+--
+-- `tenant_id` is not written by the handler — TAR-48's `tenant_isolation` policy
+-- supplies it as an equality predicate on every query — which is exactly why it
+-- still leads the index (TAR-39, decision 1, rule 3).
+--
+-- The composer's index cannot serve this one.
+-- `message_templates (tenant_id, status, name, language, id)` puts `status`
+-- second because that endpoint pins it to a single value; this endpoint's whole
+-- purpose is *not* to constrain it, and with a leading column left free the
+-- index no longer yields rows in `(name, language, id)` order. Postgres would
+-- read it and then sort — invisible on a seeded database, and a sort over every
+-- template the tenant holds on a real one, where Meta permits thousands per
+-- WABA. This index drops `status` and is therefore an ordered range scan with no
+-- sort node.
+--
+-- Both indexes are kept rather than one being replaced by the other. Neither is
+-- a prefix of the other, the picker is the hotter path by an order of magnitude
+-- and its `status = 'approved'` equality belongs early in its own index, and
+-- when this endpoint *is* given a `status` filter the planner has both available
+-- and either serves it ordered. The cost is one more index maintained on a table
+-- written only by the template sync.
+--
+-- The optional business-account filter is applied as a heap-side recheck rather
+-- than by a third index, for the same reason the composer's migration gives: it
+-- narrows an already-bounded page, and an index on the same prefix would cost
+-- write throughput on every sync for no read it uniquely serves.
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+--   Additive    One CREATE INDEX. No column, constraint, type or row is changed,
+--               so code running against the previous schema is unaffected — the
+--               endpoint this serves is new, and every existing query keeps the
+--               plan it had.
+--   Idempotent  IF NOT EXISTS, so a re-run over a database that already has it
+--               succeeds quietly. Nothing here depends on being applied once.
+--   Duration    Milliseconds on every environment today: `message_templates` is
+--               populated only by a template sync, and the largest tenant holds
+--               tens of rows. The bound to plan against is Meta's own — a few
+--               thousand templates per WABA is still a sub-second build.
+--   Locks       SHARE on message_templates, which blocks writes to that table
+--               only, for the duration of the build. Not CONCURRENTLY: Prisma
+--               runs a migration inside one transaction and Postgres forbids
+--               CREATE INDEX CONCURRENTLY there. The only writer is the template
+--               sync, which is operator-triggered and safe to have wait.
+--               Revisit if this ever has to be applied to a table with real
+--               volume — at that point it belongs in its own out-of-band
+--               statement, not in a migration.
+--   Blocking    lock_timeout caps the wait at three seconds, so a conflicting
+--               long-running transaction aborts this migration cleanly rather
+--               than queueing ahead of every new query. Re-run once it clears.
+--   Data loss   None. `down.sql` drops the index and nothing else.
+--
+-- No `pnpm db:roles` re-run: this adds no table, so no grant and no policy
+-- changes.
+
+SET LOCAL lock_timeout = '3s';
+
+-- CreateIndex
+CREATE INDEX IF NOT EXISTS "message_templates_tenant_id_name_language_id_idx" ON "message_templates"("tenant_id", "name", "language", "id");

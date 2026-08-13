@@ -1,33 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  decodeKeysetCursor,
-  encodeKeysetCursor,
-  type KeysetCursor,
-} from '../common/pagination/keyset-cursor';
-import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
+import { describeTemplateComponents } from './message-template-components';
 import {
-  describeTemplateComponents,
-  type MessageTemplateComponentSummary,
-} from './message-template-components';
-
-/** Exactly the columns the response is built from — nothing wider. */
-const TEMPLATE_PROJECTION = {
-  id: true,
-  whatsappBusinessAccountId: true,
-  name: true,
-  language: true,
-  category: true,
-  status: true,
-  components: true,
-  providerTemplateId: true,
-  createdAt: true,
-  updatedAt: true,
-} as const;
-
-export type ListedMessageTemplate = Prisma.MessageTemplateGetPayload<{
-  select: typeof TEMPLATE_PROJECTION;
-}>;
+  alreadyReturned,
+  encodeMessageTemplateCursor,
+  readMessageTemplateCursor,
+} from './message-template-cursor';
+import { messageTemplateSendBlockers } from './message-template-sendability';
+import { MESSAGE_TEMPLATE_PROJECTION, type ListedTemplate } from './message-template.projection';
 
 export interface ListMessageTemplatesQuery {
   limit: number;
@@ -37,16 +17,6 @@ export interface ListMessageTemplatesQuery {
   whatsappBusinessAccountId?: string;
   /** Name prefix. */
   q?: string;
-}
-
-/**
- * A row with what its component tree says, read once. The controller needs the
- * summary to build the response and this service needs it to apply the button
- * exclusion, so it is derived here and carried, rather than parsed twice.
- */
-export interface ListedTemplate {
-  row: ListedMessageTemplate;
-  summary: MessageTemplateComponentSummary;
 }
 
 export interface MessageTemplatePage {
@@ -63,15 +33,6 @@ export interface FindApprovedTemplateQuery {
   name: string;
   /** Meta's language tag, exactly as `MessageTemplateResponse.language` published it. */
   language: string;
-}
-
-/** Raised for a cursor this build cannot act on. The controller turns it into `validation_failed`. */
-export class InvalidCursorError extends Error {
-  constructor() {
-    super('The cursor is not valid. Start from the first page.');
-    Object.setPrototypeOf(this, new.target.prototype);
-    this.name = new.target.name;
-  }
 }
 
 /**
@@ -154,7 +115,7 @@ export class MessageTemplateQueryService {
   constructor(@Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma) {}
 
   async list(query: ListMessageTemplatesQuery): Promise<MessageTemplatePage> {
-    const cursor = readCursor(query.cursor);
+    const cursor = readMessageTemplateCursor(query.cursor);
     const whatsappBusinessAccountId = await this.resolveBusinessAccountId(query);
 
     const rows = await this.prisma.messageTemplate.findMany({
@@ -179,7 +140,7 @@ export class MessageTemplateQueryService {
       // One more than asked for: its existence is the answer to "is there another
       // page", which is cheaper than counting a table that a sync appends to.
       take: query.limit + 1,
-      select: TEMPLATE_PROJECTION,
+      select: MESSAGE_TEMPLATE_PROJECTION,
     });
 
     // The page this request covers, before the button exclusion. The cursor is
@@ -193,11 +154,17 @@ export class MessageTemplateQueryService {
     return {
       items: window
         .map((row) => ({ row, summary: describeTemplateComponents(row.components) }))
-        .filter(({ summary }) => !summary.requiresButtonParameters),
+        // The same predicate the administration surface publishes as
+        // `sendBlockers`, so "dropped from the picker" and "reported as blocked"
+        // cannot drift apart. `status` is already `approved` for every row here,
+        // which leaves the button rule as the only one that can fire — the SQL
+        // filter above is that half of the predicate applied earlier, where the
+        // index can serve it.
+        .filter(
+          ({ row, summary }) => messageTemplateSendBlockers(row.status, summary).length === 0,
+        ),
       nextCursor:
-        rows.length > query.limit && last !== undefined
-          ? encodeKeysetCursor({ sortValues: [last.name, last.language], id: last.id })
-          : null,
+        rows.length > query.limit && last !== undefined ? encodeMessageTemplateCursor(last) : null,
     };
   }
 
@@ -239,7 +206,7 @@ export class MessageTemplateQueryService {
         },
         status: 'approved',
       },
-      select: TEMPLATE_PROJECTION,
+      select: MESSAGE_TEMPLATE_PROJECTION,
     });
 
     return row === null ? null : { row, summary: describeTemplateComponents(row.components) };
@@ -278,57 +245,4 @@ export class MessageTemplateQueryService {
 
     return account.whatsappBusinessAccountId;
   }
-}
-
-/** The cursor as this query uses it: the row's position in `(name, language, id)`. */
-interface TemplateCursor {
-  name: string;
-  language: string;
-  id: string;
-}
-
-/**
- * A cursor whose sort key is not the `[name, language]` pair this ordering emits
- * is rejected here rather than passed on. Prisma would refuse an `undefined`
- * comparison too, but as a 500 — and a corrupted cursor is bad input, not a
- * fault. The arity check is also what rejects a cursor issued by the superseded
- * `created_at DESC` ordering: it decodes cleanly and carries one value.
- */
-function readCursor(value: string | undefined): TemplateCursor | null {
-  if (value === undefined) {
-    return null;
-  }
-
-  const cursor: KeysetCursor | null = decodeKeysetCursor(value);
-  const [name, language, ...rest] = cursor?.sortValues ?? [];
-
-  if (cursor === null || name === undefined || language === undefined || rest.length > 0) {
-    throw new InvalidCursorError();
-  }
-
-  return { name, language, id: cursor.id };
-}
-
-/**
- * "Strictly after the cursor row in `(name ASC, language ASC, id ASC)` order",
- * in the shape 0002 rules for a resume predicate: an inclusive bound on the
- * leading column — `name >= $1`, written where the query is built — minus the
- * part of that name's tie group this caller has already been given.
- *
- * The obvious translation is the nested disjunction
- * `name > $1 OR (name = $1 AND (language > $2 OR (language = $2 AND id > $3)))`.
- * It returns the same rows and is the wrong shape: a planner cannot turn a
- * nested OR into one index start condition, so it scans the range from the
- * beginning and filters — the `OFFSET` cost profile keyset pagination exists to
- * avoid. The bound below is a start condition, and the `NOT` discards only the
- * rows sharing the cursor's name, of which a template list holds a handful.
- */
-function alreadyReturned(cursor: TemplateCursor): Prisma.MessageTemplateWhereInput {
-  return {
-    name: cursor.name,
-    OR: [
-      { language: { lt: cursor.language } },
-      { language: cursor.language, id: { lte: cursor.id } },
-    ],
-  };
 }
