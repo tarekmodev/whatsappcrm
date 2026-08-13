@@ -1394,14 +1394,30 @@ model TicketCounter {
 model AssignmentRule {
   id           String   @id @default(uuid(7)) @db.Uuid
   tenantId     String   @map("tenant_id") @db.Uuid
-  name         String
-  /// Rules are evaluated in ascending `position`; the first match wins.
+  /// `citext`, on the same reasoning as `teams.name` (conventions, rule 6),
+  /// applied to a second name column: decision 6 of 0007 puts the rule *name*
+  /// into the `ticket_events` row that records why a ticket was routed, and
+  /// `Billing` next to `billing` is indistinguishable to whoever reads that log.
+  name         String   @db.Citext
+  /// Rules are evaluated in ascending `position`; the first match wins. Ties
+  /// break on `id`, and that tie-break is load-bearing rather than cosmetic
+  /// (0007, decision 2): `position` defaults to `0` and carries no unique
+  /// constraint, so without it two rules created normally have no defined
+  /// order. Ids are UUIDv7, so a tie resolves in creation order.
   position     Int      @default(0)
   isActive     Boolean  @default(true) @map("is_active")
-  /// TAR-24 owns the condition and action grammar. JSONB keeps that grammar
-  /// out of the schema so evolving it is not a migration.
+  /// TAR-24 owns the condition grammar — `RoutingConditionSchema` in
+  /// `@whatsappcrm/contracts` (0007, decision 3). JSONB keeps that grammar out
+  /// of the schema so evolving it is not a migration.
+  ///
+  /// The `action` column TAR-47 shipped beside this one was dropped by TAR-285:
+  /// the target is the two foreign-key columns below, and two representations
+  /// of one fact is a drift surface with no owner (0007, data model delta 3).
+  /// A non-assignment action belongs to TAR-27's automation engine.
   conditions   Json
-  action       Json
+  /// Exactly one of the two is set on an **active** rule, enforced by the CHECK
+  /// constraint noted at the bottom of this model. Both null is a legitimate
+  /// state only while `is_active` is false — see that note.
   targetUserId String?  @map("target_user_id") @db.Uuid
   targetTeamId String?  @map("target_team_id") @db.Uuid
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -1411,9 +1427,28 @@ model AssignmentRule {
   targetUser User?  @relation(fields: [tenantId, targetUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
   targetTeam Team?  @relation(fields: [tenantId, targetTeamId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@index([tenantId, isActive, position])
+  @@unique([tenantId, name])
+  /// `id` is part of the sort (decision 2 above), so it is part of the index
+  /// that serves it — the engine's one read per created ticket is
+  /// `WHERE tenant_id = … AND is_active ORDER BY position, id`.
+  @@index([tenantId, isActive, position, id])
   @@index([tenantId, targetUserId])
   @@index([tenantId, targetTeamId])
+  /// ⚠️ One constraint on this table is **not** in this file:
+  /// `assignment_rules_active_has_one_target`, a CHECK that reads
+  /// `NOT is_active OR num_nonnulls(target_user_id, target_team_id) = 1`.
+  /// Prisma's schema language cannot express a CHECK and its describer does not
+  /// report one, so `migrate dev` proposes neither to create nor to drop it and
+  /// this is not drift — but nothing regenerates it from this file either. It
+  /// lives in `20260813140000_routing_rule_schema` and
+  /// `src/prisma/assignment-rule-schema.int-spec.ts` fails if it goes missing,
+  /// the same arrangement as `tickets_one_active_per_contact` (TAR-74).
+  ///
+  /// It is conditional on `is_active` deliberately. `users.service.ts` sets
+  /// `{ targetUserId: null, isActive: false }` on every rule pointing at a
+  /// removed user, so that a supervisor finds a rule needing a new target
+  /// rather than finding it silently gone; an unconditional form would make
+  /// that shipped statement fail at the constraint and break user removal.
   @@map("assignment_rules")
 }
 
