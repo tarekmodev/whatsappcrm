@@ -7,6 +7,8 @@ import { AdminWhatsAppController } from './admin/admin-whatsapp.controller';
 import { WhatsAppBusinessAccountConnectionService } from './business-account-connection.service';
 import { WhatsAppBusinessAccountsController } from './business-accounts.controller';
 import { WhatsAppEmbeddedSignupService } from './embedded-signup.service';
+import { MessageTemplateAdministrationController } from './message-template-administration.controller';
+import { MessageTemplateAdministrationService } from './message-template-administration.service';
 import { MessageTemplateQueryService } from './message-template-query.service';
 import { MessageTemplateSyncService } from './message-template-sync.service';
 import { MessageTemplatesController } from './message-templates.controller';
@@ -39,6 +41,15 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
  * for; the alternative was the inbox querying `message_templates` directly and
  * re-implementing the approved-only filter.
  *
+ * `MessageTemplateAdministrationService` stays **private** and is deliberately a
+ * second service rather than a flag on the one above (TAR-91). The exported one
+ * is what the send path asks "may this be sent", and its answer is only
+ * trustworthy while nothing can relax its approved-only filter; the
+ * administration read wants the opposite default, so it gets its own class, its
+ * own permission and no export. Everything the two must agree on — the
+ * projection, the ordering and cursor, the component derivation, the exclusion
+ * predicate — is shared as a module, so the split duplicates no behaviour.
+ *
  * `WhatsAppAccessTokenCipher` and `WhatsAppCredentialResolver` stay **private**.
  * They are the only two places a Meta access token is encrypted or decrypted,
  * and the value of that property is entirely in nobody else being able to.
@@ -66,6 +77,7 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
     AdminWhatsAppController,
     WhatsAppBusinessAccountsController,
     MessageTemplatesController,
+    MessageTemplateAdministrationController,
   ],
   providers: [
     WhatsAppAccessTokenCipher,
@@ -75,6 +87,7 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
     WhatsAppEmbeddedSignupService,
     MessageTemplateSyncService,
     MessageTemplateQueryService,
+    MessageTemplateAdministrationService,
     WhatsAppSenderService,
     WhatsAppMediaService,
     PlatformAdminGuard,

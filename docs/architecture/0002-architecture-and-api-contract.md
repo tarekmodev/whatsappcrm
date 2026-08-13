@@ -612,6 +612,14 @@ GET    /api/v1/message-templates             → CursorPage<MessageTemplateRespo
                                                                       conversation:send
                                                                       added by amendment 1
 
+# WhatsApp channel (tenant-facing)                                        TAR-161/91
+POST   /api/v1/whatsapp/business-accounts    → ConnectedWhatsAppBusinessAccountResponse
+                                                                      channel:manage
+                                                                      added by amendment 2
+GET    /api/v1/whatsapp/message-templates    → CursorPage<MessageTemplateAdminResponse>
+                                                                      channel:manage
+                                                                      added by amendment 8
+
 # Tickets                                                                 TAR-21/25/32
 GET    /api/v1/tickets                       → CursorPage<TicketResponse>  ticket:read
 GET    /api/v1/tickets/{id}                  → TicketResponse
@@ -988,7 +996,8 @@ choose, and a parameter nobody should vary is a decision left lying on the floor
 send and a confused agent. There is no `status` parameter, because one would make that
 state reachable by accident. Template _administration_, which does need to show the
 rejected ones, is a separate surface under `channel:manage` — never a widening of this
-route.
+route. Ruled and built in
+[Amendment 8](#amendment-8--the-template-administration-surface-tar-91).
 
 **`conversation:send`, and no new permission.** `rbac.ts` grows no `template:*`: a new
 permission costs TAR-22 a matrix change and buys no separation, since anyone who may read
@@ -1076,14 +1085,28 @@ one of the most common utility shapes, and excluding all of them would drop far 
 the picker than this ruling intends. Because the predicate is the invariant and not a type
 list, whatever verification finds is a change to the derivation, not to this contract.
 
+_Verification status, TAR-91 (2026-08-13):_ **still open, and now recorded rather than
+pending.** Meta's template-components page is reachable and settles what a `quick_reply` and
+a `voice_call` button carry at _creation_; the send-side guide, which is the only page
+stating whether a `button` component is _required in a send_, has answered HTTP 500 on every
+attempt across four builds. The question is narrower than the documentation makes it look —
+this product consumes no quick-reply payload, so widening the list means sending with the
+button component omitted, and only Meta's acceptance of that matters. It is settleable by one
+live send against a connected WABA and by nothing else; the test, the reading of each
+outcome, and `voice_call`'s status as a deliberate accepted fail-open are written where the
+allowlist is (`apps/api/src/whatsapp/message-template-components.ts`).
+
 The cost is the one just rejected for headers, accepted here only because the case is
 expected to be rarer: such a template is missing from the picker with no in-product
 explanation. `requiresButtonParameters` is published rather than kept internal so the
 mitigation can work — the template-administration surface under `channel:manage` shows
 every template and is where "approved by Meta, not yet sendable from this product"
 belongs, and it cannot say that about a template it cannot identify. On this list the field
-is `false` for every row by construction. _Triggers to revisit:_ the first tenant with a
-dynamic URL button, or verification finding that quick replies fall inside the predicate.
+is `false` for every row by construction. That surface now exists
+([Amendment 8](#amendment-8--the-template-administration-surface-tar-91)), so the mitigation
+this paragraph leans on is code rather than an intention. _Triggers to revisit:_ the first
+tenant with a dynamic URL button, or verification finding that quick replies fall inside the
+predicate.
 
 **Cursor.** `(name, language, id)` is the contract's first multi-column sort, and the
 worked example under [Cursor encoding](#data-model): `k: [name, language]`, `id` last,
@@ -1605,3 +1628,84 @@ every refusal. One additive contract change lands outside `assignment.ts`:
 `assignment_deferred` joins `TICKET_EVENT_TYPES`, for the ticket that matched no rule and
 found no available agent. `ticket_events.type` is text for exactly this reason, so it is not
 a migration.
+
+### Amendment 8 — the template administration surface (TAR-91)
+
+Amendment 1 accepts two silent exclusions on `GET /api/v1/message-templates` — templates
+Meta has not approved, and templates whose buttons take a send-time parameter — and
+justifies both on one promise: "the template-administration surface under `channel:manage`
+shows every template with its status, so this is visible to the tenant, not silently
+missing." That surface had no route, no schema and no story. Until it did, an accepted gap
+was mitigated by a sentence.
+
+```
+GET /api/v1/whatsapp/message-templates → CursorPage<MessageTemplateAdminResponse>  channel:manage
+```
+
+Query — `MessageTemplateAdminListQuerySchema`, extending `CursorPageQuerySchema`:
+
+| Parameter                   | Type                 | Notes                              |
+| --------------------------- | -------------------- | ---------------------------------- |
+| `whatsappBusinessAccountId` | id, optional         | Omitted, the page spans every WABA |
+| `status`                    | template status, opt | Narrows; it can never widen        |
+| `q`                         | string 1–120, opt.   | Name prefix                        |
+
+`MessageTemplateAdminResponseSchema` **extends** `MessageTemplateResponseSchema` rather than
+restating it, with two fields added:
+
+| Field          | Type                           | Why                                            |
+| -------------- | ------------------------------ | ---------------------------------------------- |
+| `sendable`     | boolean                        | Whether an agent can send it from this product |
+| `sendBlockers` | send-blocker[], possibly empty | Which of amendment 1's exclusions apply        |
+
+`MESSAGE_TEMPLATE_SEND_BLOCKERS` is `meta_not_approved` and `button_parameters_required` —
+amendment 1's two exclusions, named. A row carries **both** where both apply: a pending
+template with a dynamic-URL button stays out of the picker after Meta approves it, and an
+administrator told only about the approval would be waiting for something that does not
+finish the job. `sendable` is derivable from `sendBlockers` and is published anyway, because
+it is the question a client asks; the schema refines on `sendable === (sendBlockers.length
+=== 0)` so the redundancy cannot become a disagreement, in either direction.
+
+**A separate route, and never a `status` parameter on the composer's list.** Amendment 1
+fixes that filter with nothing that can reach past it, precisely so a picker cannot offer a
+send that fails at Meta. A parameter relaxing it would put the two surfaces one query string
+apart. _Rejected:_ exactly that, for the saving of one route. The path sits under
+`whatsapp/`, where this tenant's channel configuration already lives.
+
+**`channel:manage`, and no new permission.** This is the channel's configuration, beside the
+WABA connection amendment 2 put under the same permission. An agent who may send does not
+thereby need to see a rejected template, and `rbac.ts` grows nothing.
+
+**Filters by WABA, not by phone number.** Templates are approved per WABA and shared by every
+number behind it, so a number filter would be a longer way of naming the same set. Amendment
+1 already reserves `whatsappBusinessAccountId` for this "cross-number administrative read",
+and an administrator holds a WABA — it is what they connected.
+
+**Ordering is amendment 1's, unchanged**, so both lists put the same template in the same
+place and the cursor is the same keyset. It needs its own index:
+`message_templates (tenant_id, name, language, id)`, added by
+`20260813120000_message_template_administration_index`. The composer's index puts `status`
+second because that endpoint pins it to one value; with that column left free the index no
+longer yields rows in sort order, so the plan would be a sort over every template the tenant
+holds. Both indexes are kept — neither is a prefix of the other, and the table is written
+only by the template sync.
+
+Unlike the composer's list, this page is never shortened after the read: `limit` items means
+`limit` items, because nothing is excluded.
+
+**The derivation is shared, not restated.** `messageTemplateSendBlockers` is one function;
+the picker filters on `blockers.length === 0` and this surface publishes the blockers. Two
+copies would eventually disagree, and the silent direction is the dangerous one — a template
+missing from the picker and reported here as sendable tells an administrator that what they
+are looking at is fine.
+
+**Read-only.** Authoring, editing and submitting templates for approval stay in Meta's own
+tooling. This surface explains what is there; it does not change it.
+
+**One acceptance criterion of TAR-91 describes a gap that had already closed.** It names a
+third reason a template might be unsendable — "a media/location header type not yet supported
+by the composer" — written when `SendTemplateInput` was still a flat variables array.
+Amendment 1 gave the send contract its header slot and TAR-72 built the fields for all five
+formats, so no header format is excluded from the picker and there is no such state to
+report. It is deliberately **not** in the blocker vocabulary: a blocker that can never fire
+is a promise that this list is complete, kept by a branch nothing reaches.

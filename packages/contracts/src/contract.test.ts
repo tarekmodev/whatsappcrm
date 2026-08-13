@@ -48,6 +48,9 @@ import {
 import {
   ConnectedWhatsAppBusinessAccountResponseSchema,
   ConnectWhatsAppBusinessAccountInputSchema,
+  MESSAGE_TEMPLATE_SEND_BLOCKERS,
+  MessageTemplateAdminListQuerySchema,
+  MessageTemplateAdminResponseSchema,
   MessageTemplateListQuerySchema,
   MessageTemplateResponseSchema,
   WhatsAppBusinessAccountResponseSchema,
@@ -809,6 +812,78 @@ describe('a listed message template', () => {
     expect(() =>
       MessageTemplateResponseSchema.parse({ ...template, headerFormat: 'carousel' }),
     ).toThrow();
+  });
+
+  describe('on the administration surface', () => {
+    const administered = { ...template, sendable: true, sendBlockers: [] };
+
+    it('carries every field the composer’s shape carries, plus why a row is blocked', () => {
+      // Extended rather than restated, so a template cannot describe itself
+      // differently depending on which list it was read through.
+      expect(MessageTemplateAdminResponseSchema.parse(administered)).toMatchObject({
+        bodyText: 'Order {{1}}',
+        parameterCount: 1,
+        sendable: true,
+        sendBlockers: [],
+      });
+    });
+
+    it('names both reasons a template can be missing from the picker', () => {
+      // The two exclusions amendment 1 accepts on the promise that this surface
+      // makes them visible. A blocker vocabulary short of either would leave one
+      // of them unexplainable.
+      expect(MESSAGE_TEMPLATE_SEND_BLOCKERS).toEqual([
+        'meta_not_approved',
+        'button_parameters_required',
+      ]);
+    });
+
+    it('refuses a response claiming a blocked template is sendable', () => {
+      // The one direction that matters: "nothing is wrong with this template"
+      // about a template an agent cannot find is worse than no answer.
+      expect(() =>
+        MessageTemplateAdminResponseSchema.parse({
+          ...administered,
+          sendBlockers: ['meta_not_approved'],
+        }),
+      ).toThrow();
+    });
+
+    it('refuses a response claiming a sendable template is blocked', () => {
+      expect(() =>
+        MessageTemplateAdminResponseSchema.parse({ ...administered, sendable: false }),
+      ).toThrow();
+    });
+  });
+});
+
+describe('listing every message template for administration', () => {
+  const WABA_ID = '60444444-4444-7444-8444-444444444401';
+
+  it('paginates by cursor with a documented default and cap', () => {
+    expect(MessageTemplateAdminListQuerySchema.parse({})).toMatchObject({ limit: 25 });
+    expect(() => MessageTemplateAdminListQuerySchema.parse({ limit: 1000 })).toThrow();
+  });
+
+  it('accepts a status filter, which the composer’s list refuses', () => {
+    // Refused there because it would make a failed send reachable from a picker;
+    // accepted here because showing unapproved templates is the point. It
+    // narrows within what the caller may already see, never widens it.
+    expect(MessageTemplateAdminListQuerySchema.parse({ status: 'rejected' })).toMatchObject({
+      status: 'rejected',
+    });
+  });
+
+  it('refuses a status outside the published set', () => {
+    expect(() => MessageTemplateAdminListQuerySchema.parse({ status: 'archived' })).toThrow();
+  });
+
+  it('filters by business account, which is what an administrator holds', () => {
+    // Templates are approved per WABA and shared by every number behind it, so a
+    // number filter would be a longer way of naming the same set.
+    expect(
+      MessageTemplateAdminListQuerySchema.parse({ whatsappBusinessAccountId: WABA_ID }),
+    ).toMatchObject({ whatsappBusinessAccountId: WABA_ID });
   });
 });
 

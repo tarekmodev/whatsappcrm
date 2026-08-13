@@ -19,8 +19,8 @@ import { TenantNotActiveError } from '../prisma/prisma.errors';
 import { PermissionGuard } from '../rbac/permission.guard';
 import { PrincipalGuard } from '../rbac/principal.guard';
 import { ANONYMOUS, PRINCIPAL_SOURCE, resolved } from '../rbac/principal.source';
+import { InvalidCursorError } from './message-template-cursor';
 import {
-  InvalidCursorError,
   MessageTemplateQueryService,
   UnknownWhatsAppAccountError,
 } from './message-template-query.service';

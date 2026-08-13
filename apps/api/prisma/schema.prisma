@@ -947,6 +947,15 @@ model MessageTemplate {
   /// query (TAR-39, decision 1, rule 3); `name, language, id` are the three sort
   /// keys, and a name-leading order is also what makes the `q` prefix a range.
   @@index([tenantId, status, name, language, id])
+  /// Serves `GET /api/v1/whatsapp/message-templates` (TAR-91, ruled in 0002
+  /// amendment 8): every template the tenant holds, in amendment 1's ordering,
+  /// with no status constraint. The index above cannot serve it — `status` sits
+  /// second there, and with a leading column left free the index no longer
+  /// yields rows in `(name, language, id)` order, so the plan becomes a sort
+  /// over every template the tenant holds. Both are kept: neither is a prefix of
+  /// the other, the composer's is the hotter path and wants its `status`
+  /// equality early, and this table is written only by the template sync.
+  @@index([tenantId, name, language, id])
   @@map("message_templates")
 }
 

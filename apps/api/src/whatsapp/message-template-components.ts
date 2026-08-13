@@ -62,21 +62,56 @@ const EMPTY_SUMMARY: MessageTemplateComponentSummary = {
  * broad and a sendable one goes missing, which is visible to the tenant,
  * explainable on the administration surface, and fixed by widening this list.
  *
- * **Both sides of this list are pending the same verification**, which the
- * amendment asks for against Meta's current documentation and which no build so
- * far has been able to reach (its pages answered 404 and 500).
+ * `voice_call` is the **one deliberate exception** to that rule, and is listed
+ * as an accepted risk rather than as a verified entry — see below. One exception
+ * with a stated reason is not a broken invariant; an unlabelled one would be.
  *
- *   * `quick_reply` is deliberately **not** here, and is the entry to revisit
- *     first. Meta's send examples always carry a `payload` parameter for one.
- *     Held closed until that is confirmed: quick replies are a common template
- *     shape, so widening this is worth evidence rather than an assumption.
- *   * `voice_call` **is** here, which is the fail-open side and therefore the
- *     quieter risk: nothing watches for a template that was listed and should
- *     not have been. If it turns out to take a send-time parameter, that is the
- *     same defect as a too-narrow quick-reply rule.
+ * ## Verification state — TAR-91, as of 2026-08-13
  *
- * Both are answerable in one sitting by whoever first has live access — a
- * connected WABA under TAR-91, or Meta's console.
+ * Amendment 1 asks for both entries to be settled against Meta's current
+ * documentation. What that has and has not produced, so the next build does not
+ * repeat the reachable half:
+ *
+ *   * **Settled.** Meta's template-components page (both the
+ *     `business-management-api` path and its migrated twin) describes a
+ *     `quick_reply` button as "custom text-only buttons that immediately message
+ *     you with the specified text string when tapped", with one documented
+ *     property — the 25-character label. No creation-time variable and no
+ *     `example`, unlike `url`, which is the one button type whose documentation
+ *     mentions a variable. A `voice_call` button has no configurable field at
+ *     all.
+ *   * **Not settled, and not settleable from the documentation.** Whether Meta
+ *     *rejects a send* that omits the `button` component. That is stated only on
+ *     the send-side guide (`.../cloud-api/guides/send-message-templates/` and
+ *     `.../whatsapp/messages/template-messages/`), which has answered HTTP 500
+ *     on every attempt across four builds — most recently 2026-08-13.
+ *
+ * The question is narrower than "does a quick reply carry a payload", because
+ * this product never consumes one: the send path emits header and body
+ * components only (`meta-cloud-api.client.ts`), and an inbound button tap is
+ * modelled as `{ text?: string }` and read as `button.text`
+ * (`whatsapp-payload.schema.ts`, `whatsapp-message.mapper.ts`). Widening this
+ * list means sending quick-reply templates with the button component omitted
+ * entirely, so the only thing that matters is whether Meta accepts that.
+ *
+ *   * `quick_reply` stays **out**, fail-closed, until one live send says
+ *     otherwise. The test that settles it: an approved template with a
+ *     placeholder-free BODY and two QUICK_REPLY buttons, sent through
+ *     `POST /{phone-number-id}/messages` with `template.components` omitted —
+ *     exactly what `sendTemplate` produces today. 2xx with a message id that
+ *     delivers and renders both buttons means add it here and replace this note
+ *     with what was observed and when; any 4xx (expect the #132000 family) means
+ *     it stays out, and the real fix is emitting button components from the send
+ *     path — a composer and send-path change, not an allowlist edit.
+ *   * `voice_call` stays **in**, as an accepted open risk rather than a to-do.
+ *     Meta documents no configurable field for it, so there is nothing a send
+ *     could supply; that is weaker evidence than a live send, for the same
+ *     reason as above. The exposure is bounded — it needs a tenant with Calling
+ *     enabled, an approved voice_call template, and an agent picking it — and
+ *     the cost if wrong is one send that fails at Meta, not a wrong send.
+ *
+ * Neither can be closed without a WABA whose credentials the runtime holds, and
+ * `voice_call` additionally needs one with Calling enabled.
  */
 const PARAMETERLESS_BUTTON_TYPES: readonly string[] = ['phone_number', 'voice_call'];
 

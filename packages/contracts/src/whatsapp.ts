@@ -447,6 +447,114 @@ export const MessageTemplatePageSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 
+// ---------------------------------------------------------------------------
+// Template administration — the `channel:manage` surface (TAR-91, 0002 amendment 8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a template the tenant holds is not in the composer's picker.
+ *
+ * `MessageTemplateListQuerySchema` drops rows on exactly two rules, and this
+ * vocabulary is those two rules named. That is the whole point of the surface:
+ * amendment 1 accepts both exclusions on the promise that they are *visible*
+ * somewhere, and a template that is simply absent from one list and present in
+ * another explains nothing.
+ *
+ *   * `meta_not_approved` — Meta has not approved it (`pending`), or has
+ *     withdrawn approval (`rejected`, `paused`, `disabled`). Nothing the product
+ *     can do; the template is fixed in Meta's own tooling.
+ *   * `button_parameters_required` — Meta *has* approved it, and this build
+ *     cannot fill what its buttons need at send time. A product limit, not
+ *     Meta's, which is exactly the distinction an administrator needs in order
+ *     to know whether to wait for Meta or to raise it with us.
+ *
+ * A row may carry both: a pending template with a dynamic-URL button is blocked
+ * twice, and reporting one of them would leave an administrator watching for a
+ * Meta approval that will not put the template in the picker.
+ *
+ * The set may grow — a future exclusion is a new member here rather than a
+ * silent absence — so a client renders an unrecognised value as "not sendable"
+ * rather than assuming this list is closed.
+ */
+export const MESSAGE_TEMPLATE_SEND_BLOCKERS = [
+  'meta_not_approved',
+  'button_parameters_required',
+] as const;
+export const MessageTemplateSendBlockerSchema = z.enum(MESSAGE_TEMPLATE_SEND_BLOCKERS);
+
+/**
+ * A template as the administration surface shows it: the published resource,
+ * plus whether an agent can actually send it and what stands in the way.
+ *
+ * Built by extending `MessageTemplateResponseSchema` rather than restating it,
+ * so a field added to a template cannot be forgotten here — and so the two
+ * surfaces cannot describe the same row differently. `requiresButtonParameters`
+ * is inherited and stays exactly what it was; `sendBlockers` is the answer to
+ * the question that field alone could not answer, because a template can also be
+ * missing for a reason that has nothing to do with its buttons.
+ *
+ * `sendable` is derivable from `sendBlockers` and is published anyway: it is the
+ * question a client actually asks, and leaving every consumer to write
+ * `blockers.length === 0` makes the emptiness convention an unwritten rule. The
+ * refinement below is what keeps the redundancy safe — the two can never
+ * disagree, in either direction, and a response that got it wrong fails to parse
+ * rather than misreporting a template as sendable.
+ */
+export const MessageTemplateAdminResponseSchema = MessageTemplateResponseSchema.extend({
+  sendable: z.boolean(),
+  sendBlockers: z.array(MessageTemplateSendBlockerSchema),
+}).refine(
+  (template) => template.sendable === (template.sendBlockers.length === 0),
+  'sendable must mean exactly that sendBlockers is empty',
+);
+
+/**
+ * `GET /api/v1/whatsapp/message-templates` — every template this tenant holds,
+ * whatever Meta thinks of it (TAR-91; ruled in 0002 amendment 8).
+ *
+ * **A separate route, not a widening of `GET /api/v1/message-templates`.**
+ * Amendment 1 fixes the approved-and-sendable filter in that route with no
+ * parameter that can reach past it, precisely so a picker cannot offer a send
+ * that fails at Meta. Administration needs the opposite default, so it gets its
+ * own path, its own permission and its own response — the one arrangement in
+ * which neither surface can be turned into the other by a query string.
+ *
+ * **`channel:manage`, not `conversation:send`.** This is the WhatsApp channel's
+ * configuration, next to the WABA connection under the same permission. An agent
+ * who may send does not thereby need to see a rejected template, and the reverse
+ * is what the surface exists for.
+ *
+ * **Filters by WABA, not by phone number.** Templates are approved per WABA;
+ * every number behind one shares them, so a number filter would be a longer way
+ * of naming the same set. Amendment 1 already reserves
+ * `whatsappBusinessAccountId` for exactly this "cross-number administrative
+ * read", and an administrator holds a WABA — it is what they connected.
+ *
+ * **`status` is a filter here, and only here.** The reason it is refused on the
+ * composer's route is that it would make an unsendable template reachable from a
+ * picker; on a surface whose purpose is showing unapproved templates there is
+ * nothing to protect. It narrows within what the caller may already see rather
+ * than widening it.
+ *
+ * Ordering is amendment 1's, unchanged — `name ASC, language ASC, id ASC` — so
+ * the two lists put the same template in the same place and an administrator
+ * comparing them is not also reconciling two sort orders.
+ */
+export const MessageTemplateAdminListQuerySchema = CursorPageQuerySchema.extend({
+  /** One connected business account. Omitted, the page spans every WABA the tenant holds. */
+  whatsappBusinessAccountId: IdSchema.optional(),
+  /** Meta's approval status. Narrows what is shown; it can never widen it. */
+  status: MessageTemplateStatusSchema.optional(),
+  /** Name prefix, as on the composer's list. */
+  q: z.string().min(1).max(120).optional(),
+});
+
+/** `{ items, nextCursor }` per TAR-39's list convention — no envelope. */
+export const MessageTemplateAdminPageSchema = z.object({
+  items: z.array(MessageTemplateAdminResponseSchema),
+  nextCursor: z.string().nullable(),
+});
+
 export type WhatsAppBusinessVerificationStatus = z.infer<
   typeof WhatsAppBusinessVerificationStatusSchema
 >;
@@ -473,3 +581,8 @@ export type ConnectedWhatsAppBusinessAccountResponse = z.infer<
 export type SyncMessageTemplatesResponse = z.infer<typeof SyncMessageTemplatesResponseSchema>;
 export type MessageTemplateListQuery = z.infer<typeof MessageTemplateListQuerySchema>;
 export type MessageTemplatePage = z.infer<typeof MessageTemplatePageSchema>;
+
+export type MessageTemplateSendBlocker = z.infer<typeof MessageTemplateSendBlockerSchema>;
+export type MessageTemplateAdminResponse = z.infer<typeof MessageTemplateAdminResponseSchema>;
+export type MessageTemplateAdminListQuery = z.infer<typeof MessageTemplateAdminListQuerySchema>;
+export type MessageTemplateAdminPage = z.infer<typeof MessageTemplateAdminPageSchema>;
