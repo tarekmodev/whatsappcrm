@@ -1,8 +1,11 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
+  SLA_EVALUATE_TICKET_JOB,
+  SLA_QUEUE,
   TICKET_STATUS_REQUIRES_CLOSE,
   canAgentTransition,
+  type SlaEvaluateTicketTrigger,
   type TicketPriority,
   type TicketResponse,
   type TicketStatus,
@@ -12,6 +15,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import { TICKET_UPDATED_EVENT, type TicketUpdatedEvent } from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
+import { QueueService } from '../queue/queue.service';
 import { TICKET_PROJECTION, toTicketResponse, type TicketRow } from './ticket.mapper';
 import { TicketQueryService } from './ticket-query.service';
 import {
@@ -83,11 +87,14 @@ interface TicketChange {
  */
 @Injectable()
 export class TicketCommandService {
+  private readonly logger = new Logger(TicketCommandService.name);
+
   constructor(
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly tickets: TicketQueryService,
     private readonly tenantContext: TenantContextService,
     private readonly events: EventEmitter2,
+    private readonly queue: QueueService,
   ) {}
 
   /**
@@ -124,8 +131,65 @@ export class TicketCommandService {
     const after = await this.write(before, change);
 
     this.announceUpdate(before, after);
+    await this.triggerSlaEvaluation(before, after);
 
     return toTicketResponse(after);
+  }
+
+  /**
+   * 0006's fourth SLA trigger: a ticket's status changed, so its timers may need
+   * to pause, resume, stop or be cancelled (TAR-26).
+   *
+   * **A durable queue job, not the `ticket.updated` event this service already
+   * emits.** `domain-events.ts` says it in as many words — "a subscriber for
+   * which loss is not acceptable — TAR-23's assignment, TAR-26's SLA timers —
+   * needs a durable trigger of its own." A missed in-process event costs a
+   * client one refetch; a missed SLA transition leaves a paused clock running
+   * against an agent for time they could not act on, or a breach nobody is told
+   * about, with nothing anywhere recording that it was lost.
+   *
+   * Only a **status** change enqueues. A priority or subject edit moves no timer:
+   * a running deadline keeps the policy it started under, which is 0006's rule
+   * that a policy change affects future tickets and never past deadlines.
+   *
+   * `SlaModule` is L4 and this is L3, so what crosses the line is the shape in
+   * `@whatsappcrm/contracts/sla` and a queue name — never an import.
+   *
+   * After the commit and never inside it: a job that reached a worker before the
+   * status landed would reconcile against the old row and burn a retry. Failure
+   * to enqueue is logged rather than thrown, per `QueueService`'s contract — the
+   * status change is committed and the caller is owed their 200.
+   */
+  private async triggerSlaEvaluation(before: TicketRow, after: TicketRow): Promise<void> {
+    if (before.status === after.status) {
+      return;
+    }
+
+    const trigger: SlaEvaluateTicketTrigger = {
+      tenantId: this.tenantContext.requireTenantId(),
+      ticketId: after.id,
+      reason: 'status_changed',
+    };
+
+    const outcome = await this.queue.enqueue<SlaEvaluateTicketTrigger>(
+      SLA_QUEUE,
+      SLA_EVALUATE_TICKET_JOB,
+      trigger,
+      {
+        // No custom `jobId` — see the note in `@whatsappcrm/contracts/sla`.
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1_000 },
+        removeOnComplete: 1_000,
+        removeOnFail: 5_000,
+      },
+    );
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      this.logger.warn(
+        `Ticket ${after.id} moved ${before.status} → ${after.status} but its SLA evaluation was ` +
+          `not queued (${outcome}); its timers will not move until it is evaluated again.`,
+      );
+    }
   }
 
   /**

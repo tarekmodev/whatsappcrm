@@ -50,6 +50,7 @@ describe('SlaSweepService', () => {
   let deactivatedTenants: Set<string>;
   let scopes: (string | null)[];
   let ticketEvents: Record<string, unknown>[];
+  let loadAlertCandidates: jest.Mock;
   let resolveRecipients: jest.Mock;
   let insertForBreach: jest.Mock;
   let emit: jest.Mock;
@@ -93,6 +94,7 @@ describe('SlaSweepService', () => {
     deactivatedTenants = new Set();
     scopes = [];
     ticketEvents = [];
+    loadAlertCandidates = jest.fn(() => Promise.resolve([{ id: SUPERVISOR, teamIds: [] }]));
     resolveRecipients = jest.fn(() => Promise.resolve([SUPERVISOR]));
     insertForBreach = jest.fn((_tx: unknown, { slaTimerId }: { slaTimerId: string }) =>
       Promise.resolve([
@@ -124,7 +126,7 @@ describe('SlaSweepService', () => {
       systemPrisma,
       prisma,
       tenantContext,
-      { resolveRecipients, insertForBreach } as unknown as SlaAlertService,
+      { loadAlertCandidates, resolveRecipients, insertForBreach } as unknown as SlaAlertService,
       { emit } as unknown as EventEmitter2,
     );
   });
@@ -162,6 +164,32 @@ describe('SlaSweepService', () => {
       ticketId: TICKET_A,
       alertIds: [`alert-for-${TIMER_A}`],
     } satisfies SlaBreachedEvent);
+  });
+
+  /**
+   * The candidate list is invariant for the whole transaction, and the recovery
+   * path this service is sized for is a full 200-timer batch inside one — so
+   * resolving it per breach meant 200 identical queries against `users` and
+   * `team_members`.
+   */
+  it('reads the tenant’s supervisors once per transaction, not once per breach', async () => {
+    claimed.set(TENANT_A, [claimedRow(TIMER_A, TICKET_A), claimedRow('timer-2', 'ticket-2')]);
+
+    await sweep.sweep();
+
+    // Two tenants, two transactions — and two breaches inside the first one.
+    expect(loadAlertCandidates).toHaveBeenCalledTimes(2);
+    expect(resolveRecipients).toHaveBeenCalledTimes(3);
+  });
+
+  /** Nothing claimed means nothing to alert, so the candidate read is not worth making. */
+  it('reads no supervisors at all when the claim moved nothing', async () => {
+    claimed.set(TENANT_A, []);
+    claimed.set(TENANT_B, []);
+
+    await sweep.sweep();
+
+    expect(loadAlertCandidates).not.toHaveBeenCalled();
   });
 
   it('records the breach on the ticket’s event log in the same pass', async () => {

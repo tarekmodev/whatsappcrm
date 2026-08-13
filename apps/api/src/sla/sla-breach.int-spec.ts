@@ -401,10 +401,10 @@ describe('SLA breach detection against a real database', () => {
 
       const ticket = await systemPrisma.ticket.findUniqueOrThrow({
         where: { id: ticketId },
-        select: { firstResponseAt: true },
+        select: { firstRespondedAt: true },
       });
 
-      expect(ticket.firstResponseAt).not.toBeNull();
+      expect(ticket.firstRespondedAt).not.toBeNull();
       expect(
         await systemPrisma.ticketEvent.findMany({ where: { ticketId, type: 'first_response' } }),
       ).toHaveLength(1);
@@ -435,10 +435,10 @@ describe('SLA breach detection against a real database', () => {
 
       const ticket = await systemPrisma.ticket.findUniqueOrThrow({
         where: { id: ticketId },
-        select: { firstResponseAt: true },
+        select: { firstRespondedAt: true },
       });
 
-      expect(ticket.firstResponseAt).toBeNull();
+      expect(ticket.firstRespondedAt).toBeNull();
       expect((await timerFor(ticketId)).state).toBe('running');
     });
 
@@ -454,11 +454,11 @@ describe('SLA breach detection against a real database', () => {
 
       const ticket = await systemPrisma.ticket.findUniqueOrThrow({
         where: { id: ticketId },
-        select: { firstResponseAt: true },
+        select: { firstRespondedAt: true },
       });
 
       expect((await timerFor(ticketId)).state).toBe('breached');
-      expect(ticket.firstResponseAt).not.toBeNull();
+      expect(ticket.firstRespondedAt).not.toBeNull();
     });
   });
 
@@ -522,6 +522,47 @@ describe('SLA breach detection against a real database', () => {
 
       expect((await timerFor(ticketId)).state).toBe('running');
       expect(await alertsFor(ticketId)).toEqual([]);
+    });
+
+    /**
+     * A deactivated tenant's timers can never be swept — phase 2 opens a
+     * `$tenantTransaction` and `assert_tenant_active` raises before the claim
+     * runs — so if phase 1 kept returning them they would stay `running` for
+     * ever, and because they only get older they sort to the head of every
+     * batch. One deactivated tenant with a full batch of overdue timers would
+     * then stop detection for the whole platform.
+     *
+     * The `LIMIT 1` is what makes this a test of exclusion rather than of
+     * ordering: with the deactivated tenant's older timer still in the result
+     * set, the active tenant's would never fit in the batch.
+     */
+    it('leaves a deactivated tenant’s timers out of the batch entirely', async () => {
+      const suspended = await openTicket(TENANT_B, CONTACT_B, CONVERSATION_B, WINDOW_MINUTES + 30);
+      const active = await openTicket(TENANT_A, CONTACT_A, CONVERSATION_A, WINDOW_MINUTES + 1);
+
+      await evaluate(TENANT_B, suspended, 'ticket_created');
+      await evaluate(TENANT_A, active, 'ticket_created');
+
+      await systemPrisma.tenant.update({
+        where: { id: TENANT_B },
+        data: { status: 'suspended' },
+      });
+
+      try {
+        const report = await sweep.sweep();
+
+        // The active tenant's breach is found and alerted; the deactivated
+        // tenant is not even considered, so it is not reported as skipped.
+        expect(report).toMatchObject({ breached: 1, alerted: 1, skippedTenants: 0 });
+        expect((await timerFor(active)).state).toBe('breached');
+        expect((await timerFor(suspended)).state).toBe('running');
+        expect(await alertsFor(suspended)).toEqual([]);
+      } finally {
+        await systemPrisma.tenant.update({
+          where: { id: TENANT_B },
+          data: { status: 'active' },
+        });
+      }
     });
 
     /**

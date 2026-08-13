@@ -18,7 +18,7 @@ describe('slaTimerTargetFor', () => {
         slaTimerTargetFor({
           kind: 'first_response',
           status: 'open',
-          firstResponseAt: null,
+          firstRespondedAt: null,
           resolvedAt: null,
         }),
       ).toBe('running');
@@ -33,7 +33,7 @@ describe('slaTimerTargetFor', () => {
         slaTimerTargetFor({
           kind: 'first_response',
           status: 'pending',
-          firstResponseAt: null,
+          firstRespondedAt: null,
           resolvedAt: null,
         }),
       ).toBe('paused');
@@ -44,7 +44,7 @@ describe('slaTimerTargetFor', () => {
         slaTimerTargetFor({
           kind: 'first_response',
           status: 'open',
-          firstResponseAt: RESPONDED,
+          firstRespondedAt: RESPONDED,
           resolvedAt: null,
         }),
       ).toBe('met');
@@ -59,7 +59,7 @@ describe('slaTimerTargetFor', () => {
         slaTimerTargetFor({
           kind: 'first_response',
           status: 'pending',
-          firstResponseAt: RESPONDED,
+          firstRespondedAt: RESPONDED,
           resolvedAt: null,
         }),
       ).toBe('met');
@@ -72,7 +72,7 @@ describe('slaTimerTargetFor', () => {
           slaTimerTargetFor({
             kind: 'first_response',
             status,
-            firstResponseAt: null,
+            firstRespondedAt: null,
             resolvedAt: null,
           }),
         ).toBe('cancelled');
@@ -86,7 +86,7 @@ describe('slaTimerTargetFor', () => {
         slaTimerTargetFor({
           kind: 'resolution',
           status: 'open',
-          firstResponseAt: RESPONDED,
+          firstRespondedAt: RESPONDED,
           resolvedAt: null,
         }),
       ).toBe('running');
@@ -97,7 +97,7 @@ describe('slaTimerTargetFor', () => {
         slaTimerTargetFor({
           kind: 'resolution',
           status: 'resolved',
-          firstResponseAt: RESPONDED,
+          firstRespondedAt: RESPONDED,
           resolvedAt: RESOLVED,
         }),
       ).toBe('met');
@@ -108,7 +108,7 @@ describe('slaTimerTargetFor', () => {
         slaTimerTargetFor({
           kind: 'resolution',
           status: 'closed',
-          firstResponseAt: RESPONDED,
+          firstRespondedAt: RESPONDED,
           resolvedAt: null,
         }),
       ).toBe('cancelled');

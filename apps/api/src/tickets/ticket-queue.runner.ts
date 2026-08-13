@@ -6,7 +6,6 @@ import {
   TICKET_ENSURE_JOB,
   TICKET_LINKER,
   TICKET_QUEUE,
-  slaEvaluateJobId,
   type InboundMessageTicketTrigger,
   type SlaEvaluateReason,
   type SlaEvaluateTicketTrigger,
@@ -169,7 +168,11 @@ export class TicketQueueRunner implements OnApplicationBootstrap {
       SLA_EVALUATE_TICKET_JOB,
       trigger,
       {
-        jobId: slaEvaluateJobId(trigger),
+        // No custom `jobId`, deliberately — see the note in
+        // `@whatsappcrm/contracts/sla`. A ticket-keyed id silently collapsed
+        // every trigger after the first into the completed key of the one
+        // before it, and the handler is a reconciler, so an id buys nothing.
+        //
         // Retried, because the ticket is durable and the timer is owed: a job
         // that overtook its own transaction succeeds on the next attempt.
         attempts: 3,

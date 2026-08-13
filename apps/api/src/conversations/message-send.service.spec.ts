@@ -234,8 +234,27 @@ describe('MessageSendService', () => {
         SLA_QUEUE,
         SLA_EVALUATE_TICKET_JOB,
         { tenantId: TENANT, ticketId: TICKET, reason: 'agent_replied' },
-        expect.objectContaining({ jobId: `sla-evaluate-${TENANT}-${TICKET}` }),
+        expect.objectContaining({ attempts: expect.any(Number) as number }),
       );
+    });
+
+    /**
+     * The regression guard for the bug this trigger shipped with, at the call
+     * site it bit hardest: a ticket-keyed `jobId` collapsed this reply into the
+     * completed key of the ticket's own creation job, so the timer never reached
+     * `met` and the ticket breached at its deadline despite being answered.
+     */
+    it('sets no custom job id, so the reply is never collapsed into an earlier trigger', async () => {
+      await send({ type: 'text', body: 'On its way.' });
+
+      const [, , , options] = enqueue.mock.calls.find(([queue]) => queue === SLA_QUEUE) as [
+        string,
+        string,
+        unknown,
+        Record<string, unknown>,
+      ];
+
+      expect(options).not.toHaveProperty('jobId');
     });
 
     it('tells it nothing when the contact has no active ticket', async () => {

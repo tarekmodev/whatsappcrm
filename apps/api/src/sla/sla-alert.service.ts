@@ -16,7 +16,11 @@ import type { Prisma } from '../generated/prisma/client';
 import { UserRole, UserStatus } from '../generated/prisma/enums';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { SLA_ALERT_PROJECTION, toSlaAlertResponse } from './sla-alert.mapper';
-import { resolveAlertRecipients, type TicketResponsibility } from './sla-recipients';
+import {
+  resolveAlertRecipients,
+  type AlertCandidate,
+  type TicketResponsibility,
+} from './sla-recipients';
 import { InvalidSlaCursorError, SlaAlertNotFoundError } from './sla.errors';
 
 /**
@@ -66,25 +70,43 @@ export class SlaAlertService {
   ) {}
 
   /**
-   * Who to tell about a breach on this ticket (0006, decision 4). Runs inside
-   * the sweep's per-tenant transaction, so every read is scoped by the same RLS
-   * the writes that follow it are.
+   * The tenant's alert candidates: its active supervisors and admins, with the
+   * teams each belongs to.
    *
-   * Two indexed reads and no more: the tenant's active supervisors and admins
-   * with their team memberships, and — only when a person holds the ticket —
-   * that person's teams. `team_members (tenant_id, user_id, team_id)` serves the
-   * second, and `users (tenant_id, status)` the first. The rule itself is a pure
-   * function so it can be tested without either.
+   * **Read once per sweep transaction, not once per breach.** The answer is
+   * invariant for the whole transaction — only the assigned user's teams vary by
+   * ticket — and the recovery path this class is sized for is a full 200-timer
+   * batch inside one transaction, so folding it into `resolveRecipients` meant
+   * 200 identical queries against `users` and `team_members`. One read, served by
+   * `users (tenant_id, status)` with a bounded nested load.
    */
-  async resolveRecipients(
-    tx: Prisma.TransactionClient,
-    ticket: { assignedUserId: string | null; assignedTeamId: string | null },
-  ): Promise<string[]> {
+  async loadAlertCandidates(tx: Prisma.TransactionClient): Promise<AlertCandidate[]> {
     const candidates = await tx.user.findMany({
       where: { role: { in: [...ALERT_ROLES] }, status: UserStatus.active },
       select: { id: true, teamMemberships: { select: { teamId: true } } },
     });
 
+    return candidates.map((candidate) => ({
+      id: candidate.id,
+      teamIds: candidate.teamMemberships.map((membership) => membership.teamId),
+    }));
+  }
+
+  /**
+   * Who to tell about a breach on this ticket (0006, decision 4). Runs inside
+   * the sweep's per-tenant transaction, so every read is scoped by the same RLS
+   * the writes that follow it are.
+   *
+   * One indexed read per breach, and only when a person holds the ticket: that
+   * person's teams, served by `team_members (tenant_id, user_id, team_id)`. The
+   * candidate list is the caller's, hoisted out of the loop. The rule itself is
+   * a pure function so it can be tested without a database.
+   */
+  async resolveRecipients(
+    tx: Prisma.TransactionClient,
+    candidates: readonly AlertCandidate[],
+    ticket: { assignedUserId: string | null; assignedTeamId: string | null },
+  ): Promise<string[]> {
     if (candidates.length === 0) {
       return [];
     }
@@ -95,13 +117,7 @@ export class SlaAlertService {
       assignedUserTeamIds: await this.teamsOf(tx, ticket.assignedUserId),
     };
 
-    return resolveAlertRecipients(
-      candidates.map((candidate) => ({
-        id: candidate.id,
-        teamIds: candidate.teamMemberships.map((membership) => membership.teamId),
-      })),
-      responsibility,
-    );
+    return resolveAlertRecipients(candidates, responsibility);
   }
 
   /**

@@ -10,6 +10,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import type { Prisma, PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
+import type { QueueService } from '../queue/queue.service';
 import { TicketCommandService } from './ticket-command.service';
 import { TicketLinkerService } from './ticket-linker.service';
 import { TicketQueryService } from './ticket-query.service';
@@ -303,7 +304,16 @@ describe('ticket status, priority and the active queue, end to end', () => {
     tenantPrisma = withTenantScope(tenantBase, tenantContext);
 
     tickets = new TicketQueryService(tenantPrisma, tenantContext);
-    commands = new TicketCommandService(tenantPrisma, tickets, tenantContext, new EventEmitter2());
+    commands = new TicketCommandService(
+      tenantPrisma,
+      tickets,
+      tenantContext,
+      new EventEmitter2(),
+      // No Redis in this suite, and none needed: `enqueue` reports `unavailable`
+      // and the command still answers, which is `QueueService`'s own contract.
+      // What a status change does to a timer is proved in `sla-breach.int-spec.ts`.
+      stubQueue(),
+    );
     linker = new TicketLinkerService(tenantPrisma, tenantContext, new EventEmitter2());
 
     await removeFixture();
@@ -538,6 +548,7 @@ describe('ticket status, priority and the active queue, end to end', () => {
         racing,
         tenantContext,
         new EventEmitter2(),
+        stubQueue(),
       );
 
       await expect(
@@ -937,6 +948,15 @@ function assigneeFor(ticketId: string): string | null {
   }
 
   return ticketId === UNASSIGNED ? null : AGENT_A;
+}
+
+/**
+ * A `QueueService` with no Redis behind it, which is the state a bare clone runs
+ * in: `enqueue` reports `unavailable` and never throws, so the command path is
+ * exercised exactly as it is in production minus the job.
+ */
+function stubQueue(): QueueService {
+  return { enqueue: () => Promise.resolve('unavailable' as const) } as unknown as QueueService;
 }
 
 /** Loaded from the repository-root `.env` by `jest.int.setup.cjs`. */

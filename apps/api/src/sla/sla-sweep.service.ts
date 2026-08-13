@@ -141,7 +141,7 @@ export class SlaSweepService {
   }
 
   /**
-   * Phase 1. Read-only, two columns, every tenant.
+   * Phase 1. Read-only, two columns, every **active** tenant.
    *
    * `ORDER BY due_at` with a `LIMIT` is what makes the scan stop at the first row
    * that is not yet due, so the cost grows with the number of *running* timers
@@ -150,13 +150,34 @@ export class SlaSweepService {
    *
    * `now()` is Postgres's, never a node clock: skew between API instances must
    * not be able to breach a timer early or hold one open.
+   *
+   * ## Why the join to `tenants`, and why it is not optional
+   *
+   * A deactivated tenant's timers cannot be swept: phase 2 opens a
+   * `$tenantTransaction`, `assert_tenant_active` raises before `set_config`
+   * runs, and the claim never executes — so those rows stay `running` for ever.
+   * They also only get *older*, so `ORDER BY due_at` sorts them to the head of
+   * every batch. Without this filter, one deactivated tenant holding 200 overdue
+   * timers fills the batch on every sweep from then on and **no other tenant's
+   * breaches are ever examined** — platform-wide detection stops, reported only
+   * as a warning line about a skipped tenant.
+   *
+   * The status term is the same one `assert_tenant_active` enforces, so this
+   * cannot admit a row phase 2 would then refuse. Phase 2 keeps its
+   * `TenantNotActiveError` branch regardless: a tenant deactivated in the gap
+   * between the two phases is a race this narrows rather than closes.
+   *
+   * The join costs a primary-key lookup per candidate row and reaches no tenant
+   * data — `tenants.status` is not a tenant's business data, and this statement
+   * still returns nothing but uuid pairs.
    */
   private async findDueTimers(): Promise<DueTimerRow[]> {
     return await this.systemPrisma.$queryRaw<DueTimerRow[]>`
-      SELECT tenant_id AS "tenantId", id
-        FROM sla_timers
-       WHERE state = 'running' AND due_at <= now()
-       ORDER BY due_at
+      SELECT t.tenant_id AS "tenantId", t.id
+        FROM sla_timers t
+        JOIN tenants n ON n.id = t.tenant_id
+       WHERE t.state = 'running' AND t.due_at <= now() AND n.status = 'active'
+       ORDER BY t.due_at
        LIMIT ${SLA_SWEEP_BATCH}
     `;
   }
@@ -248,6 +269,15 @@ export class SlaSweepService {
     const claimed = await this.claim(tx, timerIds);
     const breaches: { ticketId: string; alerts: InsertedSlaAlert[] }[] = [];
 
+    if (claimed.length === 0) {
+      return breaches;
+    }
+
+    // Once per transaction, not once per breach: the tenant's supervisors and
+    // admins do not change while this transaction runs, and a full 200-timer
+    // recovery batch would otherwise issue 200 identical queries inside it.
+    const candidates = await this.alerts.loadAlertCandidates(tx);
+
     for (const timer of claimed) {
       // In the same transaction as the flip, which is what bounds it to one:
       // `ticket_events` is append-only with no unique constraint, so the
@@ -276,7 +306,7 @@ export class SlaSweepService {
         continue;
       }
 
-      const recipientUserIds = await this.alerts.resolveRecipients(tx, ticket);
+      const recipientUserIds = await this.alerts.resolveRecipients(tx, candidates, ticket);
 
       if (recipientUserIds.length === 0) {
         // 0004's `last_admin_required` guarantees every tenant keeps one active

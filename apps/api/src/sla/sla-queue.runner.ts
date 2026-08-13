@@ -10,7 +10,7 @@ import {
 import { UnrecoverableError } from 'bullmq';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
 import { QueueService } from '../queue/queue.service';
-import { SLA_SWEEP_SCHEDULE_KEY } from './sla.constants';
+import { SLA_SWEEP_SCHEDULE_KEY, SLA_WORKER_CONCURRENCY } from './sla.constants';
 import { SlaSweepService } from './sla-sweep.service';
 import { SlaTimerService } from './sla-timer.service';
 
@@ -49,6 +49,22 @@ export class SlaQueueRunner implements OnApplicationBootstrap {
   async onApplicationBootstrap(): Promise<void> {
     const started = this.queue.registerWorker<SlaEvaluateTicketTrigger>({
       queue: SLA_QUEUE,
+      // Above the repo default of one, and this is the one place in the codebase
+      // where that default is actively wrong. The sweep and the per-ticket
+      // evaluations share this queue, and a sweep walking several slow tenants
+      // holds its slot for tens of seconds — during which every
+      // `sla.evaluate-ticket` job queues behind it. Because the sweep re-checks
+      // `due_at <= now()` when it claims, an evaluation stuck behind a long
+      // sweep can let a ticket breach whose agent had already replied: a false
+      // alert, by a narrower route than the one that made the job id a bug.
+      //
+      // Concurrency rather than a second queue: the work is short and
+      // database-bound, the reconciler is safe to run concurrently with itself
+      // (every transition is a guarded conditional update), and a queue of its
+      // own would be a second scheduler key and a second failed set to monitor
+      // for no gain the arithmetic supports. Revisit if a sweep ever saturates
+      // all four.
+      concurrency: SLA_WORKER_CONCURRENCY,
       handlers: {
         [SLA_EVALUATE_TICKET_JOB]: async (job) => {
           await this.evaluateTicket(job.data);

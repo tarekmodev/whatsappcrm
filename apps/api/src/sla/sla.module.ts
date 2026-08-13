@@ -35,17 +35,20 @@ import { SlaTimerService } from './sla-timer.service';
  * | `SlaAlertService`  | Resolves recipients, reads and acknowledges alerts                          |
  * | `SlaQueueRunner`   | BullMQ registration — the only file here that knows a queue exists          |
  *
- * ## What is not wired yet, and why
+ * ## The four triggers, and who produces each
  *
- * 0006 names four ticket-level triggers. Three exist: a ticket being created and
- * a customer replying to a paused one are both enqueued by `TicketQueueRunner`,
- * and an agent replying by `MessageSendService`. The fourth — a ticket's status
- * changing — belongs to TAR-25's ticket command service, which has not landed;
- * there is no code path in this repository that changes a ticket's status other
- * than the `pending → open` reopen the linker performs, and that is covered by
- * the customer-reply trigger. When TAR-25 lands it enqueues the same job with
- * `reason: 'status_changed'` and nothing here changes: the handler reconciles
- * from the row.
+ * | When                                     | Enqueued by             | Reason             |
+ * | ---------------------------------------- | ----------------------- | ------------------ |
+ * | A ticket is created                      | `TicketQueueRunner`     | `ticket_created`   |
+ * | A customer replies to a `pending` ticket | `TicketQueueRunner`     | `customer_replied` |
+ * | An outbound message from a person        | `MessageSendService`    | `agent_replied`    |
+ * | A ticket's status changes                | `TicketCommandService`  | `status_changed`   |
+ *
+ * All four enqueue **the same job**, and the handler re-derives the whole timer
+ * state from the row rather than branching on `reason` — which is what makes a
+ * job that is lost, duplicated or delivered out of order converge on the same
+ * state, and what let the fourth producer be added without touching this module.
+ * `reason` exists for logs.
  */
 @Module({
   controllers: [SlaPoliciesController, SlaAlertsController],

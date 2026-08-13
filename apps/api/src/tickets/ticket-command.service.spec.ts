@@ -5,10 +5,12 @@ import {
   type SessionPrincipal,
   type TicketStatus,
 } from '@whatsappcrm/contracts';
+import { SLA_EVALUATE_TICKET_JOB, SLA_QUEUE } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { TICKET_UPDATED_EVENT } from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
+import type { QueueService } from '../queue/queue.service';
 import type { TicketRow } from './ticket.mapper';
 import { TicketCommandService } from './ticket-command.service';
 import type { TicketQueryService } from './ticket-query.service';
@@ -52,6 +54,8 @@ interface AppendedEvent {
 interface Harness {
   /** Everything put on the in-process bus, in order. */
   readonly emitted: Emission[];
+  /** Every `QueueService.enqueue` call — TAR-26's durable status-change trigger. */
+  readonly enqueue: jest.Mock;
   /** Every row appended to `ticket_events`, in order. */
   readonly appended: AppendedEvent[];
   /** The `data` of every `updateMany` the writer issued — empty when it wrote nothing. */
@@ -75,6 +79,11 @@ function ticket(overrides: Partial<TicketRow> = {}): TicketRow {
     closedAt: null,
     createdAt: new Date('2026-08-11T08:00:00.000Z'),
     updatedAt: new Date('2026-08-11T09:00:00.000Z'),
+    // No timers: TAR-26 makes the SLA block a real read of `sla_timers`, and a
+    // ticket in a tenant that has SLA turned off legitimately has none. The
+    // mapper answers `not_applicable` for that, which is exactly what this
+    // fixture asserted back when the block was a fixed placeholder.
+    slaTimers: [],
     ...overrides,
   };
 }
@@ -153,10 +162,18 @@ function harnessFor(
     },
   } as unknown as EventEmitter2;
 
-  const commands = new TicketCommandService(prisma, tickets, tenantContext, events);
+  // TAR-26's fourth trigger. Recorded rather than asserted here — what a status
+  // change does to a timer is `sla-breach.int-spec.ts`'s business; what this
+  // file cares about is that a durable job is produced at all, and only when the
+  // status actually moved.
+  const enqueue = jest.fn(() => Promise.resolve('added'));
+  const queue = { enqueue } as unknown as QueueService;
+
+  const commands = new TicketCommandService(prisma, tickets, tenantContext, events, queue);
 
   return {
     emitted,
+    enqueue,
     appended,
     written,
     asAgent: async (work) =>
@@ -421,5 +438,63 @@ describe('announcing a ticket change', () => {
         },
       },
     ]);
+  });
+});
+
+/**
+ * 0006's fourth SLA trigger. It is a **durable queue job**, not the in-process
+ * `ticket.updated` above — `domain-events.ts` says a subscriber for which loss
+ * is not acceptable needs a durable trigger of its own, and a missed SLA
+ * transition leaves a paused clock running or a breach nobody is told about.
+ */
+describe('the SLA evaluation a status change triggers', () => {
+  it('enqueues one durable job naming the ticket and the reason', async () => {
+    const { asAgent, enqueue } = harnessFor(ticket({ status: 'open' }));
+
+    await asAgent(async (commands) => commands.update(TICKET, { status: 'pending' }));
+
+    expect(enqueue).toHaveBeenCalledWith(
+      SLA_QUEUE,
+      SLA_EVALUATE_TICKET_JOB,
+      { tenantId: TENANT, ticketId: TICKET, reason: 'status_changed' },
+      // No custom `jobId`: a ticket-keyed id silently collapses every trigger
+      // after the first into the completed key of the one before it.
+      expect.not.objectContaining({ jobId: expect.anything() as unknown }),
+    );
+  });
+
+  /**
+   * A running deadline keeps the policy it started under, which is 0006's rule
+   * that a policy change affects future tickets and never past deadlines — so a
+   * re-prioritisation moves no timer and is not worth a job.
+   */
+  it('enqueues nothing when only the priority moved', async () => {
+    const { asAgent, enqueue } = harnessFor(ticket({ status: 'open', priority: 'low' }));
+
+    await asAgent(async (commands) => commands.update(TICKET, { priority: 'urgent' }));
+
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('enqueues nothing when the request set the status it already had', async () => {
+    const { asAgent, enqueue } = harnessFor(ticket({ status: 'open' }));
+
+    await asAgent(async (commands) => commands.update(TICKET, { status: 'open' }));
+
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The status change is committed and the caller is owed their 200.
+   * `QueueService`'s contract is that an enqueue never fails a caller.
+   */
+  it('still answers when the job could not be queued', async () => {
+    const { asAgent, enqueue } = harnessFor(ticket({ status: 'open' }));
+
+    enqueue.mockResolvedValue('failed');
+
+    await expect(
+      asAgent(async (commands) => commands.update(TICKET, { status: 'pending' })),
+    ).resolves.toMatchObject({ status: 'pending' });
   });
 });

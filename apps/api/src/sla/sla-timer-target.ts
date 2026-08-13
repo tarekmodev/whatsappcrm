@@ -22,17 +22,17 @@ export interface SlaTimerTargetInput {
   readonly kind: SlaTargetKind;
   readonly status: TicketStatus;
   /** When a person first replied, or null. Written by the evaluate handler. */
-  readonly firstResponseAt: Date | null;
+  readonly firstRespondedAt: Date | null;
   readonly resolvedAt: Date | null;
 }
 
 export function slaTimerTargetFor({
   kind,
   status,
-  firstResponseAt,
+  firstRespondedAt,
   resolvedAt,
 }: SlaTimerTargetInput): SlaTimerTarget {
-  const achieved = kind === 'first_response' ? firstResponseAt !== null : resolvedAt !== null;
+  const achieved = kind === 'first_response' ? firstRespondedAt !== null : resolvedAt !== null;
 
   if (achieved) {
     return 'met';

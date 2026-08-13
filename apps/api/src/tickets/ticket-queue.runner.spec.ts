@@ -171,8 +171,31 @@ describe('TicketQueueRunner', () => {
         SLA_QUEUE,
         SLA_EVALUATE_TICKET_JOB,
         expect.anything(),
-        expect.objectContaining({ jobId: `sla-evaluate-${TENANT}-${CREATED.ticketId}` }),
+        expect.objectContaining({ attempts: expect.any(Number) as number }),
       );
+    });
+
+    /**
+     * The regression guard for the bug this trigger shipped with.
+     *
+     * A ticket-keyed `jobId` collapsed every later trigger into the completed
+     * key of this one — BullMQ's `addStandardJob` answers `handleDuplicatedJob`
+     * whenever the key `EXISTS`, in any state, and `removeOnComplete` keeps it
+     * alive — so the agent's reply never stopped the clock and the ticket
+     * breached anyway. Asserting the *absence* of an id rather than its value,
+     * because any ticket-stable id reintroduces the same fault.
+     */
+    it('sets no custom job id, so a later trigger on the same ticket is never dropped', async () => {
+      await handler()(jobOf({ ...TRIGGER }));
+
+      const [, , , options] = enqueue.mock.calls.find(([queue]) => queue === SLA_QUEUE) as [
+        string,
+        string,
+        unknown,
+        Record<string, unknown>,
+      ];
+
+      expect(options).not.toHaveProperty('jobId');
     });
 
     /**

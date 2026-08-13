@@ -47,7 +47,7 @@ const EVALUATION_PROJECTION = {
   status: true,
   priority: true,
   conversationId: true,
-  firstResponseAt: true,
+  firstRespondedAt: true,
   resolvedAt: true,
   createdAt: true,
   slaTimers: { select: { id: true, kind: true, state: true, policyId: true } },
@@ -86,15 +86,15 @@ export class SlaTimerService {
         throw new SlaTicketNotVisibleError(trigger.ticketId);
       }
 
-      const firstResponseAt = await this.stampFirstResponse(tx, trigger.tenantId, ticket);
+      const firstRespondedAt = await this.stampFirstResponse(tx, trigger.tenantId, ticket);
       const created = await this.createMissingTimers(tx, trigger.tenantId, ticket);
-      const transitioned = await this.reconcile(tx, ticket, firstResponseAt, created > 0);
+      const transitioned = await this.reconcile(tx, ticket, firstRespondedAt, created > 0);
 
       return {
         ticketId: ticket.id,
         created,
         transitioned,
-        firstResponseStamped: ticket.firstResponseAt === null && firstResponseAt !== null,
+        firstResponseStamped: ticket.firstRespondedAt === null && firstRespondedAt !== null,
       };
     });
   }
@@ -128,8 +128,8 @@ export class SlaTimerService {
     tenantId: string,
     ticket: EvaluationTicket,
   ): Promise<Date | null> {
-    if (ticket.firstResponseAt !== null) {
-      return ticket.firstResponseAt;
+    if (ticket.firstRespondedAt !== null) {
+      return ticket.firstRespondedAt;
     }
 
     if (ticket.conversationId === null) {
@@ -152,8 +152,8 @@ export class SlaTimerService {
     }
 
     const { count } = await tx.ticket.updateMany({
-      where: { id: ticket.id, firstResponseAt: null },
-      data: { firstResponseAt: reply.sentAt },
+      where: { id: ticket.id, firstRespondedAt: null },
+      data: { firstRespondedAt: reply.sentAt },
     });
 
     if (count > 0) {
@@ -239,7 +239,7 @@ export class SlaTimerService {
   private async reconcile(
     tx: Prisma.TransactionClient,
     ticket: EvaluationTicket,
-    firstResponseAt: Date | null,
+    firstRespondedAt: Date | null,
     reread: boolean,
   ): Promise<number> {
     const timers = reread
@@ -259,7 +259,7 @@ export class SlaTimerService {
       const target = slaTimerTargetFor({
         kind: timer.kind,
         status: ticket.status,
-        firstResponseAt,
+        firstRespondedAt,
         resolvedAt: ticket.resolvedAt,
       });
 

@@ -5,7 +5,6 @@ import {
   SLA_QUEUE,
   TICKET_ACTIVE_STATUSES,
   mediaContentPath,
-  slaEvaluateJobId,
   type MessageResponse,
   type SendMediaInput,
   type SendMessageInput,
@@ -398,7 +397,10 @@ export class MessageSendService {
       SLA_EVALUATE_TICKET_JOB,
       trigger,
       {
-        jobId: slaEvaluateJobId(trigger),
+        // No custom `jobId` — see the note in `@whatsappcrm/contracts/sla`. This
+        // is the call site the bug bit hardest: a ticket-keyed id collapsed this
+        // trigger into the completed key of the ticket's own creation job, so
+        // the reply never stopped the clock and the ticket breached anyway.
         attempts: 3,
         backoff: { type: 'exponential', delay: 1_000 },
         removeOnComplete: 1_000,

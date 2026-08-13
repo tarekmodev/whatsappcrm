@@ -23,6 +23,19 @@ export const SLA_SWEEP_SCHEDULE_KEY = 'sla-sweep';
 export const SLA_TIMER_KINDS: readonly SlaTargetKind[] = ['first_response', 'resolution'];
 
 /**
+ * Jobs this queue's worker runs in parallel.
+ *
+ * Four rather than the repo default of one, because the sweep and the
+ * per-ticket evaluations share this queue: a sweep walking several slow tenants
+ * holds a slot for tens of seconds, and a reconciliation queued behind it can
+ * let a ticket breach whose agent had already replied. Four is enough that a
+ * single long sweep never blocks the reconciler, and small enough that a
+ * recovery burst cannot open more than four transactions at once against the
+ * connection budget.
+ */
+export const SLA_WORKER_CONCURRENCY = 4;
+
+/**
  * How many due timers one sweep claims.
  *
  * Bounded for the reason `WebhookSweeperService` bounds its own batch: after an

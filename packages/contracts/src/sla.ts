@@ -89,20 +89,36 @@ export type SlaEvaluateReason = z.infer<typeof SlaEvaluateReasonSchema>;
 export type SlaEvaluateTicketTrigger = z.infer<typeof SlaEvaluateTicketTriggerSchema>;
 
 /**
- * Collapses a duplicate enqueue while the first job is still queued.
+ * ## There is deliberately no `slaEvaluateJobId`
  *
- * An optimisation and documented as one: BullMQ forgets a completed job's id, so
- * this can never be the mechanism that prevents a duplicate alert. The
- * load-bearing guard is the conditional `UPDATE … WHERE state = 'running'` in
- * the sweep (0006, decision 3).
+ * This file shipped one, keyed on `(tenantId, ticketId)`, described as a
+ * harmless optimisation on the premise that "BullMQ forgets a completed job's
+ * id". **That premise is false for the pinned `bullmq@6.0.10`**, and the bug it
+ * produced was the exact inverse of TAR-26's second acceptance criterion.
  *
- * Hyphens, never a colon — TAR-249's lesson, which cost a release of silently
- * uncreated tickets: BullMQ reserves `:` for its Redis key structure and rejects
- * a custom id containing one, as a warning rather than a throw.
+ * `addStandardJob-9.lua` answers `handleDuplicatedJob` whenever the job hash key
+ * `EXISTS` — in *any* state, completed included — and `removeOnComplete: 1_000`
+ * keeps the newest thousand completed keys alive. `Queue.add` neither throws nor
+ * signals it, so the enqueue reported `added` and nothing was logged.
+ *
+ * A ticket's id is stable for its whole life, so every trigger after the first
+ * collapsed into the completed key of the one before it: the `ticket_created`
+ * job ran, and the `agent_replied` job that should have stopped the timer was
+ * silently dropped. The ticket then breached at its deadline and the supervisor
+ * was alerted about a ticket that had been answered in five minutes. The same
+ * collapse stopped a paused timer ever resuming.
+ *
+ * `ticketEnsureJobId` in `ticket-linking.ts` is safe from this only because it
+ * is keyed on `messageId`, which is never reused — that is precisely the
+ * property a ticket-keyed id drops, and its own docblock's "once it leaves the
+ * completed set" is the wording this one got wrong.
+ *
+ * So these jobs carry **no custom id**. Nothing is lost by it: the handler is a
+ * reconciler that re-derives the whole timer state from the ticket row, so a
+ * duplicate delivery is a no-op by construction, and that — not a Redis key — is
+ * what makes at-least-once delivery safe here. Anything reintroducing an id must
+ * key it on the *event* that triggered the evaluation, never on the ticket.
  */
-export function slaEvaluateJobId(trigger: SlaEvaluateTicketTrigger): string {
-  return `sla-evaluate-${trigger.tenantId}-${trigger.ticketId}`;
-}
 
 // ---------------------------------------------------------------------------
 // Resources
