@@ -34,6 +34,16 @@ import {
   TENANT_STATUSES,
   TENANT_STATUS_EFFECTS,
 } from './tenant';
+import {
+  canAgentTransition,
+  TICKET_EVENT_CAUSES,
+  TICKET_PRIORITIES,
+  TICKET_STATUS_REQUIRES_CLOSE,
+  TICKET_STATUSES,
+  TicketEventSchema,
+  TicketListQuerySchema,
+  TicketUpdateInputSchema,
+} from './tickets';
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
 import {
   AvailabilityUpdateInputSchema,
@@ -897,5 +907,121 @@ describe('usage metrics', () => {
   it('treats seats as a gauge and conversations as a counter', () => {
     expect(USAGE_METRIC_KINDS.seats_active).toBe('gauge');
     expect(USAGE_METRIC_KINDS.conversations_opened).toBe('counter');
+  });
+});
+
+describe('the ticket transition table', () => {
+  it('is terminal-for-active on resolved and closed', () => {
+    // The invariant `tickets_one_active_per_contact` depends on: nothing an
+    // agent can send re-activates a finished ticket, so the partial unique
+    // index can never be the thing that refuses a PATCH.
+    for (const status of TICKET_STATUSES) {
+      expect(canAgentTransition('closed', status), status).toBe(false);
+    }
+
+    expect(canAgentTransition('resolved', 'open')).toBe(false);
+    expect(canAgentTransition('resolved', 'pending')).toBe(false);
+    expect(canAgentTransition('resolved', 'closed')).toBe(true);
+  });
+
+  it('lets an active ticket be closed without passing through resolved', () => {
+    // Closing spam or a wrong number is not a resolution, and forcing the
+    // two-step would put a fake `resolved_at` on every one of them.
+    expect(canAgentTransition('open', 'closed')).toBe(true);
+    expect(canAgentTransition('pending', 'closed')).toBe(true);
+  });
+
+  it('never lists a status as a transition to itself', () => {
+    // Setting the value a ticket already has is a no-op the endpoint accepts,
+    // not a move it validates — so it must never reach this table.
+    for (const status of TICKET_STATUSES) {
+      expect(canAgentTransition(status, status), status).toBe(false);
+    }
+  });
+
+  it('asks for ticket:close on exactly the two terminal statuses', () => {
+    expect(TICKET_STATUS_REQUIRES_CLOSE).toEqual({
+      open: false,
+      pending: false,
+      resolved: true,
+      closed: true,
+    });
+  });
+
+  it('declares urgent last, which is what makes priority DESC urgent-first', () => {
+    // Postgres orders an enum by declaration order and the queue is
+    // `ORDER BY priority DESC`. Reordering this array inverts the queue.
+    expect(TICKET_PRIORITIES.at(-1)).toBe('urgent');
+    expect(TICKET_PRIORITIES.at(0)).toBe('low');
+  });
+});
+
+describe('the ticket update input', () => {
+  it('refuses a body with no field set', () => {
+    // `{}` is a client bug with no honest answer; accepting it would report
+    // success for a request that asked for nothing.
+    expect(TicketUpdateInputSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts any one field on its own', () => {
+    expect(TicketUpdateInputSchema.safeParse({ status: 'resolved' }).success).toBe(true);
+    expect(TicketUpdateInputSchema.safeParse({ priority: 'urgent' }).success).toBe(true);
+    expect(TicketUpdateInputSchema.safeParse({ subject: 'Refund' }).success).toBe(true);
+  });
+});
+
+describe('the ticket list query', () => {
+  it('reads breachedOnly out of a query string, both ways round', () => {
+    // It is parsed from `?breachedOnly=…`, so the value arrives as characters.
+    // `z.boolean()` refused every one of them, which made the supervisor's
+    // breached view a guaranteed 400.
+    expect(TicketListQuerySchema.parse({ breachedOnly: 'true' }).breachedOnly).toBe(true);
+    expect(TicketListQuerySchema.parse({ breachedOnly: 'false' }).breachedOnly).toBe(false);
+  });
+
+  it('does not read a bare "false" as truthy', () => {
+    // The trap in `z.coerce.boolean()`, which is `Boolean(value)` — every
+    // non-empty string, including "false", becomes `true`. Asserted rather than
+    // trusted, because the two spellings look interchangeable at a glance.
+    expect(TicketListQuerySchema.parse({ breachedOnly: 'false' }).breachedOnly).toBe(false);
+    expect(TicketListQuerySchema.parse({ breachedOnly: '0' }).breachedOnly).toBe(false);
+  });
+
+  it('refuses a value that is not a boolean token', () => {
+    expect(TicketListQuerySchema.safeParse({ breachedOnly: 'perhaps' }).success).toBe(false);
+  });
+
+  it('defaults to the active queue for everybody’s own work', () => {
+    const query = TicketListQuerySchema.parse({});
+
+    expect(query).toMatchObject({ scope: 'assigned', breachedOnly: false, limit: 25 });
+    // No status filter: the service reads that as "the active statuses", which
+    // is what makes a resolved ticket leave the queue with no client change.
+    expect(query.status).toBeUndefined();
+  });
+});
+
+describe('ticket event causes', () => {
+  it('publishes the token that tells an agent reopen from a customer reply', () => {
+    expect(TICKET_EVENT_CAUSES).toContain('agent');
+    expect(TICKET_EVENT_CAUSES).toContain('inbound_message');
+  });
+
+  it('carries the cause on a published event, nullable for the types that predate it', () => {
+    const event = {
+      id: '25444444-4444-7444-8444-4444444444e1',
+      ticketId: '25444444-4444-7444-8444-4444444444f1',
+      type: 'status_changed',
+      actorUserId: null,
+      fromValue: 'pending',
+      toValue: 'open',
+      reason: null,
+      cause: 'inbound_message',
+      createdAt: '2026-08-13T09:00:00.000Z',
+    };
+
+    expect(TicketEventSchema.parse(event)).toMatchObject({ cause: 'inbound_message' });
+    expect(TicketEventSchema.parse({ ...event, cause: null }).cause).toBeNull();
+    expect(() => TicketEventSchema.parse({ ...event, cause: 'telepathy' })).toThrow();
   });
 });

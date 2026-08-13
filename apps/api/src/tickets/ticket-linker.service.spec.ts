@@ -289,16 +289,6 @@ describe('TicketLinkerService', () => {
       ]);
     });
 
-    it('does not log a transition another writer had already made', async () => {
-      const harness = build();
-      harness.findActiveTicket.mockResolvedValue(activeTicket({ status: 'pending' }));
-      harness.updateTicket.mockResolvedValue({ count: 0 });
-
-      await harness.link();
-
-      expect(eventsOfType(harness.createTicketEvent, 'status_changed')).toHaveLength(0);
-    });
-
     it('records the link when the message arrived on another conversation', async () => {
       // Only reachable for a tenant running more than one WhatsApp number: the
       // ticket invariant is per contact, conversations are per contact per
@@ -327,6 +317,94 @@ describe('TicketLinkerService', () => {
       await harness.link();
 
       expect(eventsOfType(harness.createTicketEvent, 'conversation_linked')).toHaveLength(0);
+    });
+  });
+
+  /**
+   * The second writer TAR-25 put on these rows: `PATCH /tickets/{id}`. A ticket
+   * read as `pending` can be `resolved` a millisecond later, and the reopen's
+   * `WHERE status = 'pending'` then matches nothing.
+   *
+   * The old behaviour was to carry on and report `attached` against it, which
+   * was two failures at once — the customer's reply recorded on a finished
+   * ticket, leaving the contact with **no** active one until they wrote again,
+   * and a `previousStatus: 'pending'` handed to TAR-26 as a resume cue for a
+   * transition that never happened. So a lost reopen now abandons the attempt
+   * and the loop reads the contact's ticket again.
+   */
+  describe('losing the reopen race to an agent', () => {
+    it('opens a new ticket when the agent resolved it', async () => {
+      const harness = build();
+      // First attempt: pending when read, gone from `pending` by the time the
+      // compare-and-set lands. Second attempt: the agent resolved it, so the
+      // contact has no active ticket and this reply deserves a fresh one.
+      harness.findActiveTicket
+        .mockResolvedValueOnce(activeTicket({ status: 'pending' }))
+        .mockResolvedValueOnce(null);
+      harness.updateTicket.mockResolvedValueOnce({ count: 0 });
+      harness.insertTicket.mockResolvedValue(allocated(WINNING_TICKET, 8));
+
+      await expect(harness.link()).resolves.toEqual({
+        outcome: 'created',
+        ticketId: WINNING_TICKET,
+        ticketNumber: 8,
+        previousStatus: null,
+        reason: null,
+      });
+
+      // A new transaction for the retry, for the same reason the create race
+      // needs one: Prisma exposes no savepoint.
+      expect(harness.transaction).toHaveBeenCalledTimes(2);
+      // And nothing claims a transition that did not happen.
+      expect(eventsOfType(harness.createTicketEvent, 'status_changed')).toHaveLength(0);
+    });
+
+    it('attaches without a reopen when the agent had only moved it to open', async () => {
+      const harness = build();
+      harness.findActiveTicket
+        .mockResolvedValueOnce(activeTicket({ status: 'pending' }))
+        .mockResolvedValueOnce(activeTicket({ status: 'open' }));
+      harness.updateTicket.mockResolvedValueOnce({ count: 0 });
+
+      // `previousStatus: 'open'` — the honest answer, and the one that does not
+      // tell TAR-26 to resume a timer this reply did not unpause.
+      await expect(harness.link()).resolves.toMatchObject({
+        outcome: 'attached',
+        ticketId: TICKET,
+        previousStatus: 'open',
+      });
+      expect(eventsOfType(harness.createTicketEvent, 'status_changed')).toHaveLength(0);
+    });
+
+    it('writes no conversation_linked against the ticket it abandons', async () => {
+      // Ordering, not decoration: the losing transaction still commits, so a
+      // `conversation_linked` written before the reopen was checked would land
+      // on a ticket this attempt is about to walk away from — and then be
+      // written again against the ticket the retry lands on.
+      const harness = build();
+      harness.findActiveTicket
+        .mockResolvedValueOnce(
+          activeTicket({ status: 'pending', conversationId: OTHER_CONVERSATION }),
+        )
+        .mockResolvedValueOnce(null);
+      harness.updateTicket.mockResolvedValueOnce({ count: 0 });
+      harness.insertTicket.mockResolvedValue(allocated(WINNING_TICKET, 8));
+
+      await harness.link();
+
+      expect(eventsOfType(harness.createTicketEvent, 'conversation_linked')).toHaveLength(0);
+    });
+
+    it('gives up loudly after three attempts rather than retrying forever', async () => {
+      // An agent would have to move the same ticket out of `pending` three times
+      // in a row for this to fire. If it ever does, something is flapping the
+      // status and that is worth an alert rather than an unbounded loop.
+      const harness = build();
+      harness.findActiveTicket.mockResolvedValue(activeTicket({ status: 'pending' }));
+      harness.updateTicket.mockResolvedValue({ count: 0 });
+
+      await expect(harness.link()).rejects.toThrow(TicketLinkRaceUnresolvedError);
+      expect(harness.transaction).toHaveBeenCalledTimes(3);
     });
   });
 
