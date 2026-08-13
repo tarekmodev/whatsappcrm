@@ -175,8 +175,24 @@ export const TicketListQuerySchema = CursorPageQuerySchema.extend({
   scope: z.enum(['assigned', 'unassigned', 'all']).default('assigned'),
   assignedUserId: IdSchema.optional(),
   assignedTeamId: IdSchema.optional(),
-  /** Filters to tickets whose SLA has breached — the supervisor's landing view. */
-  breachedOnly: z.boolean().default(false),
+  /**
+   * Filters to tickets whose SLA has breached — the supervisor's landing view.
+   *
+   * `stringbool`, not `boolean`, because this schema parses a **query string**:
+   * `?breachedOnly=true` arrives as the four characters `true`, and `z.boolean()`
+   * refuses it — so the one query the supervisor's landing view is built on
+   * answered `validation_failed` for every value a client could send.
+   *
+   * Not `z.coerce.boolean()` either, and that one is worse than useless here:
+   * coercion is `Boolean(value)`, so the non-empty string `"false"` is `true` and
+   * `?breachedOnly=false` would turn the filter **on**. `stringbool` reads the
+   * token — `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off` — and rejects
+   * anything else rather than guessing.
+   *
+   * `limit` above takes `z.coerce.number()` for the same reason and gets away
+   * with plain coercion because a number has no such trap.
+   */
+  breachedOnly: z.stringbool().default(false),
 });
 
 /**

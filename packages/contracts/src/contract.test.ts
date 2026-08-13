@@ -41,6 +41,7 @@ import {
   TICKET_STATUS_REQUIRES_CLOSE,
   TICKET_STATUSES,
   TicketEventSchema,
+  TicketListQuerySchema,
   TicketUpdateInputSchema,
 } from './tickets';
 import { USAGE_METRIC_KINDS, USAGE_METRICS } from './usage';
@@ -966,6 +967,37 @@ describe('the ticket update input', () => {
     expect(TicketUpdateInputSchema.safeParse({ status: 'resolved' }).success).toBe(true);
     expect(TicketUpdateInputSchema.safeParse({ priority: 'urgent' }).success).toBe(true);
     expect(TicketUpdateInputSchema.safeParse({ subject: 'Refund' }).success).toBe(true);
+  });
+});
+
+describe('the ticket list query', () => {
+  it('reads breachedOnly out of a query string, both ways round', () => {
+    // It is parsed from `?breachedOnly=…`, so the value arrives as characters.
+    // `z.boolean()` refused every one of them, which made the supervisor's
+    // breached view a guaranteed 400.
+    expect(TicketListQuerySchema.parse({ breachedOnly: 'true' }).breachedOnly).toBe(true);
+    expect(TicketListQuerySchema.parse({ breachedOnly: 'false' }).breachedOnly).toBe(false);
+  });
+
+  it('does not read a bare "false" as truthy', () => {
+    // The trap in `z.coerce.boolean()`, which is `Boolean(value)` — every
+    // non-empty string, including "false", becomes `true`. Asserted rather than
+    // trusted, because the two spellings look interchangeable at a glance.
+    expect(TicketListQuerySchema.parse({ breachedOnly: 'false' }).breachedOnly).toBe(false);
+    expect(TicketListQuerySchema.parse({ breachedOnly: '0' }).breachedOnly).toBe(false);
+  });
+
+  it('refuses a value that is not a boolean token', () => {
+    expect(TicketListQuerySchema.safeParse({ breachedOnly: 'perhaps' }).success).toBe(false);
+  });
+
+  it('defaults to the active queue for everybody’s own work', () => {
+    const query = TicketListQuerySchema.parse({});
+
+    expect(query).toMatchObject({ scope: 'assigned', breachedOnly: false, limit: 25 });
+    // No status filter: the service reads that as "the active statuses", which
+    // is what makes a resolved ticket leave the queue with no client change.
+    expect(query.status).toBeUndefined();
   });
 });
 

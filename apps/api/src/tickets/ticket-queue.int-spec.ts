@@ -3,10 +3,11 @@ import {
   permissionsForRole,
   type Permission,
   type SessionPrincipal,
+  type TicketLinkResult,
   type TicketResponse,
 } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
-import type { PrismaClient } from '../generated/prisma/client';
+import type { Prisma, PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import { TicketCommandService } from './ticket-command.service';
@@ -79,6 +80,7 @@ const CONTACTS = [
   '25444444-4444-7444-8444-4444444444c8',
   '25444444-4444-7444-8444-4444444444c9',
   '25444444-4444-7444-8444-4444444444ca',
+  '25444444-4444-7444-8444-4444444444cc',
 ] as const;
 const CONTACT_B = '25444444-4444-7444-8444-4444444444cb';
 
@@ -91,12 +93,14 @@ const REOPEN_WINS = '25444444-4444-7444-8444-4444444444f6';
 const AGENT_WINS = '25444444-4444-7444-8444-4444444444f7';
 const COLLEAGUES = '25444444-4444-7444-8444-4444444444f8';
 const UNASSIGNED = '25444444-4444-7444-8444-4444444444f9';
+/** The linker reads this one as `pending` and loses its reopen to the agent. */
+const REOPEN_LOSES = '25444444-4444-7444-8444-4444444444fc';
 const LOW = '25444444-4444-7444-8444-4444444444fa';
 const TENANT_B_TICKET = '25444444-4444-7444-8444-4444444444fb';
 
 /**
  * The queue as the fixture defines it: `priority DESC, createdAt DESC, id DESC`
- * over the ten active tickets of tenant A, before any test has changed one.
+ * over the eleven active tickets of tenant A, before any test has changed one.
  *
  * Written out rather than derived, so a change to the sort has to be a change to
  * this list — a computed expectation would re-derive the bug.
@@ -111,6 +115,7 @@ const QUEUE_IN_ORDER = [
   AGENT_WINS,
   COLLEAGUES,
   UNASSIGNED,
+  REOPEN_LOSES,
   LOW,
 ] as const;
 
@@ -187,7 +192,10 @@ describe('ticket status, priority and the active queue, end to end', () => {
    * with the transport left out, which is what makes the interleaving below
    * deterministic instead of a sleep.
    */
-  async function customerReplies(index: number): Promise<string> {
+  async function customerReplies(
+    index: number,
+    using: TicketLinkerService = linker,
+  ): Promise<TicketLinkResult> {
     const messageId = await as(
       principalFor(TENANT_A, AGENT_A, 'agent'),
       async () =>
@@ -208,10 +216,10 @@ describe('ticket status, priority and the active queue, end to end', () => {
 
     // No principal: a queue worker has a tenant and nobody to attribute to,
     // which is exactly what makes the reopen's `actorUserId` null.
-    await tenantContext.run(
+    return tenantContext.run(
       { requestId: REQUEST_ID, tenantId: TENANT_A, userId: null, principal: null },
       async () =>
-        await linker.ensureTicketForMessage({
+        await using.ensureTicketForMessage({
           tenantId: TENANT_A,
           contactId: CONTACTS[index] ?? '',
           conversationId: conversationFor(index),
@@ -219,8 +227,56 @@ describe('ticket status, priority and the active queue, end to end', () => {
           receivedAt: new Date().toISOString(),
         }),
     );
+  }
 
-    return messageId;
+  /**
+   * A linker whose transaction runs `interrupt` the first time it reads the
+   * contact's active ticket — after the read, before the compare-and-set.
+   *
+   * That window is the whole of the defect this guards: the linker sees
+   * `pending`, an agent's `PATCH` commits, and the reopen's
+   * `WHERE status = 'pending'` then matches nothing. Reproducing it by racing two
+   * promises would be a coin flip; wrapping the one statement whose ordering
+   * matters makes it a fact.
+   *
+   * `interrupt` runs in its own transaction, and READ COMMITTED is what makes
+   * that legal here: the linker holds no lock on the row (its read is a plain
+   * `SELECT`), and its later `UPDATE` re-reads the newest committed version.
+   *
+   * The client is assembled by hand rather than proxied because the linker uses
+   * exactly these four operations inside its transaction — a narrower stub than
+   * a proxy, and one that fails to compile if that ever stops being true.
+   */
+  function linkerInterruptedAfterRead(interrupt: () => Promise<unknown>): TicketLinkerService {
+    let interrupted = false;
+
+    const racingPrisma = {
+      message: tenantPrisma.message,
+      $tenantTransaction: <T>(work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> =>
+        tenantPrisma.$tenantTransaction(async (tx) => {
+          const spy = {
+            ticket: {
+              findFirst: async (args: Parameters<typeof tx.ticket.findFirst>[0]) => {
+                const row = await tx.ticket.findFirst(args);
+
+                if (!interrupted) {
+                  interrupted = true;
+                  await interrupt();
+                }
+
+                return row;
+              },
+              updateMany: tx.ticket.updateMany.bind(tx.ticket),
+            },
+            ticketEvent: { create: tx.ticketEvent.create.bind(tx.ticketEvent) },
+            $queryRaw: tx.$queryRaw.bind(tx),
+          };
+
+          return work(spy as unknown as Prisma.TransactionClient);
+        }),
+    } as unknown as TenantPrisma;
+
+    return new TicketLinkerService(racingPrisma, tenantContext, new EventEmitter2());
   }
 
   /** Every event on a ticket, oldest first, as the log holds them. */
@@ -503,6 +559,51 @@ describe('ticket status, priority and the active queue, end to end', () => {
       ]);
     });
 
+    it('never leaves the contact with no active ticket when the resolve lands mid-attach', async () => {
+      // The interleave the compare-and-set on the *linker's* side exists for,
+      // and the one a sequential test cannot reach: the linker reads the ticket
+      // as `pending`, the agent's PATCH to `resolved` commits, and the reopen
+      // then matches nothing. Reporting `attached` there would record the
+      // customer's reply against a finished ticket and leave the contact with
+      // **zero** active tickets until they wrote again.
+      const agent = principalFor(TENANT_A, AGENT_A, 'agent');
+      const racingLinker = linkerInterruptedAfterRead(async () =>
+        as(agent, async () => commands.update(REOPEN_LOSES, { status: 'resolved' })),
+      );
+
+      const result = await customerReplies(10, racingLinker);
+
+      // The reply opened a fresh ticket rather than landing on the resolved one.
+      expect(result.outcome).toBe('created');
+      expect(result.ticketId).not.toBe(REOPEN_LOSES);
+      // `previousStatus` is null on a create — nothing tells TAR-26 to resume a
+      // timer for a `pending → open` that never happened.
+      expect(result.previousStatus).toBeNull();
+
+      const held = await as(principalFor(TENANT_A, SUPERVISOR_A, 'supervisor'), async () =>
+        tenantPrisma.ticket.findMany({
+          where: { contactId: CONTACTS[10] },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true, status: true },
+        }),
+      );
+
+      expect(held).toEqual([
+        { id: REOPEN_LOSES, status: 'resolved' },
+        { id: result.ticketId, status: 'open' },
+      ]);
+      // And the abandoned ticket carries the agent's move only: no reopen the
+      // database refused, and no `conversation_linked` from the attempt that
+      // walked away.
+      expect(await eventsOn(REOPEN_LOSES)).toEqual([
+        {
+          type: 'status_changed',
+          actorUserId: AGENT_A,
+          data: { from: 'pending', to: 'resolved', cause: 'agent' },
+        },
+      ]);
+    });
+
     it('opens a second ticket for the contact when the agent commits first', async () => {
       // The other ordering, and it is **not** a defect: 0003 has no reopen
       // window, so a customer writing back after resolution gets a new ticket.
@@ -781,6 +882,13 @@ async function seedFixture(systemPrisma: PrismaClient): Promise<void> {
       priority: 'normal' as const,
       status: 'open' as const,
       ageHours: 10,
+    },
+    {
+      id: REOPEN_LOSES,
+      contact: 10,
+      priority: 'normal' as const,
+      status: 'pending' as const,
+      ageHours: 11,
     },
     { id: LOW, contact: 9, priority: 'low' as const, status: 'open' as const, ageHours: 2 },
   ];

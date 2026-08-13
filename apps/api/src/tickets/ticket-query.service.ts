@@ -230,9 +230,20 @@ function scopeClauses(
  * tenant's *active ticket* set is orders of magnitude smaller, and the
  * `bound`/`exclude` trick cannot express a leading enum column at all.
  *
- * So the OR form is accepted here deliberately, and asserted rather than
- * assumed: `ticket-queue-shape.int-spec.ts` measures the plan. If the numbers
- * ever disagree, the answer is a raw-SQL page for this one list.
+ * So the OR form is accepted here deliberately, and measured rather than
+ * assumed. `ticket-queue-shape.int-spec.ts` explains a **cursor-resumed** page —
+ * this predicate, not just the unfiltered first page — against 4 000 active
+ * tickets in one tenant, as `whatsappcrm_app` under RLS. The planner folds the
+ * `OR` into `tickets_active_queue_idx`:
+ *
+ * ```
+ *   Limit / Index Scan using tickets_active_queue_idx
+ * ```
+ *
+ * No Sort node, so the objection does not apply at this shape and size. The
+ * spec asserts that property rather than a number; if a future planner answers
+ * it with a sort over the tenant's active set instead, the answer is a raw-SQL
+ * page for this one list.
  *
  * `prioritiesBelow('low')` is `[]`, which `in: []` matches nothing — correct for
  * the last band rather than a bug: there is no priority below `low`, so the only

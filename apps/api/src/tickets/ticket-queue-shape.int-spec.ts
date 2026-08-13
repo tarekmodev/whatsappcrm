@@ -56,6 +56,52 @@ const QUEUE_PAGE = `
   LIMIT ${PAGE}
 `;
 
+/** The row a first page ends on — what the next page's cursor is built from. */
+interface CursorRow {
+  priority: string;
+  created_at: Date;
+  id: string;
+}
+
+/**
+ * The **second** page, in the enumerated-priority shape `cursorClauses` emits.
+ *
+ * Prisma's enum filters have no `lt`, so the leading column's bound cannot be
+ * written the way `timestamp-keyset.ts` writes a timestamp's — the priorities
+ * below the cursor's band are listed instead. `timestamp-keyset.ts` argues
+ * against exactly this plain-OR form, on the grounds that a planner cannot fold
+ * a nested `OR` into one index start condition, so accepting it here is a
+ * deliberate exception and this is the measurement that makes it one.
+ *
+ * The values are fixture-controlled and interpolated as literals rather than
+ * bound, so `EXPLAIN` reports the plan for *these* values instead of a generic
+ * one.
+ */
+function resumedPage(cursor: CursorRow, below: readonly string[]): string {
+  const bands = below.map((priority) => `'${priority}'`).join(', ');
+  const at = cursor.created_at.toISOString();
+
+  return `
+    SELECT "id", "number", "status", "priority", "created_at"
+    FROM "public"."tickets"
+    WHERE "status" IN ('open', 'pending')
+      AND (
+        "priority" IN (${bands})
+        OR ("priority" = '${cursor.priority}' AND "created_at" < '${at}')
+        OR ("priority" = '${cursor.priority}' AND "created_at" = '${at}' AND "id" < '${cursor.id}')
+      )
+    ORDER BY "priority" DESC, "created_at" DESC, "id" DESC
+    LIMIT ${PAGE}
+  `;
+}
+
+/** Everything declared before `priority` in `ticket_priority` — its `prioritiesBelow`. */
+function prioritiesBelow(priority: string): string[] {
+  const declared = ['low', 'normal', 'high', 'urgent'];
+
+  return declared.slice(0, declared.indexOf(priority));
+}
+
 interface PlanNode {
   'Node Type': string;
   'Index Name'?: string;
@@ -187,6 +233,30 @@ describe('the ticket queue query shape', () => {
     const measured = await explain(QUEUE_PAGE);
 
     expect(measured.rowsFiltered).toBe(0);
+  });
+
+  it('serves a cursor-resumed page off the same index, sort and all', async () => {
+    // The claim `ticket-query.service.ts` makes about the enumerated-priority
+    // keyset, measured rather than asserted from the first page — which does not
+    // exercise the OR predicate at all. This is the shape `timestamp-keyset.ts`
+    // argues against, so if the planner ever answers it with a Sort over the
+    // tenant's active set, the exception stops being justified and the answer is
+    // a raw-SQL page for this one list.
+    const [cursor] = await tenantContext.run(
+      { requestId: 'tar284-cursor', tenantId: TENANT, userId: null, principal: null },
+      async () => await appPrisma.$queryRawUnsafe<CursorRow[]>(`${QUEUE_PAGE} OFFSET ${PAGE - 1}`),
+    );
+
+    if (cursor === undefined) {
+      throw new Error('the fixture produced no first page to resume from');
+    }
+
+    const measured = await explain(resumedPage(cursor, prioritiesBelow(cursor.priority)));
+
+    console.info(`resumed page: ${measured.nodes.join(' / ')}`);
+
+    expect(measured.nodes.filter((node) => node.startsWith('Sort'))).toEqual([]);
+    expect(measured.nodes.some((node) => node.includes('tickets_active_queue_idx'))).toBe(true);
   });
 });
 
