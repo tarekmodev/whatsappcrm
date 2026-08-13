@@ -1,12 +1,16 @@
 import {
+  ASSIGNMENT_QUEUE,
+  ASSIGNMENT_ROUTE_JOB,
   SLA_EVALUATE_TICKET_JOB,
   SLA_QUEUE,
   TICKET_ENSURE_JOB,
   TICKET_QUEUE,
+  assignmentRouteJobId,
   type InboundMessageTicketTrigger,
   type SlaEvaluateTicketTrigger,
   type TicketLinkResult,
   type TicketLinker,
+  type TicketRoutingTrigger,
 } from '@whatsappcrm/contracts';
 import { UnrecoverableError } from 'bullmq';
 import type { Job } from 'bullmq';
@@ -59,6 +63,15 @@ const CUSTOMER_REPLIED: TicketLinkResult = {
 
 const ATTACHED_TO_OPEN: TicketLinkResult = { ...CUSTOMER_REPLIED, previousStatus: 'open' };
 
+/** The outbound message that never became a ticket, so neither producer fires. */
+const SKIPPED: TicketLinkResult = {
+  outcome: 'skipped',
+  ticketId: null,
+  ticketNumber: null,
+  previousStatus: null,
+  reason: 'not_inbound',
+};
+
 describe('TicketQueueRunner', () => {
   let ensureTicketForMessage: jest.Mock;
   let registerWorker: jest.Mock;
@@ -98,6 +111,21 @@ describe('TicketQueueRunner', () => {
   function slaTrigger(): SlaEvaluateTicketTrigger | undefined {
     const call = enqueue.mock.calls.find(([queue]) => queue === SLA_QUEUE) as
       [string, string, SlaEvaluateTicketTrigger] | undefined;
+
+    return call?.[2];
+  }
+
+  /**
+   * The routing trigger this runner produced, if it produced one.
+   *
+   * Filtered by queue rather than asserting on `enqueue` as a whole, because two
+   * producers now share this handler: a customer replying to a pending ticket
+   * enqueues an SLA evaluation and no routing job, and a bare
+   * `not.toHaveBeenCalled()` could not tell that apart from producing neither.
+   */
+  function routingTrigger(): TicketRoutingTrigger | undefined {
+    const call = enqueue.mock.calls.find(([queue]) => queue === ASSIGNMENT_QUEUE) as
+      [string, string, TicketRoutingTrigger] | undefined;
 
     return call?.[2];
   }
@@ -281,6 +309,83 @@ describe('TicketQueueRunner', () => {
     ])('refuses %s without calling the linker', async (_case, data) => {
       await expect(handler()(jobOf(data))).rejects.toThrow(UnrecoverableError);
       expect(ensureTicketForMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * TAR-24's one change inside this module (0007, decision 1): a ticket that was
+   * just *created* asks to be routed.
+   *
+   * Named in 0007's phase table so it is reviewed as part of TAR-24 rather than
+   * discovered during integration — and asserted here rather than in
+   * `TicketLinkerService`, because keeping the queue out of that class is what
+   * makes TAR-75's race cases unit-testable.
+   */
+  describe('asking for the new ticket to be routed', () => {
+    beforeEach(() => {
+      runner.onApplicationBootstrap();
+    });
+
+    it('enqueues a routing job carrying the message that opened the ticket', async () => {
+      await handler()(jobOf({ ...TRIGGER }));
+
+      const routing: TicketRoutingTrigger = {
+        tenantId: TENANT,
+        ticketId: TICKET,
+        contactId: CONTACT,
+        messageId: MESSAGE,
+        createdAt: TRIGGER.receivedAt,
+      };
+
+      expect(routingTrigger()).toEqual(routing);
+      expect(enqueue).toHaveBeenCalledWith(ASSIGNMENT_QUEUE, ASSIGNMENT_ROUTE_JOB, routing, {
+        jobId: assignmentRouteJobId(routing),
+      });
+    });
+
+    it('does not route an attached message, which joins a ticket somebody may be working', async () => {
+      // Re-routing a ticket that is already being worked is worse than not
+      // routing it — 0007 risk 2, and the reason routing is evaluated once.
+      ensureTicketForMessage.mockResolvedValue(ATTACHED_TO_OPEN);
+
+      await handler()(jobOf({ ...TRIGGER }));
+
+      expect(routingTrigger()).toBeUndefined();
+    });
+
+    /**
+     * The case the two producers disagree about, and the reason this asserts per
+     * queue: a customer replying to a pending ticket resumes an SLA timer and
+     * must still not re-route the ticket.
+     */
+    it('does not route a customer reply, though it does start an SLA evaluation', async () => {
+      ensureTicketForMessage.mockResolvedValue(CUSTOMER_REPLIED);
+
+      await handler()(jobOf({ ...TRIGGER }));
+
+      expect(routingTrigger()).toBeUndefined();
+      expect(slaTrigger()).toBeDefined();
+    });
+
+    it('does not route a skipped message, which never had a ticket', async () => {
+      ensureTicketForMessage.mockResolvedValue(SKIPPED);
+
+      await handler()(jobOf({ ...TRIGGER }));
+
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    /**
+     * `enqueue` reports rather than throws, so a Redis outage leaves the ticket
+     * created and unrouted instead of failing the message that created it. The
+     * ticket is durable and the job can be replayed; a lost ticket could not be.
+     */
+    it('warns but does not fail the message when the routing job could not be queued', async () => {
+      enqueue.mockResolvedValue('failed');
+      const warn = jest.spyOn(runner['logger'], 'warn').mockImplementation();
+
+      await expect(handler()(jobOf({ ...TRIGGER }))).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('not queued for routing'));
     });
   });
 

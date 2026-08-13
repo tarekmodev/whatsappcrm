@@ -1,16 +1,20 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import {
+  ASSIGNMENT_QUEUE,
+  ASSIGNMENT_ROUTE_JOB,
   InboundMessageTicketTriggerSchema,
   SLA_EVALUATE_TICKET_JOB,
   SLA_QUEUE,
   TICKET_ENSURE_JOB,
   TICKET_LINKER,
   TICKET_QUEUE,
+  assignmentRouteJobId,
   type InboundMessageTicketTrigger,
   type SlaEvaluateReason,
   type SlaEvaluateTicketTrigger,
   type TicketLinkResult,
   type TicketLinker,
+  type TicketRoutingTrigger,
 } from '@whatsappcrm/contracts';
 import { UnrecoverableError } from 'bullmq';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
@@ -103,7 +107,12 @@ export class TicketQueueRunner implements OnApplicationBootstrap {
           (result.ticketNumber === null ? '' : ` ticket #${result.ticketNumber}`),
       );
 
+      // Two independent consequences of the same linked message, and both are
+      // enqueues rather than in-process calls: SLA timers (TAR-26) and routing
+      // (TAR-24). Neither can fail the message — each logs and moves on — so the
+      // order between them carries no meaning beyond reading order.
       await this.triggerSlaEvaluation(trigger.tenantId, result);
+      await this.requestRouting(trigger, result);
     } catch (error: unknown) {
       if (error instanceof TenantNotActiveError) {
         // 0003's error table: non-retryable, and discarded rather than failed.
@@ -186,6 +195,58 @@ export class TicketQueueRunner implements OnApplicationBootstrap {
       this.logger.warn(
         `Ticket ${result.ticketId} was linked but its SLA evaluation was not queued (${outcome}); ` +
           'no timer will be started until it is evaluated again.',
+      );
+    }
+  }
+
+  /**
+   * A ticket that was just **created** asks to be routed (TAR-24, 0007
+   * decision 1). The one place these two stories touch, named in 0007's phase
+   * table so it is reviewed rather than discovered during integration.
+   *
+   * Three things about where this sits:
+   *
+   *   * **`created` only.** An `attached` message joins a ticket somebody may
+   *     already be working, and re-routing that is worse than not routing it
+   *     (0007, risk 2). A `skipped` outbound message never had a ticket.
+   *   * **After the linking transaction has committed**, because it is called
+   *     from here rather than from inside `TicketLinkerService`. A routing job
+   *     that overtook its own ticket's commit would read nothing and burn a
+   *     retry.
+   *   * **In this file, not that one.** `TicketLinkerService` stays a plain
+   *     class with no queue in it, which is the property that makes TAR-75's
+   *     race and idempotency cases unit-testable.
+   *
+   * `enqueue` reports rather than throws, so a Redis outage leaves the ticket
+   * created and unrouted instead of failing the message that created it. The
+   * ticket is durable and the job can be replayed; a lost ticket could not be.
+   */
+  private async requestRouting(
+    trigger: InboundMessageTicketTrigger,
+    result: TicketLinkResult,
+  ): Promise<void> {
+    if (result.outcome !== 'created' || result.ticketId === null) {
+      return;
+    }
+
+    const routing: TicketRoutingTrigger = {
+      tenantId: trigger.tenantId,
+      ticketId: result.ticketId,
+      contactId: trigger.contactId,
+      // The message that opened the ticket, so a `keyword` condition matches it
+      // rather than whichever message is newest when the worker runs.
+      messageId: trigger.messageId,
+      createdAt: trigger.receivedAt,
+    };
+
+    const outcome = await this.queue.enqueue(ASSIGNMENT_QUEUE, ASSIGNMENT_ROUTE_JOB, routing, {
+      jobId: assignmentRouteJobId(routing),
+    });
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      this.logger.warn(
+        `Ticket ${result.ticketId} was created but not queued for routing (${outcome}): ` +
+          'it will stay unassigned until a routing job runs for it.',
       );
     }
   }

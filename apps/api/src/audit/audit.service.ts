@@ -7,7 +7,7 @@ import type { AuditAction } from './audit.actions';
 /** What changed, in a shape an auditor can read six months later. */
 export interface AuditEntry {
   action: AuditAction;
-  targetType: 'user' | 'team' | 'invite' | 'whatsapp_business_account';
+  targetType: 'user' | 'team' | 'invite' | 'whatsapp_business_account' | 'assignment_rule';
   targetId: string;
   /**
    * A redacted before/after at most. **Never a secret, a password hash, a token

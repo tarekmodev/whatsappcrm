@@ -268,6 +268,52 @@ sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the 
   the console. The first tenant-user document in the repository; `docs/STYLE.md` gains the
   rule it is written under.
 
+- **A supervisor's routing rules now decide where a new ticket goes** (TAR-288) — ADR 0007
+  published the grammar, the evaluation order and the fallback seam; TAR-285 shipped the
+  schema. This is the code between them. Six routes under `/api/v1/assignment-rules`, gated
+  on the `assignment_rule:read` / `assignment_rule:write` pair `rbac.ts` has carried since
+  TAR-39 — not the admin-only `channel:manage` the issue text proposed, which would have
+  made routing an admin surface and contradicted TAR-22's third acceptance criterion. The
+  list does not paginate and says so in its shape, keeping `nextCursor` fixed at `null`:
+  `rulesPerTenant` is enforced on create, so a bounded response is a promise the server can
+  actually keep. Reorder takes the tenant's **complete** set rather than a delta, which
+  buys optimistic concurrency for free — a set that is not exactly the current one means
+  another supervisor edited the list, and the answer is `conflict` rather than a silent
+  partial reorder. Delete is idempotent and leaves the surviving positions alone, because
+  the order is the sort and not the values.
+  On the engine side, a created ticket is enqueued onto a new `assignment` queue after its
+  transaction commits, and the worker evaluates the active rules in `(position, id)` order
+  with the first match winning. The `id` tie-break is load-bearing rather than cosmetic:
+  `position` defaults to `0` and carries no unique constraint, so without it two rules
+  created normally would have their order decided by the query plan. A matched rule is
+  terminal — it assigns its team or user and does not then run rotation inside that team —
+  and a rule whose target is a suspended user or a member-less team is treated as not
+  matching, so evaluation continues rather than parking the ticket somewhere nobody can
+  see it. When nothing matches, the engine calls `FallbackAssignmentResolver` and stops
+  there; TAR-23 fills that binding in, and until it does `NullFallbackAssignmentResolver`
+  answers "nobody available", which means a ticket no rule matches stays unassigned and is
+  flagged with an `assignment_deferred` event rather than being silently unowned.
+  Two properties are worth knowing because they are deliberate. The assignment write is a
+  **compare-and-set** bounded to an unassigned ticket, in the same transaction as the
+  `ticket_events` append — so a redelivered job is a no-op, and a supervisor who assigns by
+  hand in the second before the worker runs keeps their assignment rather than having a
+  rule silently undo them. And **bad tenant data never throws**: a rule whose stored
+  conditions do not parse, an unreadable `business_hours` column, a ticket with no contact
+  or no message — each makes a condition false and evaluation continues, because the
+  failure mode of a routing engine has to be "this went to rotation", never "this went to
+  the wrong team" and never "the queue stopped".
+  `isWithinBusinessHours` is published in `@whatsappcrm/contracts` alongside the shape
+  `tenant_settings.business_hours` has carried since TAR-47 and never had an interpreter,
+  which narrows ADR 0006's risk 1 to the holiday calendar it left open. Both daylight-saving
+  transitions are covered: neither needs a special case, because working from the formatted
+  wall clock means a skipped hour simply contains no instants and a repeated one contains
+  two runs of them. One deviation from 0007's transcript, called out in the code: Zod 4
+  made an enum-keyed `z.record` exhaustive, so `BusinessHoursSchema` uses `partialRecord` —
+  the document's literal spelling would have refused the seeded tenant, which lists `mon`–
+  `fri` and no weekend. Rule writes are audited as `assignment_rule.created/.updated/
+.deleted/.reordered`, carrying the name and target and never the conditions, which can
+  hold tenant PII.
+
 - **A template an agent cannot find is now explained rather than absent** (TAR-91) —
   `GET /api/v1/message-templates` deliberately hides two kinds of template from the
   composer's picker: the ones Meta has not approved, and the ones whose buttons need a
