@@ -169,6 +169,34 @@ change.
 
 ### Added
 
+- **A template an agent cannot find is now explained rather than absent** (TAR-91) —
+  `GET /api/v1/message-templates` deliberately hides two kinds of template from the
+  composer's picker: the ones Meta has not approved, and the ones whose buttons need a
+  send-time parameter this build cannot supply. Amendment 1 accepted both on the promise
+  that a template-administration surface made them visible, and that surface did not exist,
+  so the mitigation was a sentence in a document. It exists now:
+  `GET /api/v1/whatsapp/message-templates` under `channel:manage` returns **every** template
+  the tenant holds, whatever its Meta status, each carrying `sendable` and a `sendBlockers`
+  list — `meta_not_approved`, `button_parameters_required`, or both where both apply. That
+  distinction is the point: _Meta has not approved this yet_ and _we cannot send this yet_
+  are different problems with different owners, and a template that is simply missing from
+  one list says neither. Filters by business account, Meta status and name prefix; read-only,
+  because template authorship stays in Meta's own tooling.
+  A separate route rather than a `status` parameter on the composer's list, so neither
+  surface can be turned into the other by a query string, and the exclusion rule itself is
+  now one function (`messageTemplateSendBlockers`) that the picker filters on and this
+  surface publishes — two copies would eventually disagree, and the silent direction is
+  reporting a hidden template as fine. Adds
+  `message_templates (tenant_id, name, language, id)`; the picker's index leads with `status`
+  and cannot serve an unfiltered read in sort order. Recorded as ADR 0002 amendment 8.
+  ⚠️ Still open, and now written down where the code is rather than left as a pending
+  to-do: whether `quick_reply` belongs on `PARAMETERLESS_BUTTON_TYPES`. Meta's send-side
+  documentation — the only page that states whether a `button` component is required in a
+  send — has returned HTTP 500 on every attempt across four builds, so it is settleable by
+  one live send against a connected WABA and by nothing else. `quick_reply` stays out
+  (fail-closed, cost: a sendable template missing from the picker, which this surface now
+  explains); `voice_call` stays in as a stated accepted risk rather than an unverified entry.
+
 - **Routing-rule contract** — `docs/architecture/0007-routing-rules-and-assignment-fallback.md`,
   with amendment 7 to ADR 0002 for the six `/api/v1/assignment-rules` routes. Fixes the
   condition grammar (`keyword`, `tag`, `business_hours`, `contact_attribute`, combined with

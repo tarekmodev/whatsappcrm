@@ -1,0 +1,51 @@
+-- Let an SLA timer be paused (TAR-270, against 0006).
+--
+-- `@whatsappcrm/contracts` has published `paused` in `SLA_STATES` since TAR-73,
+-- and `TICKET_STATUS_PAUSES_SLA` names the three ticket statuses that reach it —
+-- but `sla_timer_state` only ever carried `running`, `met`, `breached` and
+-- `cancelled`. 0006's lifecycle makes the pause a real transition (a ticket
+-- moved to `pending` is waiting on the customer, and billing an agent for that
+-- time is the thing TAR-26 exists to avoid), so the first pause TAR-280 writes
+-- would reach the database as an invalid enum label: a 500 for a state the
+-- published contract calls valid. Exactly the shape of TAR-68's
+-- `conversation_status` gap, and fixed the same way.
+--
+-- ---------------------------------------------------------------------------
+-- Why this label is alone in its own migration
+-- ---------------------------------------------------------------------------
+--
+-- PostgreSQL refuses to *use* an enum label in the same transaction that added
+-- it, and Prisma runs each migration inside one transaction. The very next
+-- migration in this directory writes `paused` — the backfill and the demo data
+-- do not, but TAR-280's timer service will, and a later migration that touches
+-- the value would fail on a fresh database while passing on an incrementally
+-- migrated one. Splitting it costs one directory and removes that class of
+-- failure entirely.
+--
+-- Verified rather than assumed (0006, risk 6): the Compose stack runs
+-- PostgreSQL 16.13, where `ALTER TYPE ... ADD VALUE` is permitted inside a
+-- transaction block (PostgreSQL 12+) but the new label still cannot be
+-- referenced until that transaction commits. Both halves of that sentence are
+-- why this file applies cleanly and why it is on its own.
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+--   Duration     Milliseconds, at any table size. Adding a label to an enum is a
+--                catalogue insert into `pg_enum`; no table is rewritten, no row
+--                is read, and `sla_timers` is empty in every environment today
+--                regardless.
+--   Locks        A brief lock on the type itself. No table lock, so nothing
+--                queueing on `sla_timers` or `tickets` is blocked.
+--   Blocking     None worth naming.
+--   Data loss    None. Nothing is dropped and no existing value changes meaning.
+--   Rollback     `down.sql` beside this file, and it is deliberately a no-op.
+--
+-- Appended at the end of the label list rather than inserted after `running`.
+-- Enum ordering is the sort order for `ORDER BY state` and no query sorts by it,
+-- so position carries no meaning — while `BEFORE`/`AFTER` placement would make
+-- the statement non-idempotent in a way `IF NOT EXISTS` cannot cover. Same
+-- reasoning, and the same wording, as 20260811170000_conversation_status_closed.
+
+ALTER TYPE "sla_timer_state" ADD VALUE IF NOT EXISTS 'paused';

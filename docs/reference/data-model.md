@@ -1,7 +1,7 @@
 # Data model reference
 
 The database as it stands on `main` after TAR-47, TAR-48, TAR-51, TAR-52, TAR-54, TAR-66,
-TAR-74, TAR-80, TAR-92 and TAR-20e. Written for engineers building against it.
+TAR-74, TAR-80, TAR-92, TAR-20e and TAR-270. Written for engineers building against it.
 
 `apps/api/prisma/schema.prisma` is the source of truth for columns, types and defaults,
 and carries the per-model reasoning next to each model. This document does not transcribe
@@ -43,7 +43,7 @@ Six rules hold across every model. A change that breaks one needs a reason in re
 
 ## Tenancy classification
 
-41 models. **38 are tenant-scoped**: they carry a non-null `tenant_id`, have
+42 models. **39 are tenant-scoped**: they carry a non-null `tenant_id`, have
 `ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Three are
 not, each deliberately:
 
@@ -558,20 +558,80 @@ Round-robin cursor, one row per team.
 - **Owned by:** TAR-26
 
 `priority` null means "any". `business_hours_only` counts elapsed time against
-`tenant_settings.business_hours` rather than wall-clock.
+`tenant_settings.business_hours` rather than wall-clock — modelled, but not implemented at
+v1 and left `false` (0006, risk 1).
+
+**This table is the tenant's SLA configuration surface**, rather than a column on
+`tenant_settings` (0006, decision 6). Every tenant gets one row named `Default`, with
+`priority` null and `first_response_minutes` 60 — written by `TenantProvisioningService`
+for new tenants and by the backfill in `20260813130000_sla_pause_accounting_and_alerts` for
+the ones that already existed. A tenant changes its window by editing that row through
+`PATCH /api/v1/sla-policies/{id}`; `is_active = false` is how it turns SLA off, and that
+decision is honoured rather than overridden by the platform default.
+
+Policy resolution for a ticket: among the tenant's active policies, prefer
+`priority = ticket.priority`, then `priority IS NULL`, oldest `created_at` breaking a tie.
 
 #### `sla_timers`
 
-- **Unique:** `(tenant_id, ticket_id, kind)` — one timer per target per ticket
-- **Indexes:** `(tenant_id, state, due_at)`
+- **Unique:** `(tenant_id, ticket_id, kind)` — one timer per target per ticket, and what
+  serves the ticket queue's `breachedOnly` filter as an `EXISTS`; `(tenant_id, id)`
+- **Indexes:** `(tenant_id, state, due_at)`; `(state, due_at)`
 - **Owned by:** TAR-26
 
-The architecture document specifies a partial index `(tenant_id, due_at) WHERE state =
-'running'` for the timer sweep. Prisma cannot express a `WHERE` on an index, and an index
-created outside the schema shows up as drift that the next `migrate dev` proposes to drop.
-Leading with `state` gives the sweep the same access path — equality on `state`, then a
-range scan on `due_at` in index order — at the cost of also indexing finished timers.
-Revisit once timer volume makes the size matter; the query does not have to change.
+`due_at` is the single authoritative wall-clock deadline. A pause records `paused_at`; the
+resume moves `due_at` forward by however long the pause lasted and accumulates the same
+interval into `paused_ms`. Keeping the deadline in a column rather than deriving it from an
+elapsed counter is what lets the breach sweep stay one comparison against one index;
+`paused_ms` is never read by the sweep and exists for reporting and for explaining a moved
+deadline. `breached_at` is separate from `stopped_at`, which is overloaded across `met` and
+`cancelled`.
+
+`(state, due_at)` is **the one composite index in this schema that does not lead with
+`tenant_id`**, and 0002's rule 3 is knowingly excepted (0006, decision 2). Phase 1 of the
+breach sweep runs inside a queue worker where no request context exists, so its predicate
+carries no tenant term at all — `state = 'running' AND due_at <= now()` — and
+`(tenant_id, state, due_at)` leaves the planner a full scan. Measured on PostgreSQL 16 at
+100 000 running timers with 200 due: 7 shared buffers and 0.05 ms with the index, against
+1 640 buffers and 7.5 ms with a sequential scan and a sort without it. The gap grows with
+the number of _running_ timers, not the number due, because the index scan stops at the
+first row not yet due.
+
+Neither index is partial (`WHERE state = 'running'`), which the architecture document
+originally specified: Prisma cannot express a `WHERE` on an index, and one created outside
+the schema shows up as drift that the next `migrate dev` proposes to drop. Leading with
+`state` gives the same access path at the cost of also indexing finished timers. Revisit
+once timer volume makes the size matter; the query does not have to change.
+
+#### `sla_alerts`
+
+- **Unique:** `(tenant_id, sla_timer_id, recipient_user_id)`
+- **Indexes:** `(tenant_id, recipient_user_id, created_at DESC, id DESC)`;
+  `(tenant_id, ticket_id)`
+- **Owned by:** TAR-26
+
+One row per recipient per breached timer, and three things at once (0006, decision 5): the
+delivery record that survives an offline supervisor, the read model behind
+`GET /api/v1/sla-alerts`, and the idempotency ledger. `due_at` and `kind` are copied from
+the timer at write time so that a later policy edit cannot rewrite what a supervisor was
+told they missed. `acknowledged_at` is set by the acknowledge endpoint; first write wins.
+
+The unique key is the second of three idempotency layers. The load-bearing one is the
+conditional `UPDATE ... WHERE state = 'running'` that flips the timer in the same
+transaction; the BullMQ `jobId` is an optimisation only.
+
+Recipients are derived rather than configured — the tenant's active supervisors and admins,
+narrowed to those sharing a team with whoever holds the ticket, falling back to all of them
+when that yields nobody. TAR-22's model carries no manager link, and 0006 decision 4 records
+why v1 does not add one.
+
+#### What is _not_ on `tickets`
+
+There is no `first_response_due_at` and no overdue flag. The deadline and the state live on
+`sla_timers`; a copy on `tickets` would be a second source of truth that pause and resume
+have to keep in step, and the failure when it drifts is a false breach alert.
+`tickets.first_response_at` already exists and is stamped by the first outbound message from
+a person.
 
 ### Workflows — TAR-27
 
@@ -711,7 +771,7 @@ definitions — stays text or JSON.
 | `ticket_status`                         | `open`, `pending`, `resolved`, `closed`                                                                                              |
 | `ticket_priority`                       | `low`, `normal`, `high`, `urgent`                                                                                                    |
 | `sla_target_kind`                       | `first_response`, `resolution`                                                                                                       |
-| `sla_timer_state`                       | `running`, `met`, `breached`, `cancelled`                                                                                            |
+| `sla_timer_state`                       | `running`, `met`, `breached`, `cancelled`, `paused`                                                                                  |
 | `workflow_run_status`                   | `pending`, `running`, `succeeded`, `failed`                                                                                          |
 | `knowledge_document_status`             | `pending`, `indexed`, `failed`                                                                                                       |
 | `billing_interval`                      | `month`, `year`                                                                                                                      |
@@ -743,12 +803,20 @@ Applied in this order. Every directory carries a hand-written `down.sql` beside 
 | `20260811140000_media_pipeline`                         | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable                                                     | TAR-20e |
 | `20260811150000_auth_schema_and_policies`               | `password_reset_tokens` and `invite_teams` and the 37th and 38th policies; lockout columns on `users`; `absolute_expires_at` and `revoked_reason` on `sessions`; `revoked_at` and the live-invite index on `invites` | TAR-54  |
 | `20260811170000_conversation_status_closed`             | `ALTER TYPE conversation_status ADD VALUE 'closed'`                                                                                                                                                                  | TAR-68  |
+| `20260813120000_sla_timer_state_paused`                 | `ALTER TYPE sla_timer_state ADD VALUE 'paused'`, alone in its own migration                                                                                                                                          | TAR-270 |
+| `20260813130000_sla_pause_accounting_and_alerts`        | `paused_at`, `paused_ms`, `breached_at` and the `(state, due_at)` sweep index on `sla_timers`; adds `sla_alerts` and the 39th policy; backfills the default `sla_policies` row for existing tenants                  | TAR-270 |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's
 migration; the 35th, `ticket_counters`, carries its policy in TAR-74's; the 36th,
-`media_objects`, carries its policy in TAR-20e's; and the 37th and 38th,
-`password_reset_tokens` and `invite_teams`, carry theirs in TAR-54's.
+`media_objects`, carries its policy in TAR-20e's; the 37th and 38th,
+`password_reset_tokens` and `invite_teams`, carry theirs in TAR-54's; and the 39th,
+`sla_alerts`, carries its policy in TAR-270's.
+
+`20260813120000_sla_timer_state_paused` is one statement in a directory of its own because
+PostgreSQL refuses to _use_ an enum label in the transaction that added it, and Prisma runs
+each migration in one transaction. Splitting it costs a directory and removes a class of
+deploy failure that only shows up on a fresh database.
 
 `20260810180000_message_content_type_unsupported` shares the `180000` slot with the
 template-list index and is absent from the table above only because it was added on a

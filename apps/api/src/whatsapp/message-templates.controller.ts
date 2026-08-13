@@ -3,19 +3,18 @@ import {
   MessageTemplateListQuerySchema,
   type MessageTemplateListQuery,
   type MessageTemplatePage,
-  type MessageTemplateResponse,
 } from '@whatsappcrm/contracts';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ApiException } from '../common/errors/api.exception';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
 import { RequirePermission } from '../rbac/require-permission.decorator';
+import { InvalidCursorError } from './message-template-cursor';
 import {
-  InvalidCursorError,
   MessageTemplateQueryService,
   UnknownWhatsAppAccountError,
-  type ListedTemplate,
 } from './message-template-query.service';
+import { toMessageTemplateResponse } from './message-template.response';
 
 /**
  * `GET /api/v1/message-templates` — the approved templates an agent may send.
@@ -64,7 +63,7 @@ export class MessageTemplatesController {
       })
       .catch((error: unknown) => translateQueryFailure(error));
 
-    return { items: page.items.map(toResponse), nextCursor: page.nextCursor };
+    return { items: page.items.map(toMessageTemplateResponse), nextCursor: page.nextCursor };
   }
 }
 
@@ -89,40 +88,4 @@ function translateQueryFailure(error: unknown): never {
   }
 
   throw error;
-}
-
-/**
- * Maps the row onto the published response. Explicit rather than spread, so
- * adding a column to the projection cannot quietly add a field to the API.
- *
- * `components` is Prisma's `JsonValue`, which includes `null` for a SQL NULL —
- * the contract publishes `unknown | null`, so the two already agree and this is
- * a pass-through rather than a conversion. `bodyText`, `parameterCount` and
- * `headerFormat` are read out of that same tree here (0002, amendment 1): the
- * composer needs to know how many variable inputs to render without shipping its
- * own parser for Meta's shape, and the send path needs the arity to check
- * against before it calls Meta.
- */
-function toResponse({ row, summary }: ListedTemplate): MessageTemplateResponse {
-  return {
-    id: row.id,
-    whatsappBusinessAccountId: row.whatsappBusinessAccountId,
-    name: row.name,
-    language: row.language,
-    category: row.category,
-    status: row.status,
-    components: row.components,
-    bodyText: summary.bodyText,
-    parameterCount: summary.parameterCount,
-    headerFormat: summary.headerFormat,
-    headerParameterCount: summary.headerParameterCount,
-    // `false` for every row this endpoint returns, by construction — the page
-    // drops the rest. Published anyway, because the administration surface that
-    // has to explain "approved by Meta, not yet sendable from this product"
-    // cannot say it about a template it cannot identify.
-    requiresButtonParameters: summary.requiresButtonParameters,
-    providerTemplateId: row.providerTemplateId,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  };
 }
