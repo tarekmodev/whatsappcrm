@@ -661,6 +661,33 @@ change.
 
 ### Changed
 
+- **`assignment_rules` can hold a routing rule.** TAR-47 shipped the table with
+  `conditions JSONB`, `position`, `is_active` and both target foreign keys under a comment
+  saying TAR-24 owned the grammar; 0007 worked out what that grammar needed, and this is the
+  four changes plus the one that turned out to be unnecessary. `name` is `citext` with
+  `UNIQUE (tenant_id, name)`, on `teams.name`'s reasoning applied to a second name column —
+  the rule name is what an audit reader sees in the ticket event recording why a ticket was
+  routed, and `Billing` beside `billing` is two rules nobody can tell apart. An **active**
+  rule must have exactly one target, enforced by
+  `assignment_rules_active_has_one_target`; the condition on `is_active` is load-bearing
+  rather than defensive, because `UsersService` deliberately leaves a target-less inactive
+  rule behind when a rule's target user is removed, so that a supervisor finds a rule
+  needing a new target instead of finding it gone. The ordering index becomes
+  `(tenant_id, is_active, position, id)`, since `position` defaults to `0` and is not
+  unique — without the `id` tie-break two rules created normally have no defined evaluation
+  order at all. And `action JSONB` is **dropped**: the target is the two foreign-key
+  columns, nothing read the column in `apps/api`, `apps/web` or `packages/contracts`, and
+  two representations of one fact is a drift surface with no owner. A non-assignment rule
+  action belongs to TAR-27's automation engine, which owns trigger/condition/action
+  properly. Row-level security needed nothing — the table has had row-level security
+  enabled, forced, and carrying its `tenant_isolation` policy since the initial migration,
+  so no `pnpm db:roles` re-run follows this one. ⚠️ The `action` drop is the one destructive
+  statement: `down.sql` restores the column and cannot restore its contents, which is
+  acceptable only because it is unread and unwritten in every environment the migration can
+  reach. Two of the constraints are invisible to Prisma — it can express neither a CHECK nor
+  the fact that `citext` is what makes the unique index case-insensitive — so
+  `src/prisma/assignment-rule-schema.int-spec.ts` asserts both against a real PostgreSQL,
+  the same arrangement `tickets_one_active_per_contact` uses. (TAR-285)
 - **Team membership is bounded, and a membership change costs the same whatever the team
   size.** `memberUserIds` and `teamIds` carried no upper bound, so a caller holding
   `team:write` could `POST /api/v1/teams` with ten thousand ids: validation passed, ten
