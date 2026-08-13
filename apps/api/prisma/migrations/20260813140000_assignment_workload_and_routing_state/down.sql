@@ -60,9 +60,10 @@
 -- `verify-tenant-isolation.sql` reads the catalogue rather than a list.
 --
 -- The explicit transaction is here because, unlike the up migration, this file
--- is applied by hand through `psql` (or by `db:rollback`), which is in
--- autocommit. Locks and duration mirror the up migration: ACCESS EXCLUSIVE on
--- the four tables, milliseconds on any current environment.
+-- is applied by hand through `psql`, which is in autocommit. `db:rollback`
+-- batches it with the `_prisma_migrations` delete, and this `BEGIN` becomes the
+-- transaction that covers both. Locks and duration mirror the up migration:
+-- ACCESS EXCLUSIVE on the four tables, milliseconds on any current environment.
 
 BEGIN;
 
