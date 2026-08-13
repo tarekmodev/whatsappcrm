@@ -1,10 +1,16 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import {
   InboundMessageTicketTriggerSchema,
+  SLA_EVALUATE_TICKET_JOB,
+  SLA_QUEUE,
   TICKET_ENSURE_JOB,
   TICKET_LINKER,
   TICKET_QUEUE,
+  slaEvaluateJobId,
   type InboundMessageTicketTrigger,
+  type SlaEvaluateReason,
+  type SlaEvaluateTicketTrigger,
+  type TicketLinkResult,
   type TicketLinker,
 } from '@whatsappcrm/contracts';
 import { UnrecoverableError } from 'bullmq';
@@ -97,6 +103,8 @@ export class TicketQueueRunner implements OnApplicationBootstrap {
         `Message ${trigger.messageId} ${result.outcome}` +
           (result.ticketNumber === null ? '' : ` ticket #${result.ticketNumber}`),
       );
+
+      await this.triggerSlaEvaluation(trigger.tenantId, result);
     } catch (error: unknown) {
       if (error instanceof TenantNotActiveError) {
         // 0003's error table: non-retryable, and discarded rather than failed.
@@ -117,4 +125,76 @@ export class TicketQueueRunner implements OnApplicationBootstrap {
       throw error;
     }
   }
+
+  /**
+   * Two of 0006's four SLA triggers, both produced here (TAR-26).
+   *
+   * A ticket that was **created** needs its timers started; one that was
+   * **attached to while `pending`** has just had the customer reply, which is
+   * the cue to resume a paused timer. `previousStatus` carries that fact out of
+   * the linker precisely so this does not have to re-read the row.
+   *
+   * An `attached` on an already-open ticket enqueues nothing: nothing about the
+   * SLA changed, and a job per inbound message on a busy thread would be a
+   * reconciliation that always finds the same state.
+   *
+   * ## Why here rather than inside `TicketLinkerService`
+   *
+   * This runner is documented as the only file in the module that knows a queue
+   * exists, and that is what keeps the linker a plain class a unit test calls
+   * directly. It also keeps the enqueue outside the linker's transaction, which
+   * is where it has to be: a job that reached a worker before the ticket
+   * committed would read no ticket and burn a retry.
+   *
+   * Failure to enqueue is logged, never thrown. The ticket is committed, and
+   * throwing would have BullMQ retry `ticket.ensure-for-message` — re-running
+   * the linker to fix an SLA job, which is the wrong repair. The honest
+   * limitation, stated rather than glossed: nothing re-enqueues a lost
+   * evaluation today. A ticket whose trigger was lost gets no timers until
+   * something else evaluates it, which is a narrower gap than it sounds — the
+   * customer's next message produces another trigger — but it is a real one, and
+   * a sweep for ticket-with-no-timer is this story's recorded follow-up.
+   */
+  private async triggerSlaEvaluation(tenantId: string, result: TicketLinkResult): Promise<void> {
+    const reason = slaReasonFor(result);
+
+    if (reason === null || result.ticketId === null) {
+      return;
+    }
+
+    const trigger: SlaEvaluateTicketTrigger = { tenantId, ticketId: result.ticketId, reason };
+
+    const outcome = await this.queue.enqueue<SlaEvaluateTicketTrigger>(
+      SLA_QUEUE,
+      SLA_EVALUATE_TICKET_JOB,
+      trigger,
+      {
+        jobId: slaEvaluateJobId(trigger),
+        // Retried, because the ticket is durable and the timer is owed: a job
+        // that overtook its own transaction succeeds on the next attempt.
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1_000 },
+        removeOnComplete: 1_000,
+        removeOnFail: 5_000,
+      },
+    );
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      this.logger.warn(
+        `Ticket ${result.ticketId} was linked but its SLA evaluation was not queued (${outcome}); ` +
+          'no timer will be started until it is evaluated again.',
+      );
+    }
+  }
+}
+
+/** Which of 0006's reasons this link outcome is, or `null` when it is none of them. */
+function slaReasonFor(result: TicketLinkResult): SlaEvaluateReason | null {
+  if (result.outcome === 'created') {
+    return 'ticket_created';
+  }
+
+  return result.outcome === 'attached' && result.previousStatus === 'pending'
+    ? 'customer_replied'
+    : null;
 }

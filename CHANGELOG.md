@@ -169,6 +169,51 @@ change.
 
 ### Added
 
+- **A ticket nobody answers in time now goes overdue on its own, and a supervisor is told**
+  (TAR-280) — TAR-47 landed `sla_policies` and `sla_timers` and TAR-73 published
+  `TicketSlaSchema`; nothing read or wrote any of it, no timer was ever created, and
+  `tickets.first_response_at` had never been written by any code path. The mechanism exists
+  now, built to ADR 0006. A new L4 `SlaModule` starts a first-response timer when a ticket
+  opens, pauses it while the ticket waits on the customer, resumes it — with the deadline
+  moved forward by however long the pause lasted — when they reply, and stops it as `met`
+  the first time a **person** answers. A bot reply writes no `sender_user_id` and therefore
+  does not stop the clock, which is a decision recorded rather than an accident of whichever
+  path writes the message.
+  **Detection is a repeatable sweep every `SLA_SWEEP_INTERVAL_MS`, not a job scheduled per
+  timer.** A delayed job is precise to the second and stores the deadline in Redis, which
+  this codebase treats as losable: a flush would lose breaches with no error, no retry and
+  no failed set — an alert that simply never comes. The deadline lives in Postgres, the
+  predicate is `due_at <= now()` rather than "due since the last tick", so an outage of any
+  length makes alerts _late_ rather than _absent_ and the first sweep afterwards drains the
+  whole backlog. `due_at` also moves on every pause, and a stale scheduled job that escaped
+  cancellation would fire early — a **false** breach, which is worse than a late one. Cost,
+  stated: detection latency bounded by the interval, 30 s against a 60-minute window.
+  **Exactly one alert per breach, by construction rather than by checking.** The sweep's
+  claim is a conditional `UPDATE … WHERE state = 'running'` and only the rows it moved are
+  alerted, so two replicas sweeping the same timer produce one alert and one `sla_breached`
+  ticket event — the audit row is written in the same transaction as the flip precisely
+  because `ticket_events` has no unique constraint to fall back on. `UNIQUE (tenant_id,
+sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the third; only
+  the first is load-bearing.
+  Recipients are derived from TAR-22's model as it stands — the tenant's active supervisors
+  and admins, narrowed to those sharing a team with whoever holds the ticket, falling back to
+  all of them when that yields nobody. A broad alert is worse than a narrow one; an alert
+  delivered to nobody is worse than both. Each gets a durable `sla_alerts` row **and** an
+  `sla.breached` push to their own user room, because a supervisor offline at 02:14 must
+  still learn about it: the row is the record, the socket is the accelerator.
+  New surface: `GET`/`PATCH /api/v1/sla-policies` under the existing `sla:read`/`sla:write`,
+  and `GET /api/v1/sla-alerts` plus `POST /api/v1/sla-alerts/{id}/acknowledge` under
+  `ticket:read` — no new permission and no grant moved. The alert list needs no `_all`
+  permission because every row names its recipient and the query narrows to the calling
+  principal on top of RLS; an agent may call it and gets an empty page, and another
+  supervisor's alert answers `not_found` rather than `forbidden`.
+  ⚠️ Two things are stated rather than built. Business hours stay modelled and unimplemented
+  (`business_hours_only` is always false), so a timer started at 17:30 breaches overnight —
+  ADR 0006 risk 1, and its own story if any tenant's SLA is contractual against working
+  hours. And nothing re-enqueues a lost evaluation trigger: a ticket whose trigger was lost
+  gets no timer until something else evaluates it, which a sweep for
+  ticket-with-no-timer would close.
+
 - **A template an agent cannot find is now explained rather than absent** (TAR-91) —
   `GET /api/v1/message-templates` deliberately hides two kinds of template from the
   composer's picker: the ones Meta has not approved, and the ones whose buttons need a

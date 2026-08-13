@@ -1,7 +1,10 @@
 import {
+  SLA_EVALUATE_TICKET_JOB,
+  SLA_QUEUE,
   TICKET_ENSURE_JOB,
   TICKET_QUEUE,
   type InboundMessageTicketTrigger,
+  type SlaEvaluateTicketTrigger,
   type TicketLinkResult,
   type TicketLinker,
 } from '@whatsappcrm/contracts';
@@ -36,17 +39,30 @@ const TRIGGER: InboundMessageTicketTrigger = {
   receivedAt: '2026-08-12T09:00:00.000Z',
 };
 
+const TICKET = '77000000-0000-7000-8000-00000000000a';
+
 const CREATED: TicketLinkResult = {
   outcome: 'created',
-  ticketId: '77000000-0000-7000-8000-00000000000a',
+  ticketId: TICKET,
   ticketNumber: 1,
   previousStatus: null,
   reason: null,
 };
 
+const CUSTOMER_REPLIED: TicketLinkResult = {
+  outcome: 'attached',
+  ticketId: TICKET,
+  ticketNumber: 4,
+  previousStatus: 'pending',
+  reason: null,
+};
+
+const ATTACHED_TO_OPEN: TicketLinkResult = { ...CUSTOMER_REPLIED, previousStatus: 'open' };
+
 describe('TicketQueueRunner', () => {
   let ensureTicketForMessage: jest.Mock;
   let registerWorker: jest.Mock;
+  let enqueue: jest.Mock;
   let runner: TicketQueueRunner;
 
   /** The handler BullMQ would call, as the runner registered it. */
@@ -71,11 +87,20 @@ describe('TicketQueueRunner', () => {
   beforeEach(() => {
     ensureTicketForMessage = jest.fn().mockResolvedValue(CREATED);
     registerWorker = jest.fn().mockReturnValue(true);
+    enqueue = jest.fn().mockResolvedValue('added');
 
     const linker: TicketLinker = { ensureTicketForMessage };
 
-    runner = new TicketQueueRunner({ registerWorker } as unknown as QueueService, linker);
+    runner = new TicketQueueRunner({ registerWorker, enqueue } as unknown as QueueService, linker);
   });
+
+  /** The SLA trigger this runner produced, if it produced one. */
+  function slaTrigger(): SlaEvaluateTicketTrigger | undefined {
+    const call = enqueue.mock.calls.find(([queue]) => queue === SLA_QUEUE) as
+      [string, string, SlaEvaluateTicketTrigger] | undefined;
+
+    return call?.[2];
+  }
 
   describe('registration', () => {
     it('serves the ensure job on the queue the contract names', () => {
@@ -121,6 +146,89 @@ describe('TicketQueueRunner', () => {
       const [received] = ensureTicketForMessage.mock.calls[0] as [InboundMessageTicketTrigger];
 
       expect(received.tenantId).toBe(TENANT);
+    });
+  });
+
+  /**
+   * TAR-26's two producer-side triggers. Both are durable jobs rather than
+   * in-process events, because losing one loses a timer — and 0006's whole
+   * mechanism rests on a timer existing to be swept.
+   */
+  describe('the SLA trigger it produces', () => {
+    beforeEach(() => {
+      runner.onApplicationBootstrap();
+    });
+
+    it('asks for an evaluation when a ticket was created', async () => {
+      await handler()(jobOf({ ...TRIGGER }));
+
+      expect(slaTrigger()).toEqual({
+        tenantId: TENANT,
+        ticketId: CREATED.ticketId,
+        reason: 'ticket_created',
+      });
+      expect(enqueue).toHaveBeenCalledWith(
+        SLA_QUEUE,
+        SLA_EVALUATE_TICKET_JOB,
+        expect.anything(),
+        expect.objectContaining({ jobId: `sla-evaluate-${TENANT}-${CREATED.ticketId}` }),
+      );
+    });
+
+    /**
+     * A customer answering a ticket that was waiting on them is what resumes a
+     * paused timer. `previousStatus` is the only place that fact survives — by
+     * the time this runs, the ticket is `open` again.
+     */
+    it('asks for an evaluation when a customer replied to a pending ticket', async () => {
+      ensureTicketForMessage.mockResolvedValue(CUSTOMER_REPLIED);
+
+      await handler()(jobOf({ ...TRIGGER }));
+
+      expect(slaTrigger()).toEqual({
+        tenantId: TENANT,
+        ticketId: TICKET,
+        reason: 'customer_replied',
+      });
+    });
+
+    /**
+     * Nothing about the SLA changed, and a job per inbound message on a busy
+     * thread would be a reconciliation that always finds the same state.
+     */
+    it('asks for nothing when the message attached to an already-open ticket', async () => {
+      ensureTicketForMessage.mockResolvedValue(ATTACHED_TO_OPEN);
+
+      await handler()(jobOf({ ...TRIGGER }));
+
+      expect(slaTrigger()).toBeUndefined();
+    });
+
+    it('asks for nothing when the message was ours rather than the customer’s', async () => {
+      ensureTicketForMessage.mockResolvedValue({
+        outcome: 'skipped',
+        ticketId: null,
+        ticketNumber: null,
+        previousStatus: null,
+        reason: 'not_inbound',
+      } satisfies TicketLinkResult);
+
+      await handler()(jobOf({ ...TRIGGER }));
+
+      expect(slaTrigger()).toBeUndefined();
+    });
+
+    /**
+     * The ticket is committed. Throwing here would have BullMQ retry
+     * `ticket.ensure-for-message` — re-running the linker to fix an SLA job,
+     * which is the wrong repair — so a Redis blip is a warning and nothing more.
+     */
+    it('warns rather than throws when the evaluation could not be queued', async () => {
+      enqueue.mockResolvedValue('failed');
+      const warn = jest.spyOn(runner['logger'], 'warn').mockImplementation();
+
+      await expect(handler()(jobOf({ ...TRIGGER }))).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('SLA evaluation was not queued'));
     });
   });
 

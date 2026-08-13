@@ -1,5 +1,7 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
+  SLA_EVALUATE_TICKET_JOB,
+  SLA_QUEUE,
   permissionsForRole,
   type SendMessageInput,
   type SessionPrincipal,
@@ -40,6 +42,7 @@ const CONTACT = '68444444-4444-7444-8444-4444444444d1';
 const NUMBER = '68444444-4444-7444-8444-4444444444a0';
 const MESSAGE = '68444444-4444-7444-8444-4444444444e0';
 const MEDIA = '68444444-4444-7444-8444-4444444444f1';
+const TICKET = '68444444-4444-7444-8444-4444444444c9';
 
 const PRINCIPAL: SessionPrincipal = {
   userId: '68444444-4444-7444-8444-4444444444a1',
@@ -88,6 +91,17 @@ describe('MessageSendService', () => {
   let emit: jest.Mock;
   let serviceWindowExpiresAt: Date | null;
   let optedOutAt: Date | null;
+  let activeTicketId: string | null;
+
+  /** The contact's live ticket, as `tickets_one_active_per_contact` bounds it. */
+  function activeTicket(): { id: string } | null {
+    return activeTicketId === null ? null : { id: activeTicketId };
+  }
+
+  /** Which queues this send reached, so "it enqueued nothing" is provable. */
+  function queuesUsed(): string[] {
+    return (enqueue.mock.calls as [string, ...unknown[]][]).map(([queue]) => queue);
+  }
 
   function inScope<T>(work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
@@ -110,6 +124,7 @@ describe('MessageSendService', () => {
     createdMessages = [];
     serviceWindowExpiresAt = OPEN_WINDOW;
     optedOutAt = null;
+    activeTicketId = TICKET;
     enqueue = jest.fn(() => Promise.resolve('added'));
     findApprovedForNumber = jest.fn(() => Promise.resolve(null));
     describeForSend = jest.fn(() =>
@@ -153,6 +168,10 @@ describe('MessageSendService', () => {
           }),
         ),
       },
+      // The contact's active ticket, looked up after the commit so TAR-26 can be
+      // told a person replied. `activeTicketId` is what each case decides — null
+      // for a thread nobody has ticketed yet.
+      ticket: { findFirst: jest.fn(() => Promise.resolve(activeTicket())) },
     } as unknown as TenantPrisma;
 
     tenantContext = new TenantContextService();
@@ -201,6 +220,42 @@ describe('MessageSendService', () => {
           contactId: CONTACT,
         }),
       );
+    });
+
+    /**
+     * TAR-26's `agent_replied` trigger. It says only *that* a person replied —
+     * the SLA handler re-derives the first response from the messages — which is
+     * what makes a lost job recoverable rather than a timer that never stops.
+     */
+    it('tells the SLA module a person replied on the contact’s active ticket', async () => {
+      await send({ type: 'text', body: 'On its way.' });
+
+      expect(enqueue).toHaveBeenCalledWith(
+        SLA_QUEUE,
+        SLA_EVALUATE_TICKET_JOB,
+        { tenantId: TENANT, ticketId: TICKET, reason: 'agent_replied' },
+        expect.objectContaining({ jobId: `sla-evaluate-${TENANT}-${TICKET}` }),
+      );
+    });
+
+    it('tells it nothing when the contact has no active ticket', async () => {
+      activeTicketId = null;
+
+      await send({ type: 'text', body: 'On its way.' });
+
+      expect(queuesUsed()).not.toContain(SLA_QUEUE);
+    });
+
+    /**
+     * The message is committed and on its way to a customer. A Redis blip must
+     * not turn that into a 500 after the fact — `QueueService`'s own contract.
+     */
+    it('still answers when the evaluation could not be queued', async () => {
+      enqueue.mockResolvedValue('failed');
+
+      await expect(send({ type: 'text', body: 'On its way.' })).resolves.toMatchObject({
+        status: 'queued',
+      });
     });
 
     it('records the caption as the body of a media send', async () => {

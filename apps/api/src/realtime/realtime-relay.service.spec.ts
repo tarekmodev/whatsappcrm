@@ -21,6 +21,7 @@ import type { SessionService } from '../identity/session.service';
 import type { ConversationResourceService } from './conversation-resource.service';
 import type { MessageResourceService, RelayableMessage } from './message-resource.service';
 import { RealtimeRelayService } from './realtime-relay.service';
+import type { SlaBreachResourceService } from './sla-breach-resource.service';
 import type { TenantHostnameService } from './tenant-hostname.service';
 
 /**
@@ -217,6 +218,8 @@ function harnessFor(
   const relay = new RealtimeRelayService(
     messages,
     conversations,
+    // TAR-280's breach relay has its own spec; nothing in this file emits one.
+    {} as unknown as SlaBreachResourceService,
     hostnames,
     sessions,
     tenantContext,

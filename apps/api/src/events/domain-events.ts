@@ -30,6 +30,7 @@ export const MESSAGE_ATTACHMENT_SETTLED_EVENT = 'message.attachment_settled';
 export const TICKET_CREATED_EVENT = 'ticket.created';
 export const TICKET_UPDATED_EVENT = 'ticket.updated';
 export const CONVERSATION_ASSIGNED_EVENT = 'conversation.assigned';
+export const SLA_BREACHED_EVENT = 'sla.breached';
 
 /**
  * Something happened that may have ended one or more of this user's sessions —
@@ -234,4 +235,36 @@ export interface ConversationAssignedEvent {
   readonly conversationId: string;
   readonly previousAssignedUserId: string | null;
   readonly previousAssignedTeamId: string | null;
+}
+
+/**
+ * A ticket missed its SLA deadline, and the supervisor alerts for it are
+ * committed (TAR-26, 0006 decision 5).
+ *
+ * Emitted by the breach sweep **after** its per-tenant transaction commits, once
+ * per breached timer, and only when at least one `sla_alerts` row was actually
+ * inserted. A breach in a tenant with nobody to tell emits nothing — there is no
+ * audience to address, and the ticket's overdue badge is served by the queue.
+ *
+ * ## Why loss is acceptable here, unlike the trigger that leads to it
+ *
+ * The four *inputs* to the SLA mechanism are durable BullMQ jobs precisely
+ * because losing one loses a timer. This is the opposite direction: by the time
+ * it is emitted, the row that makes "the supervisor is notified" true is already
+ * committed, and a supervisor who was offline sees it on their next
+ * `GET /api/v1/sla-alerts`. The socket is an accelerator, so a missed relay
+ * costs one page load — which is exactly what this bus is for.
+ *
+ * ## It carries ids, not resources
+ *
+ * The subscriber reads both back, for the same reason `conversation.assigned`
+ * does: the payload a socket publishes must be the committed resource rather
+ * than the writer's view of it, and the `ticket.updated` half is addressed by
+ * the assignment on the row that read returns.
+ */
+export interface SlaBreachedEvent {
+  readonly tenantId: string;
+  readonly ticketId: string;
+  /** The alert rows this breach inserted. One socket per id, and no more. */
+  readonly alertIds: readonly string[];
 }

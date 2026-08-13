@@ -60,8 +60,14 @@ function effectOfEvent(event: ServerEvent): InboxEffect {
     case 'conversation.updated':
     case 'note.created':
       return 'refetch';
+    // `sla.breached` is addressed to a supervisor's own user room and belongs to
+    // the alert surface TAR-281 builds, not to the inbox. Listed rather than
+    // defaulted, like the two beside it, so this switch stays exhaustive: the
+    // day a wire event is added and this screen should react to it, the compiler
+    // is what says so.
     case 'agent.typing':
     case 'ticket.updated':
+    case 'sla.breached':
       return 'ignore';
   }
 }
