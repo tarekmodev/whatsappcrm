@@ -4,6 +4,8 @@ import type {
   MessageStatus,
   MessageType,
   TenantRole,
+  TicketPriority,
+  TicketStatus,
   UserStatus,
   WhatsAppAccountStatus,
   WhatsAppBusinessVerificationStatus,
@@ -35,6 +37,7 @@ export const content = {
     collapseNav: 'Collapse navigation',
     expandNav: 'Expand navigation',
     inbox: 'Inbox',
+    tickets: 'Tickets',
     settings: 'Settings',
     people: 'People',
     assignment: 'Assignment',
@@ -122,6 +125,21 @@ export const content = {
     resolved: 'Resolved',
     closed: 'Closed',
   } satisfies Record<ConversationStatus, string>,
+
+  ticketStatuses: {
+    open: 'Open',
+    /** Waiting on the customer. The customer's next message reopens it. */
+    pending: 'Waiting on customer',
+    resolved: 'Resolved',
+    closed: 'Closed',
+  } satisfies Record<TicketStatus, string>,
+
+  ticketPriorities: {
+    low: 'Low',
+    normal: 'Normal',
+    high: 'High',
+    urgent: 'Urgent',
+  } satisfies Record<TicketPriority, string>,
 
   /**
    * The outbound send ladder. Inbound messages are born `delivered`, so these
@@ -331,9 +349,160 @@ export const content = {
     ticketLinked: 'A ticket is open for this conversation.',
     ticketLinkedBody:
       'It was opened automatically when the customer wrote in, and everything said here is on it.',
+    /**
+     * The link the panel's original comment promised would land with
+     * `GET /tickets/{id}`. Resolving the ticket empties this section rather than
+     * leaving a link to work that is finished — `conversation.ticketId` names
+     * the *active* ticket, so it goes null the moment one is resolved.
+     */
+    ticketOpen: 'Open the ticket',
     ticketUnlinked: 'No ticket yet',
     ticketUnlinkedBody:
       'A ticket opens by itself with the customer’s next message, and this conversation joins it.',
+  },
+
+  tickets: {
+    title: 'Tickets',
+    subtitle: 'Work waiting on your team, urgent first.',
+
+    // --- The queue ----------------------------------------------------------
+    queueHeading: 'Ticket queue',
+    queueLoading: 'Loading tickets',
+    /**
+     * Says what the order *is*, because it is not a control: the queue has one
+     * order and no sort picker, so an agent who cannot see why a ticket is at
+     * the top would otherwise have to guess.
+     */
+    queueOrderNotice: 'Urgent tickets come first, then the most recently opened.',
+    emptyHeading: 'Nothing waiting',
+    emptyBody: 'Tickets assigned to you or your teams appear here as customers write in.',
+    emptyFilteredBody: 'Nothing matches this filter. Try a wider scope, status or priority.',
+    scopeNarrowedNotice:
+      'You are seeing your own and your teams’ tickets, not every ticket in the workspace.',
+
+    columnTicket: 'Ticket',
+    columnStatus: 'Status',
+    columnPriority: 'Priority',
+    columnAssignee: 'Assignee',
+    columnOpened: 'Opened',
+    columnActions: 'Actions',
+
+    /**
+     * A ticket opened by the auto-linker has no subject: the first inbound
+     * message is as likely to be a photo as a sentence, so there is nothing
+     * honest to derive one from. The per-tenant number is what agents and
+     * customers quote anyway.
+     */
+    untitled: (number: number) => `Ticket #${String(number)}`,
+    reference: (number: number) => `#${String(number)}`,
+    openTicket: (label: string) => `Open ${label}`,
+    openedAt: 'Opened',
+    updatedAt: 'Last updated',
+    resolvedAt: 'Resolved',
+    closedAt: 'Closed',
+    /**
+     * A ticket closed without being resolved keeps a null resolution time,
+     * deliberately — back-filling it would manufacture a resolution that never
+     * happened, and cycle-time reporting reads that column (ADR 0006 §3).
+     */
+    closedUnresolved: 'Closed without a resolution',
+
+    // --- Filters ------------------------------------------------------------
+    filtersLabel: 'Ticket filters',
+    statusFilterLabel: 'Status',
+    /** No `status` parameter at all: `open` and `pending`, the API's own default. */
+    filterActive: 'Active',
+    priorityFilterLabel: 'Priority',
+    scopeFilterLabel: 'Scope',
+    scopeAssigned: 'Assigned to me',
+    scopeUnassigned: 'Unassigned',
+    scopeAll: 'All tickets',
+
+    // --- One ticket ---------------------------------------------------------
+    detailLoading: 'Loading this ticket',
+    detailHeading: 'Ticket',
+    backToQueue: 'Back to the queue',
+    conversationHeading: 'Conversation',
+    openConversation: (name: string) => `Open the conversation with ${name}`,
+    /**
+     * The ticket exists and its conversation is not one this reader may open —
+     * ticket visibility and conversation visibility are separate rules, so this
+     * is reachable rather than hypothetical.
+     */
+    conversationUnavailable: 'The conversation behind this ticket is not visible to you.',
+    noConversation: 'This ticket has no conversation behind it.',
+    /**
+     * The API answers `not_found` for a ticket the reader may not see, never
+     * `forbidden`, so nothing can be enumerated. A shared supervisor link opened
+     * by an agent lands here.
+     */
+    unavailableHeading: 'This ticket is not available to you',
+    unavailableBody:
+      'It may be outside what your role can see, or it may no longer exist. Go back to the queue and pick another.',
+
+    // --- Changing status and priority --------------------------------------
+    controlsHeading: 'Status and priority',
+    statusLabel: 'Status',
+    priorityLabel: 'Priority',
+    /**
+     * One label per transition the ticket's current status allows, named by what
+     * the agent is doing rather than by the value they are setting — "Resolve"
+     * is what triage feels like, "set status to resolved" is what a database
+     * feels like. The set of buttons comes from `TICKET_STATUS_TRANSITIONS`, so
+     * a status with no moves left renders none.
+     */
+    statusActions: {
+      open: 'Move back to open',
+      pending: 'Waiting on customer',
+      resolved: 'Resolve',
+      closed: 'Close',
+    } satisfies Record<TicketStatus, string>,
+    /**
+     * `closed` is terminal: `TICKET_STATUS_TRANSITIONS` leaves it with nowhere
+     * to go, so the control is replaced by the value rather than rendered as a
+     * select with one option — a picker that cannot pick anything is the
+     * hardest kind of control to understand.
+     */
+    statusFinal: 'This ticket is closed. Its status cannot change.',
+    statusChangeSuccess: (label: string, status: string) => `${label} is now ${status}`,
+    priorityChangeSuccess: (label: string, priority: string) =>
+      `${label} is now ${priority} priority`,
+    /**
+     * Said rather than left as a missing control. `ticket:update` is in every
+     * role's set today, so this is the rare case — a role that has had it taken
+     * away — and a screen with no controls and no explanation reads as broken.
+     */
+    updateNotPermitted: 'Your role can read this ticket but not change it. Ask a workspace admin.',
+    closeNotPermitted:
+      'Your role can change this ticket’s priority but not resolve or close it. Ask a supervisor to finish it.',
+
+    /**
+     * Resolving and closing are confirmed because they are one-way at v1: there
+     * is no reopen window, so neither is undoable from this screen. The copy
+     * names exactly what happens rather than asking "are you sure?".
+     */
+    terminalConfirm: {
+      resolved: {
+        title: 'Resolve this ticket?',
+        body: (label: string) =>
+          `${label} leaves the active queue and records its resolution time. It cannot be reopened — if the customer writes again, a new ticket opens for them.`,
+        confirm: 'Resolve ticket',
+      },
+      closed: {
+        title: 'Close this ticket?',
+        body: (label: string) =>
+          `${label} leaves the active queue without recording a resolution time, which is how a wrong number or a spam message is filed. It cannot be reopened.`,
+        confirm: 'Close ticket',
+      },
+    },
+
+    /**
+     * How a `status_changed` carrying `cause: 'inbound_message'` reads once the
+     * event log lands (TAR-32 owns `GET /tickets/{id}/events`). The reopen
+     * itself is the system's, with no actor — saying "reopened by nobody" would
+     * be worse than saying who actually did it, which is the customer.
+     */
+    reopenedByCustomer: 'Reopened — customer replied',
   },
 
   thread: {

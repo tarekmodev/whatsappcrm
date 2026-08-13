@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import Link from 'next/link';
 import styles from './FilterPills.module.css';
 
@@ -26,15 +27,35 @@ export interface FilterPillsProps {
   /** Names the strip for assistive technology: "Conversation scope", not "Filters". */
   label: string;
   items: readonly FilterPillItem[];
+  /**
+   * Also shows the label above the strip, and points the nav at it rather than
+   * repeating the string.
+   *
+   * For a screen with several strips side by side: on the ticket queue, scope,
+   * status and priority wrap into one continuous run of pills, and "All tickets"
+   * beside "Active" is unreadable without saying which is which. A single strip
+   * needs no heading and does not get one.
+   */
+  isLabelVisible?: boolean;
 }
 
-export function FilterPills({ label, items }: FilterPillsProps) {
+export function FilterPills({ label, items, isLabelVisible = false }: FilterPillsProps) {
+  const labelId = useId();
+
   if (items.length < 2) {
     return null;
   }
 
   return (
-    <nav aria-label={label}>
+    <nav
+      aria-label={isLabelVisible ? undefined : label}
+      aria-labelledby={isLabelVisible ? labelId : undefined}
+    >
+      {isLabelVisible ? (
+        <p id={labelId} className={styles.label}>
+          {label}
+        </p>
+      ) : null}
       <ul className={styles.list}>
         {items.map((item) => (
           <li key={item.id}>

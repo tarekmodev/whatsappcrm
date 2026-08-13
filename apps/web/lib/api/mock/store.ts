@@ -6,12 +6,14 @@ import {
   MOCK_MESSAGES,
   MOCK_MESSAGE_TEMPLATES,
   MOCK_TEAMS,
+  MOCK_TICKETS,
   MOCK_USERS,
   type MockConversation,
   type MockInternalNote,
   type MockMessage,
   type MockMessageTemplate,
   type MockTeam,
+  type MockTicket,
   type MockUser,
 } from '@/lib/api/mock/fixtures';
 
@@ -32,6 +34,7 @@ interface MockState {
   messages: Map<string, MockMessage>;
   internalNotes: Map<string, MockInternalNote>;
   messageTemplates: Map<string, MockMessageTemplate>;
+  tickets: Map<string, MockTicket>;
   /**
    * `Idempotency-Key` → the request it was spent on, and what it produced.
    *
@@ -67,6 +70,7 @@ function seed(): MockState {
     messages: new Map(MOCK_MESSAGES.map((message) => [message.id, message])),
     internalNotes: new Map(MOCK_INTERNAL_NOTES.map((note) => [note.id, note])),
     messageTemplates: new Map(MOCK_MESSAGE_TEMPLATES.map((item) => [item.id, item])),
+    tickets: new Map(MOCK_TICKETS.map((item) => [item.id, item])),
     sentByIdempotencyKey: new Map(),
     nextId: 1,
   };

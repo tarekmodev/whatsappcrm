@@ -9,6 +9,7 @@ import {
   type MessageTemplateResponse,
   type TeamResponse,
   type TenantRole,
+  type TicketResponse,
   type UserResponse,
 } from '@whatsappcrm/contracts';
 
@@ -841,5 +842,194 @@ describe('connecting a WhatsApp Business Account', () => {
         body: { code: 'a-fresh-code', wabaId: 'not-a-meta-id' },
       }),
     ).rejects.toMatchObject({ code: 'validation_failed' });
+  });
+});
+
+// --- Tickets (TAR-25, ADR 0006) --------------------------------------------
+
+async function listTickets(query = ''): Promise<CursorPage<TicketResponse>> {
+  return (await handleMockRequest({
+    method: 'GET',
+    path: `/v1/tickets${query}`,
+  })) as CursorPage<TicketResponse>;
+}
+
+async function patchTicket(id: string, body: unknown): Promise<TicketResponse> {
+  return (await handleMockRequest({
+    method: 'PATCH',
+    path: `/v1/tickets/${id}`,
+    body,
+  })) as TicketResponse;
+}
+
+describe('the ticket queue', () => {
+  it('never returns another tenant’s tickets, even at the widest scope', async () => {
+    const page = await listTickets('?scope=all&limit=100');
+
+    expect(page.items.map((item) => item.id)).not.toContain(MOCK_IDS.tickets.otherTenant);
+  });
+
+  it('defaults to the active statuses, which is what makes resolving remove a row', async () => {
+    asRole('supervisor');
+
+    const page = await listTickets('?scope=all&limit=100');
+    const ids = page.items.map((item) => item.id);
+
+    expect(ids).toContain(MOCK_IDS.tickets.fatimaUrgent);
+    expect(ids).not.toContain(MOCK_IDS.tickets.fatimaResolved);
+    expect(ids).not.toContain(MOCK_IDS.tickets.meiClosed);
+  });
+
+  it('returns a terminal ticket only when it is asked for by name', async () => {
+    asRole('supervisor');
+
+    const page = await listTickets('?scope=all&status=resolved&limit=100');
+
+    expect(page.items.map((item) => item.id)).toEqual([MOCK_IDS.tickets.fatimaResolved]);
+  });
+
+  it('sorts urgent first, then newest — the one order, with no sort parameter', async () => {
+    asRole('supervisor');
+
+    const page = await listTickets('?scope=all&limit=100');
+
+    expect(page.items.map((item) => item.priority)).toEqual(['urgent', 'high', 'normal']);
+  });
+
+  it('re-sorts when a ticket is raised to urgent', async () => {
+    // TAR-25 AC3 end to end: the console never re-sorts, so the queue coming
+    // back in the new order is the whole of it. The raised ticket moves above
+    // the `high` one and settles behind the urgent ticket opened after it —
+    // `createdAt DESC` is the tie-break within a band, not an afterthought.
+    asRole('supervisor');
+
+    expect((await listTickets('?scope=all&limit=100')).items.map((item) => item.id)).toEqual([
+      MOCK_IDS.tickets.fatimaUrgent,
+      MOCK_IDS.tickets.meiUnassigned,
+      MOCK_IDS.tickets.jonasPending,
+    ]);
+
+    await patchTicket(MOCK_IDS.tickets.jonasPending, { priority: 'urgent' });
+
+    expect((await listTickets('?scope=all&limit=100')).items.map((item) => item.id)).toEqual([
+      MOCK_IDS.tickets.fatimaUrgent,
+      MOCK_IDS.tickets.jonasPending,
+      MOCK_IDS.tickets.meiUnassigned,
+    ]);
+  });
+
+  it('narrows an agent asking for `all` to their own and their teams’', async () => {
+    asRole('agent');
+
+    const page = await listTickets('?scope=all&limit=100');
+    const ids = page.items.map((item) => item.id);
+
+    // Narrowed rather than refused, so a supervisor's shared link still renders.
+    expect(ids).toContain(MOCK_IDS.tickets.fatimaUrgent);
+    expect(ids).not.toContain(MOCK_IDS.tickets.meiUnassigned);
+  });
+
+  it('gives `unassigned` to a supervisor and nothing to an agent', async () => {
+    // Unlike an unclaimed conversation, an unassigned ticket is triaged work.
+    asRole('supervisor');
+    expect((await listTickets('?scope=unassigned&limit=100')).items.map((item) => item.id)).toEqual(
+      [MOCK_IDS.tickets.meiUnassigned],
+    );
+
+    asRole('agent');
+    expect(
+      (await listTickets('?scope=unassigned&limit=100')).items.map((item) => item.id),
+    ).not.toContain(MOCK_IDS.tickets.meiUnassigned);
+  });
+});
+
+describe('reading one ticket', () => {
+  it('answers 404, not 403, for one this principal may not see', async () => {
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({ method: 'GET', path: `/v1/tickets/${MOCK_IDS.tickets.meiUnassigned}` }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('answers 404 for another tenant’s ticket', async () => {
+    await expect(
+      handleMockRequest({ method: 'GET', path: `/v1/tickets/${MOCK_IDS.tickets.otherTenant}` }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+});
+
+describe('changing a ticket', () => {
+  it('records a resolution time on the way into resolved', async () => {
+    const updated = await patchTicket(MOCK_IDS.tickets.fatimaUrgent, { status: 'resolved' });
+
+    expect(updated.status).toBe('resolved');
+    expect(updated.resolvedAt).not.toBeNull();
+    expect(updated.closedAt).toBeNull();
+  });
+
+  it('leaves resolvedAt null when a ticket is closed without being resolved', async () => {
+    // The honest signal for "closed unworked"; back-filling it would manufacture
+    // a resolution that never happened.
+    const updated = await patchTicket(MOCK_IDS.tickets.fatimaUrgent, { status: 'closed' });
+
+    expect(updated.closedAt).not.toBeNull();
+    expect(updated.resolvedAt).toBeNull();
+  });
+
+  it('keeps the original resolution time when a resolved ticket is closed', async () => {
+    asRole('supervisor');
+
+    const before = (await listTickets('?scope=all&status=resolved&limit=100')).items[0];
+    const updated = await patchTicket(MOCK_IDS.tickets.fatimaResolved, { status: 'closed' });
+
+    expect(updated.resolvedAt).toBe(before?.resolvedAt);
+    expect(updated.closedAt).not.toBeNull();
+  });
+
+  it('refuses re-activating a resolved ticket with a conflict naming its status', async () => {
+    asRole('supervisor');
+
+    await expect(
+      patchTicket(MOCK_IDS.tickets.fatimaResolved, { status: 'open' }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('treats setting the status it already has as a no-op, not a conflict', async () => {
+    // A double-clicked button and a retry after a dropped response both arrive
+    // this way; answering 409 would show a failure for a request that achieved
+    // exactly what was asked.
+    const before = await patchTicket(MOCK_IDS.tickets.fatimaUrgent, { status: 'pending' });
+    const again = await patchTicket(MOCK_IDS.tickets.fatimaUrgent, { status: 'pending' });
+
+    expect(again.status).toBe('pending');
+    expect(again.updatedAt).toBe(before.updatedAt);
+  });
+
+  it('rejects an empty body rather than accepting it as a no-op', async () => {
+    await expect(patchTicket(MOCK_IDS.tickets.fatimaUrgent, {})).rejects.toMatchObject({
+      code: 'validation_failed',
+    });
+  });
+
+  it('answers 404 for a ticket this principal may not see, on the write too', async () => {
+    asRole('agent');
+
+    await expect(
+      patchTicket(MOCK_IDS.tickets.meiUnassigned, { priority: 'low' }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('unlinks the conversation when its active ticket is resolved', async () => {
+    // What empties the inbox context panel's ticket section. A fixture layer
+    // that kept the link would let a stale panel ship looking fine.
+    await patchTicket(MOCK_IDS.tickets.fatimaUrgent, { status: 'resolved' });
+
+    const conversation = (await handleMockRequest({
+      method: 'GET',
+      path: `/v1/conversations/${MOCK_IDS.conversations.assignedToAmina}`,
+    })) as { ticketId: string | null };
+
+    expect(conversation.ticketId).toBeNull();
   });
 });
