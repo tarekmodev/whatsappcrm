@@ -1,9 +1,12 @@
 import type {
+  AssignmentRuleResponse,
   ConversationResponse,
+  CustomFieldDefinition,
   InternalNoteResponse,
   MessageAttachment,
   MessageResponse,
   MessageTemplateResponse,
+  Tag,
   TeamResponse,
   TenantRole,
   TicketResponse,
@@ -77,6 +80,32 @@ const TICKET_IDS = {
   otherTenant: '0192f00a-0000-7000-8000-000000000a99',
 } as const;
 
+/**
+ * Each entity type owns a `0192fNNN` prefix, so an id read out of a log or a
+ * failing assertion says which fixture it came from. Templates hold `…009` and
+ * tickets `…00a`, so routing's three start at `…00b`.
+ */
+const TAG_IDS = {
+  vip: '0192f00b-0000-7000-8000-000000000b01',
+  refundRequested: '0192f00b-0000-7000-8000-000000000b02',
+  otherTenant: '0192f00b-0000-7000-8000-000000000b99',
+} as const;
+
+const CUSTOM_FIELD_IDS = {
+  planTier: '0192f00c-0000-7000-8000-000000000c01',
+  accountManager: '0192f00c-0000-7000-8000-000000000c02',
+  otherTenant: '0192f00c-0000-7000-8000-000000000c99',
+} as const;
+
+const ASSIGNMENT_RULE_IDS = {
+  billingKeywords: '0192f00d-0000-7000-8000-000000000d01',
+  outOfHours: '0192f00d-0000-7000-8000-000000000d02',
+  vipContacts: '0192f00d-0000-7000-8000-000000000d03',
+  /** Deactivated by the removal of its target user, so it has no target left. */
+  orphaned: '0192f00d-0000-7000-8000-000000000d04',
+  otherTenant: '0192f00d-0000-7000-8000-000000000d99',
+} as const;
+
 const WHATSAPP_ACCOUNT_ID = '0192f005-0000-7000-8000-000000000501';
 const WHATSAPP_BUSINESS_ACCOUNT_ID = '0192f005-0000-7000-8000-000000000502';
 
@@ -103,6 +132,9 @@ export interface TenantScoped {
 
 export type MockUser = UserResponse & TenantScoped;
 export type MockTeam = TeamResponse & TenantScoped;
+export type MockTag = Tag & TenantScoped;
+export type MockCustomFieldDefinition = CustomFieldDefinition & TenantScoped;
+export type MockAssignmentRule = AssignmentRuleResponse & TenantScoped;
 export type MockConversation = ConversationResponse & TenantScoped;
 export type MockMessage = MessageResponse & TenantScoped;
 export type MockInternalNote = InternalNoteResponse & TenantScoped;
@@ -801,6 +833,128 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
   }),
 ];
 
+/**
+ * The tenant's tag vocabulary, which a `tag` routing condition picks ids from.
+ * TAR-33 owns the editor; these exist so TAR-289's condition builder has real ids
+ * to offer instead of asking a supervisor to type a UUID.
+ */
+export const MOCK_TAGS: readonly MockTag[] = [
+  { tenantId: MOCK_TENANT_ID, id: TAG_IDS.vip, name: 'VIP', color: '#7c3aed' },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: TAG_IDS.refundRequested,
+    name: 'Refund requested',
+    color: '#dc2626',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: TAG_IDS.otherTenant,
+    name: 'Rival tenant tag',
+    color: '#0ea5e9',
+  },
+];
+
+/** What a `contact_attribute` condition's `key` may name. */
+export const MOCK_CUSTOM_FIELD_DEFINITIONS: readonly MockCustomFieldDefinition[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CUSTOM_FIELD_IDS.planTier,
+    key: 'plan_tier',
+    label: 'Plan tier',
+    type: 'select',
+    options: ['bronze', 'silver', 'gold'],
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CUSTOM_FIELD_IDS.accountManager,
+    key: 'account_manager',
+    label: 'Account manager',
+    type: 'text',
+    options: [],
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: CUSTOM_FIELD_IDS.otherTenant,
+    key: 'rival_field',
+    label: 'Rival tenant field',
+    type: 'text',
+    options: [],
+  },
+];
+
+/**
+ * Routing rules in evaluation order, seeded so the list surface has an order to
+ * demonstrate rather than one row.
+ *
+ * `orphaned` is the state 0007 calls out and the console has to handle: a rule
+ * whose target user was removed keeps its conditions, loses its target and is
+ * left inactive, so a supervisor finds a rule needing a new target rather than
+ * finding it silently gone.
+ */
+export const MOCK_ASSIGNMENT_RULES: readonly MockAssignmentRule[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: ASSIGNMENT_RULE_IDS.billingKeywords,
+    name: 'Billing keywords',
+    position: 0,
+    isActive: true,
+    conditions: [{ type: 'keyword', match: 'any', values: ['billing', 'invoice', 'refund'] }],
+    target: { kind: 'team', teamId: TEAM_IDS.billing },
+    createdAt: '2026-08-10T09:00:00.000Z',
+    updatedAt: '2026-08-10T09:00:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: ASSIGNMENT_RULE_IDS.outOfHours,
+    name: 'Out of hours',
+    position: 1,
+    isActive: true,
+    conditions: [{ type: 'business_hours', within: false }],
+    target: { kind: 'user', userId: USER_IDS.priya },
+    createdAt: '2026-08-10T09:05:00.000Z',
+    updatedAt: '2026-08-10T09:05:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: ASSIGNMENT_RULE_IDS.vipContacts,
+    name: 'VIP onboarding',
+    position: 2,
+    isActive: false,
+    conditions: [
+      { type: 'tag', match: 'any', tagIds: [TAG_IDS.vip] },
+      { type: 'contact_attribute', key: 'plan_tier', operator: 'equals', value: 'gold' },
+    ],
+    target: { kind: 'team', teamId: TEAM_IDS.onboarding },
+    createdAt: '2026-08-10T09:10:00.000Z',
+    updatedAt: '2026-08-11T14:20:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: ASSIGNMENT_RULE_IDS.orphaned,
+    name: 'Escalations (needs a new target)',
+    position: 3,
+    isActive: false,
+    conditions: [{ type: 'keyword', match: 'all', values: ['urgent'] }],
+    target: null,
+    createdAt: '2026-08-10T09:15:00.000Z',
+    updatedAt: '2026-08-12T08:00:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: ASSIGNMENT_RULE_IDS.otherTenant,
+    name: 'Rival tenant routing',
+    position: 0,
+    isActive: true,
+    conditions: [{ type: 'keyword', match: 'any', values: ['southwind'] }],
+    target: { kind: 'team', teamId: TEAM_IDS.otherTenant },
+    createdAt: '2026-08-10T09:00:00.000Z',
+    updatedAt: '2026-08-10T09:00:00.000Z',
+  },
+];
+
 export const MOCK_IDS = {
   teams: TEAM_IDS,
   users: USER_IDS,
@@ -810,5 +964,8 @@ export const MOCK_IDS = {
   notes: NOTE_IDS,
   templates: TEMPLATE_IDS,
   tickets: TICKET_IDS,
+  tags: TAG_IDS,
+  customFields: CUSTOM_FIELD_IDS,
+  assignmentRules: ASSIGNMENT_RULE_IDS,
   whatsappAccount: WHATSAPP_ACCOUNT_ID,
 } as const;

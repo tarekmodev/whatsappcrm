@@ -10,14 +10,24 @@ import {
   AssignmentSections,
   AssignmentSectionsSkeleton,
 } from '@/features/assignment/components/AssignmentSections';
+import {
+  RoutingRulesPanel,
+  RoutingRulesPanelSkeleton,
+} from '@/features/routing-rules/components/RoutingRulesPanel';
 
 /**
- * The supervisor's reporting and assignment view. Composition only.
+ * The supervisor's routing and reporting view. Composition only.
  *
  * Gated on `report:read_all` / `assignment_rule:read`, which the contract's
  * role table grants to supervisor and admin but not to agent — so this is exactly
  * TAR-22's third acceptance criterion, and an agent reaching the URL gets a 403
  * state rather than a tenant-wide report.
+ *
+ * The two halves are gated separately and stream separately. Routing rules need
+ * `assignment_rule:read` specifically (0007's security section: not
+ * `channel:manage`, which is admin-only and would take routing out of a
+ * supervisor's hands), so a principal holding only `report:read_all` gets the
+ * workload report and no rule list at all — not a rule list they cannot use.
  */
 
 export const metadata: Metadata = {
@@ -37,9 +47,20 @@ export default async function AssignmentPage() {
     return <ForbiddenState />;
   }
 
+  const canReadRules = session.checker.can('assignment_rule:read');
+
   return (
     <Stack gap="5">
       <PageHeader title={content.assignment.title} subtitle={content.assignment.subtitle} />
+
+      {canReadRules ? (
+        <SectionErrorBoundary>
+          <Suspense fallback={<RoutingRulesPanelSkeleton />}>
+            <RoutingRulesPanel canWrite={session.checker.can('assignment_rule:write')} />
+          </Suspense>
+        </SectionErrorBoundary>
+      ) : null}
+
       <SectionErrorBoundary>
         <Suspense fallback={<AssignmentSectionsSkeleton />}>
           <AssignmentSections />

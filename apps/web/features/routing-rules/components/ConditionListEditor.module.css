@@ -1,0 +1,33 @@
+/*
+ * The condition list is a `fieldset`, so its label, hint and error are composed
+ * from the shared form-field rules rather than restated — a group's hint that
+ * looked different from a control's hint would read as two different things.
+ */
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  composes: label from '../../../components/ui/Field.module.css';
+  padding: 0;
+}
+
+.hint {
+  composes: hint from '../../../components/ui/Field.module.css';
+}
+
+.error {
+  composes: error from '../../../components/ui/Field.module.css';
+}
+
+.list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}

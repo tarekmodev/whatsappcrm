@@ -22,6 +22,14 @@ import type { FileSizeUnit } from '@/lib/format/file-size';
  * than string concatenation so a translated sentence can reorder its parts.
  */
 export const content = {
+  /**
+   * The locale this module is written in, for `Intl` formatters that phrase a
+   * value rather than translate it — a list, a plural, a date. Read from here
+   * rather than from the browser so server and client render the same string, and
+   * so a second content module carries its own locale with its own copy.
+   */
+  locale: 'en-GB',
+
   app: {
     name: 'WhatsApp CRM',
     description: 'Multi-tenant, white-label WhatsApp CRM and helpdesk',
@@ -784,6 +792,145 @@ export const content = {
     unassignedEmptyBody: 'Every conversation in this workspace has an owner.',
     unassignedCount: (count: number) =>
       count === 1 ? '1 conversation waiting' : `${count} conversations waiting`,
+  },
+
+  /**
+   * The routing-rule builder (TAR-24). Every string the supervisor reads while
+   * writing a rule, including the plain-language summary of each condition — the
+   * summary is copy, not a rendering of the grammar, so it belongs here rather
+   * than in the component that shows it.
+   */
+  routingRules: {
+    heading: 'Routing rules',
+    sectionDescription:
+      'Rules are checked in order, top first. The first rule that matches decides where a new conversation goes; if none matches, it falls back to the usual rotation.',
+    loading: 'Loading routing rules',
+    emptyHeading: 'No routing rules yet',
+    emptyBody:
+      'Add a rule to send matching conversations straight to the right team, instead of waiting for the rotation.',
+
+    listLabel: 'Routing rules, in the order they are checked',
+    orderPosition: (index: number) => `Rule ${index}`,
+    active: 'Active',
+    inactive: 'Off',
+    conditionsHeading: 'Matches when',
+    targetHeading: 'Route to',
+    allConditionsHint: 'Every condition below has to hold.',
+
+    addRule: 'Add rule',
+    addRuleTitle: 'Add a routing rule',
+    addRuleSubmit: 'Add rule',
+    editRule: 'Edit',
+    editRuleAria: (name: string) => `Edit ${name}`,
+    editRuleTitle: (name: string) => `Edit ${name}`,
+    editRuleSubmit: 'Save changes',
+    moveUp: 'Move up',
+    moveUpAria: (name: string) => `Move ${name} earlier`,
+    moveDown: 'Move down',
+    moveDownAria: (name: string) => `Move ${name} later`,
+    enable: 'Turn on',
+    enableAria: (name: string) => `Turn on ${name}`,
+    disable: 'Turn off',
+    disableAria: (name: string) => `Turn off ${name}`,
+    deleteRule: 'Delete',
+    deleteRuleAria: (name: string) => `Delete ${name}`,
+    deleteRuleTitle: 'Delete routing rule',
+    deleteRuleBody: (name: string) =>
+      `${name} stops applying immediately. Conversations it already routed keep their assignment, and this cannot be undone.`,
+    deleteRuleConfirm: 'Delete rule',
+
+    nameLabel: 'Rule name',
+    namePlaceholder: 'Billing keywords',
+    nameHint: 'Shown in a conversation’s history as the reason it was routed.',
+    nameRequiredError: 'Give the rule a name',
+    nameTooLongError: (maxLength: number) => `Use at most ${String(maxLength)} characters`,
+
+    conditionsLegend: 'Conditions',
+    conditionsHint: 'A conversation has to match every condition for the rule to apply.',
+    conditionsRequiredError: 'Add at least one condition',
+    conditionsFullHint: (maxCount: number) =>
+      `A rule can hold up to ${String(maxCount)} conditions.`,
+    addCondition: 'Add condition',
+    removeCondition: 'Remove',
+    removeConditionAria: (index: number) => `Remove condition ${String(index)}`,
+    conditionNumber: (index: number) => `Condition ${String(index)}`,
+    conditionTypeLabel: 'Check',
+
+    conditionTypeKeyword: 'Words in the message',
+    conditionTypeTag: 'Contact tag',
+    conditionTypeBusinessHours: 'Business hours',
+    conditionTypeContactAttribute: 'Contact field',
+
+    matchLabel: 'Match',
+    matchAny: 'Any of them',
+    matchAll: 'All of them',
+
+    keywordValuesLabel: 'Words or phrases',
+    keywordValuesHint: 'One per line. Matching ignores capitals and matches inside longer words.',
+    keywordValuesRequiredError: 'Add at least one word or phrase',
+    keywordValuesTooManyError: (maxCount: number) =>
+      `Use at most ${String(maxCount)} words or phrases`,
+    keywordTooLongError: (maxLength: number) =>
+      `Keep each word under ${String(maxLength)} characters`,
+
+    tagsLabel: 'Tags',
+    tagsRequiredError: 'Choose at least one tag',
+    tagsUnavailable:
+      'This workspace has no contact tags yet, so a tag condition has nothing to match on.',
+
+    businessHoursLabel: 'The conversation arrived',
+    businessHoursWithin: 'Inside business hours',
+    businessHoursOutside: 'Outside business hours',
+    businessHoursNotice:
+      'This uses the business hours set for the workspace. Until those are set, the condition never matches and the rule is skipped.',
+
+    attributeKeyLabel: 'Contact field',
+    attributeOperatorLabel: 'Comparison',
+    attributeValueLabel: 'Value',
+    attributeValueRequiredError: 'Enter a value to compare against',
+    attributeFieldsUnavailable:
+      'This workspace has no contact fields yet, so a contact-field condition has nothing to match on.',
+    operatorEquals: 'is exactly',
+    operatorNotEquals: 'is not',
+    operatorContains: 'contains',
+    operatorIsSet: 'is filled in',
+    operatorIsNotSet: 'is empty',
+
+    targetLabel: 'Route to',
+    targetKindLabel: 'Send to a',
+    targetKindTeam: 'Team',
+    targetKindUser: 'Agent',
+    targetTeamLabel: 'Team',
+    targetUserLabel: 'Agent',
+    targetRequiredError: 'Choose where matching conversations should go',
+    targetMissing: 'No target — this rule needs one before it can be turned on',
+    targetMissingHint:
+      'The agent this rule pointed at was removed. Choose a new target, then turn the rule back on.',
+    noTeamsHint: 'Create a team on the People page first.',
+
+    /** Plain-language summaries of a condition, one per shape it can take. */
+    summaryKeywordAny: (values: string) => `the message mentions ${values}`,
+    summaryKeywordAll: (values: string) => `the message mentions ${values}`,
+    summaryTagAny: (tags: string) => `the contact is tagged ${tags}`,
+    summaryTagAll: (tags: string) => `the contact is tagged ${tags}`,
+    summaryBusinessHoursWithin: 'it arrives inside business hours',
+    summaryBusinessHoursOutside: 'it arrives outside business hours',
+    summaryAttribute: (field: string, comparison: string) => `${field} ${comparison}`,
+    summaryAttributeValue: (comparison: string, value: string) => `${comparison} “${value}”`,
+    /** A tag or field the rule names that no longer exists in the workspace. */
+    summaryUnknownReference: 'a deleted item',
+
+    routeToTeam: (name: string) => `the ${name} team`,
+    routeToUser: (name: string) => name,
+    unknownTeam: 'a deleted team',
+    unknownUser: 'a removed agent',
+
+    createSuccess: (name: string) => `Rule ${name} added`,
+    updateSuccess: (name: string) => `Rule ${name} saved`,
+    deleteSuccess: (name: string) => `Rule ${name} deleted`,
+    enableSuccess: (name: string) => `Rule ${name} is on`,
+    disableSuccess: (name: string) => `Rule ${name} is off`,
+    reorderSuccess: 'Rule order saved',
   },
 
   whatsapp: {
