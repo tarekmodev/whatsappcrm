@@ -539,16 +539,28 @@ pnpm --filter @whatsappcrm/api db:rollback --confirm  # runs it
 ```
 
 That undoes the single most recently applied migration: it takes a Postgres advisory
-lock so two runners cannot collide, runs that migration's `down.sql`, **and deletes its
-row from `_prisma_migrations`** — the step that is easy to forget by hand and that
-`migrate deploy` needs in order to re-apply the migration afterwards. `DATABASE_URL`
-decides which database is affected, so export it explicitly and read it back before
-adding `--confirm`. Locally, `pnpm db:reset` is often the faster path.
+lock so two runners cannot collide, then sends **the delete of that migration's
+`_prisma_migrations` row and its `down.sql` as one statement batch**, so the schema
+change and the bookkeeping land in a single transaction. Removing that row is the step
+that is easy to forget by hand and that `migrate deploy` needs in order to re-apply the
+migration afterwards. `DATABASE_URL` decides which database is affected, so export it
+explicitly and read it back before adding `--confirm`. Locally, `pnpm db:reset` is often
+the faster path.
+
+**A `down.sql` may wrap itself in `BEGIN;` … `COMMIT;`, or manage no transaction at
+all — but nothing in between.** Wrapping it is right when it will be applied by hand
+through `psql`, which is in autocommit; about half the files here do. Both shapes stay
+atomic under `db:rollback` because Postgres opens an implicit transaction block for a
+multi-statement batch and a `BEGIN` inside one converts it rather than nesting. A file
+that commits half-way through, or opens a second transaction, would leave the
+bookkeeping delete outside the transaction that changed the schema —
+`docs/runbooks/migrations.md` has the detail, and TAR-346 has the bug that came of
+getting it wrong.
 
 The convention is enforced, not just documented: `pnpm --filter @whatsappcrm/api
-db:check-migrations` fails when a migration directory has no `down.sql`, and CI runs it
-on every pull request. A convention nothing checks is a convention that lasts until the
-first busy afternoon.
+db:check-migrations` fails when a migration directory has no `down.sql`, or when its
+transaction shape is not one of those two, and CI runs it on every pull request. A
+convention nothing checks is a convention that lasts until the first busy afternoon.
 
 The shadow database (`whatsappcrm_shadow`, created on the container's first boot) exists
 only for the `migrate diff` above. Prisma wipes it on every use.
