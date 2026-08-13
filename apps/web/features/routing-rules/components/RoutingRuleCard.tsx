@@ -34,6 +34,7 @@ export function RoutingRuleCard({
   isFirst,
   isLast,
   isPending,
+  isReordering,
   onMove,
   onToggle,
   onEdit,
@@ -48,6 +49,13 @@ export function RoutingRuleCard({
   isLast: boolean;
   /** True while any mutation on this rule is in flight. */
   isPending: boolean;
+  /**
+   * True while a write on *any* rule is in flight. A move is computed from the
+   * order on screen, which does not update until revalidation lands, so a second
+   * move started before the first returns would be computed from the stale order
+   * and overwrite it. Every row's move controls stand down together.
+   */
+  isReordering: boolean;
   onMove: (direction: RuleMoveDirection) => void;
   onToggle: () => void;
   onEdit: () => void;
@@ -86,7 +94,7 @@ export function RoutingRuleCard({
           <Button
             variant="ghost"
             size="sm"
-            disabled={isFirst}
+            disabled={isFirst || isReordering}
             isPending={isPending}
             aria-label={copy.moveUpAria(rule.name)}
             onClick={() => {
@@ -98,7 +106,7 @@ export function RoutingRuleCard({
           <Button
             variant="ghost"
             size="sm"
-            disabled={isLast}
+            disabled={isLast || isReordering}
             isPending={isPending}
             aria-label={copy.moveDownAria(rule.name)}
             onClick={() => {

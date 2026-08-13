@@ -7,7 +7,7 @@ import {
   type CustomFieldDefinition,
 } from '@whatsappcrm/contracts';
 import { Field } from '@/components/ui/Field';
-import { Select } from '@/components/ui/Select';
+import { Select, type SelectOption } from '@/components/ui/Select';
 import { TextInput } from '@/components/ui/TextInput';
 import { useContent } from '@/lib/content';
 import { operatorOptions, withOperator } from '../presentation';
@@ -22,6 +22,12 @@ import { operatorOptions, withOperator } from '../presentation';
  *
  * The value input disappears for `is filled in` and `is empty`, and `withOperator`
  * nulls the value at the same time, so the two can never disagree.
+ *
+ * A field the rule references that no longer exists keeps its own option, so the
+ * select shows what the condition actually holds and can be pointed somewhere
+ * else. Without it the control would display the first field while the condition
+ * still carried the dead key, and every save would be refused for a reason the
+ * screen contradicted.
  */
 export function ContactAttributeConditionFields({
   condition,
@@ -45,10 +51,7 @@ export function ContactAttributeConditionFields({
             id={controlId}
             aria-describedby={describedBy}
             value={condition.key}
-            options={customFields.map((definition) => ({
-              value: definition.key,
-              label: definition.label,
-            }))}
+            options={fieldOptions(customFields, condition.key, copy.summaryUnknownReference)}
             onChange={(event) => {
               onChange({ ...condition, key: event.target.value });
             }}
@@ -88,4 +91,24 @@ export function ContactAttributeConditionFields({
       )}
     </>
   );
+}
+
+/**
+ * The workspace's fields, plus the condition's own key when it no longer names
+ * one — labelled the way the rule summary labels it, so the select shows what the
+ * condition actually holds rather than silently displaying a different field.
+ */
+function fieldOptions(
+  customFields: readonly CustomFieldDefinition[],
+  selectedKey: string,
+  unknownLabel: string,
+): readonly SelectOption[] {
+  const options = customFields.map((definition) => ({
+    value: definition.key,
+    label: definition.label,
+  }));
+
+  return options.some((option) => option.value === selectedKey)
+    ? options
+    : [...options, { value: selectedKey, label: unknownLabel }];
 }

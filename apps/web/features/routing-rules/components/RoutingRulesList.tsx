@@ -73,6 +73,15 @@ export function RoutingRulesList({
   }
 
   function move(rule: AssignmentRuleResponse, direction: RuleMoveDirection): void {
+    // A second move started before the first came back would be computed from the
+    // pre-move order, and the endpoint cannot catch it: both payloads carry the
+    // same members, so its concurrency check passes both and the later write
+    // silently undoes the earlier one. The cards disable the controls too; this is
+    // the guard that does not depend on them.
+    if (pendingRuleId !== null) {
+      return;
+    }
+
     const ruleIds = movedRuleIds(
       rules.map((current) => current.id),
       rule.id,
@@ -118,6 +127,7 @@ export function RoutingRulesList({
             isFirst={index === 0}
             isLast={index === rules.length - 1}
             isPending={pendingRuleId === rule.id}
+            isReordering={pendingRuleId !== null}
             onMove={(direction) => {
               move(rule, direction);
             }}

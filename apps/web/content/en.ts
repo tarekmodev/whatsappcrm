@@ -815,7 +815,6 @@ export const content = {
     inactive: 'Off',
     conditionsHeading: 'Matches when',
     targetHeading: 'Route to',
-    allConditionsHint: 'Every condition below has to hold.',
 
     addRule: 'Add rule',
     addRuleTitle: 'Add a routing rule',
@@ -888,15 +887,12 @@ export const content = {
     attributeOperatorLabel: 'Comparison',
     attributeValueLabel: 'Value',
     attributeValueRequiredError: 'Enter a value to compare against',
-    attributeFieldsUnavailable:
-      'This workspace has no contact fields yet, so a contact-field condition has nothing to match on.',
     operatorEquals: 'is exactly',
     operatorNotEquals: 'is not',
     operatorContains: 'contains',
     operatorIsSet: 'is filled in',
     operatorIsNotSet: 'is empty',
 
-    targetLabel: 'Route to',
     targetKindLabel: 'Send to a',
     targetKindTeam: 'Team',
     targetKindUser: 'Agent',

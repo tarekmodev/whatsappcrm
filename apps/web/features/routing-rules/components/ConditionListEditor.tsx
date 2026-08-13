@@ -56,9 +56,12 @@ export function ConditionListEditor({
       <Stack gap="3" as="ul" className={styles.list}>
         {conditions.map((condition, index) => (
           <ConditionRow
-            // Index as key: conditions have no id of their own, and the list is
-            // only ever appended to or removed from — never reordered — so an
-            // index cannot point at a different row than it did last render.
+            // Index as key: conditions have no id of their own. Removing one does
+            // shift every index after it, so what makes this safe is that
+            // `ConditionRow` holds no state of its own — every control is
+            // controlled from `conditions` — and there is nothing for React to
+            // carry onto the wrong row. Give a row local state and it needs a
+            // real key first.
             key={index}
             condition={condition}
             index={index}

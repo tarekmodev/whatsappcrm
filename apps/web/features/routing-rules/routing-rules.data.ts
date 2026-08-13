@@ -5,7 +5,7 @@ import { listAssignmentRules } from '@/lib/api/assignment-rules';
 import { listCustomFieldDefinitions, listTags } from '@/lib/api/contact-schema';
 import { listTeams } from '@/lib/api/teams';
 import { listUsers } from '@/lib/api/users';
-import { AGENTS_PAGE_SIZE } from '@/features/people/constants';
+import { VOCABULARY_LIMIT } from './constants';
 import type { RoutingRuleVocabulary } from './presentation';
 
 /**
@@ -19,6 +19,17 @@ import type { RoutingRuleVocabulary } from './presentation';
  * All five run in parallel and all five are tenant-scoped by the API from the
  * session cookie. There is no tenant parameter here to get wrong, and no read
  * that could be widened by a query string.
+ *
+ * **Every vocabulary read asks for the same `VOCABULARY_LIMIT`.** A short read
+ * here does not truncate a list — nothing on this surface paginates — it makes a
+ * card claim an agent was removed when they are active and taking work, and hides
+ * them from the target picker. So the cap is a correctness bound, not a page size.
+ *
+ * ⚠️ **Above `VOCABULARY_LIMIT` agents, that mislabelling returns**, because 100
+ * is the contract's per-read ceiling (`CursorPageQuerySchema`). Fixing it properly
+ * needs either a name-resolution endpoint that takes the ids a rule actually
+ * references, or paging until the referenced ids are all resolved — both of which
+ * want the real endpoints TAR-288 lands, not the mock. Raised on TAR-289.
  */
 
 export interface RoutingRulesData {
@@ -30,7 +41,7 @@ export async function loadRoutingRules(): Promise<RoutingRulesData> {
   const [rules, teams, users, tags, customFields] = await Promise.all([
     listAssignmentRules(),
     listTeams(),
-    listUsers({ limit: AGENTS_PAGE_SIZE }),
+    listUsers({ limit: VOCABULARY_LIMIT }),
     listTags(),
     listCustomFieldDefinitions(),
   ]);

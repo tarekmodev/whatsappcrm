@@ -36,8 +36,13 @@ import { parseCursorPage } from '@/lib/api/parse';
 const TAGS_PATH = '/v1/tags';
 const CUSTOM_FIELDS_PATH = '/v1/custom-fields';
 
-/** Bounded, like every other list read in this app. A tenant's tag set is small. */
-const VOCABULARY_PAGE_SIZE = 100;
+/**
+ * A vocabulary cap, not a page size: nothing that reads this paginates, and every
+ * id a rule stores has to resolve back to a name. 100 is `CursorPageQuerySchema`'s
+ * ceiling. `features/routing-rules/constants.ts` states the same bound for the
+ * agent read — separately, because `lib/` may not import from `features/`.
+ */
+const VOCABULARY_LIMIT = 100;
 
 export async function listTags(): Promise<readonly Tag[]> {
   return listOrEmptyUntilShipped(TAGS_PATH, TagSchema);
@@ -54,7 +59,7 @@ async function listOrEmptyUntilShipped<T>(
   try {
     const response = await authenticatedRequest({
       method: 'GET',
-      path: `${path}?limit=${String(VOCABULARY_PAGE_SIZE)}`,
+      path: `${path}?limit=${String(VOCABULARY_LIMIT)}`,
     });
 
     return parseCursorPage(itemParser, response).items;
