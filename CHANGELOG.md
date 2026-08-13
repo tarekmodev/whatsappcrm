@@ -679,9 +679,9 @@ change.
   columns, nothing read the column in `apps/api`, `apps/web` or `packages/contracts`, and
   two representations of one fact is a drift surface with no owner. A non-assignment rule
   action belongs to TAR-27's automation engine, which owns trigger/condition/action
-  properly. Row-level security needed nothing — the table has carried `ENABLE`/`FORCE ROW
-LEVEL SECURITY` and its `tenant_isolation` policy since the initial migration, so no
-  `pnpm db:roles` re-run follows this one. ⚠️ The `action` drop is the one destructive
+  properly. Row-level security needed nothing — the table has had row-level security
+  enabled, forced, and carrying its `tenant_isolation` policy since the initial migration,
+  so no `pnpm db:roles` re-run follows this one. ⚠️ The `action` drop is the one destructive
   statement: `down.sql` restores the column and cannot restore its contents, which is
   acceptable only because it is unread and unwritten in every environment the migration can
   reach. Two of the constraints are invisible to Prisma — it can express neither a CHECK nor

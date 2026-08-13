@@ -7,7 +7,7 @@ import { withTenantScope, type TenantPrisma } from './tenant-scope.extension';
  * TAR-285: the shape `assignment_rules` has to hold for TAR-24's routing rules,
  * against a real PostgreSQL as `whatsappcrm_app`.
  *
- * Two of the four schema deltas in
+ * Two of the five schema deltas in
  * `docs/architecture/0007-routing-rules-and-assignment-fallback.md` are
  * invisible to the rest of the toolchain, which is why this file exists:
  *

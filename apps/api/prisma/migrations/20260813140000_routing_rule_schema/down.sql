@@ -1,4 +1,4 @@
--- Reverses 20260813120000_routing_rule_schema.
+-- Reverses 20260813140000_routing_rule_schema.
 --
 -- Restores the shape `20260811170000` left on `assignment_rules`: `name` back
 -- to `text` with no unique index, no `assignment_rules_active_has_one_target`,
@@ -37,7 +37,18 @@
 -- `verify-tenant-isolation.sql` derives its list from the catalog.
 --
 -- The explicit transaction is here because, unlike the up migration, this file
--- is applied by hand through `psql` (or `db:rollback`), which is in autocommit.
+-- is applied by hand through `psql`, which is in autocommit. It is the same
+-- `BEGIN;`/`COMMIT;` pair ten of the other `down.sql` files carry, so it is the
+-- convention rather than a choice made here.
+--
+-- ⚠️ It does **not** make `db:rollback` atomic, and the runbook's "in one
+-- transaction" wording overstates what that path gives you.
+-- `scripts/db-rollback.mjs` opens its own transaction, feeds this file in, then
+-- deletes the `_prisma_migrations` row — so the `COMMIT` below ends the outer
+-- transaction early and the bookkeeping delete lands outside it. A failure in
+-- that narrow window leaves the schema reverted while Prisma still believes the
+-- migration is applied. That is a defect in the script, not in this file, and
+-- fixing it in this one file alone would only make the set inconsistent.
 --
 -- Locks and duration mirror the up migration: ACCESS EXCLUSIVE on
 -- `assignment_rules` for the whole file — `ALTER COLUMN … TYPE` and
