@@ -90,6 +90,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     requiresAny: ['conversation:read'],
   },
   {
+    id: 'tickets',
+    label: content.nav.tickets,
+    href: routes.tickets(),
+    icon: 'ticket',
+    // Every role has this; a ticket is the unit of work an agent is measured on.
+    requiresAny: ['ticket:read'],
+  },
+  {
     id: 'settings',
     label: content.nav.settings,
     href: routes.settings(),

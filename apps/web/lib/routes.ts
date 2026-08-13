@@ -1,4 +1,4 @@
-import type { ConversationListQuery } from '@whatsappcrm/contracts';
+import type { ConversationListQuery, TicketListQuery } from '@whatsappcrm/contracts';
 
 /**
  * The central route map. No route string is written anywhere else in the app —
@@ -7,6 +7,17 @@ import type { ConversationListQuery } from '@whatsappcrm/contracts';
 export const routes = {
   home: () => '/',
   inbox: (query?: InboxQuery) => withQuery('/inbox', inboxSearchParams(query)),
+  /**
+   * The ticket queue. Scope, status and priority all ride in the URL, so a
+   * refresh, a copied link and the back button reproduce the same view.
+   *
+   * Sort order is deliberately *not* a parameter: the queue has exactly one
+   * order — `priority DESC, createdAt DESC, id DESC` — and it is the API's, not
+   * the console's (ADR 0006 §6).
+   */
+  tickets: (query?: TicketQueueQuery) => withQuery('/tickets', ticketSearchParams(query)),
+  /** One ticket, where its status and priority are changed. */
+  ticket: (ticketId: string) => `/tickets/${ticketId}`,
   settings: () => '/settings',
   settingsPeople: (query?: PeopleQuery) => withQuery('/settings/people', peopleSearchParams(query)),
   settingsAssignment: () => '/settings/assignment',
@@ -59,6 +70,13 @@ export const searchParamKeys = {
   inboxConversation: 'conversation',
   /** The inbox's search term. Same spelling as `peopleQuery`, on purpose. */
   inboxQuery: 'q',
+  /**
+   * The queue's three filters. Spelled exactly as `TicketListQuerySchema` names
+   * them, so a URL parameter and the query it becomes cannot drift.
+   */
+  ticketScope: 'scope',
+  ticketStatus: 'status',
+  ticketPriority: 'priority',
   peopleTab: 'tab',
   peopleRole: 'role',
   peopleQuery: 'q',
@@ -137,6 +155,44 @@ export const INBOX_SCOPES = [
 ] as const satisfies readonly InboxScope[];
 
 export type ConversationStatusFilter = NonNullable<ConversationListQuery['status']>;
+
+export type TicketScope = TicketListQuery['scope'];
+export type TicketStatusFilter = NonNullable<TicketListQuery['status']>;
+export type TicketPriorityFilter = NonNullable<TicketListQuery['priority']>;
+
+/**
+ * The scopes the queue offers, in order.
+ *
+ * Narrower than the inbox's set on purpose. An unclaimed *conversation* is
+ * visible to every agent — a customer wrote in, and a thread nobody has claimed
+ * would otherwise be visible to nobody. An unassigned *ticket* is triaged work,
+ * and `visibility.ts` keeps the narrow rule for it: `unassigned` needs
+ * `ticket:read_all`. `TicketQueueFilters` drops the entry accordingly rather
+ * than offering a scope the API answers empty.
+ */
+export const TICKET_SCOPES = [
+  'assigned',
+  'unassigned',
+  'all',
+] as const satisfies readonly TicketScope[];
+
+/** Scopes every principal may ask for; `unassigned` is the one that is gated. */
+export const TICKET_SCOPES_WITHOUT_READ_ALL = [
+  'assigned',
+  'all',
+] as const satisfies readonly TicketScope[];
+
+export interface TicketQueueQuery {
+  scope?: TicketScope;
+  /**
+   * Omitted means the active queue — `open` and `pending` — which is the API's
+   * own default and what makes "resolving a ticket moves it out of the queue"
+   * true with no client change (ADR 0006 §6).
+   */
+  status?: TicketStatusFilter;
+  priority?: TicketPriorityFilter;
+}
+
 export const PEOPLE_TABS = ['agents', 'teams'] as const;
 export type PeopleTab = (typeof PEOPLE_TABS)[number];
 
@@ -161,6 +217,16 @@ function inboxSearchParams(query: InboxQuery | undefined): Record<string, string
     [searchParamKeys.inboxStatus]: query?.status,
     [searchParamKeys.inboxConversation]: query?.conversationId,
     [searchParamKeys.inboxQuery]: query?.q,
+  };
+}
+
+function ticketSearchParams(
+  query: TicketQueueQuery | undefined,
+): Record<string, string | undefined> {
+  return {
+    [searchParamKeys.ticketScope]: query?.scope,
+    [searchParamKeys.ticketStatus]: query?.status,
+    [searchParamKeys.ticketPriority]: query?.priority,
   };
 }
 

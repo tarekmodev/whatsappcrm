@@ -1,0 +1,42 @@
+/*
+ * The status/priority panel. Nothing here sets a colour or a size of its own —
+ * the controls are `Button` and `Select`, and this file only places them.
+ */
+
+.legend {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+/*
+ * The row of transition buttons. Wraps rather than overflowing: three moves at
+ * 320px do not fit on one line, and a toolbar that cannot wrap is the commonest
+ * source of horizontal scroll on a phone.
+ */
+.moves {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.hint {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  max-inline-size: var(--measure-body);
+}
+
+/*
+ * A priority select as wide as its longest label and no wider. Full width on a
+ * phone, where a control narrower than the card reads as unfinished.
+ */
+.priority {
+  max-inline-size: 100%;
+}
+
+@media (min-width: 48rem) {
+  .priority {
+    max-inline-size: 14rem;
+  }
+}
