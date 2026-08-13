@@ -24,6 +24,7 @@ export * from './users';
 export * from './admin';
 
 // --- CRM, inbox and helpdesk ------------------------------------------------
+export * from './assignment';
 export * from './contacts';
 export * from './conversations';
 export * from './media';

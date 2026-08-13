@@ -1,6 +1,7 @@
 import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { AssignmentModule } from './assignment/assignment.module';
 import { AuditModule } from './audit/audit.module';
 import { TenantContextMiddleware } from './common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
@@ -64,6 +65,10 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     PeopleModule,
     WhatsAppModule,
     TicketsModule,
+    // After `TicketsModule`, whose tickets it routes. It imports neither that
+    // module nor `PeopleModule` — the rows it reads it reads through
+    // `TenantPrisma`, so the ordering here is readability, not a dependency.
+    AssignmentModule,
     MediaModule,
     // After `WhatsAppModule` and `MediaModule`, which it imports for the send
     // path and for turning a `mediaId` into a handle Meta holds.
