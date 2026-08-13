@@ -325,6 +325,42 @@ enum TicketStatus {
   @@map("ticket_status")
 }
 
+/// Whether routing may still act on a ticket, and if not, why (TAR-271, 0008
+/// decision 3). Coarser than the router's four outcomes on purpose — *how* a
+/// ticket got here is the event log's job.
+enum TicketRoutingState {
+  /// Created; the routing job has not reached a conclusion. The column default,
+  /// so no create path has to write it.
+  pending
+  /// Routing placed it, by rule or by rotation. Which one is in the event log.
+  assigned
+  /// Routing ran and nobody was eligible. This is TAR-23's "flagged for
+  /// supervisor attention".
+  deferred
+  /// A human assigned, reassigned or released it. **Terminal for routing**, and
+  /// load-bearing: without it a re-route would overrule a supervisor who parked
+  /// a ticket deliberately.
+  manual
+
+  @@map("ticket_routing_state")
+}
+
+/// The values of `FALLBACK_ASSIGNMENT_REASONS` (ADR 0007), as a PostgreSQL type.
+/// One vocabulary across the decision object, `tickets.routing_deferred_reason`
+/// and the `assignment_deferred` event — not three that have to be mapped.
+enum TicketRoutingDeferredReason {
+  /// Candidates exist and are present; every one is at their cap.
+  all_at_capacity
+  /// Candidates exist in the scope; none is available and recently seen.
+  none_available
+  /// The scope holds no active user who could ever be a candidate — an empty
+  /// team, or a tenant with no agents. Distinct from `none_available` because it
+  /// needs a different person to fix it.
+  no_candidate_pool
+
+  @@map("ticket_routing_deferred_reason")
+}
+
 enum TicketPriority {
   low
   normal
@@ -540,17 +576,29 @@ model TenantBranding {
 /// acceptance criterion. Deliberately small: feature stories add their own
 /// columns here rather than inventing a second settings table.
 model TenantSettings {
-  id            String   @id @default(uuid(7)) @db.Uuid
-  tenantId      String   @unique @map("tenant_id") @db.Uuid
+  id                          String @id @default(uuid(7)) @db.Uuid
+  tenantId                    String @unique @map("tenant_id") @db.Uuid
   /// IANA zone name. Drives business hours, SLA calculation and report
   /// bucketing; timestamps themselves are always stored `timestamptz`.
-  timezone      String   @default("UTC")
-  locale        String   @default("en")
+  timezone                    String @default("UTC")
+  locale                      String @default("en")
   /// `{ mon: [{ from: "09:00", to: "17:00" }], ... }`. JSON because the shape
   /// is presentation-driven and TAR-26 owns its interpretation.
-  businessHours Json?    @map("business_hours")
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  businessHours               Json?  @map("business_hours")
+  /// How many active tickets one agent may hold before rotation skips them
+  /// (TAR-272, 0008 decision 4). The tenant-wide default, so a new tenant routes
+  /// correctly with nothing configured; `users.max_concurrent_tickets` overrides
+  /// it per agent. Bounded 1–1000 by
+  /// `tenant_settings_default_max_concurrent_tickets_range` in the migration.
+  ///
+  /// Five is a defensible starting value, **not a measured one**, and it is
+  /// duplicated in `ASSIGNMENT_POLICY.defaultMaxConcurrentTickets` — which is
+  /// the fallback for a tenant with no settings row at all, not a second source
+  /// of truth. The two move together.
+  defaultMaxConcurrentTickets Int    @default(5) @map("default_max_concurrent_tickets")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -606,6 +654,21 @@ model User {
   /// The lockout itself. Compared against the database's `now()`, never a
   /// node's clock, so skew between API instances cannot end one early.
   lockedUntil         DateTime? @map("locked_until") @db.Timestamptz(3)
+
+  /// Per-agent override of `tenant_settings.default_max_concurrent_tickets`
+  /// (TAR-272, 0008 decision 4). **Null means inherit**, rather than copying the
+  /// default onto every user at creation: a supervisor raising the tenant
+  /// default should move everyone who has not been singled out, and a copied
+  /// value silently would not.
+  ///
+  /// Bounded 1–1000 by `users_max_concurrent_tickets_range`, a CHECK that lives
+  /// in the migration because Prisma cannot express one. The floor is 1, not 0 —
+  /// "route nothing to me" is what `availability = 'away'` already means.
+  ///
+  /// Writing it requires `assignment_rule:write` and not merely `user:update`:
+  /// setting a colleague's cap to 1 is deciding how much work reaches them,
+  /// which is the same act as writing a routing rule.
+  maxConcurrentTickets Int? @map("max_concurrent_tickets")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1274,25 +1337,42 @@ model InternalNote {
 // ---------------------------------------------------------------------------
 
 model Ticket {
-  id              String         @id @default(uuid(7)) @db.Uuid
-  tenantId        String         @map("tenant_id") @db.Uuid
+  id             String         @id @default(uuid(7)) @db.Uuid
+  tenantId       String         @map("tenant_id") @db.Uuid
   /// Per-tenant, human-facing ticket number. Unique within the tenant only —
   /// two tenants both having ticket #1 is correct. Allocated by
   /// `TicketCounter` below (TAR-73, decision 3); the unique constraint is what
   /// makes a racy allocator fail loudly instead of duplicating.
-  number          Int
-  subject         String?
-  status          TicketStatus   @default(open)
-  priority        TicketPriority @default(normal)
-  conversationId  String?        @map("conversation_id") @db.Uuid
-  contactId       String?        @map("contact_id") @db.Uuid
-  assignedUserId  String?        @map("assigned_user_id") @db.Uuid
-  assignedTeamId  String?        @map("assigned_team_id") @db.Uuid
-  firstResponseAt DateTime?      @map("first_response_at") @db.Timestamptz(3)
-  resolvedAt      DateTime?      @map("resolved_at") @db.Timestamptz(3)
-  closedAt        DateTime?      @map("closed_at") @db.Timestamptz(3)
-  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  number         Int
+  subject        String?
+  status         TicketStatus   @default(open)
+  priority       TicketPriority @default(normal)
+  conversationId String?        @map("conversation_id") @db.Uuid
+  contactId      String?        @map("contact_id") @db.Uuid
+  assignedUserId String?        @map("assigned_user_id") @db.Uuid
+  assignedTeamId String?        @map("assigned_team_id") @db.Uuid
+
+  /// Whether routing may still act on this ticket, and if not, why (TAR-272,
+  /// 0008 decision 3). A column rather than only the `assignment_deferred`
+  /// event, because an event records *that it happened* and the supervisor's
+  /// view has to filter on *what is still true* — deriving it would be a
+  /// correlated subquery over an append-only log on every page load.
+  routingState          TicketRoutingState           @default(pending) @map("routing_state")
+  /// Non-null exactly when `routingState = 'deferred'`, enforced by
+  /// `tickets_routing_deferred_consistent`. What TAR-274 renders as the reason a
+  /// ticket is stuck.
+  routingDeferredReason TicketRoutingDeferredReason? @map("routing_deferred_reason")
+  /// When the flag was raised, and what the supervisor list sorts by. Not
+  /// derivable from `created_at`: a ticket that was assigned, released and then
+  /// deferred would report an age that is a lie. Set on the first transition
+  /// into `deferred` only, so a redelivered routing job does not reset it.
+  routingDeferredSince  DateTime?                    @map("routing_deferred_since") @db.Timestamptz(3)
+
+  firstResponseAt DateTime? @map("first_response_at") @db.Timestamptz(3)
+  resolvedAt      DateTime? @map("resolved_at") @db.Timestamptz(3)
+  closedAt        DateTime? @map("closed_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversation Conversation? @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
@@ -1320,7 +1400,21 @@ model Ticket {
   @@map("tickets")
 }
 
-// ⚠️ `tickets` carries one index this file cannot express: the partial unique
+// ⚠️ `tickets` carries three objects this file cannot express. Two arrived with
+// TAR-272 and live in the
+// 20260813140000_assignment_workload_and_routing_state migration:
+//
+//   * `tickets_routing_deferred_idx` — partial, on
+//     `(tenant_id, routing_deferred_since) WHERE routing_state = 'deferred'`.
+//     The supervisor's landing query (0008 decision 3).
+//   * `tickets_routing_deferred_consistent` — a CHECK making
+//     `routing_state = 'deferred'` equivalent to both deferred columns being
+//     non-null. Prisma's schema language has no CHECK at all.
+//
+// `src/prisma/assignment-workload-schema.int-spec.ts` asserts both by
+// definition, for the same reason the third one below has its own spec.
+//
+// The third, and the original: the partial unique
 // index `tickets_one_active_per_contact`, on `(tenant_id, contact_id)`
 // `WHERE status IN ('open','pending')`. It is the DB-level guarantee behind
 // TAR-21's "one active ticket per contact" (TAR-73, decision 2) and it lives in
@@ -1452,19 +1546,34 @@ model AssignmentRule {
   @@map("assignment_rules")
 }
 
-/// Round-robin cursor, one row per team (TAR-23).
+/// Round-robin cursor, one row per **routing scope** — a team, or the tenant
+/// pool when `teamId` is null (TAR-272, 0008 decision 6). It was one row per
+/// team until TAR-272; a tenant that has never created a team is the ordinary
+/// starting state and has to rotate too.
 model AssignmentState {
   id                 String   @id @default(uuid(7)) @db.Uuid
   tenantId           String   @map("tenant_id") @db.Uuid
-  teamId             String   @unique @map("team_id") @db.Uuid
+  /// Null is the tenant pool, and is a real scope rather than a missing value.
+  teamId             String?  @map("team_id") @db.Uuid
+  /// Where the ring stopped. Compared with `>` and never dereferenced, so it
+  /// naming a user who has since been removed is harmless by construction —
+  /// recorded so nobody "fixes" it into a join.
   lastAssignedUserId String?  @map("last_assigned_user_id") @db.Uuid
   updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant           Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  team             Team   @relation(fields: [tenantId, teamId], references: [tenantId, id], onDelete: Cascade)
+  team             Team?  @relation(fields: [tenantId, teamId], references: [tenantId, id], onDelete: Cascade)
   lastAssignedUser User?  @relation(fields: [tenantId, lastAssignedUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([tenantId, teamId])
+  /// ⚠️ The real index is `UNIQUE (tenant_id, team_id) **NULLS NOT DISTINCT**`,
+  /// and Prisma cannot say that. It sees a unique index on the pair, matches
+  /// this line against it and reports no drift — so this is not drift, but a
+  /// `migrate dev` that ever recreates the index will recreate it NULL-distinct
+  /// and silently allow a tenant several pool cursors, at which point rotation
+  /// stops rotating rather than failing. It lives in
+  /// 20260813140000_assignment_workload_and_routing_state and
+  /// `src/prisma/assignment-workload-schema.int-spec.ts` asserts it.
+  @@unique([tenantId, teamId], map: "assignment_state_tenant_scope_key")
   @@index([tenantId, lastAssignedUserId])
   @@map("assignment_state")
 }
