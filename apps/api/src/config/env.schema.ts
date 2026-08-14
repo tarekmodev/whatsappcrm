@@ -340,6 +340,25 @@ const envShape = z.object({
   WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
 
   // ---------------------------------------------------------------------------
+  // SLA timers (TAR-26)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * How often the breach sweep runs, and therefore the **upper bound on
+   * detection latency** (0006, decision 1). Thirty seconds against a 60-minute
+   * first-response window is 0.8% of it.
+   *
+   * It is a floor on cost as well: the query runs whether or not anything is
+   * due. 0006 records the interval as an assumption rather than a measurement,
+   * and names shortening it as one of the levers once a full batch comes back on
+   * consecutive sweeps — which `SlaSweepService` logs so the signal exists.
+   *
+   * Configurable mainly so a test environment can make a breach observable in
+   * seconds rather than waiting out a real interval.
+   */
+  SLA_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1_000).default(30_000),
+
+  // ---------------------------------------------------------------------------
   // WhatsApp Cloud API (TAR-20)
   // ---------------------------------------------------------------------------
 

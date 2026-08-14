@@ -115,22 +115,55 @@ connection string. Both clients are process singletons rather than request-scope
 scope would rebuild the provider subtree per request and still would not exist for queue
 workers or WebSocket handlers.
 
-### `SystemPrisma` is confined to five call sites
+### `SystemPrisma` is confined to six call sites
 
 `SystemPrisma` reads and writes across tenants, which makes it the widest hole in the
 isolation model and the first place a review should look. The architecture document permits
-exactly five uses:
+exactly five uses, and ADR 0006 adds a sixth with its justification:
 
 1. Tenant provisioning
 2. Login, before a tenant is known
 3. Webhook ingest
 4. The sweeper
 5. Platform reporting
+6. **Phase 1 of the SLA breach sweep** (`SlaSweepService.findDueTimers`, TAR-280) — see below
 
-A sixth needs a justification in review. It is a **separate client, not a flag** on the tenant
+A seventh needs a justification in review. It is a **separate client, not a flag** on the tenant
 one, precisely so that this is reviewable: a flag is one typo away from being set, invisible
 at the injection site, and impossible to find by search. `SYSTEM_PRISMA` appears in the
 constructor of every class allowed to use it, and nowhere else.
+
+#### Why the SLA sweep is the sixth
+
+A breach is a time becoming true rather than a request arriving, so the sweep has to find due
+timers across every tenant — and no request context exists inside a queue worker beyond what
+the job payload names. The sweep job names none, deliberately.
+
+The exception is kept as narrow as it can be, and the shape is the justification:
+
+```sql
+SELECT tenant_id, id
+  FROM sla_timers
+ WHERE state = 'running' AND due_at <= now()
+ ORDER BY due_at
+ LIMIT 200;
+```
+
+**Read-only, two uuid columns, and nothing reaches a caller.** No ticket, no contact, no
+message — nothing that is a tenant's data. The same shape of narrow, justified exception
+`SessionReplayProbe` already holds.
+
+Everything the sweep then _does_ with those pairs runs under RLS: they are grouped by tenant
+and processed one `$tenantTransaction` per tenant. That split is the point, because the
+writes are the dangerous half — the sweep writes to `sla_timers`, `ticket_events` and
+`sla_alerts`, and an alert row inserted with the wrong `tenant_id` under the system role is a
+cross-tenant leak RLS would otherwise have refused. `sla-breach.int-spec.ts` asserts that one
+tenant's sweep never writes into another.
+
+The rejected alternative was iterating every tenant and running a scoped query for each — no
+`SystemPrisma` at all, which is the cleanest possible story. It costs one transaction per
+tenant per interval, almost all returning nothing, growing linearly with tenants that have no
+due work.
 
 ## Using `TenantPrisma`
 

@@ -6,6 +6,7 @@ import type { ConversationResourceService } from './conversation-resource.servic
 import type { MessageResourceService } from './message-resource.service';
 import { RealtimeRelayService } from './realtime-relay.service';
 import type { RealtimeSocketData } from './realtime-socket';
+import type { SlaBreachResourceService } from './sla-breach-resource.service';
 import type { TenantHostnameService } from './tenant-hostname.service';
 
 /**
@@ -97,6 +98,7 @@ function harnessFor(sockets: FakeSocket[], live: string[] = [LIVE_SESSION]): Har
   const relay = new RealtimeRelayService(
     {} as unknown as MessageResourceService,
     {} as unknown as ConversationResourceService,
+    {} as unknown as SlaBreachResourceService,
     {} as unknown as TenantHostnameService,
     sessions,
     tenantContext,
@@ -182,6 +184,7 @@ describe('a revocation reaching an open socket', () => {
     const relay = new RealtimeRelayService(
       {} as unknown as MessageResourceService,
       {} as unknown as ConversationResourceService,
+      {} as unknown as SlaBreachResourceService,
       {} as unknown as TenantHostnameService,
       {} as unknown as SessionService,
       new TenantContextService(),

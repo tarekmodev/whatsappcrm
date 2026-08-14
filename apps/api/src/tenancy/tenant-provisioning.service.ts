@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SLA_DEFAULTS } from '@whatsappcrm/contracts';
 import { type $Enums, type Prisma } from '../generated/prisma/client';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 import { isUniqueViolationOn } from '../prisma/unique-violation';
@@ -19,15 +20,14 @@ const DEFAULT_LOCALE = 'en';
  * tenant, named `Default`, with `priority: null` so it is the catch-all policy
  * resolution falls back to for a ticket of any priority.
  *
- * 60 minutes is TAR-26's stated assumption, "first response within 1 hour".
- * `resolutionMinutes` stays null, so only the first-response timer exists at v1.
- *
- * Stated here rather than imported because `packages/contracts/src/sla.ts` is
- * TAR-280's to publish; when `SLA_DEFAULTS` lands there, this constant and the
- * literal in the backfill's sibling migration both become references to it.
+ * The windows themselves come from `SLA_DEFAULTS` in the published contract,
+ * which TAR-280 landed: 60 minutes is TAR-26's stated assumption, "first
+ * response within 1 hour", and `resolutionMinutes` stays null so only the
+ * first-response timer exists at v1. Imported rather than restated so this
+ * service and `SlaPolicyService`'s lazy creation cannot seed two different
+ * defaults.
  */
 const DEFAULT_SLA_POLICY_NAME = 'Default';
-const DEFAULT_SLA_FIRST_RESPONSE_MINUTES = 60;
 
 /**
  * Namespace for the advisory lock, so the hash cannot collide with a lock some
@@ -345,8 +345,8 @@ function defaultSlaPolicy() {
     // get 15 minutes" adds a second row with `priority: 'urgent'`, and
     // resolution prefers the matching priority over this one.
     priority: null,
-    firstResponseMinutes: DEFAULT_SLA_FIRST_RESPONSE_MINUTES,
-    resolutionMinutes: null,
+    firstResponseMinutes: SLA_DEFAULTS.firstResponseMinutes,
+    resolutionMinutes: SLA_DEFAULTS.resolutionMinutes,
     businessHoursOnly: false,
     isActive: true,
   };

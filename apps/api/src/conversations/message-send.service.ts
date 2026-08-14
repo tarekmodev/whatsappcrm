@@ -1,11 +1,15 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
+  SLA_EVALUATE_TICKET_JOB,
+  SLA_QUEUE,
+  TICKET_ACTIVE_STATUSES,
   mediaContentPath,
   type MessageResponse,
   type SendMediaInput,
   type SendMessageInput,
   type SendTemplateInput,
+  type SlaEvaluateTicketTrigger,
 } from '@whatsappcrm/contracts';
 import { ResponseOriginService } from '../common/response-origin.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
@@ -151,6 +155,7 @@ export class MessageSendService {
     });
 
     await this.queueDelivery(principal.tenantId, created.id, draft.template);
+    await this.queueSlaEvaluation(principal.tenantId, conversation.contactId);
     this.events.emit(
       MESSAGE_CREATED_EVENT,
       toCreatedEvent(created, principal.tenantId, conversation.contactId),
@@ -343,6 +348,70 @@ export class MessageSendService {
     if (outcome === 'failed' || outcome === 'unavailable') {
       this.logger.warn(
         `Message ${messageId} was recorded but not queued for delivery (${outcome}); it will stay queued.`,
+      );
+    }
+  }
+
+  /**
+   * Tells the SLA module a person has replied (TAR-26, 0006's `agent_replied`
+   * trigger).
+   *
+   * The job carries a ticket, so the contact's active ticket is looked up here —
+   * one indexed read on `tickets_one_active_per_contact`, the same partial index
+   * `TicketLinkerService` resolves the contact's live ticket with. No active
+   * ticket means there is nothing with an SLA on it, which is the ordinary case
+   * for a thread nobody has ticketed yet.
+   *
+   * It says *that* a reply happened, never *that the timer is met*: the handler
+   * re-derives the first response from the messages, and the message this send
+   * just committed is what it will find. That is why a lost job here is
+   * recoverable rather than a permanently unmet timer — any later evaluation of
+   * the same ticket reaches the same conclusion from the same rows.
+   *
+   * **A queue name, not an import.** `SlaModule` is L4 and this module is L3, so
+   * naming it would be the sideways dependency the layering rule forbids. What
+   * crosses is the shape in `@whatsappcrm/contracts/sla`.
+   *
+   * Never fails the send, per `QueueService`'s contract: the message is
+   * committed and on its way to a customer, and a Redis blip must not turn that
+   * into a 500 after the fact.
+   */
+  private async queueSlaEvaluation(tenantId: string, contactId: string): Promise<void> {
+    const ticket = await this.prisma.ticket.findFirst({
+      where: { tenantId, contactId, status: { in: TICKET_ACTIVE_STATUSES } },
+      select: { id: true },
+    });
+
+    if (ticket === null) {
+      return;
+    }
+
+    const trigger: SlaEvaluateTicketTrigger = {
+      tenantId,
+      ticketId: ticket.id,
+      reason: 'agent_replied',
+    };
+
+    const outcome = await this.queue.enqueue<SlaEvaluateTicketTrigger>(
+      SLA_QUEUE,
+      SLA_EVALUATE_TICKET_JOB,
+      trigger,
+      {
+        // No custom `jobId` — see the note in `@whatsappcrm/contracts/sla`. This
+        // is the call site the bug bit hardest: a ticket-keyed id collapsed this
+        // trigger into the completed key of the ticket's own creation job, so
+        // the reply never stopped the clock and the ticket breached anyway.
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1_000 },
+        removeOnComplete: 1_000,
+        removeOnFail: 5_000,
+      },
+    );
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      this.logger.warn(
+        `Ticket ${ticket.id} was replied to but its SLA evaluation was not queued (${outcome}); ` +
+          'the first-response timer will not stop until it is evaluated again.',
       );
     }
   }
