@@ -1,0 +1,29 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.item {
+  position: relative;
+  padding-inline-start: var(--space-4);
+  font-size: var(--font-size-body-sm);
+  overflow-wrap: anywhere;
+}
+
+/* A marker drawn rather than a list bullet, so the text aligns under itself when
+   a clause wraps. Logical inset, so it moves to the right edge under `dir="rtl"`. */
+.item::before {
+  content: '';
+  position: absolute;
+  /* Centred on the first line: half a line box, less half the marker. */
+  inset-block-start: calc(0.5em * var(--line-height-body) - var(--size-marker) / 2);
+  inset-inline-start: var(--space-1);
+  inline-size: var(--size-marker);
+  block-size: var(--size-marker);
+  background: var(--color-on-surface-subtle);
+  border-radius: var(--radius-pill);
+}

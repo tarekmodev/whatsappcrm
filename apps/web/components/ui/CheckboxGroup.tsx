@@ -26,6 +26,12 @@ export interface CheckboxGroupProps {
   selectedValues: readonly string[];
   onChange: (values: readonly string[]) => void;
   hint?: string;
+  /**
+   * A validation failure for the group as a whole — "choose at least one".
+   * Announced through `aria-describedby` on the fieldset, because the failure
+   * belongs to the set rather than to any single checkbox in it.
+   */
+  error?: string;
   /** Rendered in place of the list when there is nothing to choose from. */
   emptyLabel?: string;
   name?: string;
@@ -37,11 +43,17 @@ export function CheckboxGroup({
   selectedValues,
   onChange,
   hint,
+  error,
   emptyLabel,
   name,
 }: CheckboxGroupProps) {
   const baseId = useId();
   const hintId = `${baseId}-hint`;
+  const errorId = `${baseId}-error`;
+  const describedBy =
+    [hint === undefined ? null : hintId, error === undefined ? null : errorId]
+      .filter((value): value is string => value !== null)
+      .join(' ') || undefined;
   const selected = new Set(selectedValues);
 
   function toggle(value: string, isChecked: boolean): void {
@@ -53,11 +65,16 @@ export function CheckboxGroup({
   }
 
   return (
-    <fieldset className={styles.group} aria-describedby={hint === undefined ? undefined : hintId}>
+    <fieldset className={styles.group} aria-describedby={describedBy}>
       <legend className={styles.legend}>{legend}</legend>
       {hint === undefined ? null : (
         <p id={hintId} className={styles.hint}>
           {hint}
+        </p>
+      )}
+      {error === undefined ? null : (
+        <p id={errorId} className={styles.error}>
+          {error}
         </p>
       )}
       {options.length === 0 ? (

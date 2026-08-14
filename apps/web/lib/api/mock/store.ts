@@ -1,17 +1,23 @@
 import 'server-only';
 
 import {
+  MOCK_ASSIGNMENT_RULES,
   MOCK_CONVERSATIONS,
+  MOCK_CUSTOM_FIELD_DEFINITIONS,
   MOCK_INTERNAL_NOTES,
   MOCK_MESSAGES,
   MOCK_MESSAGE_TEMPLATES,
+  MOCK_TAGS,
   MOCK_TEAMS,
   MOCK_TICKETS,
   MOCK_USERS,
+  type MockAssignmentRule,
   type MockConversation,
+  type MockCustomFieldDefinition,
   type MockInternalNote,
   type MockMessage,
   type MockMessageTemplate,
+  type MockTag,
   type MockTeam,
   type MockTicket,
   type MockUser,
@@ -35,6 +41,9 @@ interface MockState {
   internalNotes: Map<string, MockInternalNote>;
   messageTemplates: Map<string, MockMessageTemplate>;
   tickets: Map<string, MockTicket>;
+  tags: Map<string, MockTag>;
+  customFieldDefinitions: Map<string, MockCustomFieldDefinition>;
+  assignmentRules: Map<string, MockAssignmentRule>;
   /**
    * `Idempotency-Key` → the request it was spent on, and what it produced.
    *
@@ -71,6 +80,16 @@ function seed(): MockState {
     internalNotes: new Map(MOCK_INTERNAL_NOTES.map((note) => [note.id, note])),
     messageTemplates: new Map(MOCK_MESSAGE_TEMPLATES.map((item) => [item.id, item])),
     tickets: new Map(MOCK_TICKETS.map((item) => [item.id, item])),
+    tags: new Map(MOCK_TAGS.map((tag) => [tag.id, tag])),
+    customFieldDefinitions: new Map(
+      MOCK_CUSTOM_FIELD_DEFINITIONS.map((definition) => [
+        definition.id,
+        { ...definition, options: [...definition.options] },
+      ]),
+    ),
+    assignmentRules: new Map(
+      MOCK_ASSIGNMENT_RULES.map((rule) => [rule.id, { ...rule, conditions: [...rule.conditions] }]),
+    ),
     sentByIdempotencyKey: new Map(),
     nextId: 1,
   };

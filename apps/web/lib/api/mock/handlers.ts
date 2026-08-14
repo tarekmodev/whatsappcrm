@@ -1,6 +1,9 @@
 import 'server-only';
 
 import {
+  AssignmentRuleCreateInputSchema,
+  AssignmentRuleReorderInputSchema,
+  AssignmentRuleUpdateInputSchema,
   ConversationAssignInputSchema,
   ConversationListQuerySchema,
   ConversationStatusUpdateInputSchema,
@@ -10,6 +13,7 @@ import {
   InviteCreateInputSchema,
   MessageListQuerySchema,
   MessageTemplateListQuerySchema,
+  ROUTING_RULE_LIMITS,
   PasswordChangeInputSchema,
   PasswordResetConfirmInputSchema,
   PasswordResetRequestInputSchema,
@@ -30,16 +34,22 @@ import {
   roleHasPermission,
   whatsAppSignupFailureDetails,
   type ApiError,
+  type AssignmentRuleListResponse,
+  type AssignmentRuleResponse,
   type ConnectedWhatsAppBusinessAccountResponse,
   type ConversationResponse,
   type CursorPage,
+  type CustomFieldDefinition,
   type InternalNoteResponse,
   type MessageResponse,
   type MessageTemplateResponse,
   type Permission,
+  type RoutingCondition,
+  type RoutingTarget,
   type SendMessageInput,
   type SessionPrincipal,
   type SessionResponse,
+  type Tag,
   type TeamResponse,
   type TicketListQuery,
   type TicketResponse,
@@ -49,10 +59,13 @@ import { ApiRequestError, type ApiRequest } from '@/lib/api/http';
 import { mockState, nextMockId } from '@/lib/api/mock/store';
 import { MOCK_IDS } from '@/lib/api/mock/fixtures';
 import type {
+  MockAssignmentRule,
   MockConversation,
+  MockCustomFieldDefinition,
   MockInternalNote,
   MockMessage,
   MockMessageTemplate,
+  MockTag,
   MockTeam,
   MockTicket,
   MockUser,
@@ -190,6 +203,56 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/v1/teams/${UUID_SEGMENT}$`),
     permission: 'team:write',
     handle: updateTeam,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/assignment-rules$/,
+    permission: 'assignment_rule:read',
+    handle: listAssignmentRules,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/assignment-rules$/,
+    permission: 'assignment_rule:write',
+    handle: createAssignmentRule,
+  },
+  {
+    // Before the `{id}` routes below only for readability — the patterns are
+    // anchored, so `reorder` could never be read as a rule id anyway.
+    method: 'POST',
+    pattern: /^\/v1\/assignment-rules\/reorder$/,
+    permission: 'assignment_rule:write',
+    handle: reorderAssignmentRules,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/assignment-rules/${UUID_SEGMENT}$`),
+    permission: 'assignment_rule:read',
+    handle: getAssignmentRule,
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/v1/assignment-rules/${UUID_SEGMENT}$`),
+    permission: 'assignment_rule:write',
+    handle: updateAssignmentRule,
+  },
+  {
+    method: 'DELETE',
+    pattern: new RegExp(`^/v1/assignment-rules/${UUID_SEGMENT}$`),
+    permission: 'assignment_rule:write',
+    handle: deleteAssignmentRule,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/tags$/,
+    permission: 'contact:read',
+    handle: listTags,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/custom-fields$/,
+    permission: 'contact:read',
+    handle: listCustomFieldDefinitions,
   },
   {
     method: 'GET',
@@ -555,6 +618,208 @@ function updateTeam({ principal, params, body }: RouteContext): TeamResponse {
   syncUserTeamIds(updated);
 
   return toTeamResponse(updated);
+}
+
+// --- Assignment rules (TAR-24, contract 0007) ------------------------------
+
+/**
+ * The rule CRUD surface ADR 0007 publishes, standing in until TAR-288 ships it.
+ *
+ * It enforces the refusals the console has to render — duplicate name, the
+ * per-tenant cap, enabling a rule with no target, a reorder that lost a race, and
+ * a target or condition naming another tenant's record — because a fixture layer
+ * that said yes to all of those would let every one of them through review.
+ */
+
+function listAssignmentRules({ principal }: RouteContext): AssignmentRuleListResponse {
+  return assignmentRuleList(principal);
+}
+
+/**
+ * `ORDER BY position ASC, id ASC` — 0007's decision 2. `position` defaults to 0
+ * and carries no unique constraint, so without the id tie-break two rules created
+ * without an explicit position would evaluate in whatever order the map yielded.
+ * Ids are UUIDv7, so `id ASC` is creation order: oldest first, which is the answer
+ * a supervisor would guess.
+ */
+function assignmentRuleList(principal: SessionPrincipal): AssignmentRuleListResponse {
+  return { items: orderedTenantRules(principal).map(toAssignmentRuleResponse), nextCursor: null };
+}
+
+function getAssignmentRule({ principal, params }: RouteContext): AssignmentRuleResponse {
+  return toAssignmentRuleResponse(findRuleInTenant(principal, params[0]));
+}
+
+function createAssignmentRule({ principal, body }: RouteContext): AssignmentRuleResponse {
+  const parsed = AssignmentRuleCreateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { name, conditions, target, position, isActive } = parsed.data;
+  const existing = orderedTenantRules(principal);
+
+  if (existing.length >= ROUTING_RULE_LIMITS.rulesPerTenant) {
+    // `conflict`, not `plan_limit_exceeded`: the cap is a property of the engine,
+    // not of the tenant's plan, and money cannot fix it.
+    throw ruleLimitReached();
+  }
+
+  assertRuleNameFree(existing, name, null);
+  assertTargetInTenant(principal, target);
+  assertConditionsResolvable(principal, conditions);
+
+  const created: MockAssignmentRule = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    name: name.trim(),
+    // Omitted appends last, which is what the console always sends.
+    position: position ?? nextRulePosition(existing),
+    isActive,
+    conditions: [...conditions],
+    target,
+    createdAt: MOCK_CREATED_AT,
+    updatedAt: MOCK_CREATED_AT,
+  };
+
+  mockState().assignmentRules.set(created.id, created);
+
+  return toAssignmentRuleResponse(created);
+}
+
+function updateAssignmentRule({ principal, params, body }: RouteContext): AssignmentRuleResponse {
+  const rule = findRuleInTenant(principal, params[0]);
+  const parsed = AssignmentRuleUpdateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { name, conditions, target, position, isActive } = parsed.data;
+
+  if (name !== undefined) {
+    assertRuleNameFree(orderedTenantRules(principal), name, rule.id);
+  }
+
+  if (target !== undefined) {
+    assertTargetInTenant(principal, target);
+  }
+
+  if (conditions !== undefined) {
+    assertConditionsResolvable(principal, conditions);
+  }
+
+  const nextTarget = target ?? rule.target;
+
+  // 0007's conditional CHECK, completed by the API: the database permits a
+  // target-less orphan so user removal can leave one behind, and this is what
+  // stops it being re-enabled. The supervisor is told what is missing rather than
+  // shown a constraint violation.
+  if (isActive === true && nextTarget === null) {
+    throw refused(
+      'validation_failed',
+      'Give this rule a target before enabling it.',
+      HTTP_UNPROCESSABLE,
+    );
+  }
+
+  const updated: MockAssignmentRule = {
+    ...rule,
+    name: name?.trim() ?? rule.name,
+    conditions: conditions === undefined ? rule.conditions : [...conditions],
+    target: nextTarget,
+    position: position ?? rule.position,
+    isActive: isActive ?? rule.isActive,
+    updatedAt: MOCK_UPDATED_AT,
+  };
+
+  mockState().assignmentRules.set(updated.id, updated);
+
+  // A `position` in a PATCH moves one rule past its neighbours. Renumbering the
+  // whole set by the resulting sort is observably the same as 0007's shift, and
+  // keeps `position` dense so the next move is not a no-op against a tie.
+  if (position !== undefined) {
+    renumberTenantRules(principal);
+  }
+
+  return toAssignmentRuleResponse(findRuleInTenant(principal, updated.id));
+}
+
+/**
+ * Takes the tenant's **complete** rule set in evaluation order and rewrites
+ * `position` to the array index.
+ *
+ * A submitted set that is not exactly the current one means another supervisor
+ * created or deleted a rule since this client loaded the page, so it answers
+ * `conflict` rather than performing a partial reorder — the optimistic
+ * concurrency 0007 gets for free from the whole-set payload.
+ */
+function reorderAssignmentRules({ principal, body }: RouteContext): AssignmentRuleListResponse {
+  const parsed = AssignmentRuleReorderInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { ruleIds } = parsed.data;
+  const submitted = new Set(ruleIds);
+
+  if (submitted.size !== ruleIds.length) {
+    throw refused('validation_failed', 'A rule was listed twice.', HTTP_UNPROCESSABLE);
+  }
+
+  const current = orderedTenantRules(principal);
+
+  if (current.length !== ruleIds.length || !current.every((rule) => submitted.has(rule.id))) {
+    throw refused(
+      'conflict',
+      'The rule list changed while you were reordering it. Reload and try again.',
+      HTTP_CONFLICT,
+    );
+  }
+
+  const state = mockState();
+
+  ruleIds.forEach((id, index) => {
+    const rule = findRuleInTenant(principal, id);
+
+    state.assignmentRules.set(id, { ...rule, position: index, updatedAt: MOCK_UPDATED_AT });
+  });
+
+  return assignmentRuleList(principal);
+}
+
+/** 204 either way: deleting an already-deleted rule is not an error. */
+function deleteAssignmentRule({ principal, params }: RouteContext): null {
+  const id = params[0];
+  const rule = orderedTenantRules(principal).find((candidate) => candidate.id === id);
+
+  if (rule !== undefined) {
+    mockState().assignmentRules.delete(rule.id);
+  }
+
+  return null;
+}
+
+// --- Contact vocabulary (TAR-33's resources, read-only here) ---------------
+
+function listTags({ principal }: RouteContext): CursorPage<Tag> {
+  const items = tenantTags(principal)
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map(toTagResponse);
+
+  return { items, nextCursor: null };
+}
+
+function listCustomFieldDefinitions({
+  principal,
+}: RouteContext): CursorPage<CustomFieldDefinition> {
+  const items = tenantCustomFieldDefinitions(principal)
+    .sort((left, right) => left.label.localeCompare(right.label))
+    .map(toCustomFieldDefinitionResponse);
+
+  return { items, nextCursor: null };
 }
 
 // --- Session (TAR-56) ------------------------------------------------------
@@ -1513,6 +1778,22 @@ function tenantTemplates(principal: SessionPrincipal): MockMessageTemplate[] {
   );
 }
 
+function tenantTags(principal: SessionPrincipal): MockTag[] {
+  return [...mockState().tags.values()].filter((tag) => tag.tenantId === principal.tenantId);
+}
+
+function tenantCustomFieldDefinitions(principal: SessionPrincipal): MockCustomFieldDefinition[] {
+  return [...mockState().customFieldDefinitions.values()].filter(
+    (definition) => definition.tenantId === principal.tenantId,
+  );
+}
+
+function tenantRules(principal: SessionPrincipal): MockAssignmentRule[] {
+  return [...mockState().assignmentRules.values()].filter(
+    (rule) => rule.tenantId === principal.tenantId,
+  );
+}
+
 /**
  * A record in another tenant answers 404, never 403 — the two are
  * indistinguishable by design so nothing can be enumerated across tenants
@@ -1540,6 +1821,113 @@ function findTeamInTenant(principal: SessionPrincipal, id: string | undefined): 
 
 function assertTeamsInTenant(principal: SessionPrincipal, ids: readonly string[]): MockTeam[] {
   return ids.map((id) => findTeamInTenant(principal, id));
+}
+
+function findRuleInTenant(principal: SessionPrincipal, id: string | undefined): MockAssignmentRule {
+  const rule = tenantRules(principal).find((candidate) => candidate.id === id);
+
+  if (rule === undefined) {
+    throw notFound();
+  }
+
+  return rule;
+}
+
+function orderedTenantRules(principal: SessionPrincipal): MockAssignmentRule[] {
+  return tenantRules(principal).sort(
+    (left, right) => left.position - right.position || left.id.localeCompare(right.id),
+  );
+}
+
+function nextRulePosition(existing: readonly MockAssignmentRule[]): number {
+  return existing.reduce((highest, rule) => Math.max(highest, rule.position + 1), 0);
+}
+
+/** Keeps `position` dense after a move, so the next move is never a no-op. */
+function renumberTenantRules(principal: SessionPrincipal): void {
+  const state = mockState();
+
+  orderedTenantRules(principal).forEach((rule, index) => {
+    state.assignmentRules.set(rule.id, { ...rule, position: index });
+  });
+}
+
+/**
+ * `UNIQUE (tenant_id, name)` on a citext column: two rules called `Billing` and
+ * `billing` are indistinguishable in the ticket event log that records why a
+ * ticket was routed, so the comparison is case-insensitive here too.
+ */
+function assertRuleNameFree(
+  existing: readonly MockAssignmentRule[],
+  name: string,
+  ownRuleId: string | null,
+): void {
+  const candidate = name.trim().toLowerCase();
+  const taken = existing.some(
+    (rule) => rule.id !== ownRuleId && rule.name.toLowerCase() === candidate,
+  );
+
+  if (taken) {
+    throw refused('conflict', 'A rule with that name already exists.', HTTP_CONFLICT);
+  }
+}
+
+function ruleLimitReached(): ApiRequestError {
+  return refused(
+    'conflict',
+    `A workspace can hold ${String(ROUTING_RULE_LIMITS.rulesPerTenant)} routing rules.`,
+    HTTP_CONFLICT,
+  );
+}
+
+/**
+ * A target in another tenant is `validation_failed`, not `not_found`: row-level
+ * security means the id is simply not visible, so the server cannot tell "another
+ * tenant's team" from "no such team" — and that indistinguishability is the point.
+ */
+function assertTargetInTenant(principal: SessionPrincipal, target: RoutingTarget): void {
+  const exists =
+    target.kind === 'team'
+      ? tenantTeams(principal).some((team) => team.id === target.teamId)
+      : tenantUsers(principal).some((user) => user.id === target.userId);
+
+  if (!exists) {
+    throw refused(
+      'validation_failed',
+      'That target is not a team or agent in this workspace.',
+      HTTP_UNPROCESSABLE,
+    );
+  }
+}
+
+/**
+ * Every id and key a condition names has to resolve inside the caller's tenant.
+ * Same reasoning as the target: refusing here is what stops a rule quietly
+ * referencing another tenant's tag, and the refusal names the field without
+ * confirming whether the id exists elsewhere.
+ */
+function assertConditionsResolvable(
+  principal: SessionPrincipal,
+  conditions: readonly RoutingCondition[],
+): void {
+  const tagIds = new Set(tenantTags(principal).map((tag) => tag.id));
+  const fieldKeys = new Set(
+    tenantCustomFieldDefinitions(principal).map((definition) => definition.key),
+  );
+
+  for (const condition of conditions) {
+    if (condition.type === 'tag' && !condition.tagIds.every((id) => tagIds.has(id))) {
+      throw refused('validation_failed', 'That tag is not in this workspace.', HTTP_UNPROCESSABLE);
+    }
+
+    if (condition.type === 'contact_attribute' && !fieldKeys.has(condition.key)) {
+      throw refused(
+        'validation_failed',
+        'That contact field is not in this workspace.',
+        HTTP_UNPROCESSABLE,
+      );
+    }
+  }
 }
 
 function assertUsersInTenant(principal: SessionPrincipal, ids: readonly string[]): MockUser[] {
@@ -1626,6 +2014,20 @@ function toTeamResponse(team: MockTeam): TeamResponse {
   return stripTenant(team);
 }
 
+function toTagResponse(tag: MockTag): Tag {
+  return stripTenant(tag);
+}
+
+function toCustomFieldDefinitionResponse(
+  definition: MockCustomFieldDefinition,
+): CustomFieldDefinition {
+  return stripTenant(definition);
+}
+
+function toAssignmentRuleResponse(rule: MockAssignmentRule): AssignmentRuleResponse {
+  return stripTenant(rule);
+}
+
 function toConversationResponse(conversation: MockConversation): ConversationResponse {
   return stripTenant(conversation);
 }
@@ -1650,6 +2052,8 @@ function toTicketResponse(ticket: MockTicket): TicketResponse {
 
 const DEFAULT_PAGE_SIZE = 25;
 const MOCK_CREATED_AT = '2026-08-10T12:00:00.000Z';
+/** A literal, like every other timestamp here — `Date.now()` would break hydration. */
+const MOCK_UPDATED_AT = '2026-08-12T12:00:00.000Z';
 
 function byDisplayName(left: MockUser, right: MockUser): number {
   return left.displayName.localeCompare(right.displayName);
