@@ -173,6 +173,46 @@ BEGIN
                 'GRANT SELECT, INSERT ON TABLE "public".%I TO "whatsappcrm_system", "whatsappcrm_app"',
                 t.relname
             );
+
+            -- The one exception, and it is a **column** grant rather than a
+            -- table one (TAR-413's follow-up to TAR-403, ADR 0009 decision 7).
+            -- `notified_at` is a one-way null-to-value stamp: the notification
+            -- backstop re-enqueues any row still holding NULL a minute after it
+            -- was written, so something has to be able to settle it.
+            --
+            -- Three properties are kept by making it this narrow:
+            --
+            --   * Table-level UPDATE stays withheld from both roles, so
+            --     `has_table_privilege(..., 'UPDATE')` is still false and every
+            --     other column is still unwritable after the insert.
+            --   * `whatsappcrm_app` does not get it. The sweep and the mailer
+            --     are cross-tenant workers with no request context, so they run
+            --     on SystemPrisma; the tenant connection has no reason to stamp
+            --     a notification and no way to find the rows owing one.
+            --   * The `lifecycle_audit_log_append_only` trigger refuses the
+            --     stamp anyway unless every other column is byte-identical and
+            --     the old value was NULL. This grant chooses who may try; the
+            --     trigger decides what a try may contain.
+            --
+            -- Skipped with a notice when the column is absent, so this file
+            -- stays runnable against a database that has not had the follow-up
+            -- migration yet — the same posture the function block below takes.
+            IF EXISTS (
+                SELECT 1
+                FROM pg_attribute a
+                WHERE a.attrelid = 'public.lifecycle_audit_log'::regclass
+                  AND a.attname = 'notified_at'
+                  AND NOT a.attisdropped
+            ) THEN
+                EXECUTE format(
+                    'GRANT UPDATE ("notified_at") ON TABLE "public".%I TO "whatsappcrm_system"',
+                    t.relname
+                );
+            ELSE
+                RAISE NOTICE
+                    'lifecycle_audit_log.notified_at is not present; re-run this file after applying migrations';
+            END IF;
+
             CONTINUE;
         END IF;
 
@@ -233,6 +273,14 @@ $$;
 -- `assert_tenant_active` is TAR-51's deactivation gate, called by `TenantPrisma`
 -- around every `set_config('app.tenant_id', ...)`. Both roles need `EXECUTE`.
 --
+-- `assert_tenant_serviceable` is the gate ADR 0009 decision 2 replaces it with,
+-- and both are listed because both exist for the length of the expand → migrate
+-- → contract sequence: `20260815170000` creates the new one with no callers,
+-- TAR-404's engine PR moves `tenant-scope.extension.ts` onto it, and a later
+-- migration drops the old one. Granting a function that is not there yet is what
+-- the presence check below is for, so this stays one file across all three
+-- steps.
+--
 -- Named rather than swept from the catalog, unlike the table loop above: the
 -- `citext` and `pgcrypto` extensions put their own functions in `public` too,
 -- and revoking `PUBLIC`'s execute on those would be a change to roles this file
@@ -248,24 +296,33 @@ $$;
 -- them yet is mid-bootstrap rather than broken. The default grant still applies
 -- until it is re-run.
 DO $$
+DECLARE
+    gate text;
 BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'public' AND p.proname = 'assert_tenant_active'
-    ) THEN
-        -- Start from nothing, so a grant made by hand is taken back rather than
-        -- accumulated — the same discipline the table loop above follows.
-        REVOKE ALL ON FUNCTION "public"."assert_tenant_active"(text) FROM PUBLIC;
-        REVOKE ALL ON FUNCTION "public"."assert_tenant_active"(text)
-            FROM "whatsappcrm_app", "whatsappcrm_system";
-        GRANT EXECUTE ON FUNCTION "public"."assert_tenant_active"(text)
-            TO "whatsappcrm_app", "whatsappcrm_system";
-    ELSE
-        RAISE NOTICE
-            'assert_tenant_active is not present; re-run this file after applying migrations';
-    END IF;
+    FOREACH gate IN ARRAY ARRAY['assert_tenant_active', 'assert_tenant_serviceable'] LOOP
+        IF EXISTS (
+            SELECT 1
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = gate
+        ) THEN
+            -- Start from nothing, so a grant made by hand is taken back rather
+            -- than accumulated — the same discipline the table loop above
+            -- follows.
+            EXECUTE format('REVOKE ALL ON FUNCTION "public".%I(text) FROM PUBLIC', gate);
+            EXECUTE format(
+                'REVOKE ALL ON FUNCTION "public".%I(text) FROM "whatsappcrm_app", "whatsappcrm_system"',
+                gate
+            );
+            EXECUTE format(
+                'GRANT EXECUTE ON FUNCTION "public".%I(text) TO "whatsappcrm_app", "whatsappcrm_system"',
+                gate
+            );
+        ELSE
+            RAISE NOTICE
+                '% is not present; re-run this file after applying migrations', gate;
+        END IF;
+    END LOOP;
 END
 $$;
 

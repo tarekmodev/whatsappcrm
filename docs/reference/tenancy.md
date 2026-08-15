@@ -277,6 +277,21 @@ the direction this failure should point.
 > right. TAR-403 kept the stricter behaviour, because loosening a security gate is not a schema
 > migration's call, and left the decision to TAR-397 and TAR-404.
 
+**That decision is now in flight, and this section still describes what runs.** ADR 0009
+decision 2 resolves the inconsistency the other way: `public.assert_tenant_serviceable(text)`
+admits `suspended` as well, because inbound WhatsApp messages must still be received and stored
+for a suspended tenant — they are written through `TenantPrisma` under RLS, and a gate that
+refused them would push the highest-volume write path in the product onto `SystemPrisma`.
+Refusing the _principal_ is `TenantStatusGuard`'s job at request pipeline stage 4, which knows
+who is asking and which route they want; the two gates answer different questions and 0009 says
+they must not be collapsed.
+
+`20260815170000_assert_tenant_serviceable` creates that function **alongside** the one above and
+gives it no callers — phase 1 of an expand → migrate → contract rename, so applying it changes
+nothing. `TenantPrisma` still calls `assert_tenant_active`, and everything in this section holds
+until TAR-404's engine PR moves the call site; this page and `verify-tenant-isolation.sql` move
+with it.
+
 Observed on a local stack, as the app role:
 
 ```text
