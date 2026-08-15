@@ -884,6 +884,50 @@ is rejected with `GH006: Protected branch update failed`, because the commit bei
 carries no passing checks. Renaming a job in the workflow renames its required check and
 silently removes the gate, so update the protection rule in the same change.
 
+### Landing a pull request
+
+Do not merge by hand, and do not wait to be asked for a rebase. Once the pull request is
+ready, hand it to auto-merge and stop watching it:
+
+```bash
+gh pr merge --auto --squash
+```
+
+GitHub then merges it by itself the moment the four checks are green and the branch is up
+to date with `main`.
+
+The second half of that condition is the one that used to cost everybody time. With this
+many pull requests open at once, `main` moves every few minutes, so a branch that was up
+to date when its checks started is `BEHIND` by the time they finish — and auto-merge, on
+its own, does **not** refresh a branch that has fallen behind. It just waits. That is what
+produced the loop TAR-446 was opened for: somebody had to notice each stale pull request
+and ask its author to rebase, repeatedly, faster than merges were landing.
+
+`.github/workflows/pr-autoupdate.yml` closes that gap. On every push to `main` it merges
+`main` into every open pull request that is waiting to auto-merge, which reruns the
+required checks against what is now on `main`. Green plus up to date is what auto-merge
+wants, so it lands the pull request unattended. Branches without auto-merge enabled are
+left alone — asking for auto-merge is what opts a branch into being kept fresh.
+
+A merge queue would be the natural fix and is deliberately not used here: it is an
+organization-owned-repository feature, and this repository belongs to a user account, so
+the rulesets API refuses the rule (`Invalid rule 'merge_queue'`). If this repository ever
+moves to an organization, replace this workflow with a queue and add `merge_group:` to
+`ci.yml`'s triggers.
+
+Two consequences worth knowing. The sweep needs `AUTOMERGE_TOKEN` — a fine-grained
+personal access token scoped to this repository with **Contents: read and write** and
+**Pull requests: read and write**, set under _Settings → Secrets and variables → Actions_.
+It cannot use the built-in `GITHUB_TOKEN`, because GitHub does not start workflows for
+pushes made with it, and a branch refreshed without rerunning its checks would carry green
+checks belonging to its previous head. Without the secret the sweep logs a warning and
+does nothing. And because every merge to `main` refreshes the pull requests queued behind
+it, each one costs a CI run per merge that lands ahead of it — the same runs the manual
+rebase loop was already paying for, minus the waiting.
+
+A branch that genuinely conflicts with `main` is reported in the run summary and left
+alone; no API call can resolve that, so its owner has to.
+
 Lint runs `typescript-eslint`'s type-aware rules, which has two consequences worth
 knowing. Every linted TypeScript file needs a `tsconfig` that covers it — a new `.ts`
 file outside one fails lint with a parsing error rather than being silently skipped. And

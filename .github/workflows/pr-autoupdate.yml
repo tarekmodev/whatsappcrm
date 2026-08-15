@@ -1,0 +1,189 @@
+name: Keep ready pull requests up to date
+
+# `main` requires branches be up to date before merging, and with this many
+# agents landing work concurrently every open pull request goes `BEHIND` again
+# within minutes of being rebased. The cost was never the rebase itself — it was
+# that a human or the PM had to notice and ask for one, over and over, faster
+# than merges were happening (TAR-446).
+#
+# GitHub has two built-in answers to this and neither is available here:
+#
+#   * A **merge queue** would be the right tool — it tests each pull request
+#     against the head of `main` and merges it without the author touching the
+#     branch. It is an organization-owned-repository feature; this repository
+#     belongs to a user account, and the rulesets API rejects the `merge_queue`
+#     rule outright with `Invalid rule 'merge_queue'`.
+#   * **Auto-merge** is enabled on the repository, but auto-merge does not update
+#     a branch that has fallen behind. On its own it just parks the pull request
+#     in the same `BEHIND` state, waiting for the update that nobody makes.
+#
+# So this workflow supplies the missing half. Auto-merge decides *whether* a pull
+# request should land; this decides *when its branch needs refreshing* — on every
+# push to `main`, every pull request whose author has already asked for auto-merge
+# gets `main` merged into it, which reruns the required checks against what is
+# actually on `main`. Green plus up to date is exactly the condition auto-merge is
+# waiting for, so it merges on its own. Nobody is asked to rebase anything.
+#
+# The up-to-date protection stays ON. This automates satisfying it rather than
+# weakening it — a pull request still cannot merge without having been tested
+# against the commit it lands on.
+
+on:
+  push:
+    branches: [main]
+  # For clearing a backlog by hand after this lands, or after the token below is
+  # first installed — without it the sweep only runs on the next merge.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One sweep at a time. Two would race to update the same branch, and the loser
+  # spends a full CI run on a commit that is already superseded.
+  group: pr-autoupdate
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Deliberately NOT `github.token`. Updating a branch pushes a merge commit,
+      # and GitHub does not start workflows for pushes made with `GITHUB_TOKEN` —
+      # the same rule that leaves the branch guard's draft pull requests with no
+      # checks (agent-branch-pr-guard.yml). Refreshing a branch without rerunning
+      # its checks would be worse than doing nothing: the pull request would look
+      # up to date while its green checks belonged to the previous head, and
+      # auto-merge would land code that was never tested where it landed.
+      - name: Refresh every pull request that is waiting to auto-merge
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            {
+              echo "## Not configured"
+              echo
+              echo "\`AUTOMERGE_TOKEN\` is not set, so no branch was updated."
+              echo "See the *Landing a pull request* section of the README."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::AUTOMERGE_TOKEN is not set — pull request branches were not refreshed."
+            exit 0
+          fi
+
+          prs=$(gh pr list --repo "$REPO" --base main --state open --limit 100 \
+            --json number,isDraft,autoMergeRequest,headRefName,url)
+
+          # Only pull requests that asked to land. A pull request without
+          # auto-merge is somebody's work in progress, and refreshing it would
+          # burn a CI run on a branch that nobody is waiting to merge. This is
+          # what keeps the sweep proportional to what is actually ready.
+          #
+          # `mergeStateStatus` is deliberately NOT read from this list. GitHub
+          # computes mergeability lazily and reports `UNKNOWN` until something
+          # asks about a pull request specifically — on a repository with this
+          # many open, most of a list query comes back `UNKNOWN`. Treating that
+          # as "nothing to do" would silently skip the very branches this
+          # workflow exists to refresh, so each one is resolved individually
+          # below, which is what triggers the computation.
+          ready=$(jq -c '[.[]
+            | select(.isDraft == false)
+            | select(.autoMergeRequest != null)]' <<<"$prs")
+
+          count=$(jq 'length' <<<"$ready")
+          if [ "$count" -eq 0 ]; then
+            echo "No pull request is waiting to auto-merge."
+            echo "No pull request is waiting to auto-merge." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "$count pull request(s) waiting to auto-merge."
+
+          updated=()
+          conflicted=()
+          skipped=()
+
+          while read -r pr; do
+            number=$(jq -r '.number' <<<"$pr")
+            head=$(jq -r '.headRefName' <<<"$pr")
+
+            # Asking about one pull request is what makes GitHub compute its
+            # mergeability; the answer is `UNKNOWN` until it finishes, and this
+            # workflow runs at the exact moment every open branch is being
+            # recomputed, so give each a few seconds before giving up on it.
+            state=UNKNOWN
+            for _ in 1 2 3 4 5; do
+              state=$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus \
+                --jq '.mergeStateStatus' 2>/dev/null || echo UNKNOWN)
+              [ "$state" != "UNKNOWN" ] && break
+              sleep 5
+            done
+
+            case "$state" in
+              BEHIND)
+                # The case this workflow exists for.
+                if gh api --method PUT "repos/$REPO/pulls/$number/update-branch" \
+                     --header 'Accept: application/vnd.github+json' >/dev/null; then
+                  echo "updated     #$number ($head)"
+                  updated+=("#$number")
+                else
+                  # A branch that raced another update, or lost push access.
+                  echo "::warning::could not update #$number ($head)"
+                  skipped+=("#$number could not be updated")
+                fi
+                ;;
+              DIRTY)
+                # A real conflict with `main`. No API call fixes this — the
+                # branch owner has to resolve it, so say so rather than
+                # retrying it on every merge forever.
+                echo "conflicted  #$number ($head)"
+                conflicted+=("#$number")
+                ;;
+              UNKNOWN)
+                # Still not computed after the retries above. Reported rather
+                # than ignored: if this is ever anything but rare, the sweep is
+                # quietly not doing its job. The next push to `main` retries it.
+                echo "::warning::could not determine merge state for #$number ($head)"
+                skipped+=("#$number merge state unavailable")
+                ;;
+              *)
+                # CLEAN / BLOCKED / HAS_HOOKS / UNSTABLE: either already up to
+                # date, or waiting on its own checks. Auto-merge handles both.
+                echo "no action   #$number ($head) — $state"
+                ;;
+            esac
+          done < <(jq -c '.[]' <<<"$ready")
+
+          {
+            echo "## Pull requests waiting to auto-merge"
+            echo
+            if [ ${#updated[@]} -gt 0 ]; then
+              echo "Refreshed against \`main\`, checks rerunning: ${updated[*]}"
+              echo
+            fi
+            if [ ${#conflicted[@]} -gt 0 ]; then
+              echo "> [!WARNING]"
+              echo "> Conflicting with \`main\` and cannot be updated automatically:"
+              echo "> ${conflicted[*]}. The branch owner has to resolve these by hand."
+              echo
+            fi
+            if [ ${#skipped[@]} -gt 0 ]; then
+              for line in "${skipped[@]}"; do
+                echo "- $line"
+              done
+              echo
+            fi
+            if [ ${#updated[@]} -eq 0 ] && [ ${#conflicted[@]} -eq 0 ] && [ ${#skipped[@]} -eq 0 ]; then
+              echo "All $count were already up to date with \`main\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Green even when a branch conflicts. This sweep runs on every push to
+          # `main`; failing it would paint the branch red for a condition that is
+          # somebody else's pull request to fix, and the summary above already
+          # names it.
