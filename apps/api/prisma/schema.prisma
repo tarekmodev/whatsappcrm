@@ -131,6 +131,31 @@ enum TenantDomainKind {
   @@map("tenant_domain_kind")
 }
 
+/// Why the last DNS check on a custom domain did not prove ownership (TAR-29).
+/// Exactly `DOMAIN_VERIFICATION_FAILURE_REASONS` in
+/// `packages/contracts/src/tenant.ts` — the value is read straight out of the
+/// column onto the wire, so there is no mapping layer for the two to drift
+/// through.
+///
+/// TAR-416's contract writes this column as `text`. A native enum instead, for
+/// the reason stated at the head of this section and one specific to this
+/// column: it is serialised by `z.enum(...)`, so a value the contract does not
+/// know about does not degrade — it throws at the response serializer and the
+/// tenant gets a 500 while looking at a settings page. The enum moves that
+/// failure to the write that caused it. Adding a fifth reason is one
+/// `ALTER TYPE ... ADD VALUE`, online and non-blocking.
+///
+/// Null means "no failure recorded": either never checked, or the last check
+/// succeeded. A successful verification clears it.
+enum TenantDomainVerificationFailureReason {
+  record_not_found
+  record_mismatch
+  lookup_failed
+  lookup_timeout
+
+  @@map("tenant_domain_verification_failure_reason")
+}
+
 /// The role vocabulary, and it is exactly `TENANT_ROLES` in
 /// `packages/contracts/src/rbac.ts` — no more and no less (TAR-80).
 ///
@@ -801,6 +826,29 @@ model TenantSignup {
 /// Host → tenant resolution (TAR-39, decision 2, step 1). `hostname` is unique
 /// **globally**, not per tenant: it is the lookup key on an unauthenticated
 /// request, so two tenants claiming one host has no correct answer.
+///
+/// That global unique index is also the collision rule for custom domains
+/// (TAR-29), and it works under RLS because **unique indexes are enforced below
+/// row-level security**: a tenant inserting a hostname another tenant holds gets
+/// a unique violation without being able to read, or learn anything about, the
+/// conflicting row. The API maps the violation to `conflict` and must not try to
+/// read that row back.
+///
+/// ⚠️ Three database objects on this table are invisible to Prisma — it cannot
+/// express a partial index or a CHECK constraint, and its describer skips
+/// predicated indexes, so `migrate dev` neither regenerates them nor reports
+/// their absence as drift. They live in
+/// `20260815120000_branding_and_custom_domains/migration.sql` and are asserted
+/// by `src/prisma/tenant-branding-domains.int-spec.ts`:
+///
+///   * `tenant_domains_one_primary` — UNIQUE (tenant_id) WHERE is_primary.
+///     `TenantLinkService.primaryHostname()` builds invite and password-reset
+///     links from this row; two primaries makes which link a recipient gets
+///     depend on row order.
+///   * `tenant_domains_unverified` — (verification_requested_at)
+///     WHERE verified_at IS NULL. The verification sweeper's work queue.
+///   * `tenant_domains_custom_needs_token` — CHECK: a custom domain always
+///     carries a token; a platform subdomain never needs one.
 model TenantDomain {
   id         String           @id @default(uuid(7)) @db.Uuid
   tenantId   String           @map("tenant_id") @db.Uuid
@@ -810,8 +858,39 @@ model TenantDomain {
   /// unverified row must not resolve a request.
   verifiedAt DateTime?        @map("verified_at") @db.Timestamptz(3)
   isPrimary  Boolean          @default(false) @map("is_primary")
-  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt  DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  /// 32 hex characters from a CSPRNG, published by the tenant as
+  /// `whatsappcrm-domain-verification=<token>` at
+  /// `_whatsappcrm-challenge.<hostname>`.
+  ///
+  /// **Stored in plaintext, deliberately.** Unlike a session or a reset token
+  /// this one is published in public DNS, so it is not a credential and hashing
+  /// it would only stop us re-displaying the record the tenant has to paste.
+  /// It authorises nothing on its own: proving it means controlling that
+  /// hostname's DNS, and it is scoped to one hostname and one tenant.
+  ///
+  /// Null exactly when `kind = 'platform'` — ours to issue, nothing to prove.
+  /// `tenant_domains_custom_needs_token` enforces the other direction.
+  verificationToken         String?                                @map("verification_token")
+  /// When the claim was made. Starts the squat-expiry clock:
+  /// `DOMAIN_VERIFICATION_TTL_DAYS` after this, an unverified row is deleted by
+  /// the sweeper and the hostname is released for anyone else to claim.
+  verificationRequestedAt   DateTime?                              @map("verification_requested_at") @db.Timestamptz(3)
+  verificationLastCheckedAt DateTime?                              @map("verification_last_checked_at") @db.Timestamptz(3)
+  /// Drives the sweeper's exponential backoff, so a domain whose DNS is never
+  /// going to appear is retried less often rather than every cycle.
+  verificationAttempts      Int                                    @default(0) @map("verification_attempts")
+  verificationFailureReason TenantDomainVerificationFailureReason? @map("verification_failure_reason")
+
+  /// Set when a platform operator attaches the domain at the edge and its
+  /// certificate is issued — never by the tenant. Verification and activation
+  /// are separate halves on purpose: a verified-but-unattached domain receives
+  /// no traffic, an attached-but-unverified one resolves to nothing, and neither
+  /// party controls both (TAR-416, "Delivery / Resolution / Authorisation").
+  activatedAt DateTime? @map("activated_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -820,17 +899,61 @@ model TenantDomain {
 }
 
 /// White-label presentation, one row per tenant (TAR-29 owns the contents).
+///
+/// The row is created lazily on the first branding write, not at provisioning —
+/// `TenantProvisioningService` says so in its own comment, and a tenant that has
+/// configured nothing genuinely has nothing here.
+///
+/// **Every column stays nullable, and that is a decision rather than an
+/// oversight.** `BRANDING_DEFAULTS` in `packages/contracts` fills the product
+/// name and both colours when a row or a column is absent, so the response is
+/// always fully populated and the frontend renders unconditionally. A
+/// `NOT NULL DEFAULT` here would instead bake the platform's own brand into
+/// every row and make "has this tenant customised anything" unanswerable.
+///
+/// ⚠️ Four CHECK constraints on this table are invisible to Prisma; they live in
+/// `20260815120000_branding_and_custom_domains/migration.sql` and are asserted by
+/// `src/prisma/tenant-branding-domains.int-spec.ts`:
+/// `tenant_branding_logo_complete` / `tenant_branding_favicon_complete` (an
+/// asset's four columns are all null or all set) and
+/// `tenant_branding_primary_color_hex` / `tenant_branding_accent_color_hex`
+/// (`#rrggbb`, matching `HexColorSchema`).
 model TenantBranding {
-  id           String   @id @default(uuid(7)) @db.Uuid
-  tenantId     String   @unique @map("tenant_id") @db.Uuid
-  productName  String?  @map("product_name")
-  logoUrl      String?  @map("logo_url")
-  faviconUrl   String?  @map("favicon_url")
-  primaryColor String?  @map("primary_color")
-  accentColor  String?  @map("accent_color")
-  supportEmail String?  @map("support_email") @db.Citext
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id           String  @id @default(uuid(7)) @db.Uuid
+  tenantId     String  @unique @map("tenant_id") @db.Uuid
+  productName  String? @map("product_name")
+  primaryColor String? @map("primary_color")
+  accentColor  String? @map("accent_color")
+  supportEmail String? @map("support_email") @db.Citext
+
+  /// Key in the `MediaStorage` port, `tenants/<tenantId>/branding/<storageId>` —
+  /// not a row in `media_objects`, whose kinds, mime allow-list and retention
+  /// sweep are Meta's Cloud API vocabulary and would collect a logo as
+  /// unreferenced (TAR-416, "Technology Choices").
+  ///
+  /// No URL is stored. The same row is served under a platform subdomain **and**
+  /// under a custom domain, so an absolute URL would name whichever host existed
+  /// at write time and make the browser fetch cross-origin under the other —
+  /// which drops the session cookie (0002, decision 3). The wire carries the
+  /// relative path `brandingAssetPath()` builds. This is what replaced the
+  /// `logo_url` / `favicon_url` columns.
+  logoStorageKey    String?   @map("logo_storage_key")
+  /// Sniffed from the bytes at upload, never taken from the request's declared
+  /// `Content-Type`, and echoed back as the response's `Content-Type`.
+  logoMimeType      String?   @map("logo_mime_type")
+  /// A number an operator can sum per tenant, which is the reason this is four
+  /// columns rather than one JSON blob.
+  logoSizeBytes     Int?      @map("logo_size_bytes")
+  /// The `?v=` cache-buster on the asset path, and the pivot between a one-year
+  /// `immutable` response and a 60-second one.
+  logoUpdatedAt     DateTime? @map("logo_updated_at") @db.Timestamptz(3)
+  faviconStorageKey String?   @map("favicon_storage_key")
+  faviconMimeType   String?   @map("favicon_mime_type")
+  faviconSizeBytes  Int?      @map("favicon_size_bytes")
+  faviconUpdatedAt  DateTime? @map("favicon_updated_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

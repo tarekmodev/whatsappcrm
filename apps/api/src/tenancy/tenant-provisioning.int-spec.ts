@@ -257,12 +257,24 @@ describe('tenant provisioning, end to end', () => {
     it('rolls the whole thing back when the platform hostname belongs to someone else', async () => {
       // Another tenant already holds the host this slug maps to — the shape of
       // a custom domain (TAR-29) registered before the slug was provisioned.
+      //
+      // The token is not what this case is about, but every custom domain
+      // carries one: `tenant_domains_custom_needs_token` (TAR-417) makes a
+      // tokenless custom row unrepresentable, because nothing could ever verify
+      // it by DNS challenge. Thirty-two lowercase hex characters, per the format
+      // constraint beside it.
       const squatter = await systemPrisma.tenant.create({
         data: {
           slug: SLUG_SQUATTER,
           name: 'TAR-50 squatter',
           status: 'active',
-          domains: { create: { hostname: `${SLUG_SQUATTED}.${PLATFORM_DOMAIN}`, kind: 'custom' } },
+          domains: {
+            create: {
+              hostname: `${SLUG_SQUATTED}.${PLATFORM_DOMAIN}`,
+              kind: 'custom',
+              verificationToken: '50505050505050505050505050505050',
+            },
+          },
         },
         select: { id: true },
       });
