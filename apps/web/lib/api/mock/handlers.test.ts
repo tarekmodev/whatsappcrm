@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ConnectedWhatsAppBusinessAccountResponseSchema,
+  ONBOARDING_STEP_IDS,
+  OnboardingChecklistResponseSchema,
   whatsAppSignupFailureReason,
   type ApiError,
   type ConnectedWhatsAppBusinessAccountResponse,
   type CursorPage,
   type MessageResponse,
   type MessageTemplateResponse,
+  type OnboardingChecklistResponse,
   type SlaAlertResponse,
   type TeamResponse,
   type TenantRole,
@@ -1428,5 +1431,170 @@ describe('flagged ticket queue', () => {
         path: '/v1/tickets?scope=all&routingState=deferred&breachedOnly=false',
       }),
     ).resolves.toMatchObject({ items: expect.any(Array) as unknown[] });
+  });
+});
+
+/**
+ * TAR-407's checklist. The two rules worth pinning in the transport rather than
+ * in the UI: completion is derived from what the tenant actually did, and the
+ * write endpoint refuses the status a client is not allowed to assert.
+ */
+describe('the onboarding checklist', () => {
+  it('starts a workspace with everything still to do', async () => {
+    const checklist = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant/onboarding',
+    })) as OnboardingChecklistResponse;
+
+    expect(OnboardingChecklistResponseSchema.safeParse(checklist).success).toBe(true);
+    expect(checklist.tenantId).toBe(MOCK_TENANT_ID);
+    expect(checklist.steps.every((step) => step.status === 'pending')).toBe(true);
+  });
+
+  it('is refused for a role without tenant:settings', async () => {
+    asRole('supervisor');
+
+    await expect(
+      handleMockRequest({ method: 'GET', path: '/v1/tenant/onboarding' }),
+    ).rejects.toBeInstanceOf(ApiRequestError);
+  });
+
+  it('marks “invite your agents” done because somebody was actually invited', async () => {
+    await handleMockRequest({
+      method: 'POST',
+      path: '/v1/users/invites',
+      body: { email: 'new.agent@northwind.example', role: 'agent', teamIds: [] },
+    });
+
+    const checklist = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant/onboarding',
+    })) as OnboardingChecklistResponse;
+
+    expect(checklist.steps.find((step) => step.id === 'invite_agents')?.status).toBe('completed');
+  });
+
+  it('marks “connect a number” done only when the connection succeeds', async () => {
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: '/v1/whatsapp/business-accounts',
+        body: { code: MOCK_EXPIRED_SIGNUP_CODE, wabaId: '102290129340398' },
+      }),
+    ).rejects.toBeInstanceOf(ApiRequestError);
+
+    const afterFailure = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant/onboarding',
+    })) as OnboardingChecklistResponse;
+
+    expect(afterFailure.steps.find((step) => step.id === 'connect_whatsapp')?.status).toBe(
+      'pending',
+    );
+
+    await handleMockRequest({
+      method: 'POST',
+      path: '/v1/whatsapp/business-accounts',
+      body: { code: 'a-good-code', wabaId: '102290129340398' },
+    });
+
+    const afterSuccess = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant/onboarding',
+    })) as OnboardingChecklistResponse;
+
+    expect(afterSuccess.steps.find((step) => step.id === 'connect_whatsapp')?.status).toBe(
+      'completed',
+    );
+  });
+
+  it('skips a step and puts it back, which is the whole of “return to it later”', async () => {
+    const skipped = (await handleMockRequest({
+      method: 'PATCH',
+      path: '/v1/tenant/onboarding/steps/set_branding',
+      body: { intent: 'skip' },
+    })) as OnboardingChecklistResponse;
+
+    expect(skipped.steps.find((step) => step.id === 'set_branding')?.status).toBe('skipped');
+
+    const reopened = (await handleMockRequest({
+      method: 'PATCH',
+      path: '/v1/tenant/onboarding/steps/set_branding',
+      body: { intent: 'reopen' },
+    })) as OnboardingChecklistResponse;
+
+    expect(reopened.steps.find((step) => step.id === 'set_branding')?.status).toBe('pending');
+    expect(reopened.steps.find((step) => step.id === 'set_branding')?.skippedAt).toBeNull();
+  });
+
+  it('finishes the checklist once nothing is pending, and un-finishes it on reopen', async () => {
+    for (const stepId of ONBOARDING_STEP_IDS) {
+      await handleMockRequest({
+        method: 'PATCH',
+        path: `/v1/tenant/onboarding/steps/${stepId}`,
+        body: { intent: 'skip' },
+      });
+    }
+
+    const complete = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant/onboarding',
+    })) as OnboardingChecklistResponse;
+
+    expect(complete.completedAt).not.toBeNull();
+
+    const reopened = (await handleMockRequest({
+      method: 'PATCH',
+      path: '/v1/tenant/onboarding/steps/set_branding',
+      body: { intent: 'reopen' },
+    })) as OnboardingChecklistResponse;
+
+    // An admin who puts a step back has outstanding setup again; a `completedAt`
+    // that survived would leave the console showing "all done" over a live list.
+    expect(reopened.completedAt).toBeNull();
+  });
+
+  it('refuses to skip a step the tenant has already done', async () => {
+    await handleMockRequest({
+      method: 'POST',
+      path: '/v1/users/invites',
+      body: { email: 'another.agent@northwind.example', role: 'agent', teamIds: [] },
+    });
+
+    await expect(
+      handleMockRequest({
+        method: 'PATCH',
+        path: '/v1/tenant/onboarding/steps/invite_agents',
+        body: { intent: 'skip' },
+      }),
+    ).rejects.toBeInstanceOf(ApiRequestError);
+  });
+
+  it('refuses a status write, because completion is the server’s to derive', async () => {
+    await expect(
+      handleMockRequest({
+        method: 'PATCH',
+        path: '/v1/tenant/onboarding/steps/set_branding',
+        body: { status: 'completed' },
+      }),
+    ).rejects.toBeInstanceOf(ApiRequestError);
+  });
+
+  it('keeps one tenant’s checklist out of another’s', async () => {
+    await handleMockRequest({
+      method: 'PATCH',
+      path: '/v1/tenant/onboarding/steps/set_branding',
+      body: { intent: 'skip' },
+    });
+
+    // Read straight out of the store: there is no request that can name another
+    // tenant, which is the point — the key is the caller's own tenant id.
+    const { mockState } = await import('./store');
+
+    expect(
+      mockState()
+        .onboarding.get(OTHER_TENANT_ID)
+        ?.steps.every((step) => step.status === 'pending'),
+    ).toBe(true);
   });
 });

@@ -107,6 +107,23 @@ export const NAV_ITEMS: readonly NavItem[] = [
     requiresAny: derivedRequirements(SETTINGS_CHILDREN),
     children: SETTINGS_CHILDREN,
   },
+  {
+    id: 'onboarding',
+    label: content.nav.onboarding,
+    href: routes.onboarding(),
+    icon: 'checklist',
+    /*
+     * Last, so the destinations an admin uses every day keep their positions, and
+     * gated on the permission the checklist's own endpoint requires — an agent or
+     * a supervisor never sees an entry the API would refuse.
+     *
+     * Deliberately *not* hidden once the checklist is finished. TAR-36 requires a
+     * skipped step to be returnable, and a nav entry that disappears the moment
+     * the last step resolves takes the way back with it. The page's own completed
+     * state is what says there is nothing left to do.
+     */
+    requiresAny: ['tenant:settings'],
+  },
 ];
 
 /**
