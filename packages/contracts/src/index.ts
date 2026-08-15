@@ -16,6 +16,7 @@ export * from './pagination';
 
 // --- Identity, tenancy and access -------------------------------------------
 export * from './auth';
+export * from './onboarding';
 export * from './rbac';
 export * from './tenant';
 export * from './users';

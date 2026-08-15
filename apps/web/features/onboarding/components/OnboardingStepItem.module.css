@@ -1,0 +1,153 @@
+.item {
+  padding: var(--space-4);
+  background-color: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+/* The open step is the one the walkthrough is pointing at, so it is the one with
+   the accent edge. Never colour alone — the badge says the status in words. */
+.item[aria-current='step'] {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-raised);
+}
+
+.header {
+  display: grid;
+  /* Marker, then the copy, then the badge. The badge drops under the copy at the
+     narrowest widths rather than squeezing the title to two characters. */
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2) var(--space-3);
+}
+
+.marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  background-color: var(--color-surface-sunken);
+  border-radius: var(--radius-pill);
+}
+
+.item[data-status='completed'] .marker {
+  color: var(--color-on-success-subtle);
+  background-color: var(--color-success-subtle);
+}
+
+.headingGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-tight);
+}
+
+.titleLink {
+  display: inline-block;
+  /* The whole row is the target on touch: the heading alone is a thin strip. */
+  padding-block: var(--space-2);
+  color: inherit;
+  text-decoration: none;
+}
+
+.titleLink:hover {
+  text-decoration: underline;
+}
+
+/*
+ * The skeleton's stand-in for an open step's title, which is a bare heading
+ * rather than a link. Shrink-wraps like `.titleLink` does so the placeholder is
+ * the width of a title instead of the width of the row, without that class's
+ * vertical padding — which would make the row load shorter than it was drawn.
+ */
+.titleMeasure {
+  display: inline-block;
+}
+
+.summary {
+  margin: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+.header > :last-child {
+  grid-column: 2;
+  justify-self: start;
+}
+
+/* Mobile first: full width, because indenting by the marker column costs a
+   phone most of its measure. It lines up under the copy from 40rem up. */
+.body {
+  margin-block-start: var(--space-3);
+}
+
+.detail {
+  margin: 0;
+  max-inline-size: var(--measure-body);
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+/* The step's primary action is a navigation, so it is a link — styled as the
+   call to action the walkthrough needs, and sized as a touch target. */
+.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-4);
+  color: var(--color-on-accent);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  background-color: var(--color-accent);
+  border-radius: var(--radius-md);
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+.action:hover {
+  background-color: var(--color-accent-hover);
+}
+
+.action:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/*
+ * From 40rem the badge sits on the heading row. Below it the three-column grid
+ * would leave the title about two words wide at 320px, so the badge wraps under
+ * the copy instead. A literal, like every other breakpoint in this codebase: a
+ * media condition cannot read a custom property.
+ */
+@media (min-width: 40rem) {
+  .header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .header > :last-child {
+    grid-column: 3;
+    justify-self: end;
+  }
+
+  .body {
+    /* Aligned under the copy rather than under the marker, so the open panel
+       reads as belonging to the heading above it. */
+    padding-inline-start: calc(var(--size-control-sm) + var(--space-3));
+  }
+}

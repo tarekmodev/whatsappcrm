@@ -1,0 +1,36 @@
+.meter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.track {
+  position: relative;
+  flex: 1 1 auto;
+  block-size: var(--space-2);
+  overflow: hidden;
+  background-color: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-pill);
+}
+
+/*
+ * `inline-size`, not `width`: under `dir="rtl"` the bar has to fill from the
+ * right, and a logical property gets that for free.
+ */
+.fill {
+  display: block;
+  block-size: 100%;
+  inline-size: calc(var(--onboarding-progress) * 100%);
+  background-color: var(--color-accent);
+  border-radius: inherit;
+  transition: inline-size var(--duration-medium) var(--easing-standard);
+}
+
+.count {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-variant-numeric: tabular-nums;
+}

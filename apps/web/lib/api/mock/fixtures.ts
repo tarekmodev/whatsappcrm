@@ -1,19 +1,21 @@
-import type {
-  AssignmentRuleResponse,
-  ConversationResponse,
-  CustomFieldDefinition,
-  InternalNoteResponse,
-  MessageAttachment,
-  MessageResponse,
-  MessageTemplateResponse,
-  SlaAlertResponse,
-  Tag,
-  TeamResponse,
-  TenantRole,
-  TicketResponse,
-  TicketRouting,
-  TicketSla,
-  UserResponse,
+import {
+  ONBOARDING_STEP_IDS,
+  type AssignmentRuleResponse,
+  type ConversationResponse,
+  type CustomFieldDefinition,
+  type InternalNoteResponse,
+  type MessageAttachment,
+  type MessageResponse,
+  type MessageTemplateResponse,
+  type OnboardingStep,
+  type SlaAlertResponse,
+  type Tag,
+  type TeamResponse,
+  type TenantRole,
+  type TicketResponse,
+  type TicketRouting,
+  type TicketSla,
+  type UserResponse,
 } from '@whatsappcrm/contracts';
 import { MOCK_AUDIO_URL, MOCK_DOCUMENT_URL, MOCK_IMAGE_URL } from '@/lib/api/mock/media-fixtures';
 
@@ -154,6 +156,13 @@ const WHATSAPP_BUSINESS_ACCOUNT_ID = '0192f005-0000-7000-8000-000000000502';
  */
 const OPEN_SERVICE_WINDOW = '2099-01-01T00:00:00.000Z';
 
+/**
+ * When the seeded checklists were last touched. A literal, like every other
+ * timestamp here: `Date.now()` would make server and client render different
+ * markup and break hydration.
+ */
+const MOCK_ONBOARDING_UPDATED_AT = '2026-08-10T12:00:00.000Z';
+
 /** A record is only ever read through a handler that filters on this field. */
 export interface TenantScoped {
   readonly tenantId: string;
@@ -176,6 +185,43 @@ export type MockTicket = TicketResponse & TenantScoped;
  * narrowing this feature's role-scoping rests on.
  */
 export type MockSlaAlert = SlaAlertResponse & TenantScoped & { readonly recipientUserId: string };
+
+/**
+ * One tenant's onboarding checklist. Keyed by tenant in the store rather than by
+ * an id of its own: a tenant has exactly one, and giving it a surrogate id would
+ * invite a handler to look it up by something other than the caller's tenant.
+ */
+export type MockOnboardingChecklist = TenantScoped & {
+  steps: OnboardingStep[];
+  completedAt: string | null;
+  updatedAt: string;
+};
+
+/**
+ * Both tenants start with everything pending — a brand-new workspace, which is
+ * the state this checklist exists for.
+ *
+ * `connect_whatsapp` and `invite_agents` are flipped to `completed` by the
+ * handlers that do the real thing (connecting a WABA, sending an invitation), not
+ * by a client PATCH: completion is server-derived, per `contracts/onboarding.ts`.
+ * `set_branding` therefore stays pending until TAR-29 ships a branding write —
+ * which is exactly the case the skip path exists for, and worth being able to
+ * walk.
+ */
+export const MOCK_ONBOARDING_CHECKLISTS: readonly MockOnboardingChecklist[] = [
+  MOCK_TENANT_ID,
+  OTHER_TENANT_ID,
+].map((tenantId) => ({
+  tenantId,
+  steps: ONBOARDING_STEP_IDS.map((id) => ({
+    id,
+    status: 'pending' as const,
+    completedAt: null,
+    skippedAt: null,
+  })),
+  completedAt: null,
+  updatedAt: MOCK_ONBOARDING_UPDATED_AT,
+}));
 
 function contact(id: string, displayName: string, phone: string): ConversationResponse['contact'] {
   return {

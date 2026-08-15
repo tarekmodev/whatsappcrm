@@ -1,0 +1,49 @@
+-- Reverses 20260815140000_tenant_signups.
+--
+-- Prisma does not generate down migrations; every migration directory carries a
+-- hand-written one, per docs/adr/0001-stack-decision.md (decision 6).
+--
+-- ---------------------------------------------------------------------------
+-- READ THIS BEFORE RUNNING IT: what it destroys
+-- ---------------------------------------------------------------------------
+--
+-- **Every row in `tenant_signups`, and there is no reconstructing them.** Two
+-- kinds go, and they are worth separating:
+--
+--   * **Outstanding reservations.** Anybody who has submitted the signup form
+--     and not yet clicked the link in their email loses it. Their verification
+--     token stops resolving, the slug they reserved is released, and there is no
+--     path back other than signing up again — the password hash and the
+--     organisation details went with the row. If any of those slugs is claimed
+--     by somebody else in the meantime, the original signup cannot be repeated
+--     as it stood.
+--   * **Consumed rows.** The forensic record of which signup produced which
+--     tenant, and from which address. The tenants themselves are unaffected —
+--     nothing references this table and this table references nothing.
+--
+-- This is safe on a database where signup has never run, which is every
+-- environment until TAR-405 ships. After that, take a verified backup first, and
+-- prefer a new forward migration to this file if the reservations matter.
+--
+-- ---------------------------------------------------------------------------
+-- What it deliberately does not do
+-- ---------------------------------------------------------------------------
+--
+-- Nothing to `tenants`, `tenant_domains` or anything else. A tenant provisioned
+-- by a signup is an ordinary tenant the moment `provision()` commits; this table
+-- holds no state it depends on, which is why dropping it takes nothing with it.
+--
+-- It also leaves the grants alone. `app-roles.sql` derives its work from the
+-- catalog, so a table that no longer exists simply stops being granted on the
+-- next run; there is no stale privilege to revoke by hand.
+--
+-- ---------------------------------------------------------------------------
+-- Order
+-- ---------------------------------------------------------------------------
+--
+-- One statement. The three indexes and both CHECK constraints belong to the
+-- table and go with it, so none needs a statement of its own.
+
+SET LOCAL lock_timeout = '3s';
+
+DROP TABLE IF EXISTS "public"."tenant_signups";

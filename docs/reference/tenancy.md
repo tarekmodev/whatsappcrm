@@ -202,17 +202,23 @@ Two things to know about the client handed to your callback:
 The extension's hook is `async`, so the extended client returns ordinary promises rather than
 the `PrismaPromise`s an array batch needs. Use `$tenantTransaction`.
 
-### The three tables with no RLS policy
+### The four tables with no RLS policy
 
-`tenants`, `plans` and `webhook_events` carry no `tenant_isolation` policy, so `TenantPrisma`
-applies its own rule instead. Anything not listed here is tenant-scoped and needs nothing from
-the client beyond the GUC.
+`tenants`, `plans`, `webhook_events` and `tenant_signups` carry no `tenant_isolation` policy,
+so `TenantPrisma` applies its own rule instead. Anything not listed here is tenant-scoped and
+needs nothing from the client beyond the GUC.
 
 | Model          | Rule               | Reads                            | Writes                                          |
 | -------------- | ------------------ | -------------------------------- | ----------------------------------------------- |
 | `Tenant`       | `own-row`          | Narrowed to the tenant in scope  | Refused — `UnscopedModelAccessError`            |
 | `Plan`         | `shared-read-only` | Allowed; platform-wide catalogue | Refused — `UnscopedModelAccessError`            |
 | `WebhookEvent` | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
+| `TenantSignup` | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
+
+The last two are the tables where the **grant is the enforcement** rather than a policy, and
+both are written before there is a tenant to scope to: a webhook arrives before it is routed,
+and a signup exists before its tenant is provisioned (TAR-440, ADR 0009 decision 3). Signup
+runs on `SystemPrisma`.
 
 The narrowing on `Tenant` appends `AND: [{ id: tenantId }]` rather than setting `id`, so a
 caller's own `id` filter is intersected with it and cannot overwrite it: asking for another

@@ -4,6 +4,8 @@ import type {
   FallbackAssignmentReason,
   MessageStatus,
   MessageType,
+  OnboardingStepId,
+  OnboardingStepStatus,
   SlaTargetKind,
   TenantRole,
   TicketPriority,
@@ -53,6 +55,7 @@ export const content = {
     assignment: 'Assignment',
     whatsapp: 'WhatsApp',
     security: 'Security',
+    onboarding: 'Getting started',
     /** The rail's own expand/collapse boundary — not the drawer's open/close. */
     showMore: 'More',
     showLess: 'Less',
@@ -1203,6 +1206,84 @@ export const content = {
         body: 'Something went wrong on the way to Meta. Start the connection again.',
       },
     },
+  },
+
+  /**
+   * The guided onboarding checklist (TAR-407). Second person throughout — this is
+   * the one surface that talks to an admin about their own workspace rather than
+   * about the records in it.
+   */
+  onboarding: {
+    title: 'Getting started',
+    subtitle: 'Three things to set up before your team starts replying.',
+    loading: 'Loading your setup checklist',
+
+    checklistHeading: 'Set up your workspace',
+    checklistDescription:
+      'Work through these in any order. You can skip a step and come back to it whenever you like — nothing here expires.',
+
+    /** The meter's accessible name; the visible count sits beside it. */
+    progressLabel: 'Setup progress',
+    progressCount: (resolved: number, total: number) => `${resolved} of ${total} done`,
+
+    statuses: {
+      pending: 'To do',
+      completed: 'Done',
+      /** Not a failure — a deliberate "later", and reversible. */
+      skipped: 'Skipped later',
+    } satisfies Record<OnboardingStepStatus, string>,
+
+    skip: 'Skip for now',
+    /** Puts a skipped step back on the list. */
+    unskip: 'Put back on the list',
+    skippedToast: (step: string) => `${step} skipped — it stays on this list`,
+    unskippedToast: (step: string) => `${step} is back on your list`,
+
+    steps: {
+      connect_whatsapp: {
+        title: 'Connect a WhatsApp number',
+        summary: 'Bring your WhatsApp Business Account into this workspace.',
+        detail:
+          'Until a number is connected, no conversation can reach your inbox. Meta hosts the connection — you approve it in their window and come straight back here.',
+        action: 'Connect WhatsApp',
+      },
+      invite_agents: {
+        title: 'Invite your agents',
+        summary: 'Give the people who will answer customers a way in.',
+        detail:
+          'Everyone you invite gets an email with their own sign-in. You can set who is an agent and who supervises now, and change it later.',
+        action: 'Invite people',
+      },
+      set_branding: {
+        title: 'Set your branding',
+        summary: 'Put your own name, logo and colours on the console.',
+        detail:
+          'Branding decides what your team and your customers see instead of the default product name and colours.',
+        action: 'Set branding',
+      },
+    } satisfies Record<
+      OnboardingStepId,
+      { title: string; summary: string; detail: string; action: string }
+    >,
+
+    /**
+     * Said plainly rather than shown as a link to a page that does not exist yet.
+     * TAR-29 owns the branding editor; skipping is the honest option until it lands.
+     */
+    unavailableNotice:
+      'The branding editor is not built yet. Skip this for now — it will appear here when it lands.',
+
+    /**
+     * Shown above the list rather than instead of it: a step that was skipped is
+     * still on the list, and replacing it with a congratulation would take away
+     * the way back that TAR-36 asks for.
+     */
+    completeNotice:
+      'Nothing is outstanding — your workspace is set up. Anything you skipped is still below if you want to come back to it.',
+
+    unavailableHeading: 'We could not load your checklist',
+    unavailableBody:
+      'Your workspace is fine — only this list failed to load. Try again, and everything you have already set up is still set up.',
   },
 
   auth: {

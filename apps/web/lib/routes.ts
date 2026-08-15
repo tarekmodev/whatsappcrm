@@ -1,4 +1,9 @@
-import type { ConversationListQuery, TicketListQuery } from '@whatsappcrm/contracts';
+import {
+  ONBOARDING_STEP_IDS,
+  type ConversationListQuery,
+  type OnboardingStepId,
+  type TicketListQuery,
+} from '@whatsappcrm/contracts';
 
 /**
  * The central route map. No route string is written anywhere else in the app —
@@ -18,6 +23,17 @@ export const routes = {
   tickets: (query?: TicketQueueQuery) => withQuery('/tickets', ticketSearchParams(query)),
   /** One ticket, where its status and priority are changed. */
   ticket: (ticketId: string) => `/tickets/${ticketId}`,
+  /**
+   * The guided onboarding checklist a new tenant admin lands in after signup, and
+   * returns to afterwards (TAR-36, TAR-407).
+   *
+   * `step` is in the URL rather than in component state because it is the thing
+   * an admin shares and returns to — "carry on from connecting your number" is a
+   * link. It also keeps the page a server component: which step is open is read
+   * from the URL, so nothing about the walkthrough needs client state.
+   */
+  onboarding: (query?: OnboardingQuery) =>
+    withQuery('/onboarding', { [searchParamKeys.onboardingStep]: query?.stepId }),
   settings: () => '/settings',
   settingsPeople: (query?: PeopleQuery) => withQuery('/settings/people', peopleSearchParams(query)),
   settingsAssignment: (query?: AssignmentQuery) =>
@@ -96,9 +112,20 @@ export const searchParamKeys = {
    * shares — "everyone is at capacity, look" is a link, not a screenshot.
    */
   assignmentReason: 'reason',
+  /**
+   * Which onboarding step the checklist has open. Spelled `step` rather than
+   * `onboardingStep`: the path already says which flow it belongs to, and a
+   * shared link is read by people.
+   */
+  onboardingStep: 'step',
   /** Where sign-in sends the user afterwards. Read through `parseRedirectPath`. */
   redirectTo: 'next',
 } as const;
+
+export interface OnboardingQuery {
+  /** Omitted means "open the first step still pending" — see `nextOnboardingStep`. */
+  stepId?: OnboardingStepId;
+}
 
 export interface LoginQuery {
   redirectTo?: string;
@@ -289,4 +316,14 @@ function withQuery(path: string, params: Record<string, string | undefined>): st
 /** Narrows an untrusted `?tab=` value; anything unexpected falls back to the default. */
 export function parsePeopleTab(value: string | undefined): PeopleTab {
   return PEOPLE_TABS.find((tab) => tab === value) ?? 'agents';
+}
+
+/**
+ * Narrows an untrusted `?step=` value. `undefined` rather than a default, because
+ * "no step named" and "a step named that does not exist" both mean the same thing
+ * to the checklist — open the first one still pending — and only it knows which
+ * that is.
+ */
+export function parseOnboardingStep(value: string | undefined): OnboardingStepId | undefined {
+  return ONBOARDING_STEP_IDS.find((id) => id === value);
 }

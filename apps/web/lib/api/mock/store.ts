@@ -7,6 +7,7 @@ import {
   MOCK_INTERNAL_NOTES,
   MOCK_MESSAGES,
   MOCK_MESSAGE_TEMPLATES,
+  MOCK_ONBOARDING_CHECKLISTS,
   MOCK_SLA_ALERTS,
   MOCK_TAGS,
   MOCK_TEAMS,
@@ -18,6 +19,7 @@ import {
   type MockInternalNote,
   type MockMessage,
   type MockMessageTemplate,
+  type MockOnboardingChecklist,
   type MockSlaAlert,
   type MockTag,
   type MockTeam,
@@ -47,6 +49,12 @@ interface MockState {
   customFieldDefinitions: Map<string, MockCustomFieldDefinition>;
   assignmentRules: Map<string, MockAssignmentRule>;
   slaAlerts: Map<string, MockSlaAlert>;
+  /**
+   * Keyed by **tenant**, not by an id of its own: a tenant has exactly one
+   * checklist, and a surrogate key would invite a handler to look one up by
+   * something other than the caller's tenant.
+   */
+  onboarding: Map<string, MockOnboardingChecklist>;
   /**
    * `Idempotency-Key` → the request it was spent on, and what it produced.
    *
@@ -94,6 +102,15 @@ function seed(): MockState {
       MOCK_ASSIGNMENT_RULES.map((rule) => [rule.id, { ...rule, conditions: [...rule.conditions] }]),
     ),
     slaAlerts: new Map(MOCK_SLA_ALERTS.map((item) => [item.id, item])),
+    onboarding: new Map(
+      MOCK_ONBOARDING_CHECKLISTS.map((checklist) => [
+        checklist.tenantId,
+        // Deep enough: the handlers replace step objects rather than mutating
+        // them, so copying the array is all that keeps one reset from leaking
+        // into the next.
+        { ...checklist, steps: checklist.steps.map((step) => ({ ...step })) },
+      ]),
+    ),
     sentByIdempotencyKey: new Map(),
     nextId: 1,
   };

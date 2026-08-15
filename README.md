@@ -884,6 +884,50 @@ is rejected with `GH006: Protected branch update failed`, because the commit bei
 carries no passing checks. Renaming a job in the workflow renames its required check and
 silently removes the gate, so update the protection rule in the same change.
 
+### Landing a pull request
+
+Do not merge by hand, and do not wait to be asked for a rebase. Once the pull request is
+ready, hand it to auto-merge and stop watching it:
+
+```bash
+gh pr merge --auto --squash
+```
+
+GitHub then merges it by itself the moment the four checks are green and the branch is up
+to date with `main`.
+
+The second half of that condition is the one that used to cost everybody time. With this
+many pull requests open at once, `main` moves every few minutes, so a branch that was up
+to date when its checks started is `BEHIND` by the time they finish — and auto-merge, on
+its own, does **not** refresh a branch that has fallen behind. It just waits. That is what
+produced the loop TAR-446 was opened for: somebody had to notice each stale pull request
+and ask its author to rebase, repeatedly, faster than merges were landing.
+
+`.github/workflows/pr-autoupdate.yml` closes that gap. On every push to `main` it merges
+`main` into every open pull request that is waiting to auto-merge, which reruns the
+required checks against what is now on `main`. Green plus up to date is what auto-merge
+wants, so it lands the pull request unattended. Branches without auto-merge enabled are
+left alone — asking for auto-merge is what opts a branch into being kept fresh.
+
+A merge queue would be the natural fix and is deliberately not used here: it is an
+organization-owned-repository feature, and this repository belongs to a user account, so
+the rulesets API refuses the rule (`Invalid rule 'merge_queue'`). If this repository ever
+moves to an organization, replace this workflow with a queue and add `merge_group:` to
+`ci.yml`'s triggers.
+
+Two consequences worth knowing. The sweep needs `AUTOMERGE_TOKEN` — a fine-grained
+personal access token scoped to this repository with **Contents: read and write** and
+**Pull requests: read and write**, set under _Settings → Secrets and variables → Actions_.
+It cannot use the built-in `GITHUB_TOKEN`, because GitHub does not start workflows for
+pushes made with it, and a branch refreshed without rerunning its checks would carry green
+checks belonging to its previous head. Without the secret the sweep logs a warning and
+does nothing. And because every merge to `main` refreshes the pull requests queued behind
+it, each one costs a CI run per merge that lands ahead of it — the same runs the manual
+rebase loop was already paying for, minus the waiting.
+
+A branch that genuinely conflicts with `main` is reported in the run summary and left
+alone; no API call can resolve that, so its owner has to.
+
 Lint runs `typescript-eslint`'s type-aware rules, which has two consequences worth
 knowing. Every linted TypeScript file needs a `tsconfig` that covers it — a new `.ts`
 file outside one fails lint with a parsing error rather than being silently skipped. And
@@ -1156,6 +1200,45 @@ own half — eligibility, the selection order, the workload caps and the three d
 — is [the auto-assignment reference](docs/reference/auto-assignment.md). The supervisor's
 versions are [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)
 and [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md).
+
+### Onboarding: the checklist describes the workspace, it is not a to-do list
+
+`/onboarding` is where a new tenant admin lands after signup and returns to afterwards
+(TAR-36). It walks them through connecting a WhatsApp number, inviting agents and setting
+branding, and it is gated on `tenant:settings` — the permission its own endpoints require.
+
+Three things about it are decided by the contract rather than by taste:
+
+- **Completion is server-derived; only skipping belongs to the client.** A step is `completed`
+  because the tenant actually has a connected WABA or has sent an invitation — never because
+  somebody ticked a box. That is why `PATCH /v1/tenant/onboarding/steps/{stepId}` takes an
+  _intent_ (`skip` / `reopen`) and not a status: a client that could write `completed` would
+  let an admin mark a workspace set up that has no number attached to it, and the checklist
+  would then be decoration rather than a description of the workspace. The mock transport
+  keeps the same rule — `handlers.ts` flips a step from the handler that does the real thing.
+- **Skipping is not finishing, and it is reversible.** `skipped` is its own state, so a step
+  put off stays returnable — that is TAR-36's requirement, and it is why the completion notice
+  renders _above_ the list rather than replacing it. The progress meter fills on
+  completed + skipped, because a bar that can never reach the end reads as an outstanding task
+  rather than as a decision the admin already made.
+- **Which step is open lives in the URL.** `?step=` is read through `parseOnboardingStep`, and
+  absent means "the first step still pending". That keeps the whole walkthrough a server
+  component — the only client island is the skip button — and makes "carry on where I left
+  off" a link somebody can share and the back button can undo.
+
+**Where the contract stops.**
+[ADR 0009](docs/architecture/0009-tenant-lifecycle-and-self-signup.md) owns the tenant
+lifecycle, signup, provisioning, retention and the notification hooks, and lists "the
+onboarding checklist's own state" among its non-goals — TAR-407 owns the checklist, its steps
+and its persistence, and 0009 defines only the lifecycle state the checklist runs inside. So
+`packages/contracts/src/onboarding.ts` is the checklist's contract and nothing more: it reuses
+`tenant.ts`'s lifecycle vocabulary and adds nothing to it. Its two routes sit alongside 0009's
+tenant surface (`/v1/tenant/lifecycle`, `/v1/tenant/cancel`) and share the `tenant:settings`
+permission that document assigns to a tenant-settings read.
+
+`set_branding` links nowhere: TAR-29 owns the branding editor and it does not exist yet, so the
+step says so and offers the skip rather than pointing at a route that would 404.
+`features/onboarding/presentation.ts` is the one place that mapping lives.
 
 ### Route groups: signed in and signed out
 
