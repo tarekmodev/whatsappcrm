@@ -21,7 +21,7 @@ type TenantRow = {
   id: string;
   slug: string;
   name: string;
-  status: 'pending' | 'active' | 'suspended' | 'cancelled';
+  status: 'created' | 'trialing' | 'active' | 'past_due' | 'suspended' | 'cancelled' | 'deleted';
   suspendedAt: Date | null;
 };
 

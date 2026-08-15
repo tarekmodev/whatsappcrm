@@ -638,6 +638,30 @@ DELETE /api/v1/assignment-rules/{id}         → 204                        assi
 POST   /api/v1/assignment-rules/reorder      → AssignmentRuleListResponse assignment_rule:write
                                                                       added by amendment 7
 
+# Workflow automation                                                     TAR-27
+# Grammar, evaluation model, taxonomy-sync design and the RBAC amendment:
+# docs/architecture/0009-workflow-triggers-conditions-actions.md
+GET    /api/v1/workflows                     → WorkflowListResponse       workflow:read
+POST   /api/v1/workflows                     → WorkflowResponse           workflow:write
+GET    /api/v1/workflows/{id}                → WorkflowResponse           workflow:read
+PATCH  /api/v1/workflows/{id}                → WorkflowResponse           workflow:write
+DELETE /api/v1/workflows/{id}                → 204                        workflow:write
+POST   /api/v1/workflows/reorder             → WorkflowListResponse       workflow:write
+POST   /api/v1/workflows/{id}/test           → WorkflowTestResponse       workflow:write
+                                                                      dry run; writes nothing
+GET    /api/v1/workflows/{id}/runs           → CursorPage<WorkflowRunResponse>  workflow:read
+GET    /api/v1/workflow-catalog              → WorkflowCatalogResponse    workflow:read
+
+# Notifications — always scoped to the calling principal                  TAR-27
+# Generalises 0006's sla_alerts. /api/v1/sla-alerts stays as published,
+# as a `type = 'sla_breach'` view over the same table.
+GET    /api/v1/notifications                 → CursorPage<NotificationResponse> ticket:read
+POST   /api/v1/notifications/{id}/acknowledge → NotificationResponse      ticket:read
+
+# Tags — pre-empted from TAR-33 by TAR-392; TAR-33 absorbs them unchanged  TAR-33
+GET    /api/v1/tags                          → CursorPage<TagResponse>    contact:read
+POST   /api/v1/tags                          → TagResponse                contact:write
+
 # Billing                                                                 TAR-37
 GET    /api/v1/billing/subscription          → BillingSummaryResponse     billing:read
 GET    /api/v1/billing/usage                 → UsageSummaryResponse       billing:read
