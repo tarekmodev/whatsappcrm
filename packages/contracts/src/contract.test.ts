@@ -591,15 +591,16 @@ describe('tenant provisioning input', () => {
 });
 
 describe('the two tenant status vocabularies', () => {
-  // Pinned rather than asserted equal: they genuinely differ today, and the
-  // point of this test is that the difference cannot widen without someone
-  // reading the comment on PROVISIONED_TENANT_STATUSES. TAR-36 reconciles them.
-  it('agrees on every status they share', () => {
+  // Still pinned rather than asserted equal after TAR-403's reconciliation. The
+  // column keeps one label the customer-facing set has no use for, and the point
+  // of this test is that the difference cannot widen again without someone
+  // reading the comment on PROVISIONED_TENANT_STATUSES.
+  it('covers every published status', () => {
     const shared = PROVISIONED_TENANT_STATUSES.filter((status) =>
       (TENANT_STATUSES as readonly string[]).includes(status),
     );
 
-    expect(shared).toEqual(['active', 'suspended', 'cancelled']);
+    expect(shared).toEqual([...TENANT_STATUSES]);
   });
 
   it('records exactly the statuses each side has and the other does not', () => {
@@ -610,8 +611,11 @@ describe('the two tenant status vocabularies', () => {
       (status) => !(PROVISIONED_TENANT_STATUSES as readonly string[]).includes(status),
     );
 
-    expect(onlyProvisioning).toEqual(['pending']);
-    expect(onlyCustomerFacing).toEqual(['trialing', 'past_due', 'deleted']);
+    // `created` is the pre-provisioning state. It exists only between the tenant
+    // row appearing and provisioning finishing, both inside one transaction, so
+    // no customer-facing response can observe it.
+    expect(onlyProvisioning).toEqual(['created']);
+    expect(onlyCustomerFacing).toEqual([]);
   });
 });
 

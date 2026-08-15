@@ -21,12 +21,17 @@ const TRANSACTION_TIMEOUT_MS = 10_000;
 export const TENANT_DEACTIVATED_ACTION = 'tenant.deactivated';
 
 /**
- * The statuses from which there is nothing left to deactivate. Both already
+ * The statuses from which there is nothing left to deactivate. All three already
  * fail `assert_tenant_active`, so the tenant's agents are already locked out
  * and re-stamping `suspended_at` would only overwrite the record of when that
  * happened.
+ *
+ * `deleted` joins them with TAR-403, and not merely for tidiness: it is a
+ * terminal state — `TENANT_STATUS_TRANSITIONS` gives it no outgoing edge — so
+ * without this entry a deactivate call would move a purged tenant to
+ * `suspended`, undoing the one status the audit trail says can never be left.
  */
-const ALREADY_INACCESSIBLE: readonly $Enums.TenantStatus[] = ['suspended', 'cancelled'];
+const ALREADY_INACCESSIBLE: readonly $Enums.TenantStatus[] = ['suspended', 'cancelled', 'deleted'];
 
 /** What deactivation writes, and the only columns it reads back. */
 export interface DeactivatedTenant {

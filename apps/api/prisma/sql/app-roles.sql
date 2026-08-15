@@ -153,6 +153,29 @@ BEGIN
             CONTINUE;
         END IF;
 
+        IF t.relname = 'lifecycle_audit_log' THEN
+            -- The one append-only table in the schema (TAR-403). Neither role
+            -- gets UPDATE or DELETE — including SystemPrisma, which is otherwise
+            -- unrestricted by design. An audit trail of tenant suspensions and
+            -- purges that the platform itself can rewrite is a record of what
+            -- somebody was willing to leave behind, and SystemPrisma is the
+            -- credential a mistake would run under.
+            --
+            -- Withholding DELETE does not make the tenant row undeletable:
+            -- PostgreSQL runs the `ON DELETE CASCADE` from `tenants` as a
+            -- referential-integrity action, which is not checked against the
+            -- deleting role's privileges. The seed and every integration fixture
+            -- keep working.
+            --
+            -- The matching trigger, `lifecycle_audit_log_append_only`, closes the
+            -- half these grants cannot: the table owner is bound by neither.
+            EXECUTE format(
+                'GRANT SELECT, INSERT ON TABLE "public".%I TO "whatsappcrm_system", "whatsappcrm_app"',
+                t.relname
+            );
+            CONTINUE;
+        END IF;
+
         -- SystemPrisma reaches everything, including the three tables that
         -- carry no policy. That is what it is for.
         EXECUTE format(

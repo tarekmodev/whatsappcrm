@@ -244,17 +244,32 @@ the client — is the layer that carries the guarantee.
 
 ## The deactivation gate
 
-`public.assert_tenant_active(text)` returns the tenant id when that tenant is `active` and
-raises `TN001` otherwise. PostgreSQL evaluates it before `set_config`, so a deactivated tenant
-never sets the GUC and the statement batched behind it never runs.
+`public.assert_tenant_active(text)` returns the tenant id when that tenant may serve requests
+and raises `TN001` otherwise. PostgreSQL evaluates it before `set_config`, so a deactivated
+tenant never sets the GUC and the statement batched behind it never runs.
 
 ```sql
 SELECT set_config('app.tenant_id', public.assert_tenant_active($1), true)
 ```
 
 It refuses on all of: no tenant id, an id that is not a UUID, an id no tenant carries, and any
-status other than `active`. The caller learns nothing about which — a hard-deleted tenant and a
-suspended one answer identically.
+status outside the allow-list. The caller learns nothing about which — a hard-deleted tenant and
+a suspended one answer identically.
+
+The allow-list is `active`, `trialing` and `past_due` (TAR-403). A trial is a working product,
+and dunning is a billing banner rather than an outage — the grace period exists precisely so a
+failed payment does not take access away the same day. `created`, `suspended`, `cancelled` and
+`deleted` are refused. It is an allow-list and not a deny-list on purpose: a label a later
+migration adds to `tenant_status` is refused until somebody decides it should not be, which is
+the direction this failure should point.
+
+> **One published inconsistency, named rather than quietly resolved.**
+> `TENANT_STATUS_EFFECTS` in `packages/contracts/src/tenant.ts` marks `suspended` and
+> `cancelled` as `apiAccess: true` with only outbound messaging withdrawn, while this gate
+> refuses them outright at the connection — as it has since TAR-51, and as TAR-404's own
+> acceptance criteria ("a suspended tenant's agents cannot log in") require. Both cannot be
+> right. TAR-403 kept the stricter behaviour, because loosening a security gate is not a schema
+> migration's call, and left the decision to TAR-397 and TAR-404.
 
 Observed on a local stack, as the app role:
 

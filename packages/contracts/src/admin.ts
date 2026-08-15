@@ -17,23 +17,32 @@ import { TenantNameSchema, TenantSlugSchema } from './tenant';
  * The vocabulary of the `tenants.status` column, which is what the platform's
  * own view of a tenant reports.
  *
- * **It is not `TENANT_STATUSES`, and that is a known drift.** The two were
- * authored by different stories against different concerns: `TENANT_STATUSES`
- * in `tenant.ts` is the billing-driven lifecycle a customer sees
- * (`trialing`/`past_due`/`deleted`), while the column TAR-47 shipped models
- * provisioning state and has `pending`, which the customer-facing set has no
- * spelling for. Reconciling them is TAR-36's — it owns the lifecycle state
- * machine — and doing it here would mean either an `ALTER TYPE` nobody asked
- * for or a lossy mapper that reports `pending` as something it is not.
+ * **Reconciled with `TENANT_STATUSES` by TAR-403**, which is TAR-36 doing what
+ * the previous version of this comment said it would. The two were authored by
+ * different stories against different concerns: `TENANT_STATUSES` in `tenant.ts`
+ * is the billing-driven lifecycle a customer sees, while the column TAR-47
+ * shipped modelled provisioning state and spelled the pre-provisioning state
+ * `pending`. The migration renamed that label to `created` — one state, two
+ * spellings — and added the three the column was missing, so this set is now the
+ * published set plus exactly one label.
  *
- * `contract.test.ts` pins the overlap so the drift cannot widen unnoticed.
+ * That one label is the whole remaining difference, and it is not drift: a
+ * tenant is only ever `created` between its row appearing and provisioning
+ * finishing, both inside one transaction, so no customer-facing response can
+ * observe it. Widening it back out would mean a lossy mapper reporting a
+ * half-provisioned tenant as something it is not.
+ *
+ * `contract.test.ts` pins the overlap so the difference cannot widen unnoticed.
  */
 export const PROVISIONED_TENANT_STATUSES = [
   /** Row exists, provisioning has not finished. Never returned by a successful provision. */
-  'pending',
+  'created',
+  'trialing',
   'active',
+  'past_due',
   'suspended',
   'cancelled',
+  'deleted',
 ] as const;
 
 export const ProvisionedTenantStatusSchema = z.enum(PROVISIONED_TENANT_STATUSES);

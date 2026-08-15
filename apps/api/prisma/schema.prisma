@@ -96,11 +96,30 @@ generator client {
 // for exactly that reason.
 // ---------------------------------------------------------------------------
 
+/// The tenant lifecycle vocabulary, reconciled with `@whatsappcrm/contracts` by
+/// TAR-403 (`20260815120000_tenant_lifecycle_status_vocabulary`).
+///
+/// It had carried `pending / active / suspended / cancelled` since TAR-47, while
+/// `TENANT_STATUSES` published `trialing / active / past_due / suspended /
+/// cancelled / deleted`. `pending` was **renamed** to `created` — one state, two
+/// spellings — and the three missing labels were added. The column is now a
+/// superset of the published set by exactly one label: `created` is the
+/// pre-provisioning state, which no customer-facing response reports.
+///
+/// **The order below is the catalog's, not a preference.** `ALTER TYPE ... ADD
+/// VALUE` appends, so `trialing`, `past_due` and `deleted` sort after the four
+/// original labels. `prisma migrate diff` compares this list against
+/// `pg_enum.enumsortorder`, and listing them in reading order would make it
+/// propose a reordering that is not a real change. Nothing sorts by this column,
+/// so the order carries no meaning of its own.
 enum TenantStatus {
-  pending
+  created
   active
   suspended
   cancelled
+  trialing
+  past_due
+  deleted
 
   @@map("tenant_status")
 }
@@ -487,11 +506,34 @@ model Tenant {
   /// support tooling. `citext` so `Acme` and `acme` cannot both exist.
   slug        String       @unique @db.Citext
   name        String
-  status      TenantStatus @default(pending)
+  status      TenantStatus @default(created)
   trialEndsAt DateTime?    @map("trial_ends_at") @db.Timestamptz(3)
-  /// Set by TAR-51. Deactivation retains data and revokes access; it is not a
-  /// delete, which is why there is no `deleted_at` here.
+  /// Set by TAR-51. Deactivation retains data and revokes access.
   suspendedAt DateTime?    @map("suspended_at") @db.Timestamptz(3)
+
+  /// When the tenant last entered `cancelled` (TAR-403). Kept through a
+  /// reactivation — `cancelled → active` is a legal transition — so support can
+  /// still answer "when did they leave".
+  cancelledAt        DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  /// When the grace period currently running expires, after which the retention
+  /// sweeper moves the tenant on. Null when no timer is running.
+  ///
+  /// The *length* of a grace period is TAR-397's, published as a constant; only
+  /// the instant lives here. That is what lets a revised duration take effect
+  /// without a migration, and stops it silently reinterpreting a timer already
+  /// running for a live tenant.
+  gracePeriodEndsAt  DateTime? @map("grace_period_ends_at") @db.Timestamptz(3)
+  /// The earliest instant hard-delete may run. Null until the retention window
+  /// starts. Nothing purges before it passes.
+  purgeAt            DateTime? @map("purge_at") @db.Timestamptz(3)
+  /// When the purge ran. The row **survives** it as a tombstone holding
+  /// `status = deleted`, which is what keeps `lifecycle_audit_log` permanent —
+  /// a child table cannot outlive a parent row that is gone.
+  ///
+  /// `tenants_deleted_at_matches_status` makes this and `status` agree in both
+  /// directions. It is a CHECK, so it lives in the migration rather than here.
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
+
   createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -535,9 +577,135 @@ model Tenant {
   webhookEvents            WebhookEvent[]
   idempotencyKeys          IdempotencyKey[]
   auditLogs                AuditLog[]
+  lifecycleAuditLog        LifecycleAuditLog[]
+  planLimits               TenantPlanLimits?
 
   @@index([status])
+  /// Two indexes are missing from this block on purpose. The retention sweeper's
+  /// `tenants_grace_period_ends_at_idx` and `tenants_purge_at_idx` are
+  /// **partial** (`WHERE <column> IS NOT NULL`), so each holds one entry per
+  /// tenant with a timer actually running rather than one per tenant. Prisma
+  /// cannot express an index predicate, so they live in raw SQL in
+  /// `20260815130000_tenant_lifecycle_retention_audit_and_limits` — the same
+  /// arrangement as `users_tenant_id_locked_until_idx`. Prisma's describer skips
+  /// predicated indexes, so `migrate dev` proposes neither to create nor to drop
+  /// them and this is not drift.
   @@map("tenants")
+}
+
+/// Every tenant lifecycle transition, append-only (TAR-403).
+///
+/// **Not folded into `audit_logs`**, and the reasons all point the same way:
+/// `from_state` and `to_state` are typed columns here where `audit_logs` could
+/// only carry them inside free-form `metadata`, and a state machine whose
+/// history is untyped JSON cannot be reconstructed by a query; append-only is
+/// enforced rather than assumed; and the retention rule differs — this table
+/// outlives the tenant's data.
+///
+/// **Append-only is enforced twice.** `prisma/sql/app-roles.sql` grants
+/// `SELECT, INSERT` and withholds `UPDATE, DELETE` from both application roles,
+/// which constrains the application. The
+/// `lifecycle_audit_log_append_only` trigger raises `TN002` on any UPDATE
+/// including the table owner's, which constrains us. DELETE is deliberately not
+/// blocked: it is reachable only through the `ON DELETE CASCADE` from `tenants`,
+/// and a row trigger cannot tell that apart from a hand-written statement —
+/// blocking it would make the tenant row undeletable and break every fixture.
+///
+/// The lifecycle's own hard-delete never takes this path. It leaves the
+/// `tenants` row standing as a tombstone in `status = deleted`, so these rows
+/// stand with it.
+model LifecycleAuditLog {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+
+  /// TAR-166's attribution triple, reused verbatim so support tooling reads one
+  /// vocabulary across both audit tables. Unlike `audit_logs.actor_type` there
+  /// is **no default**: a table that starts empty has no rollout window, so every
+  /// writer states who acted or the insert fails.
+  ///
+  /// `lifecycle_audit_log_actor_attribution` makes the three agree — a `user`
+  /// row names a user and carries no label, a `platform_operator` row carries a
+  /// label and names no user, `system` and `unattributed` carry neither.
+  actorType   AuditActorType @map("actor_type")
+  actorUserId String?        @map("actor_user_id") @db.Uuid
+  actorLabel  String?        @map("actor_label")
+
+  /// Null only for the first row of a tenant's history — its creation, and the
+  /// rows the migration backfilled for tenants that predate this table.
+  /// `lifecycle_audit_log_transition_changes_state` refuses any other row whose
+  /// two states are equal: that is not a transition.
+  fromState TenantStatus? @map("from_state")
+  toState   TenantStatus  @map("to_state")
+  /// Free text, written by whoever caused the transition. Never PII.
+  reason    String?
+  /// A redacted before/after at most — never PII, never a secret value.
+  metadata  Json?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor  User?  @relation(fields: [tenantId, actorUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  /// The read endpoint: this tenant's history, newest first, keyset-paginated.
+  /// The only index on the table — a tenant accumulates a handful of these over
+  /// its whole life, so a second one would cost a write per transition and never
+  /// beat the scan it replaced.
+  @@index([tenantId, occurredAt(sort: Desc), id(sort: Desc)])
+  @@map("lifecycle_audit_log")
+}
+
+/// The tenant's **effective** plan limits — the only thing write-time
+/// enforcement reads (TAR-403, for TAR-405).
+///
+/// **Why per tenant rather than per plan.** `plans.entitlements` is the
+/// catalogue and it belongs to TAR-37, which is still in `backlog` and whose
+/// table today is populated only by the demo seed. Reaching for it would mean
+/// fixing that column's JSON shape and requiring a `subscriptions` row per
+/// tenant — both decisions belonging to the story that owns billing. It is also
+/// platform-wide and so carries no RLS policy, while the enforcement TAR-405
+/// needs runs on the tenant connection.
+///
+/// When TAR-37 lands, its plan sync becomes this table's writer and `planKey`
+/// starts naming a real plan. The shape enforcement reads does not change, which
+/// is the swap TAR-397 asks for.
+///
+/// **Why not columns on `TenantSettings`**, whose comment invites exactly that:
+/// settings are edited by the tenant's own admins, and a seat cap the capped
+/// party can raise is not a cap. A separate table is a separate grant.
+model TenantPlanLimits {
+  id       String @id @default(uuid(7)) @db.Uuid
+  tenantId String @unique @map("tenant_id") @db.Uuid
+
+  /// Which plan these limits came from. `trial` for a self-signup tenant;
+  /// `unlimited` on the rows the migration backfilled for tenants provisioned by
+  /// an operator before self-signup existed, which were never sold a cap.
+  /// Bounded to `PlanSchema.key`'s shape by
+  /// `tenant_plan_limits_plan_key_format`.
+  planKey String @default("trial") @map("plan_key")
+
+  /// Billable agent seats — `PlanLimitsSchema.seats`. **Null means unlimited**,
+  /// deliberately not `-1` or a sentinel maximum, both of which invite
+  /// arithmetic bugs at the comparison site. Zero is refused by
+  /// `tenant_plan_limits_caps_positive`: a cap of zero is a lockout reached by
+  /// accident rather than a limit anyone decided.
+  ///
+  /// Three is a defensible starting value, **not a measured one**, and TAR-397
+  /// fixes the real trial figure. It is a column default so provisioning can
+  /// insert the row without restating it, and so changing it is one `ALTER
+  /// TABLE` rather than a hunt through application code.
+  seatCap Int? @default(3) @map("seat_cap")
+
+  /// Conversations opened per billing period —
+  /// `PlanLimitsSchema.conversationsPerPeriod`, metered by the
+  /// `conversations_opened` usage counter. Null means unlimited. Same
+  /// provenance as `seatCap`: a placeholder until TAR-397 fixes it.
+  conversationCap Int? @default(1000) @map("conversation_cap")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_plan_limits")
 }
 
 /// Host → tenant resolution (TAR-39, decision 2, step 1). `hostname` is unique
@@ -696,6 +864,7 @@ model User {
   slaAlerts             SlaAlert[]
   cannedResponses       CannedResponse[]
   auditLogs             AuditLog[]
+  lifecycleAuditLog     LifecycleAuditLog[]
 
   @@unique([tenantId, email])
   @@unique([tenantId, id])

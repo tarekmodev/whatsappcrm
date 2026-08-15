@@ -99,7 +99,7 @@ describe('tenant deactivation, end to end', () => {
           name: 'Next door',
           status: 'active',
         },
-        { id: PENDING_ID, slug: `${FIXTURE_PREFIX}-pending`, name: 'Half made', status: 'pending' },
+        { id: PENDING_ID, slug: `${FIXTURE_PREFIX}-pending`, name: 'Half made', status: 'created' },
         { id: RESTORED_ID, slug: `${FIXTURE_PREFIX}-restored`, name: 'Back', status: 'active' },
       ],
     });
@@ -242,8 +242,9 @@ describe('tenant deactivation, end to end', () => {
     });
 
     it('refuses a tenant that never finished provisioning, for the same reason', async () => {
-      // The gate admits `active` and nothing else, so a half-provisioned tenant
-      // is closed by the same mechanism rather than by a second rule.
+      // The gate admits `active`, `trialing` and `past_due` (TAR-403) and
+      // nothing else, so a half-provisioned `created` tenant is closed by the
+      // same mechanism rather than by a second rule.
       await asTenant(PENDING_ID, async () => {
         await expect(tenantPrisma.contact.findMany()).rejects.toBeInstanceOf(TenantNotActiveError);
       });

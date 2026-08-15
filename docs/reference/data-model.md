@@ -1,8 +1,8 @@
 # Data model reference
 
 The database as it stands on `main` after TAR-47, TAR-48, TAR-51, TAR-52, TAR-54, TAR-66,
-TAR-74, TAR-80, TAR-92, TAR-20e, TAR-270 and TAR-272. Written for engineers building
-against it.
+TAR-74, TAR-80, TAR-92, TAR-20e, TAR-270, TAR-272 and TAR-403. Written for engineers
+building against it.
 
 `apps/api/prisma/schema.prisma` is the source of truth for columns, types and defaults,
 and carries the per-model reasoning next to each model. This document does not transcribe
@@ -44,7 +44,7 @@ Six rules hold across every model. A change that breaks one needs a reason in re
 
 ## Tenancy classification
 
-42 models. **39 are tenant-scoped**: they carry a non-null `tenant_id`, have
+44 models. **41 are tenant-scoped**: they carry a non-null `tenant_id`, have
 `ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Three are
 not, each deliberately:
 
@@ -77,15 +77,47 @@ One customer business. The root of every cascade in the schema.
 - **Indexes:** `(status)`
 - **Owned by:** TAR-19
 
-`status` is the provisioning-and-lifecycle vocabulary `pending` → `active` → `suspended` →
-`cancelled`, and it is the value `assert_tenant_active` reads on every tenant statement.
-Only `active` reaches data. `suspended_at` records when access was revoked; there is no
-`deleted_at`, because deactivation retains data and is not a delete.
+`status` is the lifecycle vocabulary `created`, `trialing`, `active`, `past_due`,
+`suspended`, `cancelled`, `deleted`, and it is the value `assert_tenant_active` reads on
+every tenant statement. **`active`, `trialing` and `past_due` reach data; the other four
+do not** — a trial is a working product and dunning is a billing banner, while `created`
+is a tenant whose provisioning has not finished.
 
-> This is **not** the same vocabulary as `TENANT_STATUSES` in
-> `packages/contracts/src/tenant.ts`, which is the billing-driven lifecycle a customer
-> sees (`trialing`, `past_due`, `deleted`). The drift is known, pinned by
-> `packages/contracts/src/contract.test.ts`, and TAR-36 owns reconciling it.
+> TAR-403 reconciled this with `TENANT_STATUSES` in `packages/contracts/src/tenant.ts`:
+> `pending` was renamed to `created` (one state, two spellings) and the three missing
+> labels were added. The column is now the published set plus `created`, which no
+> customer-facing response can observe — a tenant is only in it between its row appearing
+> and provisioning finishing, both inside one transaction.
+> `packages/contracts/src/contract.test.ts` pins that so the difference cannot widen again.
+
+The retention timers, all nullable, all written by TAR-404's lifecycle engine:
+
+| Column                 | Meaning                                                                    |
+| ---------------------- | -------------------------------------------------------------------------- |
+| `suspended_at`         | When access was revoked (TAR-51)                                           |
+| `cancelled_at`         | When the tenant last entered `cancelled`, kept through a reactivation      |
+| `grace_period_ends_at` | When the grace period currently running expires. Null when no timer is set |
+| `purge_at`             | The earliest instant hard-delete may run                                   |
+| `deleted_at`           | When the purge ran                                                         |
+
+Only the **instants** are stored. The grace-period and retention _lengths_ are TAR-397's,
+published as constants, so revising one does not need a migration and cannot silently
+reinterpret a timer already running for a live tenant.
+
+`tenants_deleted_at_matches_status` makes `status = 'deleted'` and a non-null `deleted_at`
+imply each other in both directions: a tenant reported as deleted with no purge timestamp
+is as wrong as a purge timestamp on a live tenant, and the second would let a reactivation
+quietly resurrect purged data.
+
+**Hard-delete leaves the row standing.** `deleted` is a tombstone — the purge removes the
+tenant's data, not its `tenants` row, which is what lets `lifecycle_audit_log` outlive it.
+A physical `DELETE FROM tenants` is a fixture teardown and an erasure-request operation,
+and it is not the lifecycle's hard-delete.
+
+Two indexes are **not** in `schema.prisma`: `tenants_grace_period_ends_at_idx` and
+`tenants_purge_at_idx` are partial (`WHERE <column> IS NOT NULL`), so each holds one entry
+per tenant with a timer actually running rather than one per tenant. Prisma cannot express
+an index predicate.
 
 #### `tenant_domains`
 
@@ -128,6 +160,65 @@ tenant routes correctly with nothing configured, is bounded 1–1000 by
 `users.max_concurrent_tickets`. Five is defensible rather than measured — ADR 0008
 decision 4 says so, and names `ASSIGNMENT_POLICY` as the constant that has to agree with
 it.
+
+#### `lifecycle_audit_log`
+
+Every tenant lifecycle transition, one row each. **Append-only.**
+
+- **Indexes:** `(tenant_id, occurred_at DESC, id DESC)` — the read endpoint, keyset-paginated
+- **Relations:** `tenants` → `lifecycle_audit_log`, `Cascade`; `(tenant_id, actor_user_id)`
+  → `users`, `NoAction`
+- **Owned by:** TAR-403; written by TAR-404
+
+`from_state` is null only for a tenant's first row — its creation, and the rows TAR-403
+backfilled for tenants that predate the table.
+`lifecycle_audit_log_transition_changes_state` refuses any other row whose two states are
+equal, because that is not a transition. `actor_type` / `actor_user_id` / `actor_label` are
+TAR-166's attribution triple, reused verbatim so support tooling reads one vocabulary
+across both audit tables, and made to agree with each other by
+`lifecycle_audit_log_actor_attribution`. Unlike `audit_logs.actor_type` there is **no
+default**: a table that starts empty has no rollout window, so every writer states who
+acted or the insert fails.
+
+Append-only is enforced twice, and the two halves constrain different people:
+
+- `prisma/sql/app-roles.sql` grants `SELECT, INSERT` and withholds `UPDATE, DELETE` from
+  **both** application roles — including `whatsappcrm_system`, which is unrestricted
+  everywhere else in the schema.
+- `lifecycle_audit_log_append_only`, a `BEFORE UPDATE` trigger, raises `TN002` on any
+  update including the owner's. That is the half that constrains us; the grants do not
+  bind the role migrations run as.
+
+`DELETE` is deliberately **not** blocked by the trigger. It is reachable only through the
+`ON DELETE CASCADE` from `tenants`, and PostgreSQL runs a referential cascade as an
+integrity action a row trigger cannot tell apart from a hand-written statement — blocking
+it would make the tenant row undeletable and break the seed and every fixture. The
+lifecycle's own hard-delete never takes that path: it leaves the `tenants` row standing.
+
+#### `tenant_plan_limits`
+
+The tenant's **effective** plan limits — the only thing write-time enforcement reads.
+
+- **Unique:** `tenant_id`
+- **Owned by:** TAR-403; enforced by TAR-405; TAR-37 becomes the writer
+
+`seat_cap` and `conversation_cap` map onto `PlanLimitsSchema.seats` and
+`conversationsPerPeriod`. **Null means unlimited**, deliberately not `-1` or a sentinel
+maximum, both of which invite arithmetic bugs at the comparison site; zero is refused by
+`tenant_plan_limits_caps_positive`, because a cap of zero is a lockout reached by accident
+rather than a limit anyone decided. `plan_key` is bounded to `PlanSchema.key`'s shape.
+
+Defaults are `trial` / 3 / 1000 — placeholders TAR-397 fixes, not measured figures, and
+column defaults so provisioning inserts the row without restating them. Tenants that
+existed before self-signup were backfilled as `unlimited` with null caps: they were
+provisioned by an operator and never sold a cap, so capping them retroactively would have
+made a migration take away access somebody is paying for.
+
+Per tenant rather than per plan because `plans.entitlements` belongs to TAR-37 — still in
+`backlog`, and platform-wide, so it carries no RLS policy while the enforcement TAR-405
+needs runs on the tenant connection. Not columns on `tenant_settings`, despite that
+table's standing invitation, because settings are edited by the tenant's own admins and a
+seat cap the capped party can raise is not a cap.
 
 ### Identity and access — TAR-22 / TAR-35
 
@@ -849,7 +940,7 @@ definitions — stays text or JSON.
 
 | Enum                                    | Values                                                                                                                                                                                                    |
 | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tenant_status`                         | `pending`, `active`, `suspended`, `cancelled`                                                                                                                                                             |
+| `tenant_status`                         | `created`, `active`, `suspended`, `cancelled`, `trialing`, `past_due`, `deleted` — in catalogue order, because `ADD VALUE` appends. TAR-403 renamed `pending` to `created` and added the last three       |
 | `tenant_domain_kind`                    | `platform`, `custom`                                                                                                                                                                                      |
 | `user_role`                             | `admin`, `supervisor`, `agent` — `owner` removed by TAR-80; it is exactly `TENANT_ROLES` in `packages/contracts/src/rbac.ts`                                                                              |
 | `user_status`                           | `invited`, `active`, `suspended`, `removed`                                                                                                                                                               |
@@ -887,33 +978,36 @@ definitions — stays text or JSON.
 Applied in this order. Every directory carries a hand-written `down.sql` beside Prisma's
 `migration.sql`.
 
-| Migration                                               | What it does                                                                                                                                                                                                                                                                                        | Story   |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `20260810120000_baseline_extensions`                    | `pgcrypto` and `citext`. Creates no tables                                                                                                                                                                                                                                                          | TAR-42  |
-| `20260810130000_initial_data_model`                     | Every table and enum above, as TAR-47 shipped them                                                                                                                                                                                                                                                  | TAR-47  |
-| `20260810140000_tenant_isolation_rls`                   | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                                                                                                                                                                  | TAR-48  |
-| `20260810150000_tenant_deactivation_guard`              | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                                                                                                                                                          | TAR-51  |
-| `20260810160000_whatsapp_business_account_entity`       | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                                                                                                                                                          | TAR-52  |
-| `20260810170000_harden_tenant_deactivation_guard`       | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                                                                                                                                                         | TAR-51  |
-| `20260810180000_message_content_type_unsupported`       | `ALTER TYPE message_content_type ADD VALUE 'unsupported'`                                                                                                                                                                                                                                           | TAR-67  |
-| `20260810180000_message_template_list_index`            | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                                                                                                                                                                | TAR-20a |
-| `20260810190000_agent_team_role_alignment`              | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes                                                                                                                                     | TAR-80  |
-| `20260811120000_conversations_last_message_at_not_null` | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                                                                                                                                                         | TAR-92  |
-| `20260811130000_ticket_active_constraint_and_counters`  | `tickets_one_active_per_contact`; the `ticket_counters` allocator and the 35th policy                                                                                                                                                                                                               | TAR-74  |
-| `20260811140000_media_pipeline`                         | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable                                                                                                                                    | TAR-20e |
-| `20260811150000_auth_schema_and_policies`               | `password_reset_tokens` and `invite_teams` and the 37th and 38th policies; lockout columns on `users`; `absolute_expires_at` and `revoked_reason` on `sessions`; `revoked_at` and the live-invite index on `invites`                                                                                | TAR-54  |
-| `20260811170000_conversation_status_closed`             | `ALTER TYPE conversation_status ADD VALUE 'closed'`                                                                                                                                                                                                                                                 | TAR-68  |
-| `20260813120000_sla_timer_state_paused`                 | `ALTER TYPE sla_timer_state ADD VALUE 'paused'`, alone in its own migration                                                                                                                                                                                                                         | TAR-270 |
-| `20260813130000_sla_pause_accounting_and_alerts`        | `paused_at`, `paused_ms`, `breached_at` and the `(state, due_at)` sweep index on `sla_timers`; adds `sla_alerts` and the 39th policy; backfills the default `sla_policies` row for existing tenants                                                                                                 | TAR-270 |
-| `20260813140000_assignment_workload_and_routing_state`  | `ticket_routing_state` and `ticket_routing_deferred_reason`; the three routing columns and `tickets_routing_deferred_idx` on `tickets`; the workload cap on `users` and `tenant_settings`; `assignment_state.team_id` nullable under `UNIQUE … NULLS NOT DISTINCT`. Adds no table, so no new policy | TAR-272 |
-| `20260813150000_ticket_active_queue_index`              | `tickets_active_queue_idx`. One partial index and nothing else: no column, no constraint, no policy. Plain `CREATE INDEX`, not `CONCURRENTLY` — Prisma wraps a migration in a transaction and Postgres forbids the concurrent form there, the same resolution `tickets_one_active_per_contact` took | TAR-284 |
+| Migration                                                    | What it does                                                                                                                                                                                                                                                                                        | Story   |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `20260810120000_baseline_extensions`                         | `pgcrypto` and `citext`. Creates no tables                                                                                                                                                                                                                                                          | TAR-42  |
+| `20260810130000_initial_data_model`                          | Every table and enum above, as TAR-47 shipped them                                                                                                                                                                                                                                                  | TAR-47  |
+| `20260810140000_tenant_isolation_rls`                        | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                                                                                                                                                                  | TAR-48  |
+| `20260810150000_tenant_deactivation_guard`                   | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                                                                                                                                                          | TAR-51  |
+| `20260810160000_whatsapp_business_account_entity`            | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                                                                                                                                                          | TAR-52  |
+| `20260810170000_harden_tenant_deactivation_guard`            | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                                                                                                                                                         | TAR-51  |
+| `20260810180000_message_content_type_unsupported`            | `ALTER TYPE message_content_type ADD VALUE 'unsupported'`                                                                                                                                                                                                                                           | TAR-67  |
+| `20260810180000_message_template_list_index`                 | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                                                                                                                                                                | TAR-20a |
+| `20260810190000_agent_team_role_alignment`                   | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes                                                                                                                                     | TAR-80  |
+| `20260811120000_conversations_last_message_at_not_null`      | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                                                                                                                                                         | TAR-92  |
+| `20260811130000_ticket_active_constraint_and_counters`       | `tickets_one_active_per_contact`; the `ticket_counters` allocator and the 35th policy                                                                                                                                                                                                               | TAR-74  |
+| `20260811140000_media_pipeline`                              | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable                                                                                                                                    | TAR-20e |
+| `20260811150000_auth_schema_and_policies`                    | `password_reset_tokens` and `invite_teams` and the 37th and 38th policies; lockout columns on `users`; `absolute_expires_at` and `revoked_reason` on `sessions`; `revoked_at` and the live-invite index on `invites`                                                                                | TAR-54  |
+| `20260811170000_conversation_status_closed`                  | `ALTER TYPE conversation_status ADD VALUE 'closed'`                                                                                                                                                                                                                                                 | TAR-68  |
+| `20260813120000_sla_timer_state_paused`                      | `ALTER TYPE sla_timer_state ADD VALUE 'paused'`, alone in its own migration                                                                                                                                                                                                                         | TAR-270 |
+| `20260813130000_sla_pause_accounting_and_alerts`             | `paused_at`, `paused_ms`, `breached_at` and the `(state, due_at)` sweep index on `sla_timers`; adds `sla_alerts` and the 39th policy; backfills the default `sla_policies` row for existing tenants                                                                                                 | TAR-270 |
+| `20260813140000_assignment_workload_and_routing_state`       | `ticket_routing_state` and `ticket_routing_deferred_reason`; the three routing columns and `tickets_routing_deferred_idx` on `tickets`; the workload cap on `users` and `tenant_settings`; `assignment_state.team_id` nullable under `UNIQUE … NULLS NOT DISTINCT`. Adds no table, so no new policy | TAR-272 |
+| `20260813150000_ticket_active_queue_index`                   | `tickets_active_queue_idx`. One partial index and nothing else: no column, no constraint, no policy. Plain `CREATE INDEX`, not `CONCURRENTLY` — Prisma wraps a migration in a transaction and Postgres forbids the concurrent form there, the same resolution `tickets_one_active_per_contact` took | TAR-284 |
+| `20260815120000_tenant_lifecycle_status_vocabulary`          | Renames `tenant_status`'s `pending` to `created` and adds `trialing`, `past_due`, `deleted`. Nothing else — Postgres forbids _using_ an enum value in the transaction that added it, so everything that does is the next migration                                                                  | TAR-403 |
+| `20260815130000_tenant_lifecycle_retention_audit_and_limits` | The four retention timers on `tenants`, `lifecycle_audit_log`, `tenant_plan_limits`, their policies and the append-only trigger; backfills a genesis audit row and an `unlimited` limits row per existing tenant; teaches `assert_tenant_active` to admit `trialing` and `past_due`                 | TAR-403 |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's
 migration; the 35th, `ticket_counters`, carries its policy in TAR-74's; the 36th,
 `media_objects`, carries its policy in TAR-20e's; the 37th and 38th,
-`password_reset_tokens` and `invite_teams`, carry theirs in TAR-54's; and the 39th,
-`sla_alerts`, carries its policy in TAR-270's.
+`password_reset_tokens` and `invite_teams`, carry theirs in TAR-54's; the 39th,
+`sla_alerts`, carries its policy in TAR-270's; and the 40th and 41st,
+`lifecycle_audit_log` and `tenant_plan_limits`, carry theirs in TAR-403's.
 
 `20260813120000_sla_timer_state_paused` is one statement in a directory of its own because
 PostgreSQL refuses to _use_ an enum label in the transaction that added it, and Prisma runs
