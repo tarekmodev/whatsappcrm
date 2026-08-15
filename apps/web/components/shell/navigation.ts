@@ -98,6 +98,16 @@ export const NAV_ITEMS: readonly NavItem[] = [
     requiresAny: ['ticket:read'],
   },
   {
+    id: 'reports',
+    label: content.nav.reports,
+    href: routes.reports(),
+    icon: 'reports',
+    // Every role holds `report:read`; what a supervisor holds on top is
+    // `report:read_all`, which widens the aggregate and the per-agent breakdown
+    // rather than deciding whether the destination exists (ADR 0009 decision 6).
+    requiresAny: ['report:read'],
+  },
+  {
     id: 'settings',
     label: content.nav.settings,
     href: routes.settings(),
@@ -132,8 +142,10 @@ export const NAV_ITEMS: readonly NavItem[] = [
  * Five, because 0001 rules the rail's destinations to be exactly Inbox,
  * Contacts, Tickets, Reports and Settings. Anything a later story adds beyond
  * that set is a destination somebody asked for rather than one everybody needs,
- * and belongs behind the disclosure. `NavLinkList` renders no boundary while the
- * array is shorter than this, so today — two entries — the rail shows whole.
+ * and belongs behind the disclosure. `NavLinkList` renders no boundary while
+ * nothing sorts past this, so today — Inbox, Tickets, Reports, Settings and the
+ * onboarding checklist — the rail still shows whole, and the next entry after
+ * them is the first one the disclosure hides.
  */
 export const RAIL_PRIMARY_COUNT = 5;
 

@@ -1,0 +1,51 @@
+/*
+ * The three controls above the dashboard: quick ranges, the two dates, and the
+ * scope. Stacked on a phone, side by side once there is room — `wrap` rather than
+ * a second breakpoint, so a long set of labels moves to its own line instead of
+ * pushing the row into horizontal scroll.
+ *
+ * The 48rem literal matches the layout breakpoint the rest of this app already
+ * uses (`DataTable`, `AppShell`, `TicketQueueFilters`); CSS custom properties
+ * cannot be read inside a media query, so the repo spells it out and this follows
+ * suit.
+ */
+
+.bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  inline-size: 100%;
+}
+
+.range {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+.dates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+@media (min-width: 48rem) {
+  .bar {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    column-gap: var(--space-5);
+  }
+
+  .range {
+    flex-direction: row;
+    /* Bottom-aligned so the button sits on the controls' baseline rather than
+       on their labels'. */
+    align-items: flex-end;
+  }
+
+  .dates {
+    flex-direction: row;
+  }
+}

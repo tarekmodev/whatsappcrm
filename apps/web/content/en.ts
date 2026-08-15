@@ -50,6 +50,7 @@ export const content = {
     expandNav: 'Expand navigation',
     inbox: 'Inbox',
     tickets: 'Tickets',
+    reports: 'Reports',
     settings: 'Settings',
     people: 'People',
     assignment: 'Assignment',
@@ -1406,6 +1407,127 @@ export const content = {
     passwordTooShortError: (minLength: number) => `Use at least ${minLength} characters`,
     passwordTooLongError: (maxLength: number) => `Use at most ${maxLength} characters`,
     passwordMismatchError: 'The two passwords do not match',
+  },
+
+  /**
+   * The supervisor's performance dashboard (TAR-30,
+   * `docs/architecture/0009-reporting-dashboard-and-export.md`).
+   *
+   * Two things this copy has to carry, because the numbers are otherwise
+   * ambiguous and end up in a client-facing report: **what each metric is
+   * anchored on** (0009 decision 2 — "resolved this week" is over tickets
+   * resolved this week, whenever they arrived), and **that the durations are
+   * wall-clock** rather than business hours (0009 risk 2).
+   */
+  reports: {
+    title: 'Performance',
+    subtitle: 'Response and resolution times, ticket volume and per-agent workload.',
+
+    // --- The range ----------------------------------------------------------
+    rangeHeading: 'Date range',
+    rangeFromLabel: 'From',
+    rangeToLabel: 'To',
+    rangeApply: 'Apply range',
+    rangePresetLabel: 'Quick ranges',
+    presetLast7: 'Last 7 days',
+    presetLast30: 'Last 30 days',
+    presetLast90: 'Last 90 days',
+    /** Said once, above the numbers, because every duration below inherits it. */
+    rangeSummary: (from: string, to: string) => `${from} to ${to}, in your workspace’s time zone`,
+    rangeOrderError: 'The start date must be on or before the end date',
+    rangeTooLongError: (maxDays: number) => `Pick a range of ${String(maxDays)} days or fewer`,
+    rangeInvalidError: 'Enter both dates as YYYY-MM-DD',
+
+    // --- Scope --------------------------------------------------------------
+    scopeFilterLabel: 'Scope',
+    scopeAll: 'All tickets',
+    scopeAssigned: 'Assigned to me',
+    /**
+     * 0009 decision 6: without `report:read_all` the totals still cover
+     * everything the caller can see, and the breakdown is narrowed to their own
+     * row rather than the request being refused. Saying so is what stops an
+     * agent reading a supervisor's shared link as a broken table.
+     */
+    scopeNarrowedNotice:
+      'You are seeing your own and your teams’ tickets, and the breakdown shows your row only.',
+
+    // --- The four metrics ---------------------------------------------------
+    summaryHeading: 'Overview',
+    summaryLoading: 'Loading dashboard metrics',
+    volumeCreatedLabel: 'Tickets opened',
+    volumeCreatedHint: 'Opened in this range, whatever happened to them since.',
+    volumeResolvedLabel: 'Tickets resolved',
+    volumeResolvedHint: 'Resolved in this range, whenever they were opened.',
+    volumeClosedUnresolvedLabel: 'Closed unresolved',
+    volumeClosedUnresolvedHint:
+      'Closed in this range without ever being resolved — spam, wrong numbers, duplicates.',
+    firstResponseLabel: 'First response time',
+    /**
+     * Says "median" in the hint rather than in the label: the headline figure is
+     * the median on both duration cards, and a supervisor quoting a number from
+     * this screen has to know which statistic they are quoting.
+     */
+    firstResponseHint:
+      'Median, from the ticket opening to the first reply, for replies sent in this range.',
+    resolutionLabel: 'Resolution time',
+    resolutionHint:
+      'Median, from the ticket opening to its resolution, for tickets resolved in this range.',
+    /** Wall-clock, not business hours — 0009 risk 2, stated rather than assumed. */
+    durationBasisNote: 'Durations are wall-clock, including nights and weekends.',
+
+    statAverage: 'Average',
+    statP90: '90th percentile',
+    /**
+     * How many tickets the median above was computed over, carried beside it as a
+     * figure rather than as a sentence: a p90 over two tickets *is* one of those
+     * two tickets, and a supervisor cannot tell that from the duration alone.
+     */
+    statSampleLabel: 'Tickets measured',
+    /**
+     * A duration is null exactly when nothing was measured, and the contract is
+     * explicit that this is not zero: "no ticket was answered" and "every ticket
+     * was answered instantly" are different facts.
+     */
+    noMeasurement: 'No data',
+
+    // --- Per-agent breakdown ------------------------------------------------
+    agentsHeading: 'By agent',
+    agentsDescription:
+      'Attributed to whoever answered and whoever resolved each ticket, not to whoever holds it now.',
+    agentsLoading: 'Loading the per-agent breakdown',
+    agentsEmptyHeading: 'Nobody has work in this range',
+    agentsEmptyBody: 'Pick a wider range, or a scope that covers more of the workspace.',
+    columnAgent: 'Agent',
+    columnResolved: 'Resolved',
+    columnFirstResponse: 'First response (median)',
+    columnResolution: 'Resolution (median)',
+    /**
+     * The row for work whose responder or resolver was never recorded — a ticket
+     * that predates the attribution columns, or a resolution with no actor. It is
+     * rendered rather than hidden, so the table adds up to the totals above it.
+     */
+    unattributed: 'Not recorded',
+    unattributedHint: 'Work whose agent was never recorded.',
+    inactiveAgent: 'No longer active',
+    /**
+     * Said once, under the table, because the arithmetic is not the arithmetic a
+     * reader expects: the overview's medians are computed over every ticket, and
+     * a median column does not sum — averaging the rows above would give a
+     * different, wrong number.
+     */
+    mediansDoNotSumNote:
+      'The overview figures are computed over every ticket. Medians do not add up across rows.',
+
+    // --- Daily volume -------------------------------------------------------
+    seriesHeading: 'Daily volume',
+    seriesDescription: 'Opened against resolved, one bar per day in your workspace’s time zone.',
+    seriesLoading: 'Loading daily volume',
+    seriesCreatedLegend: 'Opened',
+    seriesResolvedLegend: 'Resolved',
+    seriesDayLabel: (date: string, created: number, resolved: number) =>
+      `${date}: ${String(created)} opened, ${String(resolved)} resolved`,
+    seriesEmptyHeading: 'No tickets in this range',
+    seriesEmptyBody: 'Nothing was opened or resolved between these dates.',
   },
 
   form: {
