@@ -296,6 +296,12 @@ Only the first is load-bearing. The `jobId` is an optimisation and is documented
 Hyphens, never a colon — TAR-249's lesson, which cost a release of silently uncreated
 tickets.
 
+⚠️ **Amended by TAR-380.** `WHERE state = 'running'` is not self-sufficient: the only thing
+that moved a met timer out of `running` was a job the queue is allowed to drop, so a
+dropped trigger became a permanent false breach. A **statement 0** now re-derives every due
+ticket before the claim reads its state, in the same transaction, and the guard above is
+load-bearing only because of it. See Amendment 2.
+
 **`ticket_events` has no unique constraint**, and cannot easily grow one on an append-only
 log. That is exactly why statement 2 lives in the same transaction as statement 1 rather
 than in a downstream notification job: the `state = 'running'` guard is what makes it run
@@ -724,15 +730,15 @@ a 403 confirms the id exists.
 
 ## Failure Modes and Operations
 
-| Component                | Down                                                                                                                                | Slow                                                                                                                     | Bad data                                                                                                            |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| Redis / BullMQ           | No sweep, no timers started. **Nothing is lost** — deadlines are in Postgres, and the first sweep after recovery drains the backlog | Alerts are late by the backlog, never absent                                                                             | Payloads are re-validated; a malformed one is `UnrecoverableError`, as elsewhere                                    |
-| Postgres                 | Everything is down                                                                                                                  | A sweep overruns its interval and the next tick overlaps — harmless, the conditional UPDATE gives the second one nothing | —                                                                                                                   |
-| Socket delivery          | The supervisor sees the alert on next load or via `GET /sla-alerts`. The row is the record                                          | —                                                                                                                        | —                                                                                                                   |
-| A tenant is deactivated  | `assert_tenant_active` throws; that tenant is skipped with a warning and the sweep continues                                        | —                                                                                                                        | —                                                                                                                   |
-| Clock skew               | —                                                                                                                                   | —                                                                                                                        | Not reachable: every comparison is Postgres `now()`                                                                 |
-| No active supervisor     | No alert rows; a warning names the ticket; the queue still shows it overdue                                                         | —                                                                                                                        | —                                                                                                                   |
-| Policy edited mid-flight | —                                                                                                                                   | —                                                                                                                        | Running timers keep the `due_at` they started with. Editing the window changes future tickets, never past deadlines |
+| Component                | Down                                                                                                                                                                                                                                         | Slow                                                                                                                     | Bad data                                                                                                            |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Redis / BullMQ           | No sweep, no timers started. **Nothing is lost** — deadlines are in Postgres, the first sweep after recovery drains the backlog, and a trigger dropped while Redis was away is re-derived by statement 0 rather than becoming a false breach | Alerts are late by the backlog, never absent                                                                             | Payloads are re-validated; a malformed one is `UnrecoverableError`, as elsewhere                                    |
+| Postgres                 | Everything is down                                                                                                                                                                                                                           | A sweep overruns its interval and the next tick overlaps — harmless, the conditional UPDATE gives the second one nothing | —                                                                                                                   |
+| Socket delivery          | The supervisor sees the alert on next load or via `GET /sla-alerts`. The row is the record                                                                                                                                                   | —                                                                                                                        | —                                                                                                                   |
+| A tenant is deactivated  | `assert_tenant_active` throws; that tenant is skipped with a warning and the sweep continues                                                                                                                                                 | —                                                                                                                        | —                                                                                                                   |
+| Clock skew               | —                                                                                                                                                                                                                                            | —                                                                                                                        | Not reachable: every comparison is Postgres `now()`                                                                 |
+| No active supervisor     | No alert rows; a warning names the ticket; the queue still shows it overdue                                                                                                                                                                  | —                                                                                                                        | —                                                                                                                   |
+| Policy edited mid-flight | —                                                                                                                                                                                                                                            | —                                                                                                                        | Running timers keep the `due_at` they started with. Editing the window changes future tickets, never past deadlines |
 
 **What should page someone**
 
@@ -806,6 +812,9 @@ existing one builds.
    that hour, and does not breach in between.
 5. Redis stopped for the length of a window, then started: the first sweep raises the
    alert, once.
+6. An agent replies inside the window and the `agent_replied` enqueue is dropped: the next
+   sweep leaves the timer `met`, alerts nobody, stamps `first_response_at`, and the timer
+   does not reappear in the following batch (TAR-380).
 
 ---
 
@@ -908,3 +917,69 @@ same breath, how that resource is divided when demand exceeds it.
 elapsed time, though risk 4 names sweep duration as TAR-280's deliverable. The log line now carries
 `in Xms` off `process.hrtime.bigint()`, so a sweep drifting towards the 30-second interval is
 visible before it becomes an overlap.
+
+### Amendment 2 — a dropped trigger became a permanent false breach (TAR-380)
+
+The same post-merge review of TAR-280 (#97) found a second defect in decision 3, and again in this
+document rather than in the PR: the claim's `WHERE state = 'running'` was specified as sufficient,
+and it is not.
+
+**The shape.** That predicate only reads as "not yet met" if something reliably moves a met timer
+out of `running` the moment its target is achieved. The only thing that did was the
+`sla.evaluate-ticket` job — and `QueueService.enqueue` is contractually allowed to report `failed`
+or `unavailable` and drop it, which `MessageSendService` logs and returns from with nothing
+re-enqueuing. So the sweep's "has this been answered?" question was really "did a queue job
+survive?".
+
+**How it triggers without anybody doing anything wrong.** Redis is unreachable for longer than the
+remaining window — a two-second `PRODUCER_COMMAND_TIMEOUT_MS` breach is enough for one ticket. An
+agent replies at minute 40 of a 60-minute window; the `agent_replied` enqueue fails; Redis returns;
+the first sweep flips the timer to `breached`, writes the `sla_breached` ticket event and alerts a
+supervisor about a ticket answered twenty minutes early. `breached` is not in `MUTABLE_STATES`, so
+a later evaluation stamps `first_response_at` and **cannot** undo the state — the false breach is
+permanent, and it is the exact inverse of TAR-26's second acceptance criterion. It also contradicted
+this document's own failure table: "Redis down — **nothing is lost**".
+
+**Fix — the sweep re-derives, in the transaction it claims in.** A statement 0 reads the tickets
+carrying a due timer, and each is put through `SlaTimerService.reconcile` — the body `evaluate`
+runs, now callable against a caller's transaction — before the claim looks at any state:
+
+```sql
+-- 0. Re-derive. Inside the chunk transaction, so the claim reads what this wrote.
+SELECT DISTINCT ticket_id FROM sla_timers
+WHERE id = ANY($1::uuid[]) AND state = 'running' AND due_at <= now()
+ORDER BY ticket_id;
+```
+
+**Why not a second predicate on the claim.** The obvious patch is
+`AND NOT EXISTS (… tickets.first_response_at IS NOT NULL)`. It does not work: `first_response_at`
+is written **only** by `stampFirstResponse`, so in the dropped-enqueue case that column is null
+too. The check has to derive from the messages — and writing that derivation a second time, in the
+claim's SQL, would mean two implementations of "has a person replied" that can drift. Calling the
+reconciler is one implementation, and it fixes the whole class rather than the first-response case:
+a dropped `status_changed` on a resolved or closed ticket, and a dropped pause, were the same bug.
+
+**Why it settles rather than skips.** A timer the claim merely declined would stay `running` and
+past due, and an unclaimed timer only gets older, so it would lead its tenant's slice of every
+subsequent batch for ever. Amendment 1's per-tenant cap contains that to one tenant instead of the
+platform, which makes it quieter rather than better: `SLA_SWEEP_TENANT_BATCH` permanently-declined
+timers would consume the whole allowance and that tenant's real breaches would never be examined,
+reported as nothing at all.
+
+**Cost.** Three reads per due ticket, writing nothing and taking no lock when the ticket really is
+overdue — so a 25-timer chunk goes from ~100 statements to ~175, still well inside
+`SLA_SWEEP_CHUNK_TIMEOUT_MS`. Measured against a real database before Amendment 1 landed, a full
+200-timer single-tenant batch went from 1047 ms to 1594 ms. `ORDER BY ticket_id` is not cosmetic:
+`DISTINCT` guarantees no ordering, and reconciling an already-answered ticket does take row locks,
+so two sweeps meeting the same tickets in opposite orders would deadlock and one would be rolled
+back and counted as a tenant failure.
+
+**What this says about the original specification.** Decision 3 called the conditional UPDATE "the
+mechanism" and everything else "optimisation", and that framing hid an assumption: a state
+predicate is only a guard if the state is maintained by something at least as durable as the guard.
+Here it was maintained by the one component this document elsewhere insists is losable. When a
+design leans on a column to mean something, it should name what writes that column and what happens
+when that writer does not run.
+
+**Not repaired.** Timers already sitting at a false `breached` from before this change are left
+alone. `breached` is terminal by design and unwinding it is a data decision rather than a code one.

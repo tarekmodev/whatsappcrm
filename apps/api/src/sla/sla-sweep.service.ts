@@ -14,6 +14,7 @@ import {
   type TenantPrisma,
 } from '../prisma/prisma.tokens';
 import { SlaAlertService, type InsertedSlaAlert } from './sla-alert.service';
+import { SlaTimerService } from './sla-timer.service';
 import {
   SLA_SWEEP_BATCH,
   SLA_SWEEP_CHUNK_TIMEOUT_MS,
@@ -58,6 +59,35 @@ import {
  * point: the writes are the dangerous half, and an alert row inserted with the
  * wrong `tenant_id` under the system role is a cross-tenant leak RLS would
  * otherwise have refused.
+ *
+ * ## The claim does not trust a job to have run (TAR-380)
+ *
+ * `state = 'running'` is only the right predicate if something reliably moved a
+ * timer out of `running` the moment its target was met. Nothing does:
+ * `SlaTimerService` is reached by a queue job, and `QueueService.enqueue` is
+ * contractually allowed to report `failed` or `unavailable` and drop it — a
+ * two-second Redis blip is enough. An agent who replied at minute 40 of a
+ * 60-minute window would then have their ticket flipped to `breached` by the
+ * next sweep, terminally, and a supervisor alerted about a ticket answered
+ * twenty minutes early.
+ *
+ * So phase 2 **re-derives the state of every due ticket first**, in the same
+ * transaction it claims in, through `SlaTimerService.reconcile` — the same code
+ * the dropped job would have run. A ticket that was answered, resolved, closed
+ * or paused reaches `met`/`cancelled`/`paused` there and the claim below no
+ * longer matches it; one that is genuinely overdue is left `running` and
+ * breaches. Re-deriving rather than adding a second reply check to the claim's
+ * SQL is deliberate: "has a person replied" is a question with one answer in
+ * this codebase, and two implementations of it would drift.
+ *
+ * It also has to *settle* those timers rather than merely skip them. A timer the
+ * claim declined would stay `running` and past due, and an unclaimed timer only
+ * gets *older* — so it leads its tenant's slice of every subsequent batch for
+ * ever. TAR-381's per-tenant bound below contains the damage to one tenant
+ * rather than the platform, and that is exactly what makes skipping worse rather
+ * than acceptable: a handful of permanently-declined timers would occupy that
+ * tenant's whole `SLA_SWEEP_TENANT_BATCH` allowance and its *real* breaches
+ * would never be examined, reported as nothing at all.
  *
  * ## Decision 3 — the state transition is the idempotency mechanism
  *
@@ -153,6 +183,7 @@ export class SlaSweepService {
     @Inject(SYSTEM_PRISMA) private readonly systemPrisma: SystemPrisma,
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly tenantContext: TenantContextService,
+    private readonly timers: SlaTimerService,
     private readonly alerts: SlaAlertService,
     private readonly events: EventEmitter2,
   ) {}
@@ -369,12 +400,17 @@ export class SlaSweepService {
     };
   }
 
-  /** One chunk of one tenant's phase 2, in one transaction: claim, audit, deliver. */
+  /**
+   * One chunk of one tenant's phase 2, in one transaction: reconcile, claim,
+   * audit, deliver.
+   */
   private async claimAndAlert(
     tx: Prisma.TransactionClient,
     tenantId: string,
     timerIds: readonly string[],
   ): Promise<{ ticketId: string; alerts: InsertedSlaAlert[] }[]> {
+    await this.reconcileDueTickets(tx, tenantId, timerIds);
+
     const claimed = await this.claim(tx, timerIds);
     const breaches: { ticketId: string; alerts: InsertedSlaAlert[] }[] = [];
 
@@ -446,6 +482,57 @@ export class SlaSweepService {
   }
 
   /**
+   * Brings every ticket with a due timer up to date **before** the claim reads
+   * their state, so a breach is decided against the ticket rather than against
+   * whether a queue job happened to survive Redis (TAR-380).
+   *
+   * This is the same `SlaTimerService` body the `sla.evaluate-ticket` handler
+   * runs, called here on the chunk's own transaction — inside it rather than
+   * before it, so the claim below reads a state this transaction wrote and no
+   * reply can land in a gap between the two. For a ticket that really is overdue
+   * it issues three reads, writes nothing and takes no lock, so the common path
+   * costs at most `SLA_SWEEP_TENANT_CHUNK` × 3 round trips inside
+   * `SLA_SWEEP_CHUNK_TIMEOUT_MS` and cannot contend with a concurrent sweep.
+   * For one that was answered, resolved, closed or paused while its trigger was
+   * lost, it applies exactly the transition that trigger would have — and the
+   * claim, seeing this transaction's own writes, leaves it alone.
+   *
+   * The ticket ids are read here rather than returned by phase 1 on purpose:
+   * phase 1 is the one unscoped statement in this file and stays two uuid
+   * columns wide. This read is inside the tenant transaction, under RLS, and
+   * `DISTINCT` collapses a ticket whose first-response and resolution timers are
+   * both due into one reconciliation.
+   *
+   * `ORDER BY ticket_id` is not cosmetic. `DISTINCT` gives no ordering
+   * guarantee, and the reconciliation of an already-answered ticket *does* take
+   * row locks — so two sweeps meeting the same pair of tickets in opposite
+   * orders would deadlock, and one of them would be rolled back and reported as
+   * a tenant failure. A total order over the only rows this loop can lock costs
+   * a sort of at most `SLA_SWEEP_TENANT_CHUNK` uuids and removes the cycle.
+   *
+   * A timer whose ticket is gone is unreachable while the composite foreign key
+   * holds; if it ever happens `reconcile` raises `SlaTicketNotVisibleError`, the
+   * chunk is rolled back, and the caller ends the tenant's turn with the earlier
+   * chunks committed rather than failing silently.
+   */
+  private async reconcileDueTickets(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    timerIds: readonly string[],
+  ): Promise<void> {
+    const ticketIds = await tx.$queryRaw<{ ticketId: string }[]>`
+      SELECT DISTINCT ticket_id AS "ticketId"
+        FROM sla_timers
+       WHERE id IN (${idList(timerIds)}) AND state = 'running' AND due_at <= now()
+       ORDER BY ticket_id
+    `;
+
+    for (const { ticketId } of ticketIds) {
+      await this.timers.reconcile(tx, tenantId, ticketId);
+    }
+  }
+
+  /**
    * The claim (0006, decision 3, statement 1). **Only rows this statement moved
    * are returned**, and therefore only they are alerted.
    *
@@ -458,18 +545,21 @@ export class SlaSweepService {
    * replied (the timer is `met`) or the ticket may have been paused and resumed
    * (the deadline moved forward). Trusting the phase-1 read would alert a
    * supervisor about a deadline that no longer exists.
+   *
+   * What makes that re-check sufficient rather than wishful is
+   * `reconcileDueTickets` above, which has already put each of these tickets'
+   * timers into the state the ticket implies — inside this transaction, so the
+   * `state = 'running'` predicate reads the reconciled value.
    */
   private async claim(
     tx: Prisma.TransactionClient,
     timerIds: readonly string[],
   ): Promise<ClaimedTimerRow[]> {
-    const ids = Prisma.join(timerIds.map((id) => Prisma.sql`${id}::uuid`));
-
     return await tx.$queryRaw<ClaimedTimerRow[]>`
       WITH due AS (
         SELECT id
           FROM sla_timers
-         WHERE id IN (${ids}) AND state = 'running' AND due_at <= now()
+         WHERE id IN (${idList(timerIds)}) AND state = 'running' AND due_at <= now()
            FOR UPDATE SKIP LOCKED
       )
       UPDATE sla_timers t
@@ -491,6 +581,17 @@ function* chunked<T>(values: readonly T[], size: number): Generator<readonly T[]
   for (let index = 0; index < values.length; index += size) {
     yield values.slice(index, index + size);
   }
+}
+
+/**
+ * The batch's ids as a bound `IN` list — one parameter per id, cast to `uuid` so
+ * the comparison uses the index rather than a text coercion. Written once
+ * because both statements phase 2 sends are scoped to the same batch, and
+ * because an id interpolated into the SQL rather than bound would be the
+ * injection hole this file must not have.
+ */
+function idList(ids: readonly string[]): Prisma.Sql {
+  return Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`));
 }
 
 /**

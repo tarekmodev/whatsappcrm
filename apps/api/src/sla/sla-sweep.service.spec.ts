@@ -5,6 +5,7 @@ import { TenantNotActiveError } from '../prisma/prisma.errors';
 import type { SystemPrisma, TenantPrisma } from '../prisma/prisma.tokens';
 import type { SlaAlertService, InsertedSlaAlert } from './sla-alert.service';
 import { SlaSweepService } from './sla-sweep.service';
+import type { SlaTimerService } from './sla-timer.service';
 import { SLA_SWEEP_TENANT_CHUNK } from './sla.constants';
 
 /**
@@ -18,6 +19,9 @@ import { SLA_SWEEP_TENANT_CHUNK } from './sla.constants';
  *
  *   * a claim that moved no row must alert nobody, because another replica got
  *     there first;
+ *   * every due ticket is reconciled **before** the claim reads its state, or a
+ *     dropped `sla.evaluate-ticket` enqueue becomes a permanent false breach
+ *     (TAR-380);
  *   * one tenant's failure must not cost every other tenant their detection;
  *   * a deactivated tenant is an operator's decision, not a fault to page on;
  *   * every tenant's work happens in that tenant's own scope, or the sweep is
@@ -65,12 +69,17 @@ describe('SlaSweepService', () => {
    * would rather than repeating the whole list.
    */
   let claimed: Map<string, ClaimedRow[]>;
-  /** Tenants whose claim throws, keyed to the 1-based transaction it starts on. */
+  /** What the pre-claim scan returns — the tickets carrying a due timer. */
+  let dueTickets: Map<string, { ticketId: string }[]>;
+  /** Tenants whose chunk throws, keyed to the 1-based transaction it starts on. */
   let failingFrom: Map<string, number>;
-  let claimsPerTenant: Map<string, number>;
+  let chunksPerTenant: Map<string, number>;
   let deactivatedTenants: Set<string>;
   let scopes: (string | null)[];
   let ticketEvents: Record<string, unknown>[];
+  /** Every statement and reconciliation, in the order phase 2 issued them. */
+  let steps: string[];
+  let reconcile: jest.Mock;
   let loadAlertCandidates: jest.Mock;
   let resolveRecipients: jest.Mock;
   let insertForBreach: jest.Mock;
@@ -78,19 +87,33 @@ describe('SlaSweepService', () => {
   let tenantContext: TenantContextService;
   let sweep: SlaSweepService;
 
-  function transactionClient() {
+  /**
+   * `chunk` is the 1-based transaction this client belongs to, counted by
+   * `$tenantTransaction` rather than by statements: a chunk now sends **two**
+   * raw statements — the pre-claim scan and the claim — so counting calls would
+   * inject a failure half a chunk early and silently.
+   */
+  function transactionClient(chunk: number) {
     return {
-      $queryRaw: jest.fn(() => {
+      // The two statements answer different questions, so the fake dispatches on
+      // the statement rather than on call order — a test that depended on the
+      // order would pass against an implementation that claimed first, which is
+      // the bug `steps` exists to catch.
+      $queryRaw: jest.fn((strings: TemplateStringsArray) => {
         const tenantId = tenantContext.requireTenantId();
-        const claims = (claimsPerTenant.get(tenantId) ?? 0) + 1;
+        const isClaim = strings.join('?').includes('UPDATE sla_timers');
 
-        claimsPerTenant.set(tenantId, claims);
+        steps.push(isClaim ? 'claim' : 'scan');
 
-        if (claims >= (failingFrom.get(tenantId) ?? Number.POSITIVE_INFINITY)) {
+        if (chunk >= (failingFrom.get(tenantId) ?? Number.POSITIVE_INFINITY)) {
           return Promise.reject(new Error('the database is unreachable'));
         }
 
-        return Promise.resolve(claimed.get(tenantId)?.splice(0, SLA_SWEEP_TENANT_CHUNK) ?? []);
+        return Promise.resolve(
+          isClaim
+            ? (claimed.get(tenantId)?.splice(0, SLA_SWEEP_TENANT_CHUNK) ?? [])
+            : (dueTickets.get(tenantId) ?? []),
+        );
       }),
       ticketEvent: {
         create: jest.fn(({ data }: { data: Record<string, unknown> }) => {
@@ -114,11 +137,26 @@ describe('SlaSweepService', () => {
       [TENANT_A, [claimedRow(TIMER_A, TICKET_A)]],
       [TENANT_B, [claimedRow(TIMER_B, TICKET_B)]],
     ]);
+    dueTickets = new Map([
+      [TENANT_A, [{ ticketId: TICKET_A }]],
+      [TENANT_B, [{ ticketId: TICKET_B }]],
+    ]);
     failingFrom = new Map();
-    claimsPerTenant = new Map();
+    chunksPerTenant = new Map();
     deactivatedTenants = new Set();
     scopes = [];
     ticketEvents = [];
+    steps = [];
+    reconcile = jest.fn((_tx: unknown, _tenantId: string, ticketId: string) => {
+      steps.push(`reconcile:${ticketId}`);
+
+      return Promise.resolve({
+        ticketId,
+        created: 0,
+        transitioned: 0,
+        firstResponseStamped: false,
+      });
+    });
     loadAlertCandidates = jest.fn(() => Promise.resolve([{ id: SUPERVISOR, teamIds: [] }]));
     resolveRecipients = jest.fn(() => Promise.resolve([SUPERVISOR]));
     insertForBreach = jest.fn((_tx: unknown, { slaTimerId }: { slaTimerId: string }) =>
@@ -142,7 +180,11 @@ describe('SlaSweepService', () => {
           return Promise.reject(new TenantNotActiveError(tenantId, '$tenantTransaction'));
         }
 
-        return work(transactionClient());
+        const chunk = (chunksPerTenant.get(tenantId) ?? 0) + 1;
+
+        chunksPerTenant.set(tenantId, chunk);
+
+        return work(transactionClient(chunk));
       },
     } as unknown as TenantPrisma;
 
@@ -151,6 +193,7 @@ describe('SlaSweepService', () => {
       systemPrisma,
       prisma,
       tenantContext,
+      { reconcile } as unknown as SlaTimerService,
       { loadAlertCandidates, resolveRecipients, insertForBreach } as unknown as SlaAlertService,
       { emit } as unknown as EventEmitter2,
     );
@@ -241,6 +284,57 @@ describe('SlaSweepService', () => {
     expect(insertForBreach).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalled();
     expect(ticketEvents).toEqual([]);
+  });
+
+  /**
+   * TAR-380. The claim's `state = 'running'` predicate is only meaningful if
+   * something moved a met timer out of `running`, and the only thing that did
+   * was a queue job `QueueService.enqueue` is allowed to drop. So the sweep
+   * re-derives each due ticket itself, and it has to happen **before** the
+   * claim: reconciling afterwards would still have written the breach, the
+   * `sla_breached` event and the alert.
+   */
+  it('reconciles every due ticket before the claim reads its state', async () => {
+    await sweep.sweep();
+
+    expect(steps).toEqual([
+      'scan',
+      `reconcile:${TICKET_A}`,
+      'claim',
+      'scan',
+      `reconcile:${TICKET_B}`,
+      'claim',
+    ]);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * The reconciliation ran inside this transaction, so a timer it moved to `met`
+   * is no longer `running` when the claim looks — and a claim that moved no row
+   * alerts nobody. This is the false breach an agent's dropped `agent_replied`
+   * trigger used to produce, expressed at the seam the service owns.
+   */
+  it('raises nothing for a ticket the reconciliation settled', async () => {
+    claimed.set(TENANT_A, []);
+    claimed.set(TENANT_B, []);
+
+    const report = await sweep.sweep();
+
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    expect(report).toMatchObject({ due: 2, breached: 0, alerted: 0 });
+    expect(ticketEvents).toEqual([]);
+    expect(insertForBreach).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  /** Nothing due in this tenant's batch any more, so there is nothing to re-derive. */
+  it('reconciles nothing when the scan finds no ticket still due', async () => {
+    dueTickets.set(TENANT_A, []);
+    dueTickets.set(TENANT_B, []);
+
+    await sweep.sweep();
+
+    expect(reconcile).not.toHaveBeenCalled();
   });
 
   /**
