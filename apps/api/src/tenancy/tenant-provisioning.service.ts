@@ -248,8 +248,12 @@ async function createTenant(
       slug: command.slug,
       name: command.name,
       // Provisioning completes inside this transaction, so the tenant is never
-      // observable in the `pending` state the column defaults to — a tenant row
+      // observable in the `created` state the column defaults to — a tenant row
       // exists only once everything it needs exists with it.
+      //
+      // Operator-provisioned tenants go straight to `active` and skip the trial:
+      // self-signup is TAR-405's path, and it is what starts a tenant in
+      // `trialing` against the `tenant_plan_limits` row (TAR-403).
       status: 'active',
       settings: { create: { timezone, locale } },
       domains: {

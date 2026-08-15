@@ -107,7 +107,7 @@ describe('tenant provisioning, end to end', () => {
         },
       });
 
-      // Never observable as `pending`: the row exists only once everything it
+      // Never observable as `created`: the row exists only once everything it
       // needs exists with it.
       expect(stored.status).toBe('active');
       expect(stored.settings).toEqual({ timezone: 'Europe/London', locale: 'en-GB' });
