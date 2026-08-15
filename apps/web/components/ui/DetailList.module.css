@@ -1,0 +1,46 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /*
+   * The pairs go two-column when the *card* is wide enough, not when the window
+   * is: this list sits in a section card on a settings page today and could sit
+   * in a narrow side panel tomorrow, and a viewport media query would answer the
+   * wrong question in the second case. Same reasoning as `DataTable`.
+   */
+  container-type: inline-size;
+}
+
+.row {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.term {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.value {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: start;
+  color: var(--color-on-surface);
+  /* A hostname or a long product name wraps rather than widening the card. */
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  max-inline-size: var(--measure-body);
+}
+
+@container (min-width: 30rem) {
+  .row {
+    grid-template-columns: minmax(0, 12rem) minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: baseline;
+  }
+}
