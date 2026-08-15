@@ -1,0 +1,44 @@
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/*
+ * The native colour input, stripped of the browser's own chrome so it reads as a
+ * swatch. Sized to the touch-target minimum in both axes — it is a control a
+ * finger has to hit, even though the text field beside it is the one that
+ * carries the value for assistive technology.
+ */
+.swatch {
+  flex: 0 0 auto;
+  inline-size: var(--size-swatch);
+  block-size: var(--size-swatch);
+  min-inline-size: var(--size-touch-target);
+  min-block-size: var(--size-touch-target);
+  padding: var(--space-1);
+  border: var(--border-hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+/* Chromium and Firefox each wrap the swatch in their own box; both are removed
+   so the border above is the only one drawn. */
+.swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.swatch::-webkit-color-swatch,
+.swatch::-moz-color-swatch {
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.hex {
+  /* A hex value is seven characters; letting it take the whole row would suggest
+     it accepts prose. */
+  max-inline-size: var(--size-container-sm);
+  font-family: var(--font-family-mono);
+  text-transform: lowercase;
+}

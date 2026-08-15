@@ -75,6 +75,14 @@ export const routes = {
   settingsWorkflows: () => '/settings/workflows',
   /** Where a tenant admin connects its own WhatsApp Business Account (TAR-169). */
   settingsWhatsApp: () => '/settings/whatsapp',
+  /** Logo, favicon and the two brand colours (TAR-29). */
+  settingsBranding: () => '/settings/branding',
+  /**
+   * The tenant's own hostnames (TAR-29). Separate from branding because the two
+   * are different authorities — `domain:write` controls DNS and therefore every
+   * invite and reset link, `branding:write` controls a colour.
+   */
+  settingsDomains: () => '/settings/domains',
   settingsSecurity: () => '/settings/security',
   /**
    * Sign in. `redirectTo` is where the user was heading when the guard turned
