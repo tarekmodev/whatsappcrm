@@ -28,8 +28,8 @@ const TENANT_NOT_ACTIVE_MARKER = 'TENANT_NOT_ACTIVE';
  *
  * Anything absent from this map is `tenant-scoped`: it carries a non-null
  * `tenant_id`, RLS filters it, and the extension needs to do nothing beyond
- * setting the GUC. The three entries are the three tables TAR-48 deliberately
- * left without a policy, which is exactly why they need one here instead.
+ * setting the GUC. The four entries are the tables deliberately left without a
+ * policy, which is exactly why they need one here instead.
  */
 const MODEL_POLICIES = {
   /**
@@ -53,6 +53,15 @@ const MODEL_POLICIES = {
    * frames deeper.
    */
   WebhookEvent: 'system-only',
+  /**
+   * A self-signup before its tenant exists (TAR-440, ADR 0009 decision 3). Same
+   * shape as `WebhookEvent` and for the same reason — written before there is a
+   * tenant to scope to, so no policy could apply and the app role is granted
+   * nothing on it. Refusing here means signup code that reached for the wrong
+   * client gets a message naming the cause rather than a permission failure
+   * three frames deeper. It runs on `SystemPrisma`.
+   */
+  TenantSignup: 'system-only',
 } as const satisfies Partial<Record<Prisma.ModelName, string>>;
 
 /**
