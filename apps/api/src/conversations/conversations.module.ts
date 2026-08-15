@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 import { ResponseOriginService } from '../common/response-origin.service';
+import { EntitlementsModule } from '../entitlements/entitlements.module';
 import { MediaModule } from '../media/media.module';
 import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 import { ConversationCommandService } from './conversation-command.service';
@@ -54,7 +55,9 @@ import { OutboundMessageDispatcher } from './outbound-message.dispatcher';
  * `QueueModule`, `EventEmitter2` from the root `EventEmitterModule`.
  */
 @Module({
-  imports: [WhatsAppModule, MediaModule, IdempotencyModule],
+  // `EntitlementsModule` for the plan's conversation allowance, refused at the
+  // send rather than at the receipt (TAR-405).
+  imports: [WhatsAppModule, MediaModule, IdempotencyModule, EntitlementsModule],
   controllers: [ConversationsController],
   providers: [
     ConversationQueryService,

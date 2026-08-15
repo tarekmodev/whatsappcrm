@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import type { PlanLimits } from '@whatsappcrm/contracts';
 import type { Prisma } from '../generated/prisma/client';
 import { PlanLimitExceededError } from './entitlements.errors';
+import { UsageCounterService } from './usage-counter.service';
 
 /**
  * The tenant's effective plan limits, and the write-time checks that enforce
@@ -49,18 +51,19 @@ import { PlanLimitExceededError } from './entitlements.errors';
  * the rollback, so a crashed request cannot leave it held, and the contention it
  * creates is per tenant on a path that runs at human speed.
  *
- * ## What is not here
+ * ## Why the conversation cap takes no lock
  *
- * `entitlements.limits.conversationsPerPeriod` has no check yet. 0009 puts its
- * enforcement at the outbound send, "once the counter is over", against a
- * `conversations_opened` usage counter — and nothing on `main` writes
- * `usage_counters` outside the demo seed, so the comparison would be against a
- * permanent zero. Shipping that would be enforcement that reads as working and
- * never refuses, which is worse than its absence. The counter needs a writer and
- * a period anchor first; both are recorded on TAR-405.
+ * The one place not to copy the seat check. Seats is a *level*, and two
+ * concurrent acceptances that both read "2 of 3" step over a guarantee — hence
+ * the lock. Conversation volume is a monotonic counter against a ceiling that
+ * gates and warns and never bills, so an overshoot of a handful under
+ * concurrency costs nothing and a reconcile pass corrects it. Serialising every
+ * tenant's sends on one advisory lock, on the highest-volume path in the
+ * product, to protect a non-billing ceiling is the wrong trade.
  */
 @Injectable()
 export class PlanLimitsService {
+  constructor(private readonly usage: UsageCounterService) {}
   /**
    * Refuses the caller if the tenant has no seat left for one more member.
    *
@@ -71,7 +74,7 @@ export class PlanLimitsService {
    */
   async assertSeatAvailable(tx: Prisma.TransactionClient, tenantId: string): Promise<void> {
     const row = await tx.tenantEntitlements.findFirst({ select: { entitlements: true } });
-    const cap = seatCapOf(row?.entitlements);
+    const cap = limitOf(row?.entitlements, 'seats');
 
     if (cap === null) {
       return;
@@ -87,6 +90,40 @@ export class PlanLimitsService {
       throw PlanLimitExceededError.seats(cap, used);
     }
   }
+
+  /**
+   * Refuses the caller when the tenant has opened its plan's allowance of
+   * conversations in the current period.
+   *
+   * Called from the **outbound send**, never from ingest. That asymmetry is the
+   * design and not an oversight: a conversation is opened by a customer writing
+   * in, so metering counts inbound-opened threads, but refusing the inbound
+   * write to enforce a quota would lose a real person's message to fix a billing
+   * problem. What the cap withholds is the reply.
+   *
+   * No lock — see the note on the class. Takes the caller's transaction so the
+   * count it reads is the one its own increment would land against.
+   */
+  async assertConversationVolumeAvailable(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+  ): Promise<void> {
+    const row = await tx.tenantEntitlements.findFirst({ select: { entitlements: true } });
+    const cap = limitOf(row?.entitlements, 'conversationsPerPeriod');
+
+    if (cap === null) {
+      return;
+    }
+
+    const { value } = await this.usage.current(tx, {
+      tenantId,
+      metric: 'conversations_opened',
+    });
+
+    if (value >= cap) {
+      throw PlanLimitExceededError.conversationsPerPeriod(cap, value);
+    }
+  }
 }
 
 /**
@@ -96,20 +133,24 @@ export class PlanLimitsService {
 const SEAT_LOCK_PREFIX = 'plan-limits:seats:';
 
 /**
- * The seat ceiling out of `tenant_entitlements.entitlements`, which is
+ * One ceiling out of `tenant_entitlements.entitlements`, which is
  * `PlanEntitlementsSchema`'s shape (ADR 0009 Amendment 1 ruling 3 — the column
- * replaced `seat_cap`, so enforcement and display read one row).
+ * replaced the per-limit columns, so enforcement and display read one row).
  *
  * **Null means unlimited, and so does anything unreadable.** A missing row, a
  * missing key or a value that is not a positive integer all return null, which
- * is the fail-open branch `assertSeatAvailable` documents: a billing ceiling
- * that refuses work because a JSON blob surprised it is worse than one that
- * lets a tenant over the line until somebody notices. The database is not
- * relying on this to be careful — `tenant_entitlements_shape` refuses every one
- * of those shapes at write time — so in practice this narrowing is unreachable
- * and exists so that a hand-edited row cannot lock a tenant out.
+ * is the fail-open branch both callers document: a billing ceiling that refuses
+ * work because a JSON blob surprised it is worse than one that lets a tenant
+ * over the line until somebody notices. The database is not relying on this to
+ * be careful — `tenant_entitlements_shape` refuses every one of those shapes at
+ * write time — so in practice this narrowing is unreachable, and it exists so
+ * that a hand-edited row cannot lock a tenant out.
+ *
+ * Keyed rather than one reader per limit: `PlanLimitsSchema` has five, three of
+ * them still unenforced, and five copies of this narrowing is five places for
+ * one of them to disagree about what "unlimited" looks like.
  */
-function seatCapOf(entitlements: unknown): number | null {
+function limitOf(entitlements: unknown, name: keyof PlanLimits): number | null {
   if (typeof entitlements !== 'object' || entitlements === null) {
     return null;
   }
@@ -120,9 +161,9 @@ function seatCapOf(entitlements: unknown): number | null {
     return null;
   }
 
-  const { seats } = limits as { seats?: unknown };
+  const value = (limits as Record<string, unknown>)[name];
 
-  return typeof seats === 'number' && Number.isInteger(seats) && seats > 0 ? seats : null;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
 }
 
 /**

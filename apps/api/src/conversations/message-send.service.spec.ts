@@ -21,6 +21,9 @@ import {
   ServiceWindowExpiredError,
   TemplateNotSendableError,
 } from './conversations.errors';
+import { PlanLimitsService } from '../entitlements/plan-limits.service';
+import { UsageCounterService } from '../entitlements/usage-counter.service';
+import { UsagePeriodResolver } from '../entitlements/usage-period.resolver';
 import { MessageSendService } from './message-send.service';
 
 /**
@@ -153,6 +156,9 @@ describe('MessageSendService', () => {
       },
       messageAttachment: { create: jest.fn(() => Promise.resolve({ id: 'attachment' })) },
       conversation: { updateMany: jest.fn(() => Promise.resolve({ count: 1 })) },
+      // No row, which reads as unlimited — every case in this file is about the
+      // send decision, and the cap has its own spec.
+      tenantEntitlements: { findFirst: jest.fn(() => Promise.resolve(null)) },
     };
 
     const prisma = {
@@ -187,6 +193,11 @@ describe('MessageSendService', () => {
       { enqueue } as unknown as QueueService,
       { emit } as unknown as EventEmitter2,
       new ResponseOriginService({ getOrThrow: () => 'https' } as never, tenantContext),
+      // The real one. `prisma`'s fake answers no `tenant_plan_limits` row, which
+      // reads as unlimited — so every case here exercises the send path rather
+      // than the cap, and the cap's own behaviour is proved in
+      // `conversation-cap.int-spec.ts` against a real counter.
+      new PlanLimitsService(new UsageCounterService(new UsagePeriodResolver())),
     );
   });
 

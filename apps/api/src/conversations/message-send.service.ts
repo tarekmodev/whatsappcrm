@@ -25,6 +25,7 @@ import {
 import { MediaSendResolver } from '../media/media-send.resolver';
 import type { MediaObjectRecord } from '../media/media-reader.service';
 import { MediaNotFoundError } from '../media/media.errors';
+import { PlanLimitsService } from '../entitlements/plan-limits.service';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { QueueService } from '../queue/queue.service';
 import { MessageTemplateQueryService } from '../whatsapp/message-template-query.service';
@@ -102,6 +103,7 @@ export class MessageSendService {
     private readonly queue: QueueService,
     private readonly events: EventEmitter2,
     private readonly origin: ResponseOriginService,
+    private readonly planLimits: PlanLimitsService,
   ) {}
 
   async send(conversationId: string, input: SendMessageInput): Promise<MessageResponse> {
@@ -115,6 +117,15 @@ export class MessageSendService {
     const draft = await this.prepare(conversation, input);
 
     const created = await this.prisma.$tenantTransaction(async (tx) => {
+      // The plan's conversation allowance, checked at the reply rather than at
+      // the receipt (TAR-405). A customer's message is always accepted and
+      // stored; what a spent allowance withholds is the tenant's ability to
+      // answer. Inside the transaction, so the count read is the one this send
+      // is being weighed against — but deliberately without a lock, because this
+      // ceiling gates and warns rather than bills and is on the busiest path in
+      // the product.
+      await this.planLimits.assertConversationVolumeAvailable(tx, principal.tenantId);
+
       const { id } = await tx.message.create({
         data: {
           tenantId: principal.tenantId,

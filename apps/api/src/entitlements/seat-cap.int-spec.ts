@@ -4,6 +4,8 @@ import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import { PlanLimitExceededError } from './entitlements.errors';
 import { PlanLimitsService } from './plan-limits.service';
+import { UsageCounterService } from './usage-counter.service';
+import { UsagePeriodResolver } from './usage-period.resolver';
 
 /**
  * The seat cap against a real PostgreSQL, as `whatsappcrm_app` — the role that
@@ -61,7 +63,7 @@ function entitlementsWithSeats(seats: number | null): Prisma.InputJsonObject {
 
 describe('the plan seat cap', () => {
   const tenantContext = new TenantContextService();
-  const planLimits = new PlanLimitsService();
+  const planLimits = new PlanLimitsService(new UsageCounterService(new UsagePeriodResolver()));
 
   let systemPrisma: PrismaClient;
   let tenantBase: PrismaClient;
