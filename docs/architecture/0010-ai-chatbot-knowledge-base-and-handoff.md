@@ -587,6 +587,13 @@ it per turn so "is caching working" is a query rather than a guess.
 workflows will also send messages with a null sender, so that flag is about to stop distinguishing a bot
 reply from a workflow reply — and TAR-408 has to badge exactly one of them.
 
+This is a shared seam rather than a private one:
+[0009 — workflow triggers, conditions and actions](./0009-workflow-triggers-conditions-actions.md)
+landed while this document was in review and claims no column of its own for message authorship, so
+`origin` is the field both stories should write. `bot` is this story's value; a `workflow` value is
+TAR-27's to add when its send action lands, and the enum is written to be extended rather than
+replaced.
+
 Add a column, keep the flag:
 
 ```prisma
@@ -650,7 +657,7 @@ model KnowledgeChunk {
   content      String
   /// Generated, STORED. `'simple'` is a literal because a generated column
   /// requires an immutable expression — a per-tenant regconfig cannot be one
-  /// (0009 decision 2).
+  /// (0010 decision 2).
   searchVector Unsupported("tsvector")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
