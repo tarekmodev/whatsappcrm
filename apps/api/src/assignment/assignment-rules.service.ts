@@ -337,13 +337,16 @@ async function assertUnderRuleCap(tx: Prisma.TransactionClient): Promise<void> {
 }
 
 /**
- * Every id a rule points at, checked in tenant scope before the write.
+ * Every id and key a rule points at, checked in tenant scope before the write.
  *
- * Three kinds, and all three answer `validation_failed` naming the field: a
- * target team, a target user, and the `custom_field_defs.key` a
- * `contact_attribute` condition names. The last one matters more than it looks —
- * a key that names no definition is a typo that would silently never match, and
- * a rule that never fires is the hardest kind of routing bug to see.
+ * Four kinds, and all four answer `validation_failed` naming the field: a target
+ * team, a target user, the `custom_field_defs.key` a `contact_attribute`
+ * condition names, and the `tags.id` a `tag` condition names. The last two matter
+ * more than they look — a reference that resolves to nothing is not a leak,
+ * because both reads are tenant-scoped and the engine treats a missing tag as
+ * simply absent. It is worse than that in the way that is hard to see: the rule
+ * saves, reports success, and then silently never fires again. That is the shape
+ * a supervisor cannot debug, so it is refused at the boundary.
  */
 async function assertReferencesExist(
   tx: Prisma.TransactionClient,
@@ -373,13 +376,26 @@ async function assertReferencesExist(
     }
   }
 
-  const keys = [
-    ...new Set(
-      conditions
-        .filter((condition) => condition.type === 'contact_attribute')
-        .map((condition) => condition.key),
-    ),
-  ];
+  await assertCustomFieldKeysExist(tx, tenantId, conditions);
+  await assertTagIdsExist(tx, tenantId, conditions);
+}
+
+/**
+ * The `custom_field_defs.key` every `contact_attribute` condition names.
+ *
+ * A key that names no definition is a typo that would silently never match, and
+ * a rule that never fires is the hardest kind of routing bug to see.
+ */
+async function assertCustomFieldKeysExist(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  conditions: readonly RoutingCondition[],
+): Promise<void> {
+  const keys = distinct(
+    conditions
+      .filter((condition) => condition.type === 'contact_attribute')
+      .map((condition) => condition.key),
+  );
 
   if (keys.length === 0) {
     return;
@@ -395,6 +411,50 @@ async function assertReferencesExist(
   if (unknown !== undefined) {
     throw new UnknownRuleReferenceError('conditions.key', unknown);
   }
+}
+
+/**
+ * The `tags.id` every `tag` condition names.
+ *
+ * The realistic way a dead id gets here is not a hostile client: a supervisor
+ * saves any other edit on a rule that references a tag somebody deleted, the
+ * console resubmits the whole condition list, and without this the API accepts
+ * it. The engine compares that id against `contact_tags` rows that no longer
+ * exist, so the rule matches nothing from then on and reports no error anywhere.
+ *
+ * One query for the whole set rather than one per condition — the count is
+ * bounded by `rulesPerTenant`'s companion limits and this runs inside the write
+ * transaction.
+ */
+async function assertTagIdsExist(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  conditions: readonly RoutingCondition[],
+): Promise<void> {
+  const tagIds = distinct(
+    conditions
+      .filter((condition) => condition.type === 'tag')
+      .flatMap((condition) => condition.tagIds),
+  );
+
+  if (tagIds.length === 0) {
+    return;
+  }
+
+  const held = await tx.tag.findMany({
+    where: { tenantId, id: { in: tagIds } },
+    select: { id: true },
+  });
+  const known = new Set(held.map((tag) => tag.id));
+  const unknown = tagIds.find((tagId) => !known.has(tagId));
+
+  if (unknown !== undefined) {
+    throw new UnknownRuleReferenceError('conditions.tagIds', unknown);
+  }
+}
+
+function distinct(values: readonly string[]): string[] {
+  return [...new Set(values)];
 }
 
 /**
