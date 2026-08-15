@@ -40,6 +40,23 @@ export interface NavItem {
 
 const SETTINGS_CHILDREN: readonly NavItem[] = [
   {
+    id: 'settings-workspace',
+    label: content.nav.workspace,
+    href: routes.settingsWorkspace(),
+    // `info`, not `settings`: the parent Settings entry already carries that
+    // one, and the mobile drawer renders parent and children together.
+    icon: 'info',
+    /**
+     * Either permission, because the page is two surfaces with two gates: the
+     * plan panel reads `GET /tenant/lifecycle` (`tenant:settings`) and the
+     * profile form writes `PATCH /tenant` (`branding:write`). Both are
+     * admin-only under today's role table, so the union changes nothing now —
+     * it is what stops a custom role that holds one of them from being sent to
+     * a 403 for a surface it can half use.
+     */
+    requiresAny: ['tenant:settings', 'branding:write'],
+  },
+  {
     id: 'settings-people',
     label: content.nav.people,
     href: routes.settingsPeople(),

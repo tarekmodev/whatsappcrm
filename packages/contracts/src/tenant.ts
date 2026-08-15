@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PlanSchema } from './billing';
 import { HexColorSchema, IdSchema, TimestampSchema, type IanaTimezone } from './common';
 
 /**
@@ -127,6 +128,39 @@ export const TenantPublicResponseSchema = z.object({
   id: IdSchema,
   name: z.string(),
   branding: TenantBrandingSchema,
+});
+
+/**
+ * `GET /api/v1/tenant/lifecycle` — what the workspace settings page's plan panel
+ * renders (0009, TAR-409).
+ *
+ * Deliberately **not** `BillingSummaryResponse`. That one is TAR-37's and
+ * describes a subscription; this describes a lifecycle, and the two coexist —
+ * a tenant with no subscription still has one of these. The plan is narrowed to
+ * the three fields a console needs rather than the whole `PlanSchema`, so
+ * nothing here depends on a price or a provider id.
+ *
+ * `seatsPending` is separate from `seatsUsed` for the reason 0009 gives for
+ * counting both against the cap: an admin who could mint unlimited pending
+ * invites would blow past the seat limit the moment a mailout landed. The
+ * console shows the sum against the cap and names the two parts, so "4 of 5,
+ * one invitation outstanding" is legible rather than arithmetic the reader has
+ * to do.
+ */
+export const TenantLifecycleResponseSchema = z.object({
+  status: TenantStatusSchema,
+  trialEndsAt: TimestampSchema.nullable(),
+  /** When a `past_due` or `cancelled` tenant becomes `suspended`. */
+  gracePeriodEndsAt: TimestampSchema.nullable(),
+  /** When a `suspended` tenant's data is destroyed. */
+  purgeAt: TimestampSchema.nullable(),
+  plan: PlanSchema.pick({ key: true, name: true, entitlements: true }),
+  usage: z.object({
+    seatsUsed: z.int().nonnegative(),
+    /** Invitations sent and not yet accepted. Counted against the seat cap. */
+    seatsPending: z.int().nonnegative(),
+    conversationsThisPeriod: z.int().nonnegative(),
+  }),
 });
 
 export const TenantUpdateInputSchema = z.object({
@@ -341,5 +375,6 @@ export const EDGE_AUTH_HEADER = 'x-edge-auth';
 export type TenantBranding = z.infer<typeof TenantBrandingSchema>;
 export type TenantDomain = z.infer<typeof TenantDomainSchema>;
 export type TenantResponse = z.infer<typeof TenantResponseSchema>;
+export type TenantLifecycleResponse = z.infer<typeof TenantLifecycleResponseSchema>;
 export type TenantPublicResponse = z.infer<typeof TenantPublicResponseSchema>;
 export type TenantUpdateInput = z.infer<typeof TenantUpdateInputSchema>;

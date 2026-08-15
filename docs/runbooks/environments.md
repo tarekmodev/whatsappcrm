@@ -122,8 +122,25 @@ fixed in `render.yaml` — so these are known before anything exists:
 | production  | `https://whatsappcrm-web-prod.onrender.com`    | `https://whatsappcrm-api-prod.onrender.com/api`             |
 
 They are prompted rather than wired automatically because Render's `fromService`
-supplies a hostname with no scheme, and all of these need one. They become custom
-domains once white-labelling lands.
+supplies a hostname with no scheme, and all of these need one.
+
+`PLATFORM_EDGE_HOSTNAME` is prompted alongside them, on the API service, and is the
+one value here that must **not** carry a scheme: it is the CNAME target a tenant
+publishes when it points its own domain at us, so it is the bare web host —
+`whatsappcrm-web-prod.onrender.com` and its two siblings. `fromService` is the wrong
+source for it too, but for the opposite reason: `property: host` yields the private
+network name, which no customer's resolver can see.
+
+| Environment | `PLATFORM_EDGE_HOSTNAME` (API service) |
+| ----------- | -------------------------------------- |
+| development | `whatsappcrm-web-dev.onrender.com`     |
+| staging     | `whatsappcrm-web-staging.onrender.com` |
+| production  | `whatsappcrm-web-prod.onrender.com`    |
+
+Attaching a tenant's hostname at the edge and issuing its certificate is an operator
+step that this blueprint deliberately does not describe — including the one-time
+wildcard certificate each environment needs for `*.$PLATFORM_DOMAIN`. See
+docs/runbooks/custom-domains.md.
 
 `API_BASE_URL` is the server-side one: the destination of the `/api/*` rewrite in
 `next.config.mjs` and the origin server components call. It has no default worth
