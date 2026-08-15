@@ -708,6 +708,96 @@ model TenantPlanLimits {
   @@map("tenant_plan_limits")
 }
 
+/// A self-signup between the form and the tenant existing (TAR-440, ADR 0009
+/// decision 3). `POST /api/v1/signup` writes one row here and sends one email;
+/// nothing is provisioned. `POST /api/v1/signup/verify` consumes the row and only
+/// then calls `TenantProvisioningService.provision()`.
+///
+/// **The fourth table with no tenant scoping**, and the second where the *grant*
+/// rather than RLS is the enforcement. A policy needs a tenant to compare
+/// against and there is none: at insert the tenant has not been provisioned and
+/// the caller is anonymous. `webhook_events` is the precedent, and this model is
+/// `system-only` in `tenant-scope.extension.ts` for the same reason —
+/// `whatsappcrm_app` is granted nothing on the table at all.
+///
+/// Consumption is one conditional statement, the pattern `InviteService.accept`
+/// already sets — `UPDATE … WHERE consumed_at IS NULL AND expires_at > now()
+/// RETURNING` — so the update itself is the concurrency control and two
+/// simultaneous uses of one link cannot both call `provision()`.
+model TenantSignup {
+  id    String @id @default(uuid(7)) @db.Uuid
+  email String @db.Citext
+
+  /// The platform subdomain the signup asked for. Held as a **soft reservation**
+  /// by `tenant_signups_slug_reserved`, a partial unique index over
+  /// `(desired_slug) WHERE consumed_at IS NULL` — so an unconsumed row holds the
+  /// name and a consumed one releases nothing, because the tenant holds it by
+  /// then. Missing from this block on purpose: Prisma cannot express an index
+  /// predicate, so it lives in raw SQL in `20260815140000_tenant_signups`.
+  ///
+  /// ⚠️ That predicate cannot carry `AND expires_at > now()` — an index
+  /// predicate must be IMMUTABLE — so an abandoned signup holds its slug until
+  /// something deletes it. TAR-405's insert path must delete expired unconsumed
+  /// rows for the slug in its own transaction before inserting. Same trap, same
+  /// answer, as `invites_one_live_per_email`.
+  ///
+  /// `tenant_signups_desired_slug_format` restates `TenantSlugSchema`: a
+  /// reservation the tenant could never be given squats a name for nothing.
+  desiredSlug String @map("desired_slug") @db.Citext
+
+  tenantName String @map("tenant_name")
+  adminName  String @map("admin_name")
+
+  /// Argon2id at the same cost parameters as `users.password_hash`, taken at
+  /// signup so verification is one click and not a second form. ADR 0009 records
+  /// the call: a verify page that asks for a password is one an attacker who
+  /// intercepted the link can *complete*, where one that only confirms is not.
+  /// An unconsumed row is removed by the expiry sweep, so an abandoned signup
+  /// leaves no credential behind.
+  passwordHash String @map("password_hash")
+
+  /// SHA-256 hex of the token, as `sessions`, `invites` and
+  /// `password_reset_tokens`. The token itself is never stored, so a database
+  /// leak yields no usable verification link. ADR 0009 sketched this as `bytea`;
+  /// `text` keeps it on the one hashing idiom the other three share — see the
+  /// migration header.
+  tokenHash String @unique @map("token_hash")
+
+  /// Seed `tenant_settings` on provisioning. Null means "take that table's own
+  /// default" rather than restating `UTC` / `en` somewhere they could drift.
+  timezone String?
+  locale   String?
+
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
+
+  /// The tenant this signup produced, written on consumption. Forensics only.
+  ///
+  /// **No relation and no foreign key**, and it is not called `tenant_id`. It is
+  /// a backreference rather than a scoping key, it has to survive the tenant's
+  /// purge, and `pnpm db:verify:rls` requires every table carrying a `tenant_id`
+  /// column to have FORCEd RLS and a `tenant_isolation` policy — a rule this
+  /// table cannot satisfy and should not be exempted from.
+  ///
+  /// `tenant_signups_provisioned_implies_consumed` makes a row that names a
+  /// tenant also be consumed. One way only: the consuming UPDATE has to win its
+  /// race before `provision()` can return an id.
+  provisionedTenantId String? @map("provisioned_tenant_id") @db.Uuid
+
+  /// Abuse review only — never a filter, never shown to a user. Rate limiting is
+  /// Redis-backed, in the shape `LoginThrottleService` already uses.
+  ipAddress String?  @map("ip_address") @db.Inet
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// A third index is missing from this block for the same reason as the
+  /// reservation above: `tenant_signups_expires_at_idx` is **partial** over
+  /// `(expires_at) WHERE consumed_at IS NULL`, which is exactly the expiry
+  /// sweep's predicate. Consumed rows are kept and their `expires_at` is in the
+  /// past too, so an unpartial index would hand the sweep every signup ever
+  /// completed. Raw SQL in `20260815140000_tenant_signups`.
+  @@map("tenant_signups")
+}
+
 /// Host → tenant resolution (TAR-39, decision 2, step 1). `hostname` is unique
 /// **globally**, not per tenant: it is the lookup key on an unauthenticated
 /// request, so two tenants claiming one host has no correct answer.

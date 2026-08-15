@@ -44,8 +44,9 @@
 --               table returns zero rows. With the GUC set, each tenant sees its
 --               own rows and none of the other's. Writing another tenant's
 --               `tenant_id` is rejected; updating and deleting its rows match
---               nothing. `webhook_events` is unreachable by grant. The system
---               role sees across tenants, which is what it is for.
+--               nothing. `webhook_events` and `tenant_signups` are unreachable
+--               by grant. The system role sees across tenants, which is what it
+--               is for.
 --
 -- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74), one in
 -- each of the five auth tables — `teams`, `invites`, `invite_teams`, `sessions`,
@@ -772,14 +773,31 @@ BEGIN
 
     RAISE NOTICE 'ok: GUC cleared to the empty string -> 0 rows';
 
-    -- 3g. webhook_events carries no policy by design, so the grant is the
-    -- enforcement. The app role must not be able to read it at all.
+    -- 3g. `webhook_events` and `tenant_signups` carry no policy by design, so on
+    -- both the grant is the enforcement. The app role must not be able to read
+    -- either at all.
+    --
+    -- Asserted here rather than left to phase 1b, which only proves the negative
+    -- — "no privilege on an unprotected table" also passes for a table that was
+    -- never created. These two are named, so a grant added by hand or an
+    -- `app-roles.sql` branch dropped in a refactor fails by name.
     BEGIN
         EXECUTE 'SELECT count(*) FROM "public"."webhook_events"';
         RAISE EXCEPTION 'app role can read webhook_events — it holds no policy and must hold no grant';
     EXCEPTION
         WHEN insufficient_privilege THEN
             RAISE NOTICE 'ok: webhook_events unreachable by the app role (no grant)';
+    END;
+
+    -- TAR-440. A signup row exists before its tenant does and holds an argon2id
+    -- password hash plus a verification digest for an account nobody owns yet.
+    -- It is reachable by `SystemPrisma` alone.
+    BEGIN
+        EXECUTE 'SELECT count(*) FROM "public"."tenant_signups"';
+        RAISE EXCEPTION 'app role can read tenant_signups — it holds no policy and must hold no grant';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: tenant_signups unreachable by the app role (no grant)';
     END;
 
     -- 3h. The system role, with no GUC at all, sees both tenants. Proves the
