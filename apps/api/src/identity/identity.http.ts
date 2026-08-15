@@ -1,4 +1,5 @@
 import { ApiException } from '../common/errors/api.exception';
+import { PlanLimitExceededError } from '../entitlements/entitlements.errors';
 import { translatePeopleFailure } from '../people/people.http';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
 import {
@@ -94,6 +95,16 @@ export function translateIdentityFailure(error: unknown): never {
 
   if (error instanceof RealtimeTicketUnavailableError) {
     throw new ApiException('upstream_unavailable', error.message);
+  }
+
+  if (error instanceof PlanLimitExceededError) {
+    // The published code for every quota (0002's taxonomy, 402). The limit
+    // travels in `details` rather than in a code of its own, so a console can
+    // branch on which ceiling was hit — and render "3 of 3" — without the error
+    // vocabulary growing a member per plan limit.
+    throw new ApiException('plan_limit_exceeded', error.message, [
+      { path: error.limit, message: `${error.used} of ${error.cap} in use` },
+    ]);
   }
 
   if (error instanceof TenantNotActiveError) {

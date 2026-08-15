@@ -1,6 +1,7 @@
 import { Global, Logger, Module, type Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
+import { EntitlementsModule } from '../entitlements/entitlements.module';
 import { AuthController } from './auth.controller';
 import { AuthRedisClient } from './auth-redis.client';
 import { AuthService } from './auth.service';
@@ -102,6 +103,11 @@ const mailerProvider: Provider = {
 
 @Global()
 @Module({
+  // `EntitlementsModule` is not global, so it is imported rather than inherited:
+  // the seat cap is enforced from `InviteService`, and the dependency reads in
+  // this module's own list. It imports nothing back — the edge is one-way, so
+  // there is no cycle (TAR-405).
+  imports: [EntitlementsModule],
   controllers: [
     AuthController,
     SessionController,

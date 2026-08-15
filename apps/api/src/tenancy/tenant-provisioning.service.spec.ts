@@ -33,6 +33,9 @@ interface TenantCreateArgs {
         isActive: boolean;
       };
     };
+    planLimits: {
+      create: { planKey: string; seatCap: number | null; conversationCap: number | null };
+    };
   };
 }
 
@@ -42,6 +45,7 @@ interface TransactionSpies {
   tenantSettings: { create: jest.Mock };
   tenantDomain: { create: jest.Mock };
   slaPolicy: { create: jest.Mock };
+  tenantPlanLimits: { create: jest.Mock };
 }
 
 describe('TenantProvisioningService', () => {
@@ -55,6 +59,7 @@ describe('TenantProvisioningService', () => {
       tenantSettings: { create: jest.fn() },
       tenantDomain: { create: jest.fn() },
       slaPolicy: { create: jest.fn() },
+      tenantPlanLimits: { create: jest.fn() },
     };
 
     const systemPrisma = {
@@ -129,6 +134,26 @@ describe('TenantProvisioningService', () => {
       expect(tx.slaPolicy.create).not.toHaveBeenCalled();
     });
 
+    it('seeds an uncapped plan-limits row, so the seat check has something to read', async () => {
+      await service.provision({ slug: 'acme', name: 'Acme Ltd' });
+
+      const { data } = tenantCreateArgs();
+
+      // Both caps null rather than inherited from the column defaults, which
+      // are the trial's. An operator-provisioned tenant was never sold a cap,
+      // and `plan_key` is what makes these rows findable when TAR-37's plan
+      // sync becomes this table's writer.
+      expect(data.planLimits.create).toEqual({
+        planKey: 'unlimited',
+        seatCap: null,
+        conversationCap: null,
+      });
+      // Nested with the tenant: `PlanLimitsService` reads a missing row as
+      // unlimited, so a row written in a second statement that could fail on
+      // its own would be a tenant the seat cap silently never applies to.
+      expect(tx.tenantPlanLimits.create).not.toHaveBeenCalled();
+    });
+
     it('derives the hostname from the slug, never from the caller', async () => {
       const result = await service.provision({ slug: 'acme', name: 'Acme Ltd' });
 
@@ -180,6 +205,7 @@ describe('TenantProvisioningService', () => {
         settings: { timezone: 'Europe/London', locale: 'en-GB' },
         domains: [{ hostname: 'acme.app.example.com' }],
         slaPolicies: [{ id: 'e1444444-4444-7444-8444-444444444490' }],
+        planLimits: { id: 'e2444444-4444-7444-8444-444444444490' },
       });
     });
 
@@ -233,6 +259,7 @@ describe('TenantProvisioningService', () => {
         settings: null,
         domains: [],
         slaPolicies: [],
+        planLimits: null,
       });
       tx.tenantSettings.create.mockResolvedValue({ timezone: 'UTC', locale: 'en' });
       tx.tenantDomain.create.mockResolvedValue({ hostname: 'acme.app.example.com' });
@@ -245,6 +272,17 @@ describe('TenantProvisioningService', () => {
       // A tenant provisioned before TAR-270 converges on the same shape as one
       // provisioned after it, rather than waiting for TAR-280's lazy creation.
       expect(tx.slaPolicy.create).toHaveBeenCalledTimes(1);
+      // Same convergence for the tenants provisioned between TAR-403's backfill
+      // and this change, which have no row at all and so read as unlimited.
+      expect(tx.tenantPlanLimits.create).toHaveBeenCalledWith({
+        data: {
+          tenantId: TENANT_ID,
+          planKey: 'unlimited',
+          seatCap: null,
+          conversationCap: null,
+        },
+        select: { id: true },
+      });
       expect(result.tenant).toMatchObject({
         timezone: 'UTC',
         locale: 'en',
@@ -265,11 +303,33 @@ describe('TenantProvisioningService', () => {
         settings: { timezone: 'UTC', locale: 'en' },
         domains: [{ hostname: 'acme.app.example.com' }],
         slaPolicies: [{ id: 'e1444444-4444-7444-8444-444444444491' }],
+        planLimits: { id: 'e2444444-4444-7444-8444-444444444491' },
       });
 
       await service.provision({ slug: 'acme', name: 'Acme Ltd' });
 
       expect(tx.slaPolicy.create).not.toHaveBeenCalled();
+    });
+
+    it('leaves the plan limits of a tenant that already has a row alone', async () => {
+      // The one that matters most: a replayed provisioning call against a
+      // tenant on a paid plan must not reset its caps to `unlimited`. Presence
+      // is the whole test — this service does not read what the row says.
+      tx.tenant.findUnique.mockResolvedValue({
+        id: TENANT_ID,
+        slug: 'acme',
+        name: 'Acme Ltd',
+        status: 'active',
+        createdAt: CREATED_AT,
+        settings: { timezone: 'UTC', locale: 'en' },
+        domains: [{ hostname: 'acme.app.example.com' }],
+        slaPolicies: [{ id: 'e1444444-4444-7444-8444-444444444493' }],
+        planLimits: { id: 'e2444444-4444-7444-8444-444444444493' },
+      });
+
+      await service.provision({ slug: 'acme', name: 'Acme Ltd' });
+
+      expect(tx.tenantPlanLimits.create).not.toHaveBeenCalled();
     });
 
     it('keeps an existing platform domain even when PLATFORM_DOMAIN has moved on', async () => {
@@ -282,6 +342,7 @@ describe('TenantProvisioningService', () => {
         settings: { timezone: 'UTC', locale: 'en' },
         domains: [{ hostname: 'acme.old-platform.example.com' }],
         slaPolicies: [{ id: 'e1444444-4444-7444-8444-444444444492' }],
+        planLimits: { id: 'e2444444-4444-7444-8444-444444444492' },
       });
 
       const result = await service.provision({ slug: 'acme', name: 'Acme Ltd' });

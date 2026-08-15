@@ -22,26 +22,38 @@
 -- referenced by a policy's `TO` clause fails, and the message names the policy
 -- rather than the table, which is a needlessly puzzling way to find out.
 --
--- The `EXECUTE` grant on `assert_tenant_active` goes back to `PUBLIC` for a
+-- The `EXECUTE` grant on the gate functions goes back to `PUBLIC` for a
 -- different reason. `DROP OWNED BY` removes what was granted *to* these roles,
 -- but not the `REVOKE ... FROM PUBLIC` that app-roles.sql pairs it with — so
 -- without this the function would be left executable by nobody but the owner,
 -- which is not the state this file claims to restore.
+--
+-- Both gates are listed because both exist for the length of ADR 0009's
+-- expand → migrate → contract rename; whichever is absent is skipped.
+--
+-- Nothing is done about the column-level `GRANT UPDATE ("notified_at")` on
+-- `lifecycle_audit_log`: that one was granted *to* `whatsappcrm_system` and has
+-- no `REVOKE ... FROM PUBLIC` half, so `DROP OWNED BY` below takes it with the
+-- rest.
 
 \set ON_ERROR_STOP on
 
-\echo '== app roles: restoring the default grant on assert_tenant_active =='
+\echo '== app roles: restoring the default grant on the tenant gate functions =='
 
 DO $$
+DECLARE
+    gate text;
 BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'public' AND p.proname = 'assert_tenant_active'
-    ) THEN
-        GRANT EXECUTE ON FUNCTION "public"."assert_tenant_active"(text) TO PUBLIC;
-    END IF;
+    FOREACH gate IN ARRAY ARRAY['assert_tenant_active', 'assert_tenant_serviceable'] LOOP
+        IF EXISTS (
+            SELECT 1
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = gate
+        ) THEN
+            EXECUTE format('GRANT EXECUTE ON FUNCTION "public".%I(text) TO PUBLIC', gate);
+        END IF;
+    END LOOP;
 END
 $$;
 
