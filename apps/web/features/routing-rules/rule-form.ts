@@ -174,8 +174,18 @@ function conditionError(condition: RoutingCondition, content: Content): string |
       return tooLong ? copy.keywordTooLongError(ROUTING_RULE_LIMITS.keywordLength) : null;
     }
 
-    case 'tag':
-      return condition.tagIds.length === 0 ? copy.tagsRequiredError : null;
+    case 'tag': {
+      if (condition.tagIds.length === 0) {
+        return copy.tagsRequiredError;
+      }
+
+      // `TagConditionSchema` caps this the same way it caps keyword values, and
+      // the checkbox group does not, so a workspace with more than 25 tags can
+      // reach the cap by clicking.
+      return condition.tagIds.length > ROUTING_RULE_LIMITS.valuesPerCondition
+        ? copy.tagsTooManyError(ROUTING_RULE_LIMITS.valuesPerCondition)
+        : null;
+    }
 
     case 'business_hours':
       return null;
