@@ -869,6 +869,13 @@ export const content = {
      * Shown instead of a count when the queue is longer than one page. It says
      * what is on screen and admits what is not — a bare number here would be a
      * claim about the whole queue that the request never made.
+     *
+     * "Longest-waiting" is a claim about the API's order, and it is true because
+     * `?routingState=deferred` pages `routingDeferredSince ASC` — oldest stuck
+     * first (ADR 0008 decision 3, amendment 3; TAR-365). It was written before
+     * that predicate shipped and was briefly ahead of the implementation; if the
+     * order ever changes, this string changes with it rather than quietly
+     * over-claiming again.
      */
     flaggedShowingOldest: (count: number) =>
       `Showing the ${String(count)} longest-waiting. More are flagged than fit on one page.`,

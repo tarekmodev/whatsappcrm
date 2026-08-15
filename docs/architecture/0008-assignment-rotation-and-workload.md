@@ -1,6 +1,6 @@
 # Assignment rotation, workload limits and the supervisor's deferred queue (TAR-271)
 
-Status: proposed · Builds on [0002 — architecture and API contract](./0002-architecture-and-api-contract.md), [0003 — ticket auto-linking contract](./0003-ticket-auto-linking-contract.md), [0004 — RBAC permission matrix](./0004-rbac-permission-matrix.md) · **Fills in the resolver behind the seam published by [0007 — routing rules and the assignment-fallback seam](./0007-routing-rules-and-assignment-fallback.md) (TAR-279)** · Consumed by TAR-272 (schema), TAR-273 (backend), TAR-274 (frontend), TAR-275 (QA), TAR-277 (documentation)
+Status: proposed · Builds on [0002 — architecture and API contract](./0002-architecture-and-api-contract.md), [0003 — ticket auto-linking contract](./0003-ticket-auto-linking-contract.md), [0004 — RBAC permission matrix](./0004-rbac-permission-matrix.md) · **Fills in the resolver behind the seam published by [0007 — routing rules and the assignment-fallback seam](./0007-routing-rules-and-assignment-fallback.md) (TAR-279)** · Consumed by TAR-272 (schema), TAR-273 (backend), TAR-274 (frontend), TAR-275 (QA), TAR-277 (documentation) · [Amendments](#amendments): 3
 
 > **Read 0007 first.** It owns the routing pipeline this document plugs into, and the two are only
 > comprehensible together: 0007 says who calls rotation and what it does with the answer, this one
@@ -245,6 +245,8 @@ correlated subquery over an append-only log on every load of a supervisor's land
   by (oldest stuck first), what an ageing alert reads, and the one value that cannot be recovered
   afterwards. `created_at` is not a substitute — a ticket that was assigned, released and then
   deferred would report an age that is a lie.
+  [Amendment 3](#amendment-3--the-flagged-queues-order-tar-365) implements that ordering, and adds
+  the `id` tie-breaker this paragraph left out.
 
 - **Rejected — the `assignment_deferred` event and nothing else.** Zero schema change, and 0007
   already writes it. Rejected on the subquery above. An event records _that it happened_; a column
@@ -739,6 +741,10 @@ POST /api/v1/tickets/{id}/assign                             → TicketResponse 
 > _Amendment 1_ for how the gap happened, and _Amendment 2_ for how the endpoint that closed it
 > behaves.
 
+The order of that first page, and the `deferredReason` narrowing TAR-274 needed and this section
+did not publish, are ruled on in
+[amendment 3](#amendment-3--the-flagged-queues-order-tar-365).
+
 **Specified, and required by no acceptance criterion** — the cap-editing surface. Recorded so nobody
 has to invent it, and so it is clear it is _not_ in TAR-273's or TAR-274's scope:
 
@@ -992,3 +998,75 @@ ones, so assigning a deferred ticket to the team it already carries still leaves
 **Nothing is announced and nothing is enqueued.** The Realtime section above already rules that
 pushing a routing change is not in this chain, and 0006's fourth SLA trigger is a _status_ change —
 a timer does not move because a ticket changed hands.
+
+### Amendment 3 — the flagged queue's order (TAR-365)
+
+_Raised by the review of TAR-274's PR #94, which found the document and the code disagreeing
+about the order of the one query this design exists to serve, and declined to leave the
+disagreement in a PR thread. Amendment 1 came out of the same review; the three findings are
+independent._
+
+Decision 3 justifies `routing_deferred_since` earning a column of its own by saying it is
+_"what the supervisor list sorts by (oldest stuck first)"_, and delta 7 builds
+`tickets_routing_deferred_idx` on `(tenant_id, routing_deferred_since)` to serve exactly
+that. TAR-273 then shipped `?routingState=deferred` as a predicate on the ticket queue,
+which has **one** order — `priority DESC, created_at DESC, id DESC` (0006 §6) — and no sort
+parameter. So the flagged page filtered through the index and then sorted by something else,
+and the console's "showing the N longest-waiting" line was a claim nothing upheld.
+
+**Chosen — the code moves to the document: a request pinned to the deferred set pages
+`routing_deferred_since ASC, id ASC`.** Two consequences worth stating, because they are the
+reason this needed a decision rather than a patch:
+
+- **`id` is added to the ordering this document specified.** One column is not a total order,
+  and this list is paged on a keyset: two tickets deferred in the same millisecond are
+  indistinguishable to the predicate, so a page boundary between them drops one silently.
+  Every other list in this product carries the id for the same reason (0002, cursor
+  encoding); decision 3 naming one column was an omission, not a choice.
+- **The shape follows from the set asked for, and is still not a `sort` parameter.** It
+  applies to `?routingState=deferred` and to any `?deferredReason=` —
+  `tickets_routing_deferred_consistent` makes a non-null reason equivalent to
+  `routing_state = 'deferred'`, so the two cannot describe different sets. Nothing else
+  changes order, so there is no third combination to index. The two shapes' cursors differ
+  in **arity** — one sort value against the queue's two — which makes replaying one against
+  the other `validation_failed` rather than a page from the wrong place, checked by each
+  shape's own reader.
+
+_Rejected — correct the document to the shipped `(priority, created_at, id)` order._ Cheaper
+by a diff, and wrong on the product: this queue is a triage list of customers nobody has
+answered, where a ticket stuck since yesterday morning outranks an urgent one flagged a
+minute ago. It would also have left `routing_deferred_since` a column whose stated reason for
+existing no longer applied, the partial index serving a filter it was built to sort, and the
+console's copy needing to describe an order a supervisor has no use for.
+
+**Cursor arity, and no shortcut.** The flagged page emits a real cursor. Answering
+`nextCursor: null` on this shape — tempting, since the deferred set is small by definition —
+would report the first page as the whole queue on any tenant whose queue is longer than one
+page, which is precisely the tenant this view exists for and the one case a supervisor cannot
+detect.
+
+**Cost, measured rather than asserted.** `tickets_routing_deferred_idx` supplies the
+predicate and the leading sort key; it does not carry `id`, so the tie-break resolves as an
+`Incremental Sort` inside each millisecond group — one row in practice.
+`ticket-queue-shape.int-spec.ts` explains both the first and a cursor-resumed flagged page
+against 400 deferred tickets in a 4 000-ticket tenant, as `whatsappcrm_app` under RLS, and
+asserts the plan:
+
+```
+  Limit / Incremental Sort / Index Scan using tickets_routing_deferred_idx
+```
+
+A plain `Sort` node there would mean the index stopped supplying the order and the tenant's
+whole deferred set is being ordered in memory. **Adding `id` to that index is the additive
+follow-up** if a tenant ever makes the incremental sort visible; it is deliberately not in
+this amendment, because a fleet migration for an unmeasured cost on a set this document
+argues is small by construction would be the wrong trade.
+
+**No schema change, and nothing to migrate.** The column, the index and the CHECK all landed
+with TAR-272 and are unchanged.
+
+**Where this sits against the other two.** Amendment 1 named the missing writer; TAR-373 landed it,
+so the flagged queue now has rows to order. Amendment 2 built the endpoint a supervisor acts through.
+This one decides what they are looking at and in what order. The order and the reason filter are
+asserted against a fixture that sets the three columns directly rather than through the router, so
+the query is proved independently of whichever job produced the rows.

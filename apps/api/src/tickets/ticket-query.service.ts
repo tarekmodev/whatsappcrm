@@ -13,27 +13,30 @@ import {
   encodeKeysetCursor,
   type KeysetCursor,
 } from '../common/pagination/keyset-cursor';
+import {
+  encodeTimestampCursor,
+  readTimestampCursor,
+  resumeAfter,
+  type TimestampCursor,
+} from '../common/pagination/timestamp-keyset';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { assignedFilter, isVisible, narrowScope, unclaimedFilter } from '../rbac/visibility';
 import { TICKET_PROJECTION, toTicketResponse, type TicketRow } from './ticket.mapper';
-import { InvalidTicketCursorError, TicketNotFoundError } from './tickets.errors';
+import {
+  InvalidTicketCursorError,
+  TicketNotFoundError,
+  TicketRoutingInconsistentError,
+} from './tickets.errors';
 
 /**
- * How many sort columns a ticket cursor carries, before the id tie-breaker:
+ * How many sort columns a queue cursor carries, before the id tie-breaker:
  * `priority` then `createdAt`. A cursor minted by a list with a different sort
  * key decodes cleanly and is still wrong, so the arity is checked rather than
  * assumed — a mismatch is `validation_failed`, never a silent first page.
  */
 const CURSOR_ARITY = 2;
-
-/** The queue's one order. There is no `sort` parameter; see the class comment. */
-const QUEUE_ORDER: Prisma.TicketOrderByWithRelationInput[] = [
-  { priority: 'desc' },
-  { createdAt: 'desc' },
-  { id: 'desc' },
-];
 
 /** The cursor row, once its two sort values have been validated. */
 interface TicketCursor {
@@ -41,6 +44,54 @@ interface TicketCursor {
   readonly createdAt: Date;
   readonly id: string;
 }
+
+/**
+ * One page's sort, and the three cursor operations that belong to it.
+ *
+ * Kept as one object per shape rather than as three parallel branches inside
+ * `list`, because the failure mode of splitting them is silent: a cursor read by
+ * one shape's arity check and resumed by the other's predicate pages from the
+ * wrong place and reports nothing wrong. Here a shape's arity, its resume
+ * clauses and its encoder cannot be mixed — they arrive together or not at all.
+ */
+interface TicketListOrder<TCursor> {
+  readonly orderBy: readonly Prisma.TicketOrderByWithRelationInput[];
+  /** The cursor as this shape can use it, `null` for a first page, or `'invalid'`. */
+  readCursor(value: string | undefined): TCursor | null | 'invalid';
+  /** "Strictly after the cursor row", as `where` fragments to conjoin. */
+  resume(cursor: TCursor): Prisma.TicketWhereInput[];
+  /** The cursor a caller pages on, minted from the last row of the page. */
+  encode(row: TicketRow): string;
+}
+
+/** The queue's order: urgent first, newest first within a band (0006, §6). */
+const QUEUE_ORDER: TicketListOrder<TicketCursor> = {
+  orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+  readCursor: readTicketCursor,
+  resume: queueResumeClauses,
+  encode: (row) =>
+    encodeKeysetCursor({
+      sortValues: [row.priority, row.createdAt.toISOString()],
+      id: row.id,
+    }),
+};
+
+/**
+ * The flagged queue's order: **oldest stuck first**, which is what ADR 0008
+ * decision 3 says `routing_deferred_since` exists for.
+ *
+ * `id` breaks the tie and is not optional. The ADR names one sort column, and one
+ * column is not a total order: two tickets deferred in the same millisecond are
+ * indistinguishable to a keyset predicate, and one of them is dropped at a page
+ * boundary with no error anywhere. This is the arity-1 shape, so the id travels
+ * in the cursor's own field rather than in its sort values.
+ */
+const DEFERRED_ORDER: TicketListOrder<TimestampCursor> = {
+  orderBy: [{ routingDeferredSince: 'asc' }, { id: 'asc' }],
+  readCursor: readDeferredCursor,
+  resume: deferredResumeClauses,
+  encode: (row) => encodeTimestampCursor({ at: deferredSinceOf(row), id: row.id }),
+};
 
 /**
  * The ticket reads: the queue, and one ticket's detail (0006, §6).
@@ -84,16 +135,52 @@ interface TicketCursor {
  * order. That is load-bearing and invisible; `ticket-queue.int-spec.ts` asserts
  * it against a real database so a reorder fails a test rather than a customer.
  *
+ * ## The flagged queue is the one exception, and it is not a `sort` parameter
+ *
+ * A request pinned to the deferred set — `routingState=deferred`, or any
+ * `deferredReason`, which the `tickets_routing_deferred_consistent` CHECK makes
+ * equivalent — pages **oldest stuck first**: `routing_deferred_since ASC,
+ * id ASC`. ADR 0008 decision 3 justifies that column's existence by exactly this
+ * ordering ("what the supervisor list sorts by"), and 0008's amendment 3 records
+ * why the implementation now matches it rather than the doc being corrected
+ * towards the queue's order.
+ *
+ * Still not a `sort` parameter, and the distinction is the point: the shape
+ * follows from *which set was asked for*, so there is no way for a caller to ask
+ * for a third combination and no index to add for one. Two shapes, and a cursor
+ * cannot cross between them — a queue cursor carries two sort values and a
+ * deferred cursor carries one, so each shape's arity check refuses the other's
+ * cursor with `validation_failed` instead of paging from the wrong place. The
+ * flagged queue emits a **real** cursor for the same reason every other list
+ * does: a supervisor with more stuck tickets than fit on a page must be able to
+ * reach the rest, and a shape that always answered `nextCursor: null` would
+ * silently drop them.
+ *
+ * Ordering by a nullable column is safe only because both entry conditions pin
+ * the result to the deferred set, where the CHECK makes
+ * `routing_deferred_since` non-null. `deferredSinceOf` refuses to mint a cursor
+ * from a row that breaks that, rather than emitting `null` and losing the page.
+ *
  * ## Query cost
  *
- * One statement per page and no relation load: every published field is a column
- * on `tickets`. `take: limit + 1` answers "is there another page" without a
- * `count(*)`. The page is served by `tickets_active_queue_idx` —
- * `(tenant_id, priority DESC, created_at DESC, id DESC) WHERE status IN
- * ('open','pending')`, added by 20260813120000 — which covers the RLS equality,
- * the default status filter and all three sort keys, so there is no Sort node
- * over the tenant's active set. `ticket-queue-shape.int-spec.ts` asserts that
- * property rather than a number.
+ * One statement per page and no relation load beyond the SLA timers: every other
+ * published field is a column on `tickets`. `take: limit + 1` answers "is there
+ * another page" without a `count(*)`. The queue page is served by
+ * `tickets_active_queue_idx` — `(tenant_id, priority DESC, created_at DESC,
+ * id DESC) WHERE status IN ('open','pending')`, added by 20260813120000 — which
+ * covers the RLS equality, the default status filter and all three sort keys, so
+ * there is no Sort node over the tenant's active set.
+ * `ticket-queue-shape.int-spec.ts` asserts that property rather than a number.
+ *
+ * The flagged page is served by `tickets_routing_deferred_idx` —
+ * `(tenant_id, routing_deferred_since) WHERE routing_state = 'deferred'` — which
+ * supplies the predicate and the leading sort key. It does not carry `id`, so
+ * the tie-breaker costs an incremental sort within each millisecond group, and
+ * the default status filter is applied to the rows it reads. Both are accepted
+ * deliberately: a tie group is one row in practice, and the deferred set is small
+ * by definition — if it is not, the tenant has a staffing problem its supervisor
+ * can already see. Adding `id` to that index is additive and is recorded in
+ * 0008's amendment for when a tenant makes it worth measuring.
  *
  * A scoped queue (`scope=assigned`, the default) pays a bounded sort over the
  * principal's own backlog instead and needs no index of its own; a request with
@@ -109,8 +196,18 @@ export class TicketQueryService {
   ) {}
 
   async list(query: TicketListQuery): Promise<CursorPage<TicketResponse>> {
+    return isDeferredQuery(query)
+      ? this.page(query, DEFERRED_ORDER)
+      : this.page(query, QUEUE_ORDER);
+  }
+
+  /** One page in the given shape. The `where` is identical either way; only the order differs. */
+  private async page<TCursor>(
+    query: TicketListQuery,
+    order: TicketListOrder<TCursor>,
+  ): Promise<CursorPage<TicketResponse>> {
     const principal = this.tenantContext.requirePrincipal();
-    const cursor = readTicketCursor(query.cursor);
+    const cursor = order.readCursor(query.cursor);
 
     if (cursor === 'invalid') {
       throw new InvalidTicketCursorError('cursor');
@@ -118,40 +215,16 @@ export class TicketQueryService {
 
     const rows = await this.prisma.ticket.findMany({
       where: {
-        // No `status` means the active queue, which is what makes "resolved
-        // leaves the queue" true without the client asking for anything.
-        ...(query.status === undefined
-          ? { status: { in: TICKET_ACTIVE_STATUSES } }
-          : { status: query.status }),
-        ...(query.priority === undefined ? {} : { priority: query.priority }),
-        // The requested assignee narrows the scope; it never widens it. Both are
-        // plain keys on the same `where`, so Prisma conjoins them with the scope
-        // clause in `AND` below.
-        ...(query.assignedUserId === undefined ? {} : { assignedUserId: query.assignedUserId }),
-        ...(query.assignedTeamId === undefined ? {} : { assignedTeamId: query.assignedTeamId }),
-        // Correct today and returns nothing until TAR-26 writes timers, which
-        // needs no special-casing later. A `where` predicate, never a selection:
-        // it decides which rows come back, not what is read off them.
-        ...(query.breachedOnly ? { slaTimers: { some: { state: 'breached' } } } : {}),
-        // TAR-274's supervisor landing query is `?scope=unassigned&routingState=deferred`
-        // (0008 decision 3) — the set of tickets rotation could place with
-        // nobody. Like `breachedOnly` it is correct today and returns nothing
-        // until TAR-288's router writes the column, which is the honest answer
-        // rather than an unfiltered page pretending to be the stuck set.
-        //
-        // `tickets_routing_deferred_idx` is partial on this predicate, but the
-        // queue's sort is `(priority, created_at, id)` rather than the index's
-        // `routing_deferred_since`, so it filters through the index and sorts
-        // over what comes back. That is the right trade at this size: the
-        // deferred set is small by definition, and if it is not, the tenant has
-        // a staffing problem its supervisor can already see.
-        ...(query.routingState === undefined ? {} : { routingState: query.routingState }),
-        // Both clauses are an `OR` on the same object, so they go in `AND` —
-        // spreading them side by side would have the second silently replace the
-        // first and page an unscoped queue.
-        AND: [...scopeClauses(query.scope, principal), ...cursorClauses(cursor)],
+        ...matchClauses(query),
+        // Both the scope and the resume predicate are an `OR` on the same
+        // object, so they go in `AND` — spreading them side by side would have
+        // the second silently replace the first and page an unscoped queue.
+        AND: [
+          ...scopeClauses(query.scope, principal),
+          ...(cursor === null ? [] : order.resume(cursor)),
+        ],
       },
-      orderBy: QUEUE_ORDER,
+      orderBy: [...order.orderBy],
       // One more than asked for: its existence is the answer to "is there
       // another page", which is cheaper than counting a growing table.
       take: query.limit + 1,
@@ -163,13 +236,7 @@ export class TicketQueryService {
 
     return {
       items: page.map(toTicketResponse),
-      nextCursor:
-        rows.length > query.limit && last !== undefined
-          ? encodeKeysetCursor({
-              sortValues: [last.priority, last.createdAt.toISOString()],
-              id: last.id,
-            })
-          : null,
+      nextCursor: rows.length > query.limit && last !== undefined ? order.encode(last) : null,
     };
   }
 
@@ -201,6 +268,61 @@ export class TicketQueryService {
 
     return ticket;
   }
+}
+
+/**
+ * Whether this request is pinned to the deferred set, and so pages oldest-stuck
+ * first rather than in the queue's order.
+ *
+ * `deferredReason` counts on its own, and that is a fact about the database
+ * rather than a convenience: `tickets_routing_deferred_consistent` makes a
+ * non-null reason equivalent to `routing_state = 'deferred'`, so a request
+ * carrying one cannot match a row outside the deferred set — including the
+ * contradictory `?routingState=manual&deferredReason=…`, which matches nothing
+ * at all and has no order to get wrong.
+ */
+function isDeferredQuery(query: TicketListQuery): boolean {
+  return query.routingState === 'deferred' || query.deferredReason !== undefined;
+}
+
+/** Every filter the list accepts, as one `where` fragment. The order is chosen separately. */
+function matchClauses(query: TicketListQuery): Prisma.TicketWhereInput {
+  return {
+    // No `status` means the active queue, which is what makes "resolved
+    // leaves the queue" true without the client asking for anything.
+    ...(query.status === undefined
+      ? { status: { in: TICKET_ACTIVE_STATUSES } }
+      : { status: query.status }),
+    ...(query.priority === undefined ? {} : { priority: query.priority }),
+    // The requested assignee narrows the scope; it never widens it. Both are
+    // plain keys on the same `where`, so Prisma conjoins them with the scope
+    // clause in `AND`.
+    ...(query.assignedUserId === undefined ? {} : { assignedUserId: query.assignedUserId }),
+    ...(query.assignedTeamId === undefined ? {} : { assignedTeamId: query.assignedTeamId }),
+    // Correct today and returns nothing until TAR-26 writes timers, which
+    // needs no special-casing later. A `where` predicate, never a selection:
+    // it decides which rows come back, not what is read off them.
+    ...(query.breachedOnly ? { slaTimers: { some: { state: 'breached' } } } : {}),
+    // TAR-274's supervisor landing query is `?scope=all&routingState=deferred`
+    // (0008 decision 3) — the set of tickets rotation could place with nobody.
+    // `tickets_routing_deferred_idx` is partial on this predicate and leads with
+    // `routing_deferred_since`, which is the order `DEFERRED_ORDER` asks for.
+    //
+    // Unlike `breachedOnly` above, this one has a writer: `RuleEngineService`
+    // sets the column in the branch that decided it (TAR-373), and
+    // `POST /tickets/{id}/assign` clears it on a manual placement (TAR-374). So
+    // the page carries real rows rather than being correct-but-empty.
+    ...(query.routingState === undefined ? {} : { routingState: query.routingState }),
+    // One reason out of the flagged set, for the supervisor's reason pills. An
+    // equality on a column the partial index above has already narrowed to, so
+    // it costs no index of its own.
+    //
+    // It narrows the **query** and not the page: filtering a fetched page
+    // instead would report "no tickets for that reason" whenever the matching
+    // ones sort past it — precisely the unstaffed night `none_available` and
+    // `no_candidate_pool` exist to describe.
+    ...(query.deferredReason === undefined ? {} : { routingDeferredReason: query.deferredReason }),
+  };
 }
 
 /**
@@ -262,11 +384,7 @@ function scopeClauses(
  * the last band rather than a bug: there is no priority below `low`, so the only
  * rows left are that band's own.
  */
-function cursorClauses(cursor: TicketCursor | null): Prisma.TicketWhereInput[] {
-  if (cursor === null) {
-    return [];
-  }
-
+function queueResumeClauses(cursor: TicketCursor): Prisma.TicketWhereInput[] {
   return [
     {
       OR: [
@@ -274,6 +392,29 @@ function cursorClauses(cursor: TicketCursor | null): Prisma.TicketWhereInput[] {
         { priority: cursor.priority, createdAt: { lt: cursor.createdAt } },
         { priority: cursor.priority, createdAt: cursor.createdAt, id: { lt: cursor.id } },
       ],
+    },
+  ];
+}
+
+/**
+ * "Strictly after `(routingDeferredSince, id)` under
+ * `routing_deferred_since ASC, id ASC`", in `timestamp-keyset.ts`'s
+ * `bound`/`exclude` form.
+ *
+ * The inclusive bound on the leading column is what
+ * `tickets_routing_deferred_idx` can serve as a start condition — the scan
+ * begins at the cursor row and reads forward — and `exclude` subtracts the part
+ * of that millisecond's tie group the caller has already been shown. The
+ * shorter-looking `(since, id) > ($1, $2)` written as a conjunction is not
+ * merely slower but wrong, and that file says why.
+ */
+function deferredResumeClauses(cursor: TimestampCursor): Prisma.TicketWhereInput[] {
+  const resume = resumeAfter(cursor, 'asc');
+
+  return [
+    {
+      routingDeferredSince: resume.bound,
+      NOT: { routingDeferredSince: cursor.at, ...resume.exclude },
     },
   ];
 }
@@ -288,13 +429,13 @@ function prioritiesBelow(priority: TicketPriority): TicketPriority[] {
 }
 
 /**
- * The cursor as this list can use it, `null` for a first page, or `'invalid'`.
+ * The cursor as the queue can use it, `null` for a first page, or `'invalid'`.
  *
  * Three things have to hold and each is checked: it decodes, it carries exactly
- * this list's two sort values, and both of them parse — a priority the enum
+ * this shape's two sort values, and both of them parse — a priority the enum
  * knows and a timestamp that is a real date. A cursor that decodes but carries
- * `['2026-08-13T…']` came from another list, and paging from it would compare a
- * timestamp against an enum column.
+ * `['2026-08-13T…']` came from the flagged queue, and paging from it would
+ * compare a timestamp against an enum column.
  *
  * `'invalid'` rather than a throw so the type says the caller must handle it,
  * and rather than falling back to the first page so a client that corrupted a
@@ -322,4 +463,44 @@ function toTicketCursor({ sortValues, id }: KeysetCursor): TicketCursor | 'inval
   return parsedPriority.success && !Number.isNaN(parsedCreatedAt.getTime())
     ? { priority: parsedPriority.data, createdAt: parsedCreatedAt, id }
     : 'invalid';
+}
+
+/**
+ * The same three checks for the flagged queue's arity-1 cursor, delegated to
+ * `readTimestampCursor` — which already refuses a cursor of another arity, so a
+ * queue cursor replayed here is `validation_failed` rather than a comparison
+ * between an enum label and a timestamp column.
+ *
+ * Translated into this file's `null | 'invalid'` shape rather than reusing the
+ * `outcome` union, so both orders present one interface to `page`.
+ */
+function readDeferredCursor(value: string | undefined): TimestampCursor | null | 'invalid' {
+  const result = readTimestampCursor(value);
+
+  if (result.outcome === 'absent') {
+    return null;
+  }
+
+  return result.outcome === 'invalid' ? 'invalid' : result.cursor;
+}
+
+/**
+ * The row's `routing_deferred_since`, which on the flagged queue is never null.
+ *
+ * `tickets_routing_deferred_consistent` makes that an invariant of the database
+ * rather than a hope, and every path into this shape is pinned to the deferred
+ * set — so reaching the throw means the CHECK is gone or a writer worked around
+ * it. It is a fault and is reported as one: `tickets.http.ts` does not translate
+ * it, so it surfaces as a 500 with the ticket named in the log.
+ *
+ * The alternative — returning `nextCursor: null` for a row with no timestamp —
+ * would answer "that is the whole queue" and lose every page after it, which is
+ * the one outcome a supervisor cannot detect.
+ */
+function deferredSinceOf(row: TicketRow): Date {
+  if (row.routingDeferredSince === null) {
+    throw new TicketRoutingInconsistentError(row.id);
+  }
+
+  return row.routingDeferredSince;
 }

@@ -159,3 +159,23 @@ export class InvalidTicketCursorError extends TicketError {
     super('The cursor is not valid. Start from the first page.');
   }
 }
+
+/**
+ * A deferred ticket carrying no `routing_deferred_since` — the state
+ * `tickets_routing_deferred_consistent` exists to make impossible.
+ *
+ * **Deliberately not translated in `tickets.http.ts`**, so it reaches the caller
+ * as a 500. Every other error here describes something a client did; this one
+ * says the database's own CHECK is gone or a writer worked around it, and a
+ * 4xx would file that under "bad request" and hide it. The flagged queue pages
+ * on that column, so the alternative is a `nextCursor` of `null` that claims the
+ * page is the whole queue — the one failure a supervisor cannot see.
+ */
+export class TicketRoutingInconsistentError extends TicketError {
+  constructor(readonly ticketId: string) {
+    super(
+      'A deferred ticket is missing the timestamp the flagged queue pages on. ' +
+        'tickets_routing_deferred_consistent should have made this impossible.',
+    );
+  }
+}

@@ -992,6 +992,32 @@ sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the 
 - **`assert_tenant_active` pins its own `SET search_path`** and is called schema-qualified, so
   the gate evaluates identically on every connection rather than depending on the caller's
   `search_path`. (TAR-51)
+- **The flagged-ticket queue is ordered oldest-stuck first, and can be narrowed to one reason**
+  (TAR-365) — `GET /tickets?routingState=deferred` paged in the ticket queue's own
+  `priority DESC, createdAt DESC, id DESC`, because TAR-273 shipped it as a predicate on that
+  one list. ADR 0008 had said otherwise for a reason: `routing_deferred_since` earned a column
+  of its own because it is "what the supervisor list sorts by (oldest stuck first)", and
+  `tickets_routing_deferred_idx` was built to serve exactly that. The document won — this is a
+  triage list of customers nobody has answered, where a ticket stuck since yesterday morning
+  outranks an urgent one flagged a minute ago, and the console's "showing the N longest-waiting"
+  line was a claim nothing upheld. A request pinned to the deferred set now pages
+  `routing_deferred_since ASC, id ASC`; `id` is added to the ordering the ADR specified because
+  one column is not a total order and a keyset page boundary inside a shared millisecond drops
+  a row silently. **`deferredReason` is implemented** in the same change: the parameter has been
+  published since TAR-274 and was accepted and dropped, so the supervisor's reason pills failed
+  closed on every click — it is now an equality in the query rather than a filter over a fetched
+  page, which is the difference between "no tickets for that reason" and the truth whenever the
+  matching ones sort past the first page. **Still not a `sort` parameter**: the shape follows
+  from the set asked for — `routingState=deferred`, or any `deferredReason`, which
+  `tickets_routing_deferred_consistent` makes equivalent — so there is no third combination and
+  no index to add. The two orders' cursors differ in **arity**, one sort value against two, so
+  replaying one against the other answers `validation_failed` rather than paging from the wrong
+  place; a cursor in flight across the deploy is refused rather than mis-paged. The flagged page
+  emits a real `nextCursor`, because answering `null` on a set that is "small by definition"
+  would report the first page as the whole queue for exactly the tenant this view exists for.
+  No migration — the column, the index and the CHECK all shipped with TAR-272 — and the partial
+  index supplies the predicate and the leading sort key, leaving the `id` tie-break as an
+  incremental sort inside one millisecond. Recorded as ADR 0008 amendment 3.
 
 ### Fixed
 
@@ -1121,6 +1147,14 @@ sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the 
   reached the application as SQLSTATE `22P02`, which was reported as a fault rather than as
   the refusal it is. No isolation consequence — the cast raised before `set_config` either
   way, so the GUC was unset and the policies matched nothing. (TAR-51)
+- **A reason pill on the supervisor's flagged-ticket queue no longer breaks the section**
+  (TAR-365) — `deferredReason` was published by TAR-274 and never implemented, and an
+  unimplemented query parameter is dropped rather than refused, so the API answered with a
+  valid page of the wrong set. The console's `assertRoutingFilterHonoured` caught that and
+  failed the section closed into its error boundary, which was the guard working as designed
+  and a visibly broken control either way. The predicate ships in the Changed entry above; the
+  guard stays, because a filter that stops being honoured — a rollback, an older API behind a
+  newer console — is worth an error boundary rather than a contradiction rendered calmly.
 
 ### Removed
 
