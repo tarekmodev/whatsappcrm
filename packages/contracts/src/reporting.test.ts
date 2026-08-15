@@ -4,6 +4,8 @@ import {
   DashboardMetricsQuerySchema,
   DurationStatsSchema,
   REPORT_RANGE_MAX_DAYS,
+  REPORT_SCOPES,
+  ReportScopeSchema,
   reportRangeDays,
 } from './reporting';
 
@@ -27,6 +29,28 @@ describe('reportRangeDays', () => {
     // resolve them. A zone-aware subtraction would return 30.958… here and
     // round the cap off by one somewhere in Europe every March.
     expect(reportRangeDays('2026-03-01', '2026-03-31')).toBe(31);
+  });
+});
+
+describe('ReportScopeSchema', () => {
+  it('publishes the two scopes the console narrows an untrusted `?scope=` against', () => {
+    // Exported rather than inline in the query shape so that the console has
+    // something to parse a URL search param with. Without it the dashboard
+    // re-declares the two values, and a third scope added here would not reach
+    // the screen.
+    expect(REPORT_SCOPES).toEqual(['assigned', 'all']);
+    expect(ReportScopeSchema.safeParse('unassigned').success).toBe(false);
+  });
+
+  it('is the scope the query and the response are built from', () => {
+    // One declaration, so a caller cannot ask for a scope the response has no
+    // way to echo back.
+    expect(DashboardMetricsQuerySchema.parse({ ...RANGE, scope: 'assigned' }).scope).toBe(
+      'assigned',
+    );
+    expect(DashboardMetricsQuerySchema.safeParse({ ...RANGE, scope: 'unassigned' }).success).toBe(
+      false,
+    );
   });
 });
 
