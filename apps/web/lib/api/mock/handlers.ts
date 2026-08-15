@@ -13,6 +13,8 @@ import {
   InviteCreateInputSchema,
   MessageListQuerySchema,
   MessageTemplateListQuerySchema,
+  ONBOARDING_STEP_IDS,
+  OnboardingStepUpdateInputSchema,
   ROUTING_RULE_LIMITS,
   PasswordChangeInputSchema,
   PasswordResetConfirmInputSchema,
@@ -46,6 +48,8 @@ import {
   type InternalNoteResponse,
   type MessageResponse,
   type MessageTemplateResponse,
+  type OnboardingChecklistResponse,
+  type OnboardingStepId,
   type Permission,
   type RoutingCondition,
   type RoutingTarget,
@@ -69,6 +73,7 @@ import type {
   MockInternalNote,
   MockMessage,
   MockMessageTemplate,
+  MockOnboardingChecklist,
   MockSlaAlert,
   MockTag,
   MockTeam,
@@ -402,6 +407,18 @@ const ROUTES: readonly Route[] = [
     handle: connectWhatsAppBusinessAccount,
   },
   {
+    method: 'GET',
+    pattern: /^\/v1\/tenant\/onboarding$/,
+    permission: 'tenant:settings',
+    handle: readOnboardingChecklist,
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/v1/tenant/onboarding/steps/(${ONBOARDING_STEP_IDS.join('|')})$`),
+    permission: 'tenant:settings',
+    handle: updateOnboardingStep,
+  },
+  {
     method: 'POST',
     pattern: /^\/v1\/auth\/password$/,
     // Signed in, but gated by no permission — the resource *is* the caller, and
@@ -494,6 +511,9 @@ function inviteUser({ principal, body }: RouteContext): UserResponse {
 
   mockState().users.set(created.id, created);
   syncTeamMembership(created.id, teams);
+  // Onboarding's "invite your agents" is done because somebody was invited, not
+  // because a checklist was ticked. See `completeOnboardingStep`.
+  completeOnboardingStep(principal.tenantId, 'invite_agents');
 
   return toUserResponse(created);
 }
@@ -925,6 +945,150 @@ function changePassword({ body }: RouteContext): null {
   return null;
 }
 
+// --- Onboarding checklist (TAR-407) ----------------------------------------
+
+/**
+ * `GET /v1/tenant/onboarding` — the caller's own checklist.
+ *
+ * Tenant-scoped by construction: the store is keyed by tenant and this is the
+ * only lookup, so there is no id a caller could pass to read somebody else's.
+ * A tenant the fixtures never seeded gets a fresh all-pending checklist rather
+ * than a 404 — a workspace that exists always has one.
+ */
+function readOnboardingChecklist({ principal }: RouteContext): OnboardingChecklistResponse {
+  return toOnboardingResponse(tenantOnboarding(principal.tenantId));
+}
+
+/**
+ * `PATCH /v1/tenant/onboarding/steps/{stepId}` — skip a step, or put it back.
+ *
+ * The route pattern only matches the contract's own step ids, so an unknown one
+ * is a 404 from the router rather than a validation error here.
+ *
+ * It refuses `skip` on a completed step for the reason the contract gives:
+ * putting off something already done is not a state the checklist can be in, and
+ * a transport that allowed it would let the console ship a control the real API
+ * rejects.
+ */
+function updateOnboardingStep({
+  principal,
+  params,
+  body,
+}: RouteContext): OnboardingChecklistResponse {
+  const parsed = OnboardingStepUpdateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const checklist = tenantOnboarding(principal.tenantId);
+  const stepId = params[0] as OnboardingStepId;
+  const step = checklist.steps.find((candidate) => candidate.id === stepId);
+
+  if (step === undefined) {
+    throw notFound();
+  }
+
+  if (parsed.data.intent === 'skip' && step.status === 'completed') {
+    throw refused(
+      'conflict',
+      'That step is already done, so there is nothing to skip.',
+      HTTP_CONFLICT,
+    );
+  }
+
+  writeOnboardingStep(checklist, stepId, {
+    ...step,
+    ...(parsed.data.intent === 'skip'
+      ? { status: 'skipped' as const, skippedAt: MOCK_UPDATED_AT }
+      : { status: 'pending' as const, skippedAt: null }),
+  });
+
+  return toOnboardingResponse(checklist);
+}
+
+/**
+ * Marks a step done because the tenant actually did the thing — called from the
+ * handlers that perform it, never from a client request.
+ *
+ * This is the mock's half of the contract's one real decision: completion is
+ * server-derived. A fixture layer where the console ticked its own boxes would
+ * let a checklist ship that describes nothing about the workspace.
+ *
+ * Idempotent, and it does not resurrect a skipped step's `skippedAt` — doing the
+ * thing supersedes having put it off.
+ */
+function completeOnboardingStep(tenantId: string, stepId: OnboardingStepId): void {
+  const checklist = tenantOnboarding(tenantId);
+  const step = checklist.steps.find((candidate) => candidate.id === stepId);
+
+  if (step === undefined || step.status === 'completed') {
+    return;
+  }
+
+  writeOnboardingStep(checklist, stepId, {
+    ...step,
+    status: 'completed',
+    completedAt: MOCK_UPDATED_AT,
+    skippedAt: null,
+  });
+}
+
+function tenantOnboarding(tenantId: string): MockOnboardingChecklist {
+  const state = mockState();
+  const existing = state.onboarding.get(tenantId);
+
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  const created: MockOnboardingChecklist = {
+    tenantId,
+    steps: ONBOARDING_STEP_IDS.map((id) => ({
+      id,
+      status: 'pending',
+      completedAt: null,
+      skippedAt: null,
+    })),
+    completedAt: null,
+    updatedAt: MOCK_CREATED_AT,
+  };
+
+  state.onboarding.set(tenantId, created);
+
+  return created;
+}
+
+/**
+ * Replaces one step and re-derives the checklist's own `completedAt`.
+ *
+ * Re-derived rather than set once, because a reopened step un-finishes the
+ * checklist: an admin who puts branding back on the list has outstanding setup
+ * again, and a `completedAt` that survived would leave the console showing the
+ * finished state over an unfinished list.
+ */
+function writeOnboardingStep(
+  checklist: MockOnboardingChecklist,
+  stepId: OnboardingStepId,
+  next: MockOnboardingChecklist['steps'][number],
+): void {
+  checklist.steps = checklist.steps.map((step) => (step.id === stepId ? next : step));
+  checklist.completedAt = checklist.steps.every((step) => step.status !== 'pending')
+    ? MOCK_UPDATED_AT
+    : null;
+  checklist.updatedAt = MOCK_UPDATED_AT;
+}
+
+/** Copies the steps out, so a caller cannot mutate the store by editing what it read. */
+function toOnboardingResponse(checklist: MockOnboardingChecklist): OnboardingChecklistResponse {
+  return {
+    tenantId: checklist.tenantId,
+    steps: checklist.steps.map((step) => ({ ...step })),
+    completedAt: checklist.completedAt,
+    updatedAt: checklist.updatedAt,
+  };
+}
+
 // --- WhatsApp (TAR-169) ----------------------------------------------------
 
 /**
@@ -947,6 +1111,7 @@ export const MOCK_EXPIRED_SIGNUP_CODE = 'expired';
  * exchange it stands in for cannot be faked, and is not what this is for.
  */
 function connectWhatsAppBusinessAccount({
+  principal,
   body,
 }: RouteContext): ConnectedWhatsAppBusinessAccountResponse {
   const parsed = WhatsAppEmbeddedSignupInputSchema.safeParse(body);
@@ -958,6 +1123,11 @@ function connectWhatsAppBusinessAccount({
   if (parsed.data.code === MOCK_EXPIRED_SIGNUP_CODE) {
     throw signupFailed('code_expired');
   }
+
+  // The one piece of state this otherwise-stateless handler does keep: the
+  // onboarding checklist's first step is done because a number was actually
+  // connected. Recorded after the refusal above, so a failed run leaves it alone.
+  completeOnboardingStep(principal.tenantId, 'connect_whatsapp');
 
   const businessAccountId = nextMockId();
 

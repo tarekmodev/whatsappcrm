@@ -1201,6 +1201,45 @@ own half — eligibility, the selection order, the workload caps and the three d
 versions are [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)
 and [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md).
 
+### Onboarding: the checklist describes the workspace, it is not a to-do list
+
+`/onboarding` is where a new tenant admin lands after signup and returns to afterwards
+(TAR-36). It walks them through connecting a WhatsApp number, inviting agents and setting
+branding, and it is gated on `tenant:settings` — the permission its own endpoints require.
+
+Three things about it are decided by the contract rather than by taste:
+
+- **Completion is server-derived; only skipping belongs to the client.** A step is `completed`
+  because the tenant actually has a connected WABA or has sent an invitation — never because
+  somebody ticked a box. That is why `PATCH /v1/tenant/onboarding/steps/{stepId}` takes an
+  _intent_ (`skip` / `reopen`) and not a status: a client that could write `completed` would
+  let an admin mark a workspace set up that has no number attached to it, and the checklist
+  would then be decoration rather than a description of the workspace. The mock transport
+  keeps the same rule — `handlers.ts` flips a step from the handler that does the real thing.
+- **Skipping is not finishing, and it is reversible.** `skipped` is its own state, so a step
+  put off stays returnable — that is TAR-36's requirement, and it is why the completion notice
+  renders _above_ the list rather than replacing it. The progress meter fills on
+  completed + skipped, because a bar that can never reach the end reads as an outstanding task
+  rather than as a decision the admin already made.
+- **Which step is open lives in the URL.** `?step=` is read through `parseOnboardingStep`, and
+  absent means "the first step still pending". That keeps the whole walkthrough a server
+  component — the only client island is the skip button — and makes "carry on where I left
+  off" a link somebody can share and the back button can undo.
+
+**Where the contract stops.**
+[ADR 0009](docs/architecture/0009-tenant-lifecycle-and-self-signup.md) owns the tenant
+lifecycle, signup, provisioning, retention and the notification hooks, and lists "the
+onboarding checklist's own state" among its non-goals — TAR-407 owns the checklist, its steps
+and its persistence, and 0009 defines only the lifecycle state the checklist runs inside. So
+`packages/contracts/src/onboarding.ts` is the checklist's contract and nothing more: it reuses
+`tenant.ts`'s lifecycle vocabulary and adds nothing to it. Its two routes sit alongside 0009's
+tenant surface (`/v1/tenant/lifecycle`, `/v1/tenant/cancel`) and share the `tenant:settings`
+permission that document assigns to a tenant-settings read.
+
+`set_branding` links nowhere: TAR-29 owns the branding editor and it does not exist yet, so the
+step says so and offers the skip rather than pointing at a route that would 404.
+`features/onboarding/presentation.ts` is the one place that mapping lives.
+
 ### Route groups: signed in and signed out
 
 `app/` holds two route groups, and neither changes a URL — `/inbox` is still `/inbox`.
