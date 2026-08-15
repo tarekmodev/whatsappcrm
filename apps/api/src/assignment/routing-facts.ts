@@ -25,7 +25,17 @@ export interface RoutingFacts {
   readonly messageBody: string | null;
   /** The ticket contact's tags. Null when the ticket has no contact. */
   readonly tagIds: ReadonlySet<string> | null;
-  /** The ticket contact's `custom_fields`. Null when the ticket has no contact. */
+  /**
+   * The ticket contact's `custom_fields`.
+   *
+   * **`{}` is not `null`.** Null means there is no contact to read — no contact
+   * on the ticket, or none visible in this tenant — and every
+   * `contact_attribute` condition is false against it. An empty object means the
+   * contact is there with nothing set, which is what `is_not_set` is *true* of.
+   * The column is nullable and a contact auto-created from a first inbound
+   * message leaves it null, so collapsing the two would stop "this field is not
+   * set" firing for exactly the new customers it is written for.
+   */
   readonly customFields: Readonly<Record<string, string | null>> | null;
   /**
    * Whether the ticket was created inside the tenant's opening hours.

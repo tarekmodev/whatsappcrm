@@ -233,6 +233,13 @@ built-in columns a rule might plausibly want are already covered — the custome
 their words by `keyword`. `custom_fields` values are `string | null` across the wire
 (`CustomFieldValuesSchema`), so one string-comparison operator set covers every field type.
 
+**"No contact" and "a contact with nothing set" are different facts.** `contacts.custom_fields`
+is a nullable column, and a contact auto-created from a first inbound message leaves it null, so
+the engine resolves a null column to `{}` and reserves a null _fact_ for a ticket with no contact
+to read. `is_not_set` is therefore **true** of a brand-new contact and **false** on a
+contact-less ticket, which is what makes "this field is not set → route to Onboarding" fire for
+the population it is written for rather than only for contacts somebody has already edited once.
+
 - **Rejected — a wider `{ source: 'builtin' | 'custom_field', key }` shape.** It is what a
   "contact attribute" reads like in the abstract. Rejected because each built-in it admits needs its
   own comparison semantics (`phone` is E.164, `optedOutAt` is a timestamp, `tags` is a set that
@@ -825,13 +832,13 @@ curl -X POST https://acme.app.example.com/api/v1/assignment-rules \
 }
 ```
 
-| Status | Code                | Cause                                                                                                                                          |
-| ------ | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `201`  | —                   |                                                                                                                                                |
-| `400`  | `validation_failed` | Grammar, an empty `conditions`, both or neither target, an unknown `custom_field_defs.key`, a `targetTeamId`/`targetUserId` not in this tenant |
-| `401`  | `unauthenticated`   | No session                                                                                                                                     |
-| `403`  | `forbidden`         | No `assignment_rule:write`                                                                                                                     |
-| `409`  | `conflict`          | Duplicate `name`, or `rulesPerTenant` already reached                                                                                          |
+| Status | Code                | Cause                                                                                                                                                                               |
+| ------ | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `201`  | —                   |                                                                                                                                                                                     |
+| `400`  | `validation_failed` | Grammar, an empty `conditions`, both or neither target, an unknown `custom_field_defs.key`, a `tagIds` entry not in this tenant, a `targetTeamId`/`targetUserId` not in this tenant |
+| `401`  | `unauthenticated`   | No session                                                                                                                                                                          |
+| `403`  | `forbidden`         | No `assignment_rule:write`                                                                                                                                                          |
+| `409`  | `conflict`          | Duplicate `name`, or `rulesPerTenant` already reached                                                                                                                               |
 
 **A target that belongs to another tenant is `validation_failed`, not `not_found`.** Row-level
 security means the id is simply not visible, so the server cannot distinguish "another tenant's

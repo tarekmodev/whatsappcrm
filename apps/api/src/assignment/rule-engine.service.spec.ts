@@ -65,6 +65,12 @@ interface WorldOptions {
     assignedTeamId: string | null;
   }>;
   messageBody?: string | null;
+  /**
+   * The contact row the engine reads, or `null` for a contact that is not
+   * visible. Defaults to one whose `custom_fields` column is null — the shape
+   * every contact auto-created from a first inbound message has.
+   */
+  contact?: { customFields: unknown } | null;
   /** Users the tenant has, by id, with the status the engine reads. */
   users?: Record<string, string>;
   /** Teams that have at least one active member. */
@@ -161,7 +167,9 @@ function buildWorld(options: WorldOptions = {}): {
     contact: {
       findUnique: () => {
         written.read.push('contact');
-        return Promise.resolve({ customFields: null });
+        return Promise.resolve(
+          options.contact === undefined ? { customFields: null } : options.contact,
+        );
       },
     },
     tenantSettings: {
@@ -613,6 +621,104 @@ describe('routing a created ticket', () => {
       // rotation", never "the queue stopped".
       expect((await engine.routeTicket(TRIGGER)).ruleId).toBe('r2');
       expect(written.assignments).toEqual([{ assignedUserId: null, assignedTeamId: SALES_TEAM }]);
+    });
+  });
+
+  describe('a contact whose custom fields have never been set', () => {
+    // `contacts.custom_fields` is nullable, and every contact auto-created from a
+    // first inbound WhatsApp message leaves it null. Reading that as "there is no
+    // contact" made `is_not_set` false for exactly the brand-new customers a rule
+    // like "plan_tier is not set → Onboarding" is written for — and it looked
+    // correct in any test written against a contact somebody had edited once,
+    // because an edit writes `{}` or a populated object.
+    const IS_NOT_SET: RoutingCondition = {
+      type: 'contact_attribute',
+      key: 'plan_tier',
+      operator: 'is_not_set',
+      value: null,
+    };
+
+    const onPlanTier = (operator: 'is_set' | 'is_not_set'): RuleFixture[] => [
+      {
+        id: 'r1',
+        name: 'Unknown plan to Onboarding',
+        position: 0,
+        conditions: [{ ...IS_NOT_SET, operator }],
+        targetTeamId: BILLING_TEAM,
+      },
+    ];
+
+    const ONBOARDING = onPlanTier('is_not_set');
+
+    it('matches `is_not_set` when the column is null', async () => {
+      const { engine, written } = buildWorld({
+        rules: ONBOARDING,
+        contact: { customFields: null },
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      const result = await engine.routeTicket(TRIGGER);
+
+      expect(result).toMatchObject({ outcome: 'routed', assignedTeamId: BILLING_TEAM });
+      expect(written.assignments).toEqual([{ assignedUserId: null, assignedTeamId: BILLING_TEAM }]);
+    });
+
+    it('matches it the same way when the column holds an empty object', async () => {
+      // The state an edit that cleared every field leaves behind. The two have to
+      // agree — a supervisor cannot see which one a contact is in.
+      const { engine } = buildWorld({
+        rules: ONBOARDING,
+        contact: { customFields: {} },
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      expect((await engine.routeTicket(TRIGGER)).outcome).toBe('routed');
+    });
+
+    it('does not match `is_set` on the same contact', async () => {
+      const { engine } = buildWorld({
+        rules: onPlanTier('is_set'),
+        contact: { customFields: null },
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      expect((await engine.routeTicket(TRIGGER)).outcome).toBe('deferred');
+    });
+
+    it('still refuses to answer for a ticket that has no contact at all', async () => {
+      // The distinction the fix turns on: nothing to read is not the same as
+      // nothing set, and `is_not_set` stays false here (0007's "no data to read
+      // is false"). The contact is never queried.
+      const { engine, written } = buildWorld({
+        rules: ONBOARDING,
+        ticket: { contactId: null },
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      expect((await engine.routeTicket(TRIGGER)).outcome).toBe('deferred');
+      expect(written.read).not.toContain('contact');
+    });
+
+    it('refuses to answer for a contact row that is not visible', async () => {
+      const { engine } = buildWorld({
+        rules: ONBOARDING,
+        contact: null,
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      expect((await engine.routeTicket(TRIGGER)).outcome).toBe('deferred');
+    });
+
+    it('refuses to answer for custom fields that do not parse', async () => {
+      // Corrupt data, not an empty field. Answering `is_not_set` from it would be
+      // a guess about what the row was meant to hold.
+      const { engine } = buildWorld({
+        rules: ONBOARDING,
+        contact: { customFields: { plan_tier: { nested: 'object' } } },
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      expect((await engine.routeTicket(TRIGGER)).outcome).toBe('deferred');
     });
   });
 
