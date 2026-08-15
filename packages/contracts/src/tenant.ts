@@ -13,6 +13,16 @@ import { HexColorSchema, IdSchema, TimestampSchema, type IanaTimezone } from './
  * from touching lifecycle logic.
  */
 export const TENANT_STATUSES = [
+  /**
+   * The row exists and nothing else does. It is the column default and the
+   * fail-closed state of a tenant written by anything other than
+   * `TenantProvisioningService` — a fixture, a half-applied migration, a
+   * provisioning path that is not one transaction. No tenant is ever *served*
+   * in it: provisioning and signup both leave it inside the transaction that
+   * created the row, which is what makes the gates refusing it meaningful
+   * rather than a state customers see (0009, decision 1).
+   */
+  'created',
   'trialing',
   'active',
   'past_due',
@@ -25,16 +35,30 @@ export const TenantStatusSchema = z.enum(TENANT_STATUSES);
 export type TenantStatus = (typeof TENANT_STATUSES)[number];
 
 /**
- * Legal transitions. Anything absent here is a bug, and the transition function
- * in `apps/api` throws rather than silently allowing it — a tenant that goes
- * `deleted → active` is a data-retention incident, not a state change.
+ * Legal transitions, and exactly the edges in 0009's state diagram. Anything
+ * absent here is a bug, and the transition function in `apps/api` throws rather
+ * than silently allowing it — a tenant that goes `deleted → active` is a
+ * data-retention incident, not a state change.
+ *
+ * Two edges changed when 0009 fixed the graph, and both are load-bearing:
+ *
+ *   * **`cancelled → deleted` is gone; `suspended → deleted` replaces it.**
+ *     Everything funnels through `suspended` before `deleted`, because `purge_at`
+ *     is set on entry to `suspended` and nowhere else. One timer, one sweep
+ *     branch, one code path that can destroy data — a second road to `deleted`
+ *     would be a second deletion path with its own clock.
+ *   * **`cancelled → suspended` is new**, and is what the cancellation grace
+ *     period elapsing does.
  */
 export const TENANT_STATUS_TRANSITIONS: Record<TenantStatus, readonly TenantStatus[]> = {
-  trialing: ['active', 'cancelled', 'suspended'],
+  // Provisioning commits `trialing` for self-signup and `active` for an
+  // operator-provisioned tenant, both inside the transaction that inserts the row.
+  created: ['trialing', 'active'],
+  trialing: ['active', 'past_due', 'cancelled', 'suspended'],
   active: ['past_due', 'cancelled', 'suspended'],
   past_due: ['active', 'suspended', 'cancelled'],
-  suspended: ['active', 'cancelled'],
-  cancelled: ['active', 'deleted'],
+  suspended: ['active', 'cancelled', 'deleted'],
+  cancelled: ['active', 'suspended'],
   deleted: [],
 };
 
@@ -50,20 +74,153 @@ export function canTransitionTenant(from: TenantStatus, to: TenantStatus): boole
  *
  * Note that `inboundAccepted` stays true through `suspended`: refusing Meta's
  * webhook would make Meta retry and then drop real customer messages. We keep
- * accepting and persisting them; we just do not let the tenant answer.
+ * accepting and persisting them; we just do not let the tenant answer. This is
+ * the property `assert_tenant_serviceable` admits `suspended` for — the ingest
+ * path writes `conversations` and `messages` through `TenantPrisma`, so a
+ * database gate that refused a suspended tenant would force the highest-volume
+ * write in the product onto the unscoped client (0009, decision 2).
+ *
+ * `apiAccess` is about **agent and admin HTTP access**, not about whether a
+ * statement may touch the tenant's rows. The two are separate questions with
+ * separate gates, and `suspended` is exactly where they diverge: no console
+ * access, but the webhook still lands.
  */
 export const TENANT_STATUS_EFFECTS: Record<
   TenantStatus,
   { apiAccess: boolean; inboundAccepted: boolean; outboundAllowed: boolean }
 > = {
+  // Never observable: provisioning leaves this state inside the transaction that
+  // created the row, and `HostTenantGuard` answers `tenant_not_found` for it.
+  created: { apiAccess: false, inboundAccepted: false, outboundAllowed: false },
   trialing: { apiAccess: true, inboundAccepted: true, outboundAllowed: true },
   active: { apiAccess: true, inboundAccepted: true, outboundAllowed: true },
   // Fully operational — dunning is a billing banner, not an outage.
   past_due: { apiAccess: true, inboundAccepted: true, outboundAllowed: true },
-  suspended: { apiAccess: true, inboundAccepted: true, outboundAllowed: false },
-  cancelled: { apiAccess: true, inboundAccepted: false, outboundAllowed: false },
+  // `apiAccess: false` is TAR-36's fourth acceptance criterion — agents cannot
+  // log in. An admin keeps a narrow way back in through the routes marked
+  // `@AvailableWhileSuspended()`, so a suspended tenant is not one that cannot
+  // pay its way out; that allowlist is the guard's business, not this table's.
+  suspended: { apiAccess: false, inboundAccepted: true, outboundAllowed: false },
+  cancelled: { apiAccess: false, inboundAccepted: false, outboundAllowed: false },
   deleted: { apiAccess: false, inboundAccepted: false, outboundAllowed: false },
 };
+
+/**
+ * What moved a tenant between states. Every edge in the state machine is caused
+ * by exactly one of these, and `TenantLifecycleService` refuses an edge whose
+ * trigger is not the one recorded for it: `active → past_due` from a UI button
+ * is a bug, not a shortcut (0009, proposed architecture).
+ */
+export const LIFECYCLE_TRIGGERS = [
+  /** A tenant admin pressed something — cancel, undo cancel, request deletion. */
+  'user_action',
+  /** A platform operator acted through the admin API, holding `PLATFORM_ADMIN_TOKEN`. */
+  'operator_action',
+  /** A normalised `BillingEvent` arrived. TAR-37 produces these; the union is fixed today. */
+  'billing_event',
+  /** The lifecycle sweep found an elapsed `trial_ends_at`, `grace_period_ends_at` or `purge_at`. */
+  'timer',
+  /** The platform itself, with no actor — provisioning writing a tenant's first row. */
+  'system',
+] as const;
+
+export const LifecycleTriggerSchema = z.enum(LIFECYCLE_TRIGGERS);
+export type LifecycleTrigger = (typeof LIFECYCLE_TRIGGERS)[number];
+
+/**
+ * Who is recorded against a lifecycle transition. Mirrors the `audit_actor_type`
+ * database enum so `lifecycle_audit_log` and `audit_logs` describe an actor the
+ * same way, and so a reader does not have to learn two vocabularies.
+ *
+ * `unattributed` is here because the backfill migration writes it for the state
+ * each tenant was already in when the table was created. Application code never
+ * writes it — `AuditActor` in `apps/api` excludes it.
+ */
+export const LIFECYCLE_ACTOR_TYPES = [
+  'user',
+  'platform_operator',
+  'system',
+  'unattributed',
+] as const;
+
+export const LifecycleActorTypeSchema = z.enum(LIFECYCLE_ACTOR_TYPES);
+export type LifecycleActorType = (typeof LIFECYCLE_ACTOR_TYPES)[number];
+
+/**
+ * Every window in the lifecycle, in one object, on `AUTH_POLICY`'s precedent:
+ * one place to read them and one place to change them.
+ *
+ * These are **lengths, not instants**. The database stores only the instants the
+ * sweep compares against, so revising a value here changes when future timers
+ * fire and cannot silently reinterpret one already running for a live tenant.
+ *
+ * Defensible starting values rather than measured ones, except where noted.
+ */
+export const LIFECYCLE_POLICY = Object.freeze({
+  /** Long enough to connect a WABA and run real conversations through it. Two weekends. */
+  trialDays: 14,
+  /**
+   * A card retry cycle. A provider retries a failed charge over roughly this
+   * window, so suspending sooner suspends tenants whose payment was going to
+   * succeed anyway.
+   */
+  pastDueGraceDays: 14,
+  /** An accidental or regretted cancellation is discovered within a week. */
+  cancelledGraceDays: 7,
+  /**
+   * TAR-18's stated default, recorded there as "pending client policy". The one
+   * value here that is a policy decision rather than an engineering one, and the
+   * only one that is irreversible in the wrong direction — 0009's open question 1
+   * asks for it to be confirmed before the lifecycle engine ships.
+   */
+  purgeAfterSuspendedDays: 30,
+  /** One email before the point of no return, while there is still time to act. */
+  deletionReminderDays: 7,
+  trialEndingReminderDays: 3,
+  /**
+   * Longer than `passwordResetTtlMs`, shorter than `inviteTtlMs`: the person is
+   * at the keyboard now, but they may check that mailbox tomorrow.
+   */
+  signupTokenTtlMs: 24 * 60 * 60 * 1000,
+} as const);
+
+/**
+ * One row of a tenant's lifecycle history, as `GET /api/v1/tenant/lifecycle/events`
+ * and its operator twin return it.
+ *
+ * `metadata` is deliberately absent from the response even though the column
+ * carries it: it holds a provider event id or an elapsed-timer measurement, which
+ * are platform forensics rather than something a tenant admin needs. `reason` is
+ * absent for the same reason — it is operator free text and 0009 says it is never
+ * rendered to the tenant.
+ */
+export const TenantLifecycleEventSchema = z.object({
+  id: IdSchema,
+  /** Null only for the first row of a tenant's life. */
+  fromStatus: TenantStatusSchema.nullable(),
+  toStatus: TenantStatusSchema,
+  trigger: LifecycleTriggerSchema,
+  actorType: LifecycleActorTypeSchema,
+  /** The operator credential label, or the admin's email at the time. */
+  actorLabel: z.string().nullable(),
+  occurredAt: TimestampSchema,
+});
+
+/**
+ * `GET /api/v1/tenant/lifecycle` — what TAR-409's plan-status panel renders.
+ *
+ * Deliberately not `BillingSummaryResponse`: that one is TAR-37's and describes a
+ * subscription. This describes a lifecycle, and the two coexist — a tenant with
+ * no subscription still has one of these.
+ */
+export const TenantLifecycleResponseSchema = z.object({
+  status: TenantStatusSchema,
+  trialEndsAt: TimestampSchema.nullable(),
+  /** When this tenant becomes `suspended`, if a grace period is running. */
+  gracePeriodEndsAt: TimestampSchema.nullable(),
+  /** When this tenant's data is destroyed, if the retention window is running. */
+  purgeAt: TimestampSchema.nullable(),
+});
 
 /** Per-tenant white-label appearance. TAR-29 owns the editor; the shape is fixed here. */
 export const TenantBrandingSchema = z.object({
@@ -132,6 +289,22 @@ export const TenantPublicResponseSchema = z.object({
 export const TenantUpdateInputSchema = z.object({
   name: TenantNameSchema.optional(),
   branding: TenantBrandingSchema.partial().optional(),
+});
+
+export const TenantCancelInputSchema = z.object({
+  /** Operator- and admin-supplied free text for the trail. Never rendered back to the tenant. */
+  reason: z.string().max(500).optional(),
+});
+
+/**
+ * Typing the name of the thing you are destroying is the cheapest possible guard
+ * against the one irreversible action in the product. `confirmSlug` must equal
+ * the tenant's own slug, checked server-side — the client having asked nicely is
+ * not the check.
+ */
+export const TenantDeleteInputSchema = z.object({
+  confirmSlug: TenantSlugSchema,
+  reason: z.string().max(500).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -343,3 +516,7 @@ export type TenantDomain = z.infer<typeof TenantDomainSchema>;
 export type TenantResponse = z.infer<typeof TenantResponseSchema>;
 export type TenantPublicResponse = z.infer<typeof TenantPublicResponseSchema>;
 export type TenantUpdateInput = z.infer<typeof TenantUpdateInputSchema>;
+export type TenantLifecycleEvent = z.infer<typeof TenantLifecycleEventSchema>;
+export type TenantLifecycleResponse = z.infer<typeof TenantLifecycleResponseSchema>;
+export type TenantCancelInput = z.infer<typeof TenantCancelInputSchema>;
+export type TenantDeleteInput = z.infer<typeof TenantDeleteInputSchema>;
