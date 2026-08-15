@@ -40,12 +40,12 @@ So there are exactly four open questions, and they are the ones this document an
 **One is a genuine conflict with a shipped decision.** TAR-32's first acceptance criterion
 opens "as an **agent**", and 0004 grants `ticket:assign` to **supervisor and above** — an
 agent has no way to move a ticket at all. Widening `ticket:assign` would also hand every
-agent the right to take a ticket *off* a colleague, which is precisely what 0004 split
+agent the right to take a ticket _off_ a colleague, which is precisely what 0004 split
 `conversation:claim` out of `conversation:assign` to prevent. Decision 2 resolves it.
 
 **One is a scope trap.** 0006 rejected a general `notifications` table and predicted the
 moment this document is written: "when the second notification type arrives, generalising
-it is a rename and a `type` column". This *is* the second type. Decision 5 says why it is
+it is a rename and a `type` column". This _is_ the second type. Decision 5 says why it is
 still not the moment, and states the trigger that makes it one.
 
 ## Goals / Non-Goals
@@ -64,7 +64,7 @@ still not the moment, and states the trigger that makes it one.
 **Non-Goals**
 
 - **De-escalation, or an "is escalated" state on the ticket.** TAR-32 asks for the
-  escalation to be *recorded* and *delivered*, not for a lifecycle. Adding
+  escalation to be _recorded_ and _delivered_, not for a lifecycle. Adding
   `tickets.escalated_at` would need a resolve flow, a queue filter and an empty state,
   none of which the story asks for. See open question 2.
 - **Escalation outside the platform** — email, WhatsApp, push. Explicitly out of scope on
@@ -109,14 +109,14 @@ sequenceDiagram
   S-->>C: 200 { event, notifiedUserIds }
 ```
 
-| Component                  | Responsibility                                                         |
-| -------------------------- | ---------------------------------------------------------------------- |
-| `TicketsController`        | Two new routes plus `GET /tickets/{id}/events`. Permissions only       |
-| `TicketCommandService`     | `assign` gains the reason rule and the handoff bound; `escalate` added |
-| `TicketEventQueryService`  | New. The event-log read and its keyset page                            |
-| `EscalationAlertService`   | New. Recipient resolution, alert writes, the recipient's read surface  |
-| `resolveAlertRecipients`   | **Unchanged.** Imported from `sla-recipients.ts`, not copied           |
-| `RealtimeRelayService`     | One new event, addressed exactly as `sla.breached` is                  |
+| Component                 | Responsibility                                                         |
+| ------------------------- | ---------------------------------------------------------------------- |
+| `TicketsController`       | Two new routes plus `GET /tickets/{id}/events`. Permissions only       |
+| `TicketCommandService`    | `assign` gains the reason rule and the handoff bound; `escalate` added |
+| `TicketEventQueryService` | New. The event-log read and its keyset page                            |
+| `EscalationAlertService`  | New. Recipient resolution, alert writes, the recipient's read surface  |
+| `resolveAlertRecipients`  | **Unchanged.** Imported from `sla-recipients.ts`, not copied           |
+| `RealtimeRelayService`    | One new event, addressed exactly as `sla.breached` is                  |
 
 ## Decision 1 — Reassignment reuses `POST /tickets/{id}/assign`, and `reason` becomes conditionally required
 
@@ -134,7 +134,7 @@ takes work away from somebody — and that is precisely the case where the ticke
 has a holder. A supervisor emptying the flagged queue (0008 decision 3) is placing work
 nobody held, which is not a handoff and has no handoff to explain.
 
-Because the console must know whether to mark the field required *before* it submits, the
+Because the console must know whether to mark the field required _before_ it submits, the
 rule is published as a pure predicate rather than described twice:
 
 ```ts
@@ -257,7 +257,7 @@ A caller holding `ticket:assign` skips all three. Their write is unchanged from 
 
 This is 0004 invariant 7 applied to tickets, one word for one word: `conversation:claim`
 takes what nobody is on and is granted to every role; `conversation:assign` moves what
-somebody is on and stays supervisor-and-above. `ticket:handoff` gives away what *you* are
+somebody is on and stays supervisor-and-above. `ticket:handoff` gives away what _you_ are
 on. None of the three lets an agent take work off a colleague.
 
 **Rejected — grant `ticket:assign` to agents.** No new permission, no bound, no service
@@ -348,7 +348,7 @@ become indistinguishable in the history, and it forces the agent off a ticket th
 still be the right person to work.
 
 **Rejected — a `priority: 'urgent'` bump as the escalation.** Rejected because priority is
-a property of the *work* and escalation is a request aimed at a *person*; conflating them
+a property of the _work_ and escalation is a request aimed at a _person_; conflating them
 would make every urgent ticket read as escalated in TAR-30's reporting.
 
 ## Decision 4 — The audit record is `ticket_events`, and both actions fit one shape
@@ -386,15 +386,15 @@ assignment moved" would make every consumer learn all three — the argument
 
 Structural consistency across both actions comes from the table, not from a convention:
 
-| Fact          | Where it lives                     | Reassignment                          | Escalation                                |
-| ------------- | ---------------------------------- | ------------------------------------- | ----------------------------------------- |
-| **tenant**    | `ticket_events.tenant_id`          | `NOT NULL`, under RLS                 | same                                      |
-| **target**    | `ticket_events.ticket_id`          | composite FK `(tenant_id, ticket_id)` | same                                      |
-| **actor**     | `ticket_events.actor_user_id`      | the caller; never null on these two   | same                                      |
-| **timestamp** | `ticket_events.created_at`         | `timestamptz(3)`, DB default          | same                                      |
-| **reason**    | `ticket_events.data.reason`        | required per decision 1               | always required                           |
-| **cause**     | `ticket_events.data.cause`         | `'agent'`                             | `'agent'`                                 |
-| **from → to** | `data.previous*` / the row's new state | user and team, both sides         | `data.escalatedToUserId`, null when derived |
+| Fact          | Where it lives                         | Reassignment                          | Escalation                                  |
+| ------------- | -------------------------------------- | ------------------------------------- | ------------------------------------------- |
+| **tenant**    | `ticket_events.tenant_id`              | `NOT NULL`, under RLS                 | same                                        |
+| **target**    | `ticket_events.ticket_id`              | composite FK `(tenant_id, ticket_id)` | same                                        |
+| **actor**     | `ticket_events.actor_user_id`          | the caller; never null on these two   | same                                        |
+| **timestamp** | `ticket_events.created_at`             | `timestamptz(3)`, DB default          | same                                        |
+| **reason**    | `ticket_events.data.reason`            | required per decision 1               | always required                             |
+| **cause**     | `ticket_events.data.cause`             | `'agent'`                             | `'agent'`                                   |
+| **from → to** | `data.previous*` / the row's new state | user and team, both sides             | `data.escalatedToUserId`, null when derived |
 
 `actor_user_id` is nullable on the column because the router and the SLA sweep write
 system events through it. **Both of TAR-32's events are always attributed**: neither route
@@ -424,7 +424,7 @@ export const TicketEventSchema = z.object({
   actorUserId: IdSchema.nullable(),
   fromValue: z.string().nullable(),
   toValue: z.string().nullable(),
-  assignment: TicketEventAssignmentSchema.nullable(),   // NEW
+  assignment: TicketEventAssignmentSchema.nullable(), // NEW
   reason: z.string().nullable(),
   cause: TicketEventCauseSchema.nullable(),
   createdAt: TimestampSchema,
@@ -433,16 +433,16 @@ export const TicketEventSchema = z.object({
 
 Per-type encoding, and this table is the contract TAR-470 renders from:
 
-| `type`                 | `fromValue`     | `toValue`                        | `assignment` | `reason`   |
-| ---------------------- | --------------- | -------------------------------- | ------------ | ---------- |
-| `created`              | null            | null                             | null         | null       |
-| `status_changed`       | old status      | new status                       | null         | null       |
-| `priority_changed`     | old priority    | new priority                     | null         | null       |
-| `assigned`             | null            | null                             | **set**      | when given |
-| `unassigned`           | null            | null                             | **set**      | when given |
-| `escalated`            | null            | named supervisor id, or **null** | null         | **always** |
-| `assignment_deferred`  | null            | null                             | null         | the `FallbackAssignmentReason` |
-| `sla_breached`         | null            | the `SlaTargetKind`              | null         | null       |
+| `type`                | `fromValue`  | `toValue`                        | `assignment` | `reason`                       |
+| --------------------- | ------------ | -------------------------------- | ------------ | ------------------------------ |
+| `created`             | null         | null                             | null         | null                           |
+| `status_changed`      | old status   | new status                       | null         | null                           |
+| `priority_changed`    | old priority | new priority                     | null         | null                           |
+| `assigned`            | null         | null                             | **set**      | when given                     |
+| `unassigned`          | null         | null                             | **set**      | when given                     |
+| `escalated`           | null         | named supervisor id, or **null** | null         | **always**                     |
+| `assignment_deferred` | null         | null                             | null         | the `FallbackAssignmentReason` |
+| `sla_breached`        | null         | the `SlaTargetKind`              | null         | null                           |
 
 `toValue` being null on an `escalated` event is meaningful, not missing: it says the
 escalation was addressed to whoever supervises this ticket rather than to a person. The
@@ -495,15 +495,15 @@ than "a message was emitted".
   a row delete.
 - **Owned by:** TAR-468
 
-| Column            | Notes                                                                             |
-| ----------------- | --------------------------------------------------------------------------------- |
-| `ticket_event_id` | The `escalated` event this alert belongs to. **The group key** — N recipient rows point at one escalation act, so the console shows one escalation and not three |
-| `recipient_user_id` | One row per person told. The read rule is "you are a named recipient"           |
-| `acknowledged_at` | First write wins; a second acknowledge is not a conflict                          |
+| Column              | Notes                                                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ticket_event_id`   | The `escalated` event this alert belongs to. **The group key** — N recipient rows point at one escalation act, so the console shows one escalation and not three |
+| `recipient_user_id` | One row per person told. The read rule is "you are a named recipient"                                                                                            |
+| `acknowledged_at`   | First write wins; a second acknowledge is not a conflict                                                                                                         |
 
 `ticket_event_id` doing double duty as group key and idempotency key is the point of the
 design. There is no natural uniqueness on `(ticket, recipient)` — a second escalation an
-hour later must notify again — but a *retry of one escalation* must not, and the event row
+hour later must notify again — but a _retry of one escalation_ must not, and the event row
 is already unique. It also means the alert can never reference an escalation that is not in
 the audit trail.
 
@@ -557,7 +557,7 @@ POST /api/v1/escalation-alerts/{id}/acknowledge                     ticket:read
 `unacknowledgedOnly` defaults **true** — the landing view is what still needs attention —
 and is `z.stringbool()`, not `z.boolean()`, for the reason `SlaAlertListQuerySchema`
 documents at length: it parses a query string, `"false"` arrives as four characters, and
-`z.coerce.boolean()` would turn the filter *on* for `?unacknowledgedOnly=false`.
+`z.coerce.boolean()` would turn the filter _on_ for `?unacknowledgedOnly=false`.
 
 **No `_all` permission.** Every row names its recipient and the query narrows to
 `recipient_user_id = principal.userId` on top of RLS. Another principal's alert answers
@@ -588,27 +588,27 @@ address a notification to.
 Everything in ADRs 0001, 0002, 0004, 0006 and 0008 is inherited unchanged. Only what this
 document adds:
 
-| Concern              | Choice                                    | Alternatives considered                            | Rationale                                                              |
-| -------------------- | ----------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------- |
-| Reassignment surface | Existing `POST /tickets/{id}/assign`      | A separate `/reassign` route                       | Identical transaction; two routes over one method is two RBAC surfaces |
-| Reason enforcement   | Service-side, conditional on the row      | Always-required in the Zod schema                  | Matches the criterion; no break to TAR-274's shipped console           |
-| Agent's right to move| New `ticket:handoff`, bounded by the route| Widening `ticket:assign`                           | 0004 invariant 7, applied to tickets one word for one word             |
-| Escalation semantics | Signal; assignment untouched              | Reassign upward; priority bump                     | Escalating must not lose the customer their agent                      |
-| Escalation record    | `ticket_events` type `escalated`          | `audit_logs` row                                   | Operational, not security-relevant; text `type` needs no migration     |
-| Notification store   | `escalation_alerts`, mirroring `sla_alerts` | Generic `notifications`; socket only             | Survives an offline supervisor; generalising is out of this story's scope |
-| Notification push    | `ticket.escalated` → `user:{id}`          | `tenant:{id}` broadcast                            | The socket audience must equal the rows written                        |
-| Duplicate escalation | Allowed; optional `Idempotency-Key`       | Refuse while one is open; time-window suppression  | A second ask after silence is legitimate; suppression is magic         |
+| Concern               | Choice                                      | Alternatives considered                           | Rationale                                                                 |
+| --------------------- | ------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------- |
+| Reassignment surface  | Existing `POST /tickets/{id}/assign`        | A separate `/reassign` route                      | Identical transaction; two routes over one method is two RBAC surfaces    |
+| Reason enforcement    | Service-side, conditional on the row        | Always-required in the Zod schema                 | Matches the criterion; no break to TAR-274's shipped console              |
+| Agent's right to move | New `ticket:handoff`, bounded by the route  | Widening `ticket:assign`                          | 0004 invariant 7, applied to tickets one word for one word                |
+| Escalation semantics  | Signal; assignment untouched                | Reassign upward; priority bump                    | Escalating must not lose the customer their agent                         |
+| Escalation record     | `ticket_events` type `escalated`            | `audit_logs` row                                  | Operational, not security-relevant; text `type` needs no migration        |
+| Notification store    | `escalation_alerts`, mirroring `sla_alerts` | Generic `notifications`; socket only              | Survives an offline supervisor; generalising is out of this story's scope |
+| Notification push     | `ticket.escalated` → `user:{id}`            | `tenant:{id}` broadcast                           | The socket audience must equal the rows written                           |
+| Duplicate escalation  | Allowed; optional `Idempotency-Key`         | Refuse while one is open; time-window suppression | A second ask after silence is legitimate; suppression is magic            |
 
 ## Data Model
 
 Only `escalation_alerts` is new (specified under decision 5). Everything else is an
 existing table gaining rows:
 
-| Table            | Change                                                                        |
-| ---------------- | ----------------------------------------------------------------------------- |
-| `tickets`        | **None.** Decision 3 keeps the assignment columns out of the escalation path  |
-| `ticket_events`  | `@@unique([tenantId, id])` for the composite FK. New `type` value needs no DDL |
-| `escalation_alerts` | New table, decision 5                                                      |
+| Table               | Change                                                                         |
+| ------------------- | ------------------------------------------------------------------------------ |
+| `tickets`           | **None.** Decision 3 keeps the assignment columns out of the escalation path   |
+| `ticket_events`     | `@@unique([tenantId, id])` for the composite FK. New `type` value needs no DDL |
+| `escalation_alerts` | New table, decision 5                                                          |
 
 **No enum is added.** `ticket_events.type` is text by design, and `escalation_alerts` has
 no enumerated column.
@@ -692,13 +692,13 @@ makes with `kind` and `due_at`, and for the same reason.
 
 ### Routes
 
-| Method | Path                                     | Permission        | Success | Body → Response                                    |
-| ------ | ---------------------------------------- | ----------------- | ------- | -------------------------------------------------- |
-| `POST` | `/api/v1/tickets/{id}/assign`            | `ticket:handoff`  | `200`   | `TicketAssignInput` → `TicketResponse`             |
-| `POST` | `/api/v1/tickets/{id}/escalate`          | `ticket:escalate` | `200`   | `TicketEscalateInput` → `TicketEscalationResponse` |
-| `GET`  | `/api/v1/tickets/{id}/events`            | `ticket:read`     | `200`   | — → `CursorPage<TicketEvent>`                      |
-| `GET`  | `/api/v1/escalation-alerts`              | `ticket:read`     | `200`   | — → `CursorPage<EscalationAlertResponse>`          |
-| `POST` | `/api/v1/escalation-alerts/{id}/acknowledge` | `ticket:read` | `200`   | — → `EscalationAlertResponse`                      |
+| Method | Path                                         | Permission        | Success | Body → Response                                    |
+| ------ | -------------------------------------------- | ----------------- | ------- | -------------------------------------------------- |
+| `POST` | `/api/v1/tickets/{id}/assign`                | `ticket:handoff`  | `200`   | `TicketAssignInput` → `TicketResponse`             |
+| `POST` | `/api/v1/tickets/{id}/escalate`              | `ticket:escalate` | `200`   | `TicketEscalateInput` → `TicketEscalationResponse` |
+| `GET`  | `/api/v1/tickets/{id}/events`                | `ticket:read`     | `200`   | — → `CursorPage<TicketEvent>`                      |
+| `GET`  | `/api/v1/escalation-alerts`                  | `ticket:read`     | `200`   | — → `CursorPage<EscalationAlertResponse>`          |
+| `POST` | `/api/v1/escalation-alerts/{id}/acknowledge` | `ticket:read`     | `200`   | — → `EscalationAlertResponse`                      |
 
 `200` on both POSTs, not `201`. `assign` returns the ticket as it now stands, and
 `escalate` returns a record the caller addresses by ticket and never by its own URL — there
@@ -709,39 +709,39 @@ is no resource location to hand back.
 Every code is already in `API_ERROR_CODES`. **No new error code is introduced**, and none
 should be: inventing one would make `error-codes.ts` something an implementation edits.
 
-| Condition                                                    | Code                | Status |
-| ------------------------------------------------------------ | ------------------- | ------ |
-| Ticket unknown, in another tenant, or not visible to the caller | `not_found`      | 404    |
-| `reason` missing on a reassignment (decision 1)               | `validation_failed` | 400    |
-| `reason` missing, blank, or under 3 characters on an escalation | `validation_failed` | 400  |
-| Neither `userId` nor `teamId` on an assign                    | `validation_failed` | 400    |
-| `userId` / `teamId` / `toUserId` names nobody in this tenant, or an inactive user | `validation_failed` | 400 |
-| `toUserId` names a user who does not hold `ticket:read_all`   | `validation_failed` | 400    |
-| Path id is not a UUID                                         | `validation_failed` | 400    |
-| Agent reassigning a ticket they do not hold                   | `forbidden`         | 403    |
-| Agent reassigning to a non-teammate                           | `forbidden`         | 403    |
-| Agent releasing a ticket (leaving it unassigned)              | `forbidden`         | 403    |
-| Another principal's escalation alert                          | `not_found`         | 404    |
-| Tenant deactivated with a session still open                  | `forbidden`         | 403    |
-| `Idempotency-Key` replayed with a different body              | `idempotency_key_reused` | 409 |
+| Condition                                                                         | Code                     | Status |
+| --------------------------------------------------------------------------------- | ------------------------ | ------ |
+| Ticket unknown, in another tenant, or not visible to the caller                   | `not_found`              | 404    |
+| `reason` missing on a reassignment (decision 1)                                   | `validation_failed`      | 400    |
+| `reason` missing, blank, or under 3 characters on an escalation                   | `validation_failed`      | 400    |
+| Neither `userId` nor `teamId` on an assign                                        | `validation_failed`      | 400    |
+| `userId` / `teamId` / `toUserId` names nobody in this tenant, or an inactive user | `validation_failed`      | 400    |
+| `toUserId` names a user who does not hold `ticket:read_all`                       | `validation_failed`      | 400    |
+| Path id is not a UUID                                                             | `validation_failed`      | 400    |
+| Agent reassigning a ticket they do not hold                                       | `forbidden`              | 403    |
+| Agent reassigning to a non-teammate                                               | `forbidden`              | 403    |
+| Agent releasing a ticket (leaving it unassigned)                                  | `forbidden`              | 403    |
+| Another principal's escalation alert                                              | `not_found`              | 404    |
+| Tenant deactivated with a session still open                                      | `forbidden`              | 403    |
+| `Idempotency-Key` replayed with a different body                                  | `idempotency_key_reused` | 409    |
 
 The `not_found`-vs-`forbidden` split follows `tickets.http.ts` exactly: a resource the
-caller may not *see* is `not_found`; an act they may not *perform* on a resource they are
+caller may not _see_ is `not_found`; an act they may not _perform_ on a resource they are
 looking at is `forbidden`.
 
 ## Failure Modes and Operations
 
-| Condition                                              | Behaviour                                                                    | What to watch                                            |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------- | -------------------------------------------------------- |
-| Tenant has no active supervisor or admin               | Event written, zero alert rows, warning logged naming the ticket. `notifiedUserIds: []` | Count of escalations with zero recipients — a real one is a misconfigured tenant |
-| Recipient suspended between resolution and commit      | One alert row for somebody who can no longer act. Accepted (decision 5, step 2) | —                                                        |
-| Process dies between commit and socket emit            | Rows exist; recipient sees them on next list read. Push lost, record kept    | Gap between `escalation_alerts` inserts and emits         |
-| Socket disconnected / supervisor offline               | Identical to the above by construction. This is why the row exists           | —                                                        |
-| Escalation transaction fails                           | Neither event nor alerts. Caller gets `internal_error` and can retry          | Rollback rate on the escalate route                       |
-| Two agents reassign the same ticket at once            | Last writer wins, both on the event log. Unchanged from today (0008)         | —                                                        |
-| Ticket reassigned while an escalation is unacknowledged | Both stand. The alert names the holder **at escalation time**, deliberately  | —                                                        |
-| `escalation_alerts` grows without bound                | Same unbounded-growth gap `sla_alerts` has today                             | Row count per tenant — see open question 3                |
-| An agent escalates the same ticket repeatedly          | Every escalation notifies. Not rate-limited at v1                            | Escalations per ticket; a tenant above ~3 is a process problem, not a platform one |
+| Condition                                               | Behaviour                                                                               | What to watch                                                                      |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Tenant has no active supervisor or admin                | Event written, zero alert rows, warning logged naming the ticket. `notifiedUserIds: []` | Count of escalations with zero recipients — a real one is a misconfigured tenant   |
+| Recipient suspended between resolution and commit       | One alert row for somebody who can no longer act. Accepted (decision 5, step 2)         | —                                                                                  |
+| Process dies between commit and socket emit             | Rows exist; recipient sees them on next list read. Push lost, record kept               | Gap between `escalation_alerts` inserts and emits                                  |
+| Socket disconnected / supervisor offline                | Identical to the above by construction. This is why the row exists                      | —                                                                                  |
+| Escalation transaction fails                            | Neither event nor alerts. Caller gets `internal_error` and can retry                    | Rollback rate on the escalate route                                                |
+| Two agents reassign the same ticket at once             | Last writer wins, both on the event log. Unchanged from today (0008)                    | —                                                                                  |
+| Ticket reassigned while an escalation is unacknowledged | Both stand. The alert names the holder **at escalation time**, deliberately             | —                                                                                  |
+| `escalation_alerts` grows without bound                 | Same unbounded-growth gap `sla_alerts` has today                                        | Row count per tenant — see open question 3                                         |
+| An agent escalates the same ticket repeatedly           | Every escalation notifies. Not rate-limited at v1                                       | Escalations per ticket; a tenant above ~3 is a process problem, not a platform one |
 
 Nothing here pages anyone. An escalation that reaches no recipient is the one worth an
 alert rule, and it is a tenant-configuration signal rather than a platform fault.
@@ -778,14 +778,14 @@ alert rule, and it is a tenant-configuration signal rather than a platform fault
 
 The sub-issues already exist. This maps onto them rather than proposing new ones.
 
-| Stage | Task        | Delivers                                                                                                                                                              | Unblocks |
-| ----- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| 2     | **TAR-468** | `escalation_alerts` with its RLS policy, composite FKs, unique and both indexes; `@@unique([tenantId, id])` on `TicketEvent`; reversible migration. **No enum, no `ALTER TABLE tickets`** | 469      |
-| 3     | **TAR-469** | The `rbac.ts` and `tickets.ts` contract diffs; `escalations.ts`; the reason rule and the handoff bound in `TicketCommandService`; `escalate`; `GET /tickets/{id}/events`; `EscalationAlertService` and its two routes; the realtime event | 471      |
+| Stage | Task        | Delivers                                                                                                                                                                                                                                         | Unblocks |
+| ----- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| 2     | **TAR-468** | `escalation_alerts` with its RLS policy, composite FKs, unique and both indexes; `@@unique([tenantId, id])` on `TicketEvent`; reversible migration. **No enum, no `ALTER TABLE tickets`**                                                        | 469      |
+| 3     | **TAR-469** | The `rbac.ts` and `tickets.ts` contract diffs; `escalations.ts`; the reason rule and the handoff bound in `TicketCommandService`; `escalate`; `GET /tickets/{id}/events`; `EscalationAlertService` and its two routes; the realtime event        | 471      |
 | 3     | **TAR-470** | Reassign and escalate forms with a required reason; the ticket history view; the supervisor's escalation list. **Starts immediately** — every shape it needs is in this document, and `apps/web/lib/api/mock/handlers.ts` is where it mocks them | 471      |
-| 4     | **TAR-471** | Both Given/When/Then criteria end to end, plus the negative set below                                                                                                 | 472      |
-| 5     | **TAR-472** | Review, with decision 2's ⚠️ as the checklist item                                                                                                                     | 473      |
-| 6     | **TAR-473** | `docs/reference/tickets-api.md`, a tenant-user guide for both flows, changelog                                                                                          | —        |
+| 4     | **TAR-471** | Both Given/When/Then criteria end to end, plus the negative set below                                                                                                                                                                            | 472      |
+| 5     | **TAR-472** | Review, with decision 2's ⚠️ as the checklist item                                                                                                                                                                                               | 473      |
+| 6     | **TAR-473** | `docs/reference/tickets-api.md`, a tenant-user guide for both flows, changelog                                                                                                                                                                   | —        |
 
 TAR-470 does **not** wait on TAR-469. The contract above is the fixed artifact; a mismatch
 found while mocking is raised here, not resolved privately with the backend.
@@ -811,11 +811,11 @@ found while mocking is raised here, not resolved privately with the backend.
 
 ## Open Questions and Risks
 
-| #   | Item                                                                                                                                         | Severity | Proposed resolution                                                                                                                                          |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | **Two notification tables now exist.** `sla_alerts` and `escalation_alerts` are structurally the same table with different payload columns    | Medium   | Accepted for this story (decision 5). File a story to fold both into `notifications` with a `type` column, to be done **when the third type arrives**, not before |
+| #   | Item                                                                                                                                                        | Severity | Proposed resolution                                                                                                                                                                   |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Two notification tables now exist.** `sla_alerts` and `escalation_alerts` are structurally the same table with different payload columns                  | Medium   | Accepted for this story (decision 5). File a story to fold both into `notifications` with a `type` column, to be done **when the third type arrives**, not before                     |
 | 2   | **No de-escalation and no "is escalated" state.** A ticket escalated in error stays escalated in the history, and nothing lists open escalations per ticket | Medium   | Out of scope here. `acknowledged_at` on the alert is the supervisor's half. If tenants ask for a ticket-level state, it is a column plus a filter plus a resolve flow — its own story |
-| 3   | **`escalation_alerts` retention is unset**, inheriting the same gap 0006 left open for `sla_alerts`                                           | Low now  | Settle both together in the wider retention story rather than inventing a second policy. Must be decided before the first large tenant                        |
-| 4   | **Is an agent allowed to escalate a ticket they do not hold?** As specified, yes — `ticket:escalate` is bounded only by `require`'s visibility rule | Low      | Deliberate: a colleague spotting a problem on a team ticket should be able to raise it. Revisit if escalation volume suggests it is being used as a comment channel |
-| 5   | **`Idempotency-Key` on a non-billing, non-send route** is a first for this API                                                                | Low      | The middleware is generic and the header stays optional. TAR-472 should confirm the replay path returns the original `notifiedUserIds` rather than re-resolving |
-| 6   | **`ticket:handoff` and `ticket:escalate` are granted to every role**, so `ROLE_PERMISSIONS.agent` grows by two                                | Low      | Intended. Both are bounded rights over work the agent already has; neither reaches a ticket they cannot see                                                   |
+| 3   | **`escalation_alerts` retention is unset**, inheriting the same gap 0006 left open for `sla_alerts`                                                         | Low now  | Settle both together in the wider retention story rather than inventing a second policy. Must be decided before the first large tenant                                                |
+| 4   | **Is an agent allowed to escalate a ticket they do not hold?** As specified, yes — `ticket:escalate` is bounded only by `require`'s visibility rule         | Low      | Deliberate: a colleague spotting a problem on a team ticket should be able to raise it. Revisit if escalation volume suggests it is being used as a comment channel                   |
+| 5   | **`Idempotency-Key` on a non-billing, non-send route** is a first for this API                                                                              | Low      | The middleware is generic and the header stays optional. TAR-472 should confirm the replay path returns the original `notifiedUserIds` rather than re-resolving                       |
+| 6   | **`ticket:handoff` and `ticket:escalate` are granted to every role**, so `ROLE_PERMISSIONS.agent` grows by two                                              | Low      | Intended. Both are bounded rights over work the agent already has; neither reaches a ticket they cannot see                                                                           |
