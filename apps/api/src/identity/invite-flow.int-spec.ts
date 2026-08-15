@@ -8,6 +8,7 @@ import {
 } from '@whatsappcrm/contracts';
 import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
+import { PlanLimitsService } from '../entitlements/plan-limits.service';
 import type { PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
@@ -186,6 +187,7 @@ describe('the invite flow', () => {
         new AuditService(tenantContext),
         throttleConfig,
       ),
+      new PlanLimitsService(),
     );
   });
 

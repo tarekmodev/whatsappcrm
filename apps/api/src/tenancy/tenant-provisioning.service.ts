@@ -226,6 +226,9 @@ function findProvisionedTenant(tx: Prisma.TransactionClient, slug: string) {
       // its own must not be given a second (0006, decision 6). One row is enough
       // to answer it, and none of its columns are needed.
       slaPolicies: { select: { id: true }, take: 1 },
+      // Present or absent is the whole question — the caps themselves are not
+      // reasserted over whatever a tenant was given.
+      planLimits: { select: { id: true } },
     },
   });
 }
@@ -267,6 +270,7 @@ async function createTenant(
         },
       },
       slaPolicies: { create: defaultSlaPolicy() },
+      planLimits: { create: operatorPlanLimits() },
     },
     select: { id: true, slug: true, name: true, status: true, createdAt: true },
   });
@@ -324,6 +328,16 @@ async function completeTenant(
     });
   }
 
+  // The same repair for the caps, and guarded the same way. TAR-403's migration
+  // gave every tenant that existed when it ran an `unlimited` row; this is what
+  // gives one to a tenant provisioned between that migration and this change.
+  if (existing.planLimits === null) {
+    await tx.tenantPlanLimits.create({
+      data: { tenantId: existing.id, ...operatorPlanLimits() },
+      select: { id: true },
+    });
+  }
+
   return {
     id: existing.id,
     slug: existing.slug,
@@ -354,4 +368,29 @@ function defaultSlaPolicy() {
     businessHoursOnly: false,
     isActive: true,
   };
+}
+
+/**
+ * The caps an **operator-provisioned** tenant gets: none.
+ *
+ * Every column is stated rather than left to the database, and both defaults are
+ * deliberately overridden. `tenant_plan_limits` defaults to the trial figures
+ * (`trial`, three seats, a thousand conversations) because self-signup is the
+ * common path; a tenant an operator provisioned by hand was never sold a cap, so
+ * inheriting the trial's would silently apply one nobody agreed to. That is the
+ * same judgement TAR-403's migration made when it grandfathered every existing
+ * tenant as `unlimited` rather than onto the trial.
+ *
+ * Writing the row at all — rather than relying on `PlanLimitsService` reading a
+ * missing row as unlimited — is what keeps that fallback unreachable in practice.
+ * A limit whose absence means "no limit" is one schema mistake away from failing
+ * open silently, so every tenant carries an explicit answer and the fallback
+ * stays a backstop for rows written before this change.
+ *
+ * `null` is unlimited, deliberately not `0`: the `tenant_plan_limits_caps_positive`
+ * constraint refuses zero precisely because a cap of zero is a lockout reached by
+ * accident rather than a limit anyone decided.
+ */
+function operatorPlanLimits() {
+  return { planKey: 'unlimited', seatCap: null, conversationCap: null };
 }
