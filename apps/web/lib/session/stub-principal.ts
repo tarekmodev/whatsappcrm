@@ -1,9 +1,8 @@
 import 'server-only';
 
-import { cookies } from 'next/headers';
 import { permissionsForRole, type SessionPrincipal, type TenantRole } from '@whatsappcrm/contracts';
 import { MOCK_STUB_USER_IDS, MOCK_TENANT_ID, MOCK_USERS } from '@/lib/api/mock/fixtures';
-import { ROLE_STUB_COOKIE_NAME, parseStubRole } from '@/lib/session/role-stub';
+import { readStubRole } from '@/lib/session/role-stub-request';
 
 /**
  * ⚠️ INTERIM STUB (TAR-35) — see `role-stub.ts` for why this exists and what
@@ -12,17 +11,15 @@ import { ROLE_STUB_COOKIE_NAME, parseStubRole } from '@/lib/session/role-stub';
  * Kept in its own module so both `session.ts` (which publishes the principal to
  * the app) and the mock transport's handlers (which scope fixture data by it) can
  * read it without importing each other.
+ *
+ * The role comes from `role-stub-request.ts`, the same reader the transport uses
+ * to name the role on a real API call — one cookie read, so the principal the
+ * chrome shows and the principal the API resolves cannot disagree (TAR-366).
  */
 
 /** Literals, not generated values: a fresh id per render would break hydration. */
 const STUB_SESSION_ID = '0192f0ff-0000-7000-8000-0000000000ff';
 const STUB_SESSION_EXPIRES_AT = '2026-12-31T23:59:59.000Z';
-
-export async function readStubRole(): Promise<TenantRole> {
-  const cookieStore = await cookies();
-
-  return parseStubRole(cookieStore.get(ROLE_STUB_COOKIE_NAME)?.value);
-}
 
 export async function resolveStubPrincipal(): Promise<SessionPrincipal> {
   return buildStubPrincipal(await readStubRole());
