@@ -1,4 +1,4 @@
--- Reverses 20260815150100_reporting_attribution_backfill.
+-- Reverses 20260815180100_reporting_attribution_backfill.
 --
 -- Clears both attribution columns, which is the state before that migration ran.
 --

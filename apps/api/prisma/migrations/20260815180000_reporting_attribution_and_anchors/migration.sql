@@ -4,7 +4,7 @@
 -- Purely additive: two nullable columns on `tickets`, two foreign keys, three
 -- btree indexes. No column is renamed, retyped, narrowed or dropped, and nothing
 -- here reads or moves a row — the backfill is deliberately a separate migration
--- (20260815150100), so a data pass cannot hold the locks this one takes.
+-- (20260815180100), so a data pass cannot hold the locks this one takes.
 --
 -- ---------------------------------------------------------------------------
 -- What 20260815140000 (TAR-427) already did, and what it left
@@ -127,7 +127,7 @@
 --                stated metrics.
 --   Data loss    None. Purely additive.
 --   Rollback     `down.sql` beside this file. Dropping the columns loses the
---                attribution recorded since deploy — 20260815150100 can
+--                attribution recorded since deploy — 20260815180100 can
 --                reconstruct most of it, within the limits its header states.
 --
 -- Every statement is guarded (`IF NOT EXISTS`), so re-running this file over a
