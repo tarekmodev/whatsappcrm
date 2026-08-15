@@ -102,9 +102,22 @@ export class SlaTimerService {
    *
    * Nothing here is conditional on having been reached by a job: it reads the
    * ticket, derives the state each timer should be in, and applies only the
-   * transitions that actually move a row. A ticket with nothing to change costs
-   * three reads and writes nothing, so a caller may run it over every ticket it
-   * is about to act on without taking a lock it does not need.
+   * transitions that actually move a row.
+   *
+   * ## Two paths, and only one of them is free
+   *
+   * A ticket already in the state it should be in costs three reads and issues
+   * no write, so a caller may run this over every ticket it is about to act on
+   * without paying for the ones with nothing to do.
+   *
+   * A ticket that needs repairing **writes, and therefore takes row locks** —
+   * `tickets` in `stampFirstResponse`, `sla_timers` in `applyTransition`, plus
+   * inserts into `ticket_events` and possibly `sla_timers`. They are taken in
+   * that fixed order within one call, so ordering the *tickets* is enough to
+   * give two concurrent callers a total order; a caller that loops over several
+   * tickets is responsible for looping in a deterministic order, or it can
+   * deadlock against another doing the same work in reverse. `SlaSweepService`
+   * sorts by `ticket_id` for exactly this reason.
    */
   async reconcile(
     tx: Prisma.TransactionClient,
