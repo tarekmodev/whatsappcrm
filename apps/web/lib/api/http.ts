@@ -2,6 +2,7 @@ import { webEnv } from '@/lib/config/env';
 import { handleMockRequest } from '@/lib/api/mock/handlers';
 import { toApiRequestError } from '@/lib/api/error';
 import { tenantRoutingHeaders } from '@/lib/api/tenant-host';
+import { roleStubHeaders } from '@/lib/session/role-stub-request';
 import type { ApiRequest } from '@/lib/api/request';
 
 /**
@@ -41,9 +42,15 @@ export async function apiRequest(request: ApiRequest): Promise<unknown> {
     // whole mechanism exists to prevent. `proxy.ts` takes the same position on
     // the browser path. A call that genuinely needs to name another tenant
     // wants an explicit function, not a header it happens to be able to set.
+    //
+    // The interim role stub rides alongside for the same reason it is here and
+    // not in a resource module: it has to be on *every* server-side call or the
+    // switcher moves the chrome and nothing else (TAR-366). It is `{}` unless
+    // the stub is explicitly on, so the real-session path is untouched.
     headers: {
       'content-type': 'application/json',
       ...request.headers,
+      ...(await roleStubHeaders()),
       ...(await tenantRoutingHeaders()),
     },
     body: request.body === undefined ? undefined : JSON.stringify(request.body),

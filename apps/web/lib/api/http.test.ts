@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EDGE_AUTH_HEADER, TENANT_HOST_HEADER } from '@whatsappcrm/contracts';
+import { ROLE_STUB_COOKIE_NAME, ROLE_STUB_HEADER } from '@/lib/session/role-stub';
 import { ApiRequestError, apiRequest } from './http';
 
 // The mock transport is chosen by `webEnv.useMockApi`, which is false under
@@ -8,14 +9,15 @@ import { ApiRequestError, apiRequest } from './http';
 const TENANT_HOST = 'northwind.app.localhost:3000';
 const EDGE_SECRET = 'shared-edge-secret';
 
-vi.mock('next/headers', () => ({
-  headers: () => Promise.resolve(new Headers({ host: TENANT_HOST })),
-}));
-
-// A configured secret is the deployed shape; without one the transport sends no
-// tenant pair at all, which `tenant-host.test.ts` covers on its own.
-vi.mock('@/lib/config/env', () => ({
-  webEnv: {
+// Hoisted above the `vi.mock` factories, so both are defined by the time they run.
+// Mutable, because the role-stub cases below are the same transport under a
+// different configuration rather than a different module.
+const { env, stubRoleCookie, ROLE_STUB_COOKIE } = vi.hoisted(() => ({
+  // Spelled here rather than imported: a `vi.mock` factory runs before the test
+  // module's own imports are bound. The case below asserts it against the
+  // exported constant, so a rename still fails loudly.
+  ROLE_STUB_COOKIE: 'wac_role_stub',
+  env: {
     apiBaseUrl: '/api',
     serverApiBaseUrl: 'http://api.test/api',
     trustedProxySecret: 'shared-edge-secret',
@@ -23,7 +25,29 @@ vi.mock('@/lib/config/env', () => ({
     enableRoleStub: false,
     isProduction: false,
   },
+  stubRoleCookie: { value: undefined as string | undefined },
 }));
+
+vi.mock('next/headers', () => ({
+  headers: () => Promise.resolve(new Headers({ host: TENANT_HOST })),
+  cookies: () =>
+    Promise.resolve({
+      get: (name: string) =>
+        name === ROLE_STUB_COOKIE && stubRoleCookie.value !== undefined
+          ? { name, value: stubRoleCookie.value }
+          : undefined,
+    }),
+}));
+
+// A configured secret is the deployed shape; without one the transport sends no
+// tenant pair at all, which `tenant-host.test.ts` covers on its own.
+vi.mock('@/lib/config/env', () => ({ webEnv: env }));
+
+beforeEach(() => {
+  env.enableRoleStub = false;
+  env.isProduction = false;
+  stubRoleCookie.value = undefined;
+});
 
 function mockFetch(status: number, body: unknown, jsonParses = true): void {
   const json = (): Promise<unknown> =>
@@ -174,5 +198,93 @@ describe('apiRequest', () => {
       cookie: '__Host-wac_session=opaque',
       'content-type': 'text/plain',
     });
+  });
+});
+
+/**
+ * TAR-366. Server rendering and server actions run on the Next process, which
+ * sends no cookies of its own — and while the stub is on there is no
+ * `wac_session` for `sessionCookieHeaders` to carry either. Without the header
+ * every call arrived with no role at all and the API resolved its default
+ * (`admin`), so the switcher moved the chrome and nothing else.
+ */
+describe('apiRequest under the interim role stub', () => {
+  it('spells the cookie the same way the module under test does', () => {
+    expect(ROLE_STUB_COOKIE).toBe(ROLE_STUB_COOKIE_NAME);
+  });
+
+  it('sends no role header at all when the stub is off', async () => {
+    stubRoleCookie.value = 'supervisor';
+    mockFetch(200, {});
+
+    await apiRequest({ method: 'GET', path: '/v1/sla-alerts' });
+
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
+
+    expect(init?.headers).not.toHaveProperty(ROLE_STUB_HEADER);
+  });
+
+  it('names the selected role on the call, so the API resolves that principal', async () => {
+    env.enableRoleStub = true;
+    stubRoleCookie.value = 'supervisor';
+    mockFetch(200, {});
+
+    await apiRequest({ method: 'GET', path: '/v1/sla-alerts' });
+
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
+
+    expect(init?.headers).toMatchObject({ [ROLE_STUB_HEADER]: 'supervisor' });
+  });
+
+  /**
+   * The same fallback `parseStubRole` applies to the chrome, so an unset or
+   * tampered cookie cannot make the two halves disagree.
+   */
+  it('falls back to the default role when the cookie is absent or unknown', async () => {
+    env.enableRoleStub = true;
+    mockFetch(200, {});
+
+    await apiRequest({ method: 'GET', path: '/v1/sla-alerts' });
+
+    stubRoleCookie.value = 'superuser';
+    await apiRequest({ method: 'GET', path: '/v1/sla-alerts' });
+
+    for (const [, init] of vi.mocked(globalThis.fetch).mock.calls) {
+      expect(init?.headers).toMatchObject({ [ROLE_STUB_HEADER]: 'admin' });
+    }
+  });
+
+  /** Belt and braces: `getSession` already refuses the stub in production. */
+  it('sends nothing in production, even with the flag on', async () => {
+    env.enableRoleStub = true;
+    env.isProduction = true;
+    stubRoleCookie.value = 'supervisor';
+    mockFetch(200, {});
+
+    await apiRequest({ method: 'GET', path: '/v1/sla-alerts' });
+
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
+
+    expect(init?.headers).not.toHaveProperty(ROLE_STUB_HEADER);
+  });
+
+  /**
+   * Same position the tenant pair takes: a call site that could name the role
+   * from anything request-derived is an impersonation this exists to prevent.
+   */
+  it('refuses to let a caller name a different role', async () => {
+    env.enableRoleStub = true;
+    stubRoleCookie.value = 'agent';
+    mockFetch(200, {});
+
+    await apiRequest({
+      method: 'GET',
+      path: '/v1/sla-alerts',
+      headers: { [ROLE_STUB_HEADER]: 'admin' },
+    });
+
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
+
+    expect(init?.headers).toMatchObject({ [ROLE_STUB_HEADER]: 'agent' });
   });
 });
