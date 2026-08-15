@@ -5,6 +5,7 @@ import { TenantNotActiveError } from '../prisma/prisma.errors';
 import type { SystemPrisma, TenantPrisma } from '../prisma/prisma.tokens';
 import type { SlaAlertService, InsertedSlaAlert } from './sla-alert.service';
 import { SlaSweepService } from './sla-sweep.service';
+import { SLA_SWEEP_TENANT_CHUNK } from './sla.constants';
 
 /**
  * The sweep's decisions, as behaviour rather than as SQL.
@@ -20,7 +21,11 @@ import { SlaSweepService } from './sla-sweep.service';
  *   * one tenant's failure must not cost every other tenant their detection;
  *   * a deactivated tenant is an operator's decision, not a fault to page on;
  *   * every tenant's work happens in that tenant's own scope, or the sweep is
- *     the cross-tenant leak it exists to avoid.
+ *     the cross-tenant leak it exists to avoid;
+ *   * a tenant's work commits in chunks, so a transaction that fails part-way
+ *     through the backlog keeps what it had already committed (TAR-381) — the
+ *     failure this catches is a livelock whose only symptom is one warning line
+ *     per tick.
  */
 
 const TENANT_A = '26000000-0000-7000-8000-0000000000a1';
@@ -42,11 +47,27 @@ function claimedRow(id: string, ticketId: string): ClaimedRow {
   return { id, ticketId, kind: 'first_response', dueAt: new Date('2026-08-13T09:00:00.000Z') };
 }
 
+/** `count` timers for one tenant, as phase 1 would return them. */
+function dueTimers(tenantId: string, count: number): { tenantId: string; id: string }[] {
+  return Array.from({ length: count }, (_, index) => ({
+    tenantId,
+    id: `${tenantId}-timer-${index}`,
+  }));
+}
+
 describe('SlaSweepService', () => {
   let due: { tenantId: string; id: string }[];
-  /** What the conditional UPDATE returns, per tenant scope it was run in. */
+  /**
+   * What the conditional UPDATE returns, per tenant scope it was run in.
+   *
+   * Drained rather than re-read: the service opens one transaction per chunk, so
+   * each claim hands back the next chunk's worth of rows the way a real one
+   * would rather than repeating the whole list.
+   */
   let claimed: Map<string, ClaimedRow[]>;
-  let failingTenants: Set<string>;
+  /** Tenants whose claim throws, keyed to the 1-based transaction it starts on. */
+  let failingFrom: Map<string, number>;
+  let claimsPerTenant: Map<string, number>;
   let deactivatedTenants: Set<string>;
   let scopes: (string | null)[];
   let ticketEvents: Record<string, unknown>[];
@@ -61,12 +82,15 @@ describe('SlaSweepService', () => {
     return {
       $queryRaw: jest.fn(() => {
         const tenantId = tenantContext.requireTenantId();
+        const claims = (claimsPerTenant.get(tenantId) ?? 0) + 1;
 
-        if (failingTenants.has(tenantId)) {
+        claimsPerTenant.set(tenantId, claims);
+
+        if (claims >= (failingFrom.get(tenantId) ?? Number.POSITIVE_INFINITY)) {
           return Promise.reject(new Error('the database is unreachable'));
         }
 
-        return Promise.resolve(claimed.get(tenantId) ?? []);
+        return Promise.resolve(claimed.get(tenantId)?.splice(0, SLA_SWEEP_TENANT_CHUNK) ?? []);
       }),
       ticketEvent: {
         create: jest.fn(({ data }: { data: Record<string, unknown> }) => {
@@ -90,7 +114,8 @@ describe('SlaSweepService', () => {
       [TENANT_A, [claimedRow(TIMER_A, TICKET_A)]],
       [TENANT_B, [claimedRow(TIMER_B, TICKET_B)]],
     ]);
-    failingTenants = new Set();
+    failingFrom = new Map();
+    claimsPerTenant = new Map();
     deactivatedTenants = new Set();
     scopes = [];
     ticketEvents = [];
@@ -168,9 +193,9 @@ describe('SlaSweepService', () => {
 
   /**
    * The candidate list is invariant for the whole transaction, and the recovery
-   * path this service is sized for is a full 200-timer batch inside one — so
-   * resolving it per breach meant 200 identical queries against `users` and
-   * `team_members`.
+   * path this service is sized for is a full chunk of breached timers inside one
+   * — so resolving it per breach meant one identical query against `users` and
+   * `team_members` per timer in the chunk.
    */
   it('reads the tenant’s supervisors once per transaction, not once per breach', async () => {
     claimed.set(TENANT_A, [claimedRow(TIMER_A, TICKET_A), claimedRow('timer-2', 'ticket-2')]);
@@ -256,7 +281,7 @@ describe('SlaSweepService', () => {
    * retries it for free, because the predicate is `due_at <= now()`.
    */
   it('quarantines a tenant whose transaction failed', async () => {
-    failingTenants.add(TENANT_A);
+    failingFrom.set(TENANT_A, 1);
     const error = jest.spyOn(sweep['logger'], 'error').mockImplementation();
 
     const report = await sweep.sweep();
@@ -264,6 +289,80 @@ describe('SlaSweepService', () => {
     expect(report).toMatchObject({ breached: 1, alerted: 1, failedTenants: 1 });
     expect(error).toHaveBeenCalledWith(expect.stringContaining(TENANT_A));
     expect(emit).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * TAR-381, the durability half. One transaction for a tenant's whole batch
+   * means a timeout rolls back every claim in it — and because an unclaimed
+   * timer only gets *older*, the identical rows lead the next sweep into the
+   * identical timeout. Chunking is what breaks that loop: each committed chunk
+   * leaves the candidate set for good.
+   */
+  describe('a tenant’s work is committed in chunks', () => {
+    const OVER_ONE_CHUNK = SLA_SWEEP_TENANT_CHUNK + 5;
+
+    beforeEach(() => {
+      due = dueTimers(TENANT_A, OVER_ONE_CHUNK);
+      claimed = new Map([
+        [TENANT_A, due.map((timer, index) => claimedRow(timer.id, `${TICKET_A}-${String(index)}`))],
+      ]);
+    });
+
+    it('opens one transaction per chunk rather than one for the whole backlog', async () => {
+      const report = await sweep.sweep();
+
+      expect(scopes).toEqual([TENANT_A, TENANT_A]);
+      expect(report).toMatchObject({ due: OVER_ONE_CHUNK, breached: OVER_ONE_CHUNK });
+    });
+
+    /**
+     * The property the whole ticket turns on. The second chunk times out, and
+     * the first chunk's breaches must still be reported — a service that lost
+     * them would re-present the same rows to the next sweep for ever.
+     */
+    it('keeps the chunks that committed when a later one times out', async () => {
+      failingFrom.set(TENANT_A, 2);
+      const error = jest.spyOn(sweep['logger'], 'error').mockImplementation();
+
+      const report = await sweep.sweep();
+
+      expect(report).toMatchObject({
+        due: OVER_ONE_CHUNK,
+        breached: SLA_SWEEP_TENANT_CHUNK,
+        alerted: SLA_SWEEP_TENANT_CHUNK,
+        failedTenants: 1,
+      });
+      // Committed and therefore delivered: the emit follows the commit, so a
+      // chunk that landed reaches the supervisor even though the sweep failed.
+      expect(emit).toHaveBeenCalledTimes(SLA_SWEEP_TENANT_CHUNK);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining(TENANT_A));
+    });
+
+    /**
+     * The failure is the tenant's, not the chunk's — whatever refused the first
+     * chunk refuses the next one too, and proving that costs every tenant behind
+     * this one in the loop their detection for this tick.
+     */
+    it('abandons the rest of a tenant’s chunks once one has failed', async () => {
+      failingFrom.set(TENANT_A, 1);
+      jest.spyOn(sweep['logger'], 'error').mockImplementation();
+
+      await sweep.sweep();
+
+      expect(scopes).toEqual([TENANT_A]);
+    });
+
+    /** Counted once per tenant, not once per chunk, or the report reads as a fleet-wide outage. */
+    it('counts a tenant that failed on every chunk once', async () => {
+      due = [...due, ...dueTimers(TENANT_B, 1)];
+      claimed.set(TENANT_B, [claimedRow(TIMER_B, TICKET_B)]);
+      failingFrom.set(TENANT_A, 1);
+      jest.spyOn(sweep['logger'], 'error').mockImplementation();
+
+      const report = await sweep.sweep();
+
+      expect(report).toMatchObject({ failedTenants: 1, breached: 1, alerted: 1 });
+    });
   });
 
   /**

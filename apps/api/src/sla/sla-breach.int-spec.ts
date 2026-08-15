@@ -14,6 +14,7 @@ import { SlaAlertNotFoundError } from './sla.errors';
 import { SlaPolicyService } from './sla-policy.service';
 import { SlaSweepService } from './sla-sweep.service';
 import { SlaTimerService } from './sla-timer.service';
+import { SLA_SWEEP_BATCH, SLA_SWEEP_TENANT_BATCH } from './sla.constants';
 
 /**
  * TAR-280 against a real PostgreSQL, as `whatsappcrm_app`.
@@ -70,6 +71,8 @@ describe('SLA breach detection against a real database', () => {
   let timers: SlaTimerService;
   let sweep: SlaSweepService;
   let alerts: SlaAlertService;
+  /** Namespaces the phone numbers `seedOverdueBacklog` allocates, per call. */
+  let backlogsSeeded = 0;
 
   function asTenant<T>(tenantId: string, work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
@@ -171,6 +174,85 @@ describe('SLA breach detection against a real database', () => {
       },
       select: { id: true },
     });
+  }
+
+  /**
+   * `count` overdue tickets on a tenant, each with a `running` timer, in four
+   * bulk statements.
+   *
+   * Written directly rather than through `SlaTimerService.evaluate`, because a
+   * few hundred round trips per test would dominate the run and what this
+   * fixture is for is the *shape* of the backlog — many overdue timers on one
+   * tenant — rather than how they came to exist.
+   *
+   * A contact and a conversation each, because `tickets_one_active_per_contact`
+   * allows one open ticket per contact and the alternative (a pile of closed
+   * tickets) would not be a backlog a supervisor could ever see.
+   *
+   * Rows are namespaced by `backlogsSeeded` and left behind rather than cleaned
+   * up per test: the `beforeEach` already clears every ticket and timer, and the
+   * contacts that remain are unreachable from the sweep, which reads
+   * `sla_timers` alone.
+   */
+  async function seedOverdueBacklog(
+    tenantId: string,
+    whatsappAccountId: string,
+    count: number,
+    minutesAgo: number,
+  ): Promise<void> {
+    const run = (backlogsSeeded += 1);
+    const createdAt = new Date(Date.now() - minutesAgo * 60_000);
+
+    const [policy, { _max }] = await Promise.all([
+      systemPrisma.slaPolicy.findFirstOrThrow({ where: { tenantId }, select: { id: true } }),
+      systemPrisma.ticket.aggregate({ where: { tenantId }, _max: { number: true } }),
+    ]);
+    const firstNumber = (_max.number ?? 0) + 1;
+
+    const contacts = await systemPrisma.contact.createManyAndReturn({
+      data: Array.from({ length: count }, (_, index) => ({
+        tenantId,
+        phoneE164: `+1${String(run).padStart(2, '0')}${String(index).padStart(9, '0')}`,
+      })),
+      select: { id: true },
+    });
+
+    const conversations = await systemPrisma.conversation.createManyAndReturn({
+      data: contacts.map((contact) => ({
+        tenantId,
+        whatsappAccountId,
+        contactId: contact.id,
+      })),
+      select: { id: true, contactId: true },
+    });
+
+    const tickets = await systemPrisma.ticket.createManyAndReturn({
+      data: conversations.map((conversation, index) => ({
+        tenantId,
+        number: firstNumber + index,
+        status: 'open' as const,
+        conversationId: conversation.id,
+        contactId: conversation.contactId,
+        createdAt,
+      })),
+      select: { id: true },
+    });
+
+    await systemPrisma.slaTimer.createMany({
+      data: tickets.map((ticket) => ({
+        tenantId,
+        ticketId: ticket.id,
+        policyId: policy.id,
+        kind: 'first_response' as const,
+        state: 'running' as const,
+        startedAt: createdAt,
+        dueAt: new Date(createdAt.getTime() + WINDOW_MS),
+      })),
+    });
+  }
+
+  function breachedTimerCount(tenantId: string): Promise<number> {
+    return systemPrisma.slaTimer.count({ where: { tenantId, state: 'breached' } });
   }
 
   function timerFor(ticketId: string) {
@@ -563,6 +645,54 @@ describe('SLA breach detection against a real database', () => {
           data: { status: 'active' },
         });
       }
+    });
+
+    /**
+     * TAR-381 — the starvation the deactivated-tenant filter above does *not*
+     * cover.
+     *
+     * Phase 1 used to be `ORDER BY due_at LIMIT 200` across every tenant. An
+     * unclaimed timer only gets *older*, so any active tenant sitting on a full
+     * batch of overdue work — one recovering from an outage, or one whose phase
+     * 2 keeps timing out — owned the head of that sort indefinitely and **no
+     * other tenant's breaches were examined at all**. The whole platform stopped
+     * detecting, and said so only as counts on one log line.
+     *
+     * Tenant B's backlog is deliberately both larger than the batch and two
+     * hours older than tenant A's single timer, which is precisely the ordering
+     * that used to bury A.
+     */
+    it('breaches a second tenant in the same sweep as one holding more than a full batch', async () => {
+      await seedOverdueBacklog(TENANT_B, ACCOUNT_B, SLA_SWEEP_BATCH + 5, WINDOW_MINUTES + 120);
+
+      const crowdedOut = await openTicket(TENANT_A, CONTACT_A, CONVERSATION_A, WINDOW_MINUTES + 1);
+      await evaluate(TENANT_A, crowdedOut, 'ticket_created');
+
+      await sweep.sweep();
+
+      expect((await timerFor(crowdedOut)).state).toBe('breached');
+      expect(await alertsFor(crowdedOut)).toEqual([
+        expect.objectContaining({ recipientUserId: SUPERVISOR_A, tenantId: TENANT_A }),
+      ]);
+      // Capped rather than unbounded: the big tenant takes its share of the
+      // batch and leaves the rest, which is what left room for A above.
+      expect(await breachedTimerCount(TENANT_B)).toBe(SLA_SWEEP_TENANT_BATCH);
+    });
+
+    /** And the backlog drains across sweeps rather than replaying the same rows. */
+    it('takes the next slice of a large backlog on the following sweep', async () => {
+      await seedOverdueBacklog(
+        TENANT_B,
+        ACCOUNT_B,
+        SLA_SWEEP_TENANT_BATCH * 2,
+        WINDOW_MINUTES + 120,
+      );
+
+      await sweep.sweep();
+      expect(await breachedTimerCount(TENANT_B)).toBe(SLA_SWEEP_TENANT_BATCH);
+
+      await sweep.sweep();
+      expect(await breachedTimerCount(TENANT_B)).toBe(SLA_SWEEP_TENANT_BATCH * 2);
     });
 
     /**

@@ -75,10 +75,11 @@ export class SlaAlertService {
    *
    * **Read once per sweep transaction, not once per breach.** The answer is
    * invariant for the whole transaction — only the assigned user's teams vary by
-   * ticket — and the recovery path this class is sized for is a full 200-timer
-   * batch inside one transaction, so folding it into `resolveRecipients` meant
-   * 200 identical queries against `users` and `team_members`. One read, served by
-   * `users (tenant_id, status)` with a bounded nested load.
+   * ticket — and the recovery path this class is sized for is a full chunk of
+   * breached timers inside one transaction, so folding it into
+   * `resolveRecipients` meant one identical query against `users` and
+   * `team_members` per timer in it. One read, served by `users (tenant_id,
+   * status)` with a bounded nested load.
    */
   async loadAlertCandidates(tx: Prisma.TransactionClient): Promise<AlertCandidate[]> {
     const candidates = await tx.user.findMany({
