@@ -711,6 +711,12 @@ when it was last looked at, and a redelivered job does not reset the supervisor'
 
 Whichever of TAR-273 and TAR-288 lands the router first implements this; the other reviews it.
 
+> ⚠️ **Corrected — this allocation failed and the write never shipped.** TAR-288 landed the router
+> (`e22f4cc`, #101) and TAR-273 the resolver (`21af387`, #100), neither carrying the column writes,
+> because "whichever lands first" named nobody either story could be held to. The table above is
+> still the specification; its owner is now **TAR-373**, named rather than derived. See
+> _Amendment 1_ at the end of this document.
+
 ### REST
 
 No new resource for the supervisor view — it is a filter on the ticket list 0002 already publishes,
@@ -719,8 +725,18 @@ and both permissions are supervisor-and-above already (0004):
 ```
 GET  /api/v1/tickets?scope=unassigned&routingState=deferred  → CursorPage<TicketResponse>  ticket:read_all
 POST /api/v1/tickets/{id}/assign                             → TicketResponse              ticket:assign
-                                                               [exists; gains the routing_state = 'manual' write]
+                                                               [TO BUILD — see the correction below]
 ```
+
+> ⚠️ **Corrected — `POST /tickets/{id}/assign` did not exist when this was written.** The line above
+> originally read `[exists; gains the routing_state = 'manual' write]`. That was wrong:
+> `TicketAssignInputSchema` has been in `packages/contracts/src/tickets.ts` since TAR-39, but no
+> handler was ever written, and `TicketsController` carries only `@Get()`, `@Get(':id')` and
+> `@Patch(':id')` to this day. Recording a contract as shipped because its schema exists is the
+> mistake; a schema is not a route. TAR-274 built its **Assign** control against this table and
+> shipped a button that 404s outside mock mode. The endpoint is **TAR-374**, and it is specified in
+> full there — including the `userId: null` unassign case this document never ruled on. See
+> _Amendment 1_.
 
 **Specified, and required by no acceptance criterion** — the cap-editing surface. Recorded so nobody
 has to invent it, and so it is clear it is _not_ in TAR-273's or TAR-274's scope:
@@ -886,3 +902,41 @@ free slot, asserted at `concurrency: 1`. It belongs beside `ticket-active-unique
 | 7   | **The cursor can drift by one** when the engine's compare-and-set loses to a manual assignment after the resolver advanced it (decision 5).                                                                                 | Low      | Accepted and argued there: the cursor is a fairness hint, not a ledger, and decision 2's load key corrects for it on the next ticket.                                                                                                                                                                                                                                                |
 | 8   | **Load is counted per candidate on every routing decision**, and no benchmark is claimed for the correlated subquery at a hundred candidates.                                                                               | Low      | Measure in TAR-275's concurrency case. The next step is a trigger-maintained counter, named in access patterns, and it is additive.                                                                                                                                                                                                                                                  |
 | 9   | **`assignment_state.last_assigned_user_id` can name a removed user.** The relation is `onDelete: NoAction` and users are soft-removed to `status = 'removed'`, so the row survives.                                         | Low      | Harmless by construction: the cursor is only ever compared with `>`, never dereferenced. Recorded so nobody "fixes" it into a join.                                                                                                                                                                                                                                                  |
+
+## Amendments
+
+### Amendment 1 — the `routing_state` writer, and an endpoint that never existed (TAR-276)
+
+Post-merge review of TAR-273 (#100) and TAR-274 (#94) together found two obligations this document
+placed on the story that fell between the two PRs. **Neither PR was at fault**; both gaps are
+defects in this document, and both are corrected inline above. This amendment records what went
+wrong, because the two failures have the same shape and it is worth not repeating.
+
+**1. An obligation with no named owner is an obligation nobody has.** "The one obligation this
+document places on 0007's writer" specified the `routing_state` write precisely — every branch, the
+first-transition guard, the reason it matters — and then allocated it with "whichever of TAR-273 and
+TAR-288 lands the router first implements this; the other reviews it." Both landed. Neither
+implemented it, and the review that was supposed to catch the omission was allocated to the same
+sentence. The column has sat at its default `'pending'` on every row since, which makes the
+supervisor's flagged queue permanently empty and renders "Nothing is stuck." over tickets that are.
+
+A conditional allocation reads like an assignment and behaves like a gap: at the moment either story
+is planned, neither engineer knows they are the one. Future documents name an issue, or they name a
+person. The remaining work is **TAR-373**.
+
+**2. A schema is not a route.** The REST table recorded `POST /api/v1/tickets/{id}/assign` as
+`[exists; gains the routing_state = 'manual' write]`. It did not exist. `TicketAssignInputSchema`
+had been in `packages/contracts/src/tickets.ts` since TAR-39, and its presence was mistaken for a
+shipped endpoint when this document was written — a check of the contracts package rather than of
+`TicketsController`.
+
+The cost landed on TAR-274, which built its supervisor **Assign** control against this table exactly
+as instructed, verified it against the mock — where the route does exist, at
+`apps/web/lib/api/mock/handlers.ts` — and shipped a button that 404s against a real deployment.
+That is the failure mode worth naming: **a mock that implements a route this document claims exists
+will confirm the claim rather than test it.** The endpoint is **TAR-374**, specified there in full,
+including the `userId: null` unassign case this document never ruled on.
+
+Both corrections are marked ⚠️ at their original locations rather than only here, because the
+second gap was caused by a reader trusting a line in a table, and a reader who trusts that line will
+not scroll to an amendment.
