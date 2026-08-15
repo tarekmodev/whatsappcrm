@@ -1548,8 +1548,10 @@ model Ticket {
   /// open question 4). The column keeps `first_response_at`, so this is a
   /// client-side rename with no migration behind it: the published field is the
   /// fixed artifact the console types against, and the mapper stops needing a
-  /// translation line. Nothing writes it yet — TAR-26 owns first-response
-  /// tracking, and the mapper emits `null` until it does.
+  /// translation line. TAR-26 filled it in: `SlaTimerService.stampFirstResponse`
+  /// writes it on the first human reply and the mapper publishes it, so it is a
+  /// real value rather than the placeholder it started as. TAR-30's
+  /// response-time metric reads it directly.
   firstRespondedAt DateTime? @map("first_response_at") @db.Timestamptz(3)
   resolvedAt       DateTime? @map("resolved_at") @db.Timestamptz(3)
   closedAt         DateTime? @map("closed_at") @db.Timestamptz(3)
@@ -1579,6 +1581,31 @@ model Ticket {
   @@index([tenantId, assignedTeamId, status, createdAt(sort: Desc), id(sort: Desc)], map: "tickets_tenant_assigned_team_queue_idx")
   @@index([tenantId, conversationId])
   @@index([tenantId, contactId])
+  /// The reporting dashboard and its export (TAR-427, serving TAR-30), and the
+  /// one covering index in this file. Four metrics — volume, response time,
+  /// resolution time, per-agent breakdown — over a supervisor-chosen date
+  /// range, answered by a single index-only scan of that range.
+  ///
+  /// No existing index can: the closest,
+  /// `(tenant_id, status, priority, created_at DESC)`, puts `status` *between*
+  /// the tenant and the timestamp, and a report deliberately spans every
+  /// status — so `created_at` is not reachable as a range boundary through it,
+  /// and Postgres 16 has no btree skip scan. Measured on 500 000 tickets: a
+  /// Parallel Seq Scan of the whole table, 9 608 buffers, **whatever date range
+  /// was asked for**, against 214 buffers and `Heap Fetches: 0` with this index.
+  ///
+  /// `createdAt` is ASC where every other timestamp here is DESC. Those are
+  /// queues, read newest-first; a report is read chronologically and the export
+  /// streams `ORDER BY created_at, id`, so ascending is a forward scan.
+  ///
+  /// The last four columns are the aggregated ones, carried so the scan never
+  /// visits the heap. They are plain key columns rather than an `INCLUDE`
+  /// payload only because Prisma cannot express `INCLUDE` — both forms were
+  /// built and measured at identical size, identical plans and identical
+  /// buffers, so the tie went to the form this file can declare. That makes
+  /// this the one bespoke index on `tickets` that `migrate dev` will regenerate
+  /// and whose absence *is* drift.
+  @@index([tenantId, createdAt, assignedUserId, status, firstRespondedAt, resolvedAt], map: "tickets_reporting_metrics_idx")
   @@map("tickets")
 }
 

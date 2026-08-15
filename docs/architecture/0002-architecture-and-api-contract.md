@@ -662,6 +662,15 @@ POST   /api/v1/notifications/{id}/acknowledge → NotificationResponse      tick
 GET    /api/v1/tags                          → CursorPage<TagResponse>    contact:read
 POST   /api/v1/tags                          → TagResponse                contact:write
 
+# Reporting                                                               TAR-30
+# Metric definitions, aggregation strategy and the export decision:
+# docs/architecture/0010-reporting-dashboard-and-export.md
+GET    /api/v1/reports/dashboard             → DashboardMetricsResponse   report:read
+GET    /api/v1/reports/dashboard/export      → text/csv (bytes)           report:read
+                                                                      same query layer as the
+                                                                      route above, never a
+                                                                      second aggregation
+
 # Billing                                                                 TAR-37
 GET    /api/v1/billing/subscription          → BillingSummaryResponse     billing:read
 GET    /api/v1/billing/usage                 → UsageSummaryResponse       billing:read
