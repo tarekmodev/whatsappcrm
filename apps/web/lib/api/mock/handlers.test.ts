@@ -3,6 +3,8 @@ import {
   ConnectedWhatsAppBusinessAccountResponseSchema,
   ONBOARDING_STEP_IDS,
   OnboardingChecklistResponseSchema,
+  TenantLifecycleResponseSchema,
+  TenantResponseSchema,
   whatsAppSignupFailureReason,
   type ApiError,
   type ConnectedWhatsAppBusinessAccountResponse,
@@ -12,6 +14,8 @@ import {
   type OnboardingChecklistResponse,
   type SlaAlertResponse,
   type TeamResponse,
+  type TenantLifecycleResponse,
+  type TenantResponse,
   type TenantRole,
   type TicketResponse,
   type UserResponse,
@@ -779,6 +783,105 @@ describe('validation', () => {
         body: { email: 'amina@northwind.example', role: 'agent', teamIds: [] },
       }),
     ).rejects.toMatchObject({ code: 'conflict' });
+  });
+});
+
+/**
+ * The workspace record and its lifecycle (TAR-409, ADR 0009). Three routes, and
+ * the two things worth asserting against the transport rather than against the
+ * page: that the seat count is derived from this store rather than stored, and
+ * that a partial `PATCH` cannot clobber the branding the form never showed.
+ */
+describe('the workspace record and its lifecycle', () => {
+  it('answers with the caller’s own workspace, never another tenant’s', async () => {
+    const tenant = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant',
+    })) as TenantResponse;
+
+    expect(tenant.id).toBe(MOCK_TENANT_ID);
+    expect(tenant.id).not.toBe(OTHER_TENANT_ID);
+    expect(TenantResponseSchema.safeParse(tenant).success).toBe(true);
+  });
+
+  it('validates the lifecycle against the published contract', async () => {
+    const lifecycle = await handleMockRequest({ method: 'GET', path: '/v1/tenant/lifecycle' });
+
+    expect(TenantLifecycleResponseSchema.safeParse(lifecycle).success).toBe(true);
+  });
+
+  it('counts active seats and pending invitations separately', async () => {
+    const lifecycle = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant/lifecycle',
+    })) as TenantLifecycleResponse;
+
+    // Four active fixture users occupy a seat; Noor is invited and does not.
+    expect(lifecycle.usage.seatsUsed).toBe(4);
+    expect(lifecycle.usage.seatsPending).toBe(1);
+  });
+
+  it('moves the seat count when an invitation is sent, because it is counted and not stored', async () => {
+    await handleMockRequest({
+      method: 'POST',
+      path: '/v1/users/invites',
+      body: { email: 'new@northwind.example', role: 'agent', teamIds: [] },
+    });
+
+    const lifecycle = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant/lifecycle',
+    })) as TenantLifecycleResponse;
+
+    expect(lifecycle.usage.seatsUsed).toBe(4);
+    expect(lifecycle.usage.seatsPending).toBe(2);
+  });
+
+  it('refuses the lifecycle to a role without tenant:settings', async () => {
+    asRole('supervisor');
+
+    await expect(
+      handleMockRequest({ method: 'GET', path: '/v1/tenant/lifecycle' }),
+    ).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+
+    // The record itself stays readable: it is the workspace name every principal
+    // already sees in the chrome around them.
+    await expect(handleMockRequest({ method: 'GET', path: '/v1/tenant' })).resolves.toMatchObject({
+      id: MOCK_TENANT_ID,
+    });
+  });
+
+  it('refuses the profile write to a role without branding:write', async () => {
+    asRole('supervisor');
+
+    await expect(
+      handleMockRequest({ method: 'PATCH', path: '/v1/tenant', body: { name: 'Renamed' } }),
+    ).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+  });
+
+  it('applies a partial update without clobbering the branding it was not sent', async () => {
+    const before = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant',
+    })) as TenantResponse;
+
+    const updated = (await handleMockRequest({
+      method: 'PATCH',
+      path: '/v1/tenant',
+      body: { name: 'Northwind Support Co', branding: { supportEmail: null } },
+    })) as TenantResponse;
+
+    expect(updated.name).toBe('Northwind Support Co');
+    expect(updated.branding.supportEmail).toBeNull();
+    // The colours and the product name were never sent and must survive.
+    expect(updated.branding.primaryColor).toBe(before.branding.primaryColor);
+    expect(updated.branding.productName).toBe(before.branding.productName);
+  });
+
+  it('rejects a body the contract refuses', async () => {
+    await expect(
+      handleMockRequest({ method: 'PATCH', path: '/v1/tenant', body: { name: '' } }),
+    ).rejects.toMatchObject({ status: 422, code: 'validation_failed' });
   });
 });
 

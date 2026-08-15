@@ -26,6 +26,7 @@ import {
   TICKET_STATUS_REQUIRES_CLOSE,
   TeamCreateInputSchema,
   TeamUpdateInputSchema,
+  TenantUpdateInputSchema,
   TicketAssignInputSchema,
   TicketListQuerySchema,
   TicketUpdateInputSchema,
@@ -59,6 +60,8 @@ import {
   type SlaAlertResponse,
   type Tag,
   type TeamResponse,
+  type TenantLifecycleResponse,
+  type TenantResponse,
   type TicketListQuery,
   type TicketResponse,
   type UserResponse,
@@ -405,6 +408,30 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/whatsapp\/business-accounts$/,
     permission: 'channel:manage',
     handle: connectWhatsAppBusinessAccount,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/tenant$/,
+    // Gated by no permission, matching ADR 0002's table: the workspace's own
+    // name and branding are what every signed-in principal already sees in the
+    // chrome around them.
+    permission: null,
+    handle: getTenant,
+  },
+  {
+    method: 'PATCH',
+    pattern: /^\/v1\/tenant$/,
+    permission: 'branding:write',
+    handle: updateTenant,
+  },
+  {
+    // Grouped with the two above rather than interleaved with the onboarding
+    // pair below only for a reader's benefit — every pattern here is anchored,
+    // so no ordering between them can change which one matches.
+    method: 'GET',
+    pattern: /^\/v1\/tenant\/lifecycle$/,
+    permission: 'tenant:settings',
+    handle: getTenantLifecycle,
   },
   {
     method: 'GET',
@@ -1178,6 +1205,81 @@ function signupFailed(reason: 'code_expired'): ApiRequestError {
     MOCK_REQUEST_ID,
     envelope,
   );
+}
+
+// --- Tenant record and lifecycle (TAR-409, ADR 0009) -----------------------
+
+function getTenant({ principal }: RouteContext): TenantResponse {
+  return currentTenant(principal);
+}
+
+/**
+ * A partial update, and partial *within* branding too: the console's profile
+ * form sends `branding: { supportEmail }` and must not clear the colours it
+ * never showed, which is what a naive `{ ...tenant, ...parsed.data }` would do.
+ */
+function updateTenant({ principal, body }: RouteContext): TenantResponse {
+  const parsed = TenantUpdateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const tenant = currentTenant(principal);
+  const updated: TenantResponse = {
+    ...tenant,
+    name: parsed.data.name ?? tenant.name,
+    branding: { ...tenant.branding, ...parsed.data.branding },
+  };
+
+  mockState().tenants.set(tenant.id, updated);
+
+  return updated;
+}
+
+/**
+ * Usage is counted from this store rather than stored beside the plan, so a
+ * reviewer who sends an invitation watches the seat meter move.
+ *
+ * The seat count is `users` that are `active`, plus invitations still pending —
+ * ADR 0009's rule, and the reason it gives for it: counting only active users
+ * would let an admin mint unlimited invitations and blow past the cap the moment
+ * a mailout landed.
+ *
+ * `occupiesSeat` narrows the *active* half only. An invited user carries
+ * `occupiesSeat: false` — they are not billable until they accept — and
+ * filtering the pending half on it would count exactly nobody, which is the bug
+ * this rule exists to prevent.
+ */
+function getTenantLifecycle({ principal }: RouteContext): TenantLifecycleResponse {
+  const lifecycle = mockState().tenantLifecycles.get(principal.tenantId);
+
+  if (lifecycle === undefined) {
+    throw notFound();
+  }
+
+  const users = tenantUsers(principal);
+
+  return {
+    // Scoping column stripped before anything leaves the transport, exactly as
+    // `stripTenant` does for every other record here.
+    ...stripTenant(lifecycle),
+    usage: {
+      seatsUsed: users.filter((user) => user.status === 'active' && user.occupiesSeat).length,
+      seatsPending: users.filter((user) => user.status === 'invited').length,
+      conversationsThisPeriod: tenantConversations(principal).length,
+    },
+  };
+}
+
+function currentTenant(principal: SessionPrincipal): TenantResponse {
+  const tenant = mockState().tenants.get(principal.tenantId);
+
+  if (tenant === undefined) {
+    throw notFound();
+  }
+
+  return tenant;
 }
 
 // --- Conversations ---------------------------------------------------------
