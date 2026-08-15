@@ -176,6 +176,10 @@ back on consecutive sweeps — the signal to raise the batch, shorten the interv
 the phase-1 query by `tenant_id`. Do not pre-build any of it. TAR-280 logs the batch size
 so the signal exists.
 
+⚠️ **Amended by TAR-381.** "It stops being free" understated it: a full batch is not only a
+capacity signal, it is a _starvation_ signal, because the batch can be filled indefinitely
+by a single tenant. See Amendment 1.
+
 **Rejected — a delayed BullMQ job per timer, fired at `due_at`.** Precise to the second,
 no polling, no wasted queries; genuinely the better mechanism if the deadline were durable
 where the job is. Rejected on 1 and 2 above. Reconsider only if sub-30-second precision
@@ -217,9 +221,16 @@ It returns uuid pairs. No ticket, no contact, no message, nothing that is a tena
 and nothing that reaches a caller — the same shape of narrow, justified exception that
 0002 already granted `SessionReplayProbe`.
 
+⚠️ **Amended by TAR-381.** This statement is unfair across tenants and was replaced by a
+per-tenant `LATERAL` with the same output shape and the same `SystemPrisma` justification.
+See Amendment 1 for the query as built.
+
 _Phase 2, per tenant, under RLS._ Group the pairs by `tenant_id` and process one tenant per
 `$tenantTransaction`. Every read and every write in phase 2 is scoped, so a bug there
 writes into the tenant in scope or nowhere.
+
+⚠️ **Amended by TAR-381**: one transaction per tenant became one per **chunk** of
+`SLA_SWEEP_TENANT_CHUNK` timers, so partial progress commits. See Amendment 1.
 
 **Rejected — run the whole sweep on `SystemPrisma`.** One query, no grouping, no
 per-tenant transaction. Rejected because the writes are the dangerous half: an alert row
@@ -729,6 +740,11 @@ a 403 confirms the id exists.
   else will notice.
 - A full batch (200) returned on consecutive sweeps — detection is falling behind, per
   decision 1's breaking point.
+- The same tenant in the `failed` count on consecutive sweeps — that tenant's backlog is
+  not draining, and only its own share of the batch is being spent on discovering that
+  (TAR-381).
+- A sweep whose elapsed time approaches `SLA_SWEEP_INTERVAL_MS` — logged as `in Xms` since
+  TAR-381, and the earliest visible form of risk 4 below.
 - Any timer still `running` whose `due_at` is more than ten sweep intervals in the past —
   the sweep is running but not draining, which no other signal above would show.
 
@@ -736,10 +752,11 @@ TAR-41 owns wiring these to alerting, as it does for the webhook sweeper.
 
 **Scale ceiling.** The design targets 0002's stated scale: low hundreds of concurrent
 agents, one Postgres primary. The first thing to break is phase 1's scan as the count of
-`running` timers grows. Next steps, in order: raise `SLA_SWEEP_BATCH`, then make the index
-partial (`WHERE state = 'running'`, outside the Prisma schema and therefore with the drift
-caveat the `sla_timers` docblock already records), then shard phase 1 by `tenant_id`
-across replicas. Do not pre-build any of it.
+`running` timers grows. Next steps, in order: raise `SLA_SWEEP_BATCH` and
+`SLA_SWEEP_TENANT_BATCH` together, then make the index partial (`WHERE state = 'running'`,
+outside the Prisma schema and therefore with the drift caveat the `sla_timers` docblock
+already records), then shard phase 1 by `tenant_id` across replicas. Do not pre-build any
+of it.
 
 ---
 
@@ -802,3 +819,92 @@ existing one builds.
 | 4   | **The 30-second interval is an assumption, not a measurement.** No benchmark is claimed                                                                                                                                                                        | Low      | TAR-280 logs sweep duration and batch size; TAR-282 confirms the observed detection latency against the 30 s claim                                                                         |
 | 5   | **`sla_alerts` retention is unset** and the table grows without bound                                                                                                                                                                                          | Low now  | Propose sweeping acknowledged alerts older than 90 days. Must be settled before the first large tenant, and it belongs with the wider retention question 0002 left open                    |
 | 6   | **`ALTER TYPE ... ADD VALUE` behaviour** must be confirmed against the Postgres version in the Compose stack before TAR-270 writes the migration                                                                                                               | Low      | Cheap to verify locally; the mitigation — the value in its own migration file — is free and should be applied regardless                                                                   |
+
+---
+
+## Amendments
+
+### Amendment 1 — one tenant could starve every other tenant's detection (TAR-381)
+
+Post-merge review of TAR-280 (#97) found that decisions 1 and 2, as specified here and as built,
+share a livelock. Both halves of it are corrected inline above and both are defects in this
+document rather than in the PR, which implemented what was written.
+
+**The shape.** The predicate that makes catch-up free — `due_at <= now()`, oldest first — is also
+what makes a stuck tenant contagious. A timer that is not claimed only gets _older_, so it sorts to
+the head of the _next_ batch too, and of every batch after it. Decision 2 already recognised one
+instance of this and closed it: a deactivated tenant's timers can never be claimed, so phase 1
+joins `tenants` and excludes them. Nothing guarded the general case, and the general case is an
+**active** tenant whose phase 2 keeps failing.
+
+**How it triggers without anybody doing anything wrong.** A tenant recovering from an outage with
+≥200 due timers fills the whole batch. `claimAndAlert` issues roughly four sequential round trips
+per claimed timer inside one transaction, so a full batch is ~800 statements against a 20-second
+`SLA_SWEEP_TENANT_TIMEOUT_MS`. At ~25 ms per round trip that transaction times out, rolls back
+**entirely**, and the identical 200 rows lead the next sweep into the identical timeout. Meanwhile
+no other tenant's breaches are examined at all, and the only symptom is one
+`SLA sweep failed for tenant …` line per tick — a warning that reads like one tenant's problem
+while the platform has stopped detecting breaches.
+
+**Fix, part 1 — phase 1 shares the batch by construction.** The global `ORDER BY due_at LIMIT 200`
+became a bounded per-tenant probe, with the same two output columns and therefore the same
+`SystemPrisma` justification:
+
+```sql
+SELECT d."tenantId", d.id
+FROM tenants n
+CROSS JOIN LATERAL (
+  SELECT t.tenant_id AS "tenantId", t.id, t.due_at
+  FROM sla_timers t
+  WHERE t.tenant_id = n.id AND t.state = 'running' AND t.due_at <= now()
+  ORDER BY t.due_at
+  LIMIT 50                      -- SLA_SWEEP_TENANT_BATCH
+) d
+WHERE n.status = 'active'
+ORDER BY d.due_at
+LIMIT 200;                      -- SLA_SWEEP_BATCH
+```
+
+At 50 against 200, **at least four tenants are served by every sweep** whatever any one of them is
+doing. This is the half that survives a tenant which fails permanently — no amount of chunking
+helps a tenant whose every transaction is refused, and something still has to stop it owning the
+batch.
+
+The access path changes with it: one bounded index probe per **active tenant** on
+`sla_timers (tenant_id, state, due_at)`, rather than one range scan on
+`sla_timers_state_due_at_idx`. That costs a lookup per tenant with no due work — almost all of
+them, on almost every tick — against a `tenants` table that is small by definition, and in exchange
+the rows materialised before the outer sort are bounded by `active tenants × 50` rather than by the
+platform's whole backlog. The outer `ORDER BY due_at` is unchanged, so the oldest deadline is still
+processed first _within_ the batch.
+
+The cost worth stating plainly is drain rate: a single large tenant now takes 50 timers per sweep
+rather than 200, so a 10 000-timer backlog drains in ~100 minutes rather than ~25. Against a batch
+that previously committed **nothing**, that is a trade worth making — and the escalation order in
+the scale ceiling above raises both constants together.
+
+**Fix, part 2 — phase 2 commits in chunks.** One transaction per tenant became one per
+`SLA_SWEEP_TENANT_CHUNK` (25) timers. Each committed chunk takes its timers out of the candidate
+set for good, so a tenant that overruns on its third chunk keeps the first two and starts the next
+sweep that much further ahead; the constant is sized so a chunk is ~100 statements rather than
+~800. The first chunk to fail ends that tenant's turn — whatever refused it will refuse the chunk
+behind it, and proving that costs every tenant later in the loop their detection for this tick.
+`SLA_SWEEP_TENANT_TIMEOUT_MS` was renamed `SLA_SWEEP_CHUNK_TIMEOUT_MS` to match what it now bounds;
+the value is unchanged.
+
+`failedTenants` still counts tenants rather than chunks, so the log line means what it always meant.
+
+**Why both.** Chunking alone leaves the batch fillable by one tenant, which is the criterion the
+regression test asserts against; the per-tenant cap alone leaves a full rollback discarding work
+that had already succeeded. Neither is redundant.
+
+**What this says about the original specification.** Decision 1 named a full batch on consecutive
+sweeps as a _capacity_ signal — "raise the batch, shorten the interval, or shard phase 1". It is
+also a **fairness** signal, and the two have opposite remedies: raising the batch makes a starving
+tenant wait longer, not less. A design that bounds a shared resource per tick should say, in the
+same breath, how that resource is divided when demand exceeds it.
+
+**Also in this change (minor, same review).** The sweep logged `due`/`breached`/`alerted` but not
+elapsed time, though risk 4 names sweep duration as TAR-280's deliverable. The log line now carries
+`in Xms` off `process.hrtime.bigint()`, so a sweep drifting towards the 30-second interval is
+visible before it becomes an overlap.

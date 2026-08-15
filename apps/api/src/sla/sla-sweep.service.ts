@@ -14,7 +14,12 @@ import {
   type TenantPrisma,
 } from '../prisma/prisma.tokens';
 import { SlaAlertService, type InsertedSlaAlert } from './sla-alert.service';
-import { SLA_SWEEP_BATCH, SLA_SWEEP_TENANT_TIMEOUT_MS } from './sla.constants';
+import {
+  SLA_SWEEP_BATCH,
+  SLA_SWEEP_CHUNK_TIMEOUT_MS,
+  SLA_SWEEP_TENANT_BATCH,
+  SLA_SWEEP_TENANT_CHUNK,
+} from './sla.constants';
 
 /**
  * Breach detection: the one thing in this feature that nothing calls.
@@ -76,6 +81,27 @@ import { SLA_SWEEP_BATCH, SLA_SWEEP_TENANT_TIMEOUT_MS } from './sla.constants';
  * supervisor sees it on their next page load. The row is the record; the socket
  * is an accelerator. That asymmetry is deliberate and is the reason decision 5
  * writes a row at all.
+ *
+ * ## No tenant can starve the others (TAR-381)
+ *
+ * The predicate that makes catch-up free — `due_at <= now()`, oldest first — is
+ * also what makes a stuck tenant contagious, because a timer that is never
+ * claimed only gets *older* and therefore sorts to the head of every subsequent
+ * batch. A global `ORDER BY due_at LIMIT 200` hands the whole batch to one
+ * tenant's backlog for as long as that backlog exists, and platform-wide
+ * detection stops with nothing louder than one warning per tick.
+ *
+ * Two bounds close that, and both are needed:
+ *
+ *   * **Phase 1 takes at most `SLA_SWEEP_TENANT_BATCH` rows per tenant**, so the
+ *     batch is shared by construction. Four tenants minimum are served by every
+ *     sweep however badly any one of them is behaving — including a tenant whose
+ *     phase 2 fails every single time, which no amount of chunking would help.
+ *   * **Phase 2 commits in chunks of `SLA_SWEEP_TENANT_CHUNK`**, so a
+ *     transaction that overruns its timeout costs that tenant the rest of this
+ *     sweep rather than all of it. Without this a timeout rolls back every
+ *     claim, and the identical rows lead the next sweep into the identical
+ *     timeout — a livelock that reports itself only as a warning.
  */
 
 /** One due timer, as phase 1 sees it: two uuids and nothing else. */
@@ -106,6 +132,19 @@ export interface SlaSweepReport {
   readonly failedTenants: number;
 }
 
+/**
+ * What one tenant's chunks added up to, and whether anything cut them short.
+ *
+ * The counts are of **committed** work only, so a tenant that stopped part-way
+ * still reports the chunks that landed — which is the whole point of chunking.
+ */
+interface TenantSweepOutcome {
+  readonly breached: number;
+  readonly alerted: number;
+  /** Why the tenant stopped: `'nothing'` means it worked through every chunk. */
+  readonly stoppedBy: 'nothing' | 'deactivation' | 'failure';
+}
+
 @Injectable()
 export class SlaSweepService {
   private readonly logger = new Logger(SlaSweepService.name);
@@ -119,6 +158,7 @@ export class SlaSweepService {
   ) {}
 
   async sweep(): Promise<SlaSweepReport> {
+    const startedAt = process.hrtime.bigint();
     const due = await this.findDueTimers();
 
     if (due.length === 0) {
@@ -127,57 +167,85 @@ export class SlaSweepService {
 
     const report = await this.breachByTenant(groupByTenant(due));
 
-    // Logged on every run that finds work, because two of the three things 0006
+    // Logged on every run that finds work, because three of the four things 0006
     // says should page someone are read off this line: a full batch on
-    // consecutive sweeps means detection is falling behind, and breaches with no
-    // alerts means a tenant has nobody to tell.
+    // consecutive sweeps means detection is falling behind, breaches with no
+    // alerts means a tenant has nobody to tell, and the elapsed time is 0006's
+    // named deliverable for spotting a sweep that is overrunning its 30-second
+    // interval *before* the overrun turns into the livelock TAR-381 fixed.
+    //
+    // Monotonic, so a clock adjustment cannot make a slow sweep look instant.
     this.logger.log(
       `SLA sweep: ${report.due} due, ${report.breached} breached, ${report.alerted} alerts` +
         (report.skippedTenants > 0 ? `, ${report.skippedTenants} tenant(s) inactive` : '') +
-        (report.failedTenants > 0 ? `, ${report.failedTenants} tenant(s) failed` : ''),
+        (report.failedTenants > 0 ? `, ${report.failedTenants} tenant(s) failed` : '') +
+        ` in ${elapsedMs(startedAt)}ms`,
     );
 
     return report;
   }
 
   /**
-   * Phase 1. Read-only, two columns, every **active** tenant.
-   *
-   * `ORDER BY due_at` with a `LIMIT` is what makes the scan stop at the first row
-   * that is not yet due, so the cost grows with the number of *running* timers
-   * rather than with the number due — served by `sla_timers_state_due_at_idx`,
-   * the one composite index in the schema that does not lead with `tenant_id`.
+   * Phase 1. Read-only, two columns, every **active** tenant — and no more than
+   * `SLA_SWEEP_TENANT_BATCH` of them from any one tenant.
    *
    * `now()` is Postgres's, never a node clock: skew between API instances must
    * not be able to breach a timer early or hold one open.
+   *
+   * ## Why it iterates tenants instead of scanning `sla_timers` globally
+   *
+   * The obvious statement is `WHERE state = 'running' AND due_at <= now() ORDER
+   * BY due_at LIMIT 200` against `sla_timers_state_due_at_idx`, and it is the
+   * cheaper one: the scan stops at the first row not yet due, so its cost grows
+   * with the number of *running* timers rather than with the number due. It is
+   * also unfair in a way that is fatal here (TAR-381). A timer that is not
+   * claimed only gets older, so any tenant whose phase 2 keeps failing — or that
+   * is simply recovering from an outage with a full batch of overdue work — owns
+   * the head of the sort indefinitely, and no other tenant's breaches are
+   * examined at all. The `n.status = 'active'` term below closes exactly one
+   * instance of that (a deactivated tenant, whose timers phase 2 can *never*
+   * claim); it does nothing about the rest.
+   *
+   * The `LATERAL` inverts it: one bounded, per-tenant index probe served by
+   * `sla_timers (tenant_id, state, due_at)`, so a tenant contributes at most its
+   * cap and the batch is shared by construction. The cost is one index probe per
+   * active tenant per sweep — a lookup that returns nothing for the tenants with
+   * no due work, which is almost all of them on almost every tick — against a
+   * `tenants` table that is small by definition. Rows materialised before the
+   * outer sort are therefore bounded by `active tenants × SLA_SWEEP_TENANT_BATCH`
+   * rather than by the size of the platform's backlog.
+   *
+   * The outer `ORDER BY due_at` is unchanged, so within the batch the oldest
+   * deadline is still processed first.
    *
    * ## Why the join to `tenants`, and why it is not optional
    *
    * A deactivated tenant's timers cannot be swept: phase 2 opens a
    * `$tenantTransaction`, `assert_tenant_active` raises before `set_config`
-   * runs, and the claim never executes — so those rows stay `running` for ever.
-   * They also only get *older*, so `ORDER BY due_at` sorts them to the head of
-   * every batch. Without this filter, one deactivated tenant holding 200 overdue
-   * timers fills the batch on every sweep from then on and **no other tenant's
-   * breaches are ever examined** — platform-wide detection stops, reported only
-   * as a warning line about a skipped tenant.
+   * runs, and the claim never executes — so those rows stay `running` for ever
+   * while getting steadily older. The status term is the same one
+   * `assert_tenant_active` enforces, so this cannot admit a row phase 2 would
+   * then refuse. Phase 2 keeps its `TenantNotActiveError` branch regardless: a
+   * tenant deactivated in the gap between the two phases is a race this narrows
+   * rather than closes.
    *
-   * The status term is the same one `assert_tenant_active` enforces, so this
-   * cannot admit a row phase 2 would then refuse. Phase 2 keeps its
-   * `TenantNotActiveError` branch regardless: a tenant deactivated in the gap
-   * between the two phases is a race this narrows rather than closes.
-   *
-   * The join costs a primary-key lookup per candidate row and reaches no tenant
-   * data — `tenants.status` is not a tenant's business data, and this statement
-   * still returns nothing but uuid pairs.
+   * `tenants.status` is not a tenant's business data, and this statement still
+   * returns nothing but uuid pairs — the read-only, two-column, reaches-no-caller
+   * shape that is the whole justification for phase 1 running on `SystemPrisma`.
    */
   private async findDueTimers(): Promise<DueTimerRow[]> {
     return await this.systemPrisma.$queryRaw<DueTimerRow[]>`
-      SELECT t.tenant_id AS "tenantId", t.id
-        FROM sla_timers t
-        JOIN tenants n ON n.id = t.tenant_id
-       WHERE t.state = 'running' AND t.due_at <= now() AND n.status = 'active'
-       ORDER BY t.due_at
+      SELECT d."tenantId", d.id
+        FROM tenants n
+        CROSS JOIN LATERAL (
+          SELECT t.tenant_id AS "tenantId", t.id, t.due_at
+            FROM sla_timers t
+           WHERE t.tenant_id = n.id AND t.state = 'running' AND t.due_at <= now()
+           ORDER BY t.due_at
+           LIMIT ${SLA_SWEEP_TENANT_BATCH}
+        ) d
+       WHERE n.status = 'active'
+       ORDER BY d.due_at
        LIMIT ${SLA_SWEEP_BATCH}
     `;
   }
@@ -202,21 +270,14 @@ export class SlaSweepService {
     for (const [tenantId, timerIds] of byTenant) {
       due += timerIds.length;
 
-      try {
-        const outcome = await this.breachForTenant(tenantId, timerIds);
+      const outcome = await this.breachForTenant(tenantId, timerIds);
 
-        breached += outcome.breached;
-        alerted += outcome.alerted;
-      } catch (error: unknown) {
-        if (error instanceof TenantNotActiveError) {
-          this.logger.warn(`Skipped SLA sweep for deactivated tenant ${tenantId}`);
-          skippedTenants += 1;
-          continue;
-        }
+      breached += outcome.breached;
+      alerted += outcome.alerted;
 
-        this.logger.error(
-          `SLA sweep failed for tenant ${tenantId}; the next sweep will retry: ${describeFailure(error)}`,
-        );
+      if (outcome.stoppedBy === 'deactivation') {
+        skippedTenants += 1;
+      } else if (outcome.stoppedBy === 'failure') {
         failedTenants += 1;
       }
     }
@@ -224,7 +285,55 @@ export class SlaSweepService {
     return { due, breached, alerted, skippedTenants, failedTenants };
   }
 
+  /**
+   * One tenant's whole phase 2, as several transactions rather than one.
+   *
+   * The chunk is the unit of durability (TAR-381): every committed chunk takes
+   * its timers out of the candidate set for good, so a tenant that overruns on
+   * its third chunk keeps the first two and starts the next sweep that much
+   * further ahead. One transaction for the lot rolls back all of it and leaves
+   * the identical rows to fail identically for ever.
+   *
+   * The first chunk to fail ends the tenant's turn: whatever refused it — a
+   * deactivation, an unreachable database, a transaction that will not fit the
+   * timeout — is not going to behave differently for the chunk behind it, and
+   * spending the rest of the sweep's wall-clock proving that costs every tenant
+   * after this one in the loop.
+   */
   private async breachForTenant(
+    tenantId: string,
+    timerIds: readonly string[],
+  ): Promise<TenantSweepOutcome> {
+    let breached = 0;
+    let alerted = 0;
+
+    for (const chunk of chunked(timerIds, SLA_SWEEP_TENANT_CHUNK)) {
+      try {
+        const committed = await this.breachChunk(tenantId, chunk);
+
+        breached += committed.breached;
+        alerted += committed.alerted;
+      } catch (error: unknown) {
+        if (error instanceof TenantNotActiveError) {
+          this.logger.warn(`Skipped SLA sweep for deactivated tenant ${tenantId}`);
+
+          return { breached, alerted, stoppedBy: 'deactivation' };
+        }
+
+        this.logger.error(
+          `SLA sweep failed for tenant ${tenantId} after ${breached} committed breach(es); ` +
+            `the next sweep will retry the rest: ${describeFailure(error)}`,
+        );
+
+        return { breached, alerted, stoppedBy: 'failure' };
+      }
+    }
+
+    return { breached, alerted, stoppedBy: 'nothing' };
+  }
+
+  /** One chunk of one tenant's timers, in one transaction, then its emits. */
+  private async breachChunk(
     tenantId: string,
     timerIds: readonly string[],
   ): Promise<{ breached: number; alerted: number }> {
@@ -236,7 +345,7 @@ export class SlaSweepService {
       async () =>
         await this.prisma.$tenantTransaction(
           async (tx) => await this.claimAndAlert(tx, tenantId, timerIds),
-          { timeout: SLA_SWEEP_TENANT_TIMEOUT_MS },
+          { timeout: SLA_SWEEP_CHUNK_TIMEOUT_MS },
         ),
     );
 
@@ -260,7 +369,7 @@ export class SlaSweepService {
     };
   }
 
-  /** One tenant's whole phase 2, in one transaction: claim, audit, deliver. */
+  /** One chunk of one tenant's phase 2, in one transaction: claim, audit, deliver. */
   private async claimAndAlert(
     tx: Prisma.TransactionClient,
     tenantId: string,
@@ -274,8 +383,8 @@ export class SlaSweepService {
     }
 
     // Once per transaction, not once per breach: the tenant's supervisors and
-    // admins do not change while this transaction runs, and a full 200-timer
-    // recovery batch would otherwise issue 200 identical queries inside it.
+    // admins do not change while this transaction runs, and a full chunk would
+    // otherwise issue `SLA_SWEEP_TENANT_CHUNK` identical queries inside it.
     const candidates = await this.alerts.loadAlertCandidates(tx);
 
     for (const timer of claimed) {
@@ -369,6 +478,18 @@ export class SlaSweepService {
        WHERE t.id = due.id
       RETURNING t.id AS "id", t.ticket_id AS "ticketId", t.kind::text AS "kind", t.due_at AS "dueAt"
     `;
+  }
+}
+
+/** Whole milliseconds since `startedAt`, off the monotonic clock. */
+function elapsedMs(startedAt: bigint): number {
+  return Number((process.hrtime.bigint() - startedAt) / 1_000_000n);
+}
+
+/** The chunks one tenant's ids are committed in, in order, never empty. */
+function* chunked<T>(values: readonly T[], size: number): Generator<readonly T[]> {
+  for (let index = 0; index < values.length; index += size) {
+    yield values.slice(index, index + size);
   }
 }
 
