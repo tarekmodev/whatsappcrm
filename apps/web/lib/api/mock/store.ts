@@ -11,6 +11,8 @@ import {
   MOCK_SLA_ALERTS,
   MOCK_TAGS,
   MOCK_TEAMS,
+  MOCK_TENANTS,
+  MOCK_TENANT_LIFECYCLES,
   MOCK_TICKETS,
   MOCK_USERS,
   type MockAssignmentRule,
@@ -23,9 +25,11 @@ import {
   type MockSlaAlert,
   type MockTag,
   type MockTeam,
+  type MockTenantLifecycle,
   type MockTicket,
   type MockUser,
 } from '@/lib/api/mock/fixtures';
+import type { TenantResponse } from '@whatsappcrm/contracts';
 
 /**
  * Mutable in-memory state behind the mock transport, so an invite or a team
@@ -38,6 +42,13 @@ import {
  */
 
 interface MockState {
+  /**
+   * Keyed by tenant id, not by the usual `tenantId` column: a tenant *is* the
+   * scope, so the record has no separate one. Every reader still looks it up by
+   * `principal.tenantId` and never iterates.
+   */
+  tenants: Map<string, TenantResponse>;
+  tenantLifecycles: Map<string, MockTenantLifecycle>;
   users: Map<string, MockUser>;
   teams: Map<string, MockTeam>;
   conversations: Map<string, MockConversation>;
@@ -80,6 +91,18 @@ type GlobalWithState = typeof globalThis & { [STATE_KEY]?: MockState };
 
 function seed(): MockState {
   return {
+    tenants: new Map(
+      MOCK_TENANTS.map((tenant) => [
+        tenant.id,
+        { ...tenant, branding: { ...tenant.branding }, domains: [...tenant.domains] },
+      ]),
+    ),
+    tenantLifecycles: new Map(
+      MOCK_TENANT_LIFECYCLES.map((lifecycle) => [
+        lifecycle.tenantId,
+        { ...lifecycle, plan: { ...lifecycle.plan } },
+      ]),
+    ),
     users: new Map(MOCK_USERS.map((user) => [user.id, { ...user, teamIds: [...user.teamIds] }])),
     teams: new Map(
       MOCK_TEAMS.map((team) => [team.id, { ...team, memberUserIds: [...team.memberUserIds] }]),

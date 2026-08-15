@@ -1340,6 +1340,39 @@ cannot recover from a leaked one.
 the API asserts it a third time. The UI gating exists so a role is never shown a control
 that leads to a refusal.
 
+### Workspace settings: two surfaces behind two gates
+
+`/settings/workspace` (TAR-409) is the tenant admin's view of its own workspace: the
+profile, the branding currently in effect, and the plan with its seat and conversation
+usage. It is the one settings page whose nav entry names **two** permissions, because it is
+genuinely two surfaces:
+
+| Half                            | Endpoint                       | Permission        |
+| ------------------------------- | ------------------------------ | ----------------- |
+| Profile (name, support address) | `PATCH /api/v1/tenant`         | `branding:write`  |
+| Plan, usage, lifecycle banner   | `GET /api/v1/tenant/lifecycle` | `tenant:settings` |
+
+Both are admin-only under today's `ROLE_PERMISSIONS`, so nobody currently sees half of it.
+The split exists so a custom role holding one of them gets the half it may have rather than
+a 403 for the whole page: `WorkspaceSections` renders the profile read-only without
+`branding:write`, and omits the plan card entirely without `tenant:settings`.
+
+**The word is _workspace_.** `docs/STYLE.md` fixes _tenant_ as the internal term and
+_workspace_ as the only one the console says on screen; _organisation_ is on the
+forbidden-synonym list. The route, the content group and the feature folder all take the
+on-screen word even though the issue that asked for it said "organization profile".
+
+`TenantLifecycleResponse` is what the plan panel renders, and it is deliberately not
+`BillingSummaryResponse` — that one describes a subscription, and a workspace on a trial has
+none. Pending invitations count towards the seat cap alongside active agents, because ADR
+0009 enforces the cap at invite creation as well as acceptance; `features/workspace/plan-usage.ts`
+owns that arithmetic so a second surface cannot re-derive it differently.
+
+Two primitives came out of this page and are reusable: `components/ui/DetailList` (term and
+value pairs as a real `<dl>`, two columns above a container-query threshold) and
+`components/ui/UsageMeter` (an allowance gauge whose bar is `aria-hidden` decoration over a
+sentence that states the numbers).
+
 ### Interim state: mock API and stubbed role
 
 Two flags in `.env.example` exist because TAR-82 was built ahead of its dependencies. Real

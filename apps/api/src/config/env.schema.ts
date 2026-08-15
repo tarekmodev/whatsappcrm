@@ -87,6 +87,32 @@ const envShape = z.object({
   PLATFORM_DOMAIN: z.string().min(1).default('app.localhost'),
 
   /**
+   * The hostname a tenant points its own domain at — the CNAME target on the
+   * routing record `POST /api/v1/tenant/domains` hands back (TAR-419).
+   *
+   * A bare hostname, no scheme and no trailing dot: it goes into a DNS record
+   * rather than a URL, which is what separates it from `WEB_ORIGIN`. In a
+   * deployed environment it is the *public* edge host of the web service, and
+   * the deployment target's own service-discovery value is the wrong one — on
+   * Render, `fromService.property: host` is the private-network name, which no
+   * customer's resolver can see.
+   *
+   * Optional, and absent means this environment cannot tell a tenant where to
+   * point its DNS. The custom-domain routes must **refuse the claim** in that
+   * state rather than emit a routing record with a blank target: a tenant that
+   * publishes a CNAME to nothing waits for a verification that cannot arrive,
+   * and the misconfiguration surfaces days later as a support ticket instead of
+   * immediately as a 5xx. No default — every plausible guess (`PLATFORM_DOMAIN`,
+   * the API's own host) is a hostname that resolves somewhere wrong, which is
+   * worse than a hostname that is missing.
+   *
+   * Not a secret: it is published to every tenant that adds a domain.
+   * Attaching the domain at the edge is an operator step —
+   * docs/runbooks/custom-domains.md.
+   */
+  PLATFORM_EDGE_HOSTNAME: z.string().min(1).optional(),
+
+  /**
    * The scheme put in front of a tenant's hostname when an email has to carry an
    * absolute link back into the product — the invite and password-reset links
    * (TAR-53, link shapes).

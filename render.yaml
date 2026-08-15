@@ -12,6 +12,32 @@
 # Deployment target and its rationale: docs/adr/0001-stack-decision.md (decision 9).
 # Provisioning walkthrough and the uptime alerting it cannot express:
 # docs/runbooks/environments.md.
+#
+# ---------------------------------------------------------------------------
+# One thing this blueprint deliberately does NOT declare: custom domains.
+# ---------------------------------------------------------------------------
+#
+# The spec has a `domains:` list on a web service, and both the wildcard
+# `*.<PLATFORM_DOMAIN>` and every tenant's own hostname would go in it. Neither
+# is here, for one reason each.
+#
+# Tenant hostnames are runtime state. They are created by customers through
+# `POST /api/v1/tenant/domains`, arrive between commits, and there may eventually
+# be hundreds. A set that grows without anyone opening an editor does not belong
+# in a file whose whole value is being the source of truth.
+#
+# The wildcard could be declared and is not, because `domains:` is a *list* and
+# Render's documented sync rule is that Dashboard configuration conflicting with
+# the Blueprint is overwritten. Whether a partial list prunes the domains added
+# out of band is not stated anywhere we could find, and it was not testable from
+# the task that wrote this. If it does prune, the first unrelated blueprint sync
+# after the first custom domain goes live drops every white-label customer's TLS
+# at once, with no failed deploy to point at. So custom domains are attached out
+# of band on purpose, and this file says nothing about them — an omitted setting
+# is documented as left alone, which is the property being relied on here.
+#
+# The operator procedure, the DNS records, and the experiment that would settle
+# this and let the wildcard move in here: docs/runbooks/custom-domains.md.
 
 previews:
   # A preview environment would need its own database and its own WhatsApp
@@ -81,6 +107,26 @@ projects:
               # Needs a scheme, which `fromService` cannot supply, and becomes a
               # custom domain once white-labelling lands.
               - key: WEB_ORIGIN
+                sync: false
+              # The CNAME target this environment hands a tenant that is pointing
+              # its own hostname at us (TAR-419): the *public* edge host of the web
+              # service below, bare, with no scheme and no trailing dot, because it
+              # goes into a DNS record and not into a URL.
+              #
+              # Prompted rather than `fromService`, and the temptation is real:
+              # `fromService.property: host` yields the *private network* hostname
+              # (`whatsappcrm-web-dev`), which no customer's resolver can ever see.
+              # A tenant handed that value gets a CNAME that dead-ends, and the
+              # failure is a domain that never verifies rather than a failed deploy.
+              #
+              # Predicted value below; confirm it against the hostname Render
+              # actually assigned, which carries a suffix when the service name was
+              # already taken globally — docs/runbooks/custom-domains.md.
+              #
+              #   whatsappcrm-web-dev.onrender.com
+              #
+              # Not a secret: it is published to every tenant that adds a domain.
+              - key: PLATFORM_EDGE_HOSTNAME
                 sync: false
               # Public origin of the Socket.IO server, handed to the browser on
               # `POST /api/v1/auth/realtime-ticket` (TAR-180). The gateway runs in
@@ -256,6 +302,13 @@ projects:
                 sync: false
               - key: WEB_ORIGIN
                 sync: false
+              # The public edge host of this environment's web service, handed to
+              # tenants as a CNAME target — see the development environment above
+              # for why `fromService` cannot supply it. Predicted value:
+              #
+              #   whatsappcrm-web-staging.onrender.com
+              - key: PLATFORM_EDGE_HOSTNAME
+                sync: false
               # This service's own public URL — see the development environment
               # above for why the schema default cannot be relied on here.
               - key: REALTIME_URL
@@ -385,6 +438,17 @@ projects:
               - key: SYSTEM_DATABASE_URL
                 sync: false
               - key: WEB_ORIGIN
+                sync: false
+              # The public edge host of this environment's web service, handed to
+              # tenants as a CNAME target — see the development environment above
+              # for why `fromService` cannot supply it. Predicted value:
+              #
+              #   whatsappcrm-web-prod.onrender.com
+              #
+              # Changing this in production invalidates the CNAME every tenant with
+              # a custom domain has already published. Treat it as fixed once the
+              # first custom domain is live.
+              - key: PLATFORM_EDGE_HOSTNAME
                 sync: false
               # This service's own public URL — see the development environment
               # above for why the schema default cannot be relied on here.

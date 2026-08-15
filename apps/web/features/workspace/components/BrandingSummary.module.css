@@ -1,0 +1,32 @@
+.colour {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.swatch {
+  flex: 0 0 auto;
+  inline-size: var(--size-icon-md);
+  block-size: var(--size-icon-md);
+  border: var(--border-hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--swatch-colour);
+}
+
+.hex {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+  /* A hex code is read character by character; uppercase reads no better. */
+  text-transform: lowercase;
+}
+
+/*
+ * The swatch's whole content is its background, which forced-colors drops. It
+ * becomes an empty outlined box rather than disappearing, and the code beside it
+ * is what actually carries the value.
+ */
+@media (forced-colors: active) {
+  .swatch {
+    border-color: CanvasText;
+  }
+}

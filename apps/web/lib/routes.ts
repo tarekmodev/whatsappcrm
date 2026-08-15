@@ -40,6 +40,17 @@ export const routes = {
     withQuery('/settings/assignment', {
       [searchParamKeys.assignmentReason]: query?.deferredReason,
     }),
+  /**
+   * The workspace itself: its profile, its plan state and its seat usage
+   * (TAR-409).
+   *
+   * `workspace`, not `tenant` or `organisation`. TAR-409 asks for an
+   * "organization profile" and `docs/STYLE.md` overrules the word: *tenant* is
+   * our name for the row, *workspace* is the only word the console says on
+   * screen for it, and *organisation* is on the forbidden-synonym list. This
+   * path is read by a customer, so it takes the on-screen word.
+   */
+  settingsWorkspace: () => '/settings/workspace',
   /** Where a tenant admin connects its own WhatsApp Business Account (TAR-169). */
   settingsWhatsApp: () => '/settings/whatsapp',
   settingsSecurity: () => '/settings/security',
