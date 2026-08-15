@@ -966,29 +966,13 @@ platform, which makes it quieter rather than better: `SLA_SWEEP_TENANT_BATCH` pe
 timers would consume the whole allowance and that tenant's real breaches would never be examined,
 reported as nothing at all.
 
-**Cost, on each of two paths.** A ticket that really is overdue — the overwhelming majority, since a
-dropped trigger is the exception — costs three reads and issues no write, so a 25-timer chunk goes
-from ~100 statements to ~175, still well inside `SLA_SWEEP_CHUNK_TIMEOUT_MS`. Measured against a
-real database before Amendment 1 landed, a full 200-timer single-tenant batch went from 1047 ms to
-1594 ms.
-
-A ticket that needs repairing **writes, and therefore holds row locks on `tickets` and `sla_timers`
-until the chunk commits**. Stated plainly because the obvious reading of "the sweep only reads" is
-wrong on exactly the path this amendment exists to add. It is also why the scan carries
-`ORDER BY ticket_id`: `DISTINCT` guarantees no ordering, and `reconcile` locks one ticket's rows in
-a fixed sequence, so ordering the tickets makes the loop's lock order total. Without it two sweeps
-whose chunks overlap on the same two tickets can take them in opposite orders and deadlock —
-Postgres kills one, the chunk rolls back, and the tenant is counted as a failure for that tick. The
-ordering is needed against the repair path only; the claim uses `FOR UPDATE SKIP LOCKED` and steps
-aside rather than waiting.
-
-That clause is **untested, deliberately, and must not be removed on the strength of an `EXPLAIN`.**
-Postgres plans this `DISTINCT` as `Sort → Unique` keyed on `ticket_id` today, so the rows arrive
-ordered with or without it and no test can be made to fail when it is deleted; `HashAggregate` is an
-equally valid plan for the same query, returns groups unordered, and is chosen on row-count
-estimates and `work_mem`. Provoking the deadlock itself would need two sweeps interleaved on a
-schedule a test cannot impose. So this is a case where the argument is the evidence, and it is
-recorded here rather than left to a comment somebody trims.
+**Cost.** Three reads per due ticket, writing nothing and taking no lock when the ticket really is
+overdue — so a 25-timer chunk goes from ~100 statements to ~175, still well inside
+`SLA_SWEEP_CHUNK_TIMEOUT_MS`. Measured against a real database before Amendment 1 landed, a full
+200-timer single-tenant batch went from 1047 ms to 1594 ms. `ORDER BY ticket_id` is not cosmetic:
+`DISTINCT` guarantees no ordering, and reconciling an already-answered ticket does take row locks,
+so two sweeps meeting the same tickets in opposite orders would deadlock and one would be rolled
+back and counted as a tenant failure.
 
 **What this says about the original specification.** Decision 3 called the conditional UPDATE "the
 mechanism" and everything else "optimisation", and that framing hid an assumption: a state

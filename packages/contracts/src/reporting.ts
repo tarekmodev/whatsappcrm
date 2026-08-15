@@ -3,7 +3,7 @@ import { IanaTimezoneSchema, IdSchema, TimestampSchema } from './common';
 
 /**
  * The reporting dashboard and its export, per
- * `docs/architecture/0009-reporting-dashboard-and-export.md` (TAR-426).
+ * `docs/architecture/0010-reporting-dashboard-and-export.md` (TAR-426).
  *
  * Published here rather than beside the metrics API because four stories build
  * against it at once: TAR-428 implements `GET /reports/dashboard`, TAR-429 the
@@ -12,13 +12,13 @@ import { IanaTimezoneSchema, IdSchema, TimestampSchema } from './common';
  * what makes "the export matches what is on screen" structural — both routes
  * validate against schemas built from one object shape, so the range the export
  * used and the range the screen shows are the same parsed value rather than two
- * readings of the same query string (0009 decision 1).
+ * readings of the same query string (0010 decision 1).
  */
 
 /** A year and a day. Bounds the one query whose row count the caller chooses. */
 export const REPORT_RANGE_MAX_DAYS = 366;
 
-/** Tenant-local calendar day, `YYYY-MM-DD`. Never an instant — see 0009 decision 5. */
+/** Tenant-local calendar day, `YYYY-MM-DD`. Never an instant — see 0010 decision 5. */
 export const ReportDateSchema = z.iso.date();
 
 /**
@@ -102,7 +102,7 @@ export const ReportRangeSchema = z.object({
 /**
  * The query shape, declared once as a plain object so that the JSON and CSV
  * routes are the same parameters by construction and not by convention
- * (0009 decision 1). `.refine` returns an effects schema with no `.extend`,
+ * (0010 decision 1). `.refine` returns an effects schema with no `.extend`,
  * which is why the shape and the rules are separate.
  */
 const dashboardQueryShape = {

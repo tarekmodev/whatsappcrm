@@ -489,52 +489,26 @@ export class SlaSweepService {
    * This is the same `SlaTimerService` body the `sla.evaluate-ticket` handler
    * runs, called here on the chunk's own transaction — inside it rather than
    * before it, so the claim below reads a state this transaction wrote and no
-   * reply can land in a gap between the two.
+   * reply can land in a gap between the two. For a ticket that really is overdue
+   * it issues three reads, writes nothing and takes no lock, so the common path
+   * costs at most `SLA_SWEEP_TENANT_CHUNK` × 3 round trips inside
+   * `SLA_SWEEP_CHUNK_TIMEOUT_MS` and cannot contend with a concurrent sweep.
+   * For one that was answered, resolved, closed or paused while its trigger was
+   * lost, it applies exactly the transition that trigger would have — and the
+   * claim, seeing this transaction's own writes, leaves it alone.
    *
-   * ## What it costs, on each of the two paths
+   * The ticket ids are read here rather than returned by phase 1 on purpose:
+   * phase 1 is the one unscoped statement in this file and stays two uuid
+   * columns wide. This read is inside the tenant transaction, under RLS, and
+   * `DISTINCT` collapses a ticket whose first-response and resolution timers are
+   * both due into one reconciliation.
    *
-   * A ticket that really is overdue — the overwhelming majority, because a
-   * dropped trigger is the exception — costs three reads and issues no write, so
-   * the ordinary sweep adds at most `SLA_SWEEP_TENANT_CHUNK` × 3 round trips
-   * inside `SLA_SWEEP_CHUNK_TIMEOUT_MS` and takes nothing another transaction
-   * could be waiting on.
-   *
-   * A ticket that was answered, resolved, closed or paused while its trigger was
-   * lost gets exactly the transition that trigger would have applied — and that
-   * path **writes, so it holds row locks on `tickets` and `sla_timers` until
-   * this chunk commits**. That is the price of repairing the row rather than
-   * skipping it, and it is why the scan below is ordered.
-   *
-   * ## Why `ORDER BY ticket_id`
-   *
-   * `DISTINCT` guarantees no ordering, and `reconcile` locks a ticket's rows in
-   * a fixed sequence within one call — so ordering the tickets is enough to make
-   * the whole loop's lock order total. Without it, two sweeps whose chunks
-   * overlap on the same two tickets can take them in opposite orders and
-   * deadlock; Postgres kills one, the chunk rolls back, and the tenant is
-   * counted as a failure for the tick. The sort costs at most
-   * `SLA_SWEEP_TENANT_CHUNK` uuids.
-   *
-   * Note this orders the *repair* path against itself. It is not needed against
-   * the claim, which uses `FOR UPDATE SKIP LOCKED` and steps aside rather than
-   * waiting.
-   *
-   * **Do not delete it as redundant** on the evidence of an `EXPLAIN`. Postgres
-   * currently plans this `DISTINCT` as `Sort → Unique` keyed on `ticket_id`, so
-   * the rows come back ordered whether or not the clause is written — which is
-   * also why no test in this repo can fail when it is removed. `HashAggregate`
-   * is an equally valid plan for the same query and returns groups in no order
-   * at all; the planner picks between them on row-count estimates and
-   * `work_mem`. The clause is the guarantee, the current plan is a coincidence,
-   * and the failure the coincidence hides is an intermittent deadlock under
-   * concurrency.
-   *
-   * ## Why the ids are read here
-   *
-   * Rather than returned by phase 1: phase 1 is the one unscoped statement in
-   * this file and stays two uuid columns wide. This read is inside the tenant
-   * transaction, under RLS, and `DISTINCT` collapses a ticket whose
-   * first-response and resolution timers are both due into one reconciliation.
+   * `ORDER BY ticket_id` is not cosmetic. `DISTINCT` gives no ordering
+   * guarantee, and the reconciliation of an already-answered ticket *does* take
+   * row locks — so two sweeps meeting the same pair of tickets in opposite
+   * orders would deadlock, and one of them would be rolled back and reported as
+   * a tenant failure. A total order over the only rows this loop can lock costs
+   * a sort of at most `SLA_SWEEP_TENANT_CHUNK` uuids and removes the cycle.
    *
    * A timer whose ticket is gone is unreachable while the composite foreign key
    * holds; if it ever happens `reconcile` raises `SlaTicketNotVisibleError`, the

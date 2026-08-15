@@ -102,22 +102,9 @@ export class SlaTimerService {
    *
    * Nothing here is conditional on having been reached by a job: it reads the
    * ticket, derives the state each timer should be in, and applies only the
-   * transitions that actually move a row.
-   *
-   * ## Two paths, and only one of them is free
-   *
-   * A ticket already in the state it should be in costs three reads and issues
-   * no write, so a caller may run this over every ticket it is about to act on
-   * without paying for the ones with nothing to do.
-   *
-   * A ticket that needs repairing **writes, and therefore takes row locks** —
-   * `tickets` in `stampFirstResponse`, `sla_timers` in `applyTransition`, plus
-   * inserts into `ticket_events` and possibly `sla_timers`. They are taken in
-   * that fixed order within one call, so ordering the *tickets* is enough to
-   * give two concurrent callers a total order; a caller that loops over several
-   * tickets is responsible for looping in a deterministic order, or it can
-   * deadlock against another doing the same work in reverse. `SlaSweepService`
-   * sorts by `ticket_id` for exactly this reason.
+   * transitions that actually move a row. A ticket with nothing to change costs
+   * three reads and writes nothing, so a caller may run it over every ticket it
+   * is about to act on without taking a lock it does not need.
    */
   async reconcile(
     tx: Prisma.TransactionClient,
@@ -158,9 +145,23 @@ export class SlaTimerService {
    * making it a property of the row rather than of the calling code means TAR-28
    * inherits the decision instead of re-making it by accident.
    *
+   * **It also records *who*** (TAR-30, ADR 0010 decision 4). The same statement
+   * that stamps the timestamp writes `first_response_user_id` from the same
+   * message, because this is the transaction that establishes the fact and the
+   * five-clause predicate above is the definition of "who answered". A reporting
+   * query that reproduced four of those five clauses would be a second
+   * implementation of it — correct until somebody changes one of them, and then
+   * the dashboard and the SLA timer disagree about who responded first.
+   *
+   * The comment on the event below still stands and is not a contradiction: the
+   * *event* carries no actor because the timer observed the reply rather than
+   * making it. The column is an attribution of the reply, not of the write.
+   *
    * The guard is in the `WHERE` clause, so the check and the write are one
    * statement two workers cannot interleave, and the event is appended only by
-   * the transaction that actually moved the column.
+   * the transaction that actually moved the column. Both columns move together
+   * under that guard, so a redelivered job cannot re-attribute a response that
+   * was already recorded.
    *
    * **Known gap (0006, risk 3).** Only the ticket's own conversation is
    * searched. A tenant running two WhatsApp numbers can have the same contact on
@@ -190,7 +191,10 @@ export class SlaTimerService {
         sentAt: { gte: ticket.createdAt },
       },
       orderBy: [{ sentAt: 'asc' }, { id: 'asc' }],
-      select: { sentAt: true },
+      // `senderUserId` beside `sentAt`: the predicate above already requires it
+      // to be non-null, so this reads the responder off the row that decided the
+      // timestamp rather than looking them up again from a wider set.
+      select: { sentAt: true, senderUserId: true },
     });
 
     if (reply === null) {
@@ -199,7 +203,7 @@ export class SlaTimerService {
 
     const { count } = await tx.ticket.updateMany({
       where: { id: ticket.id, firstRespondedAt: null },
-      data: { firstRespondedAt: reply.sentAt },
+      data: { firstRespondedAt: reply.sentAt, firstResponseUserId: reply.senderUserId },
     });
 
     if (count > 0) {
