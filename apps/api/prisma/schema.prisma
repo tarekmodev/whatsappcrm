@@ -468,6 +468,66 @@ enum KnowledgeDocumentStatus {
   @@map("knowledge_document_status")
 }
 
+/// Who owns the reply in a conversation (0010 decision 5, TAR-402).
+///
+/// Four values where TAR-28 names three, because "the bot never engaged" and
+/// "the bot gave up" are different facts and the console renders them
+/// differently — an empty-knowledge-base tenant's inbox must not look like a
+/// tenant whose bot is failing.
+///
+/// `human_active` is terminal for the conversation's active life on purpose, and
+/// resets to `off` when the conversation is resolved or closed. A bot that
+/// resumes after an agent has spoken talks over a colleague in front of the
+/// customer, and no confidence score prevents that.
+enum ConversationBotState {
+  off
+  bot_active
+  handed_off
+  human_active
+
+  @@map("conversation_bot_state")
+}
+
+/// Who authored a message (0010 decision 14, TAR-402).
+///
+/// `MessageResponse.sentByAutomation` is derived from `sender_user_id IS NULL`
+/// and TAR-27's workflows are about to send with a null sender too, so that flag
+/// stops distinguishing a bot reply from a workflow reply — and the console has
+/// to badge exactly one of them. Both stay published; `sentByAutomation` keeps
+/// its meaning as `origin NOT IN (contact, agent)`.
+///
+/// `workflow` is deliberately absent: it is TAR-27's value to append when its
+/// send action lands. 0009 claims no column of its own for message authorship,
+/// so this is a seam the two stories share.
+enum MessageOrigin {
+  contact
+  agent
+  bot
+  system
+
+  @@map("message_origin")
+}
+
+enum BotTurnOutcome {
+  replied
+  handed_off
+  suppressed
+
+  @@map("bot_turn_outcome")
+}
+
+/// The published `HANDOFF_REASONS` list (0010 decision 6).
+enum HandoffReason {
+  low_confidence
+  no_match
+  customer_requested
+  max_turns
+  agent_requested
+  bot_error
+
+  @@map("handoff_reason")
+}
+
 enum BillingInterval {
   month
   year
@@ -624,6 +684,9 @@ model Tenant {
   workflowRuns             WorkflowRun[]
   aiConfig                 AiConfig?
   knowledgeDocs            KnowledgeDocument[]
+  knowledgeChunks          KnowledgeChunk[]
+  botTurns                 BotTurn[]
+  handoffEvents            HandoffEvent[]
   cannedResponses          CannedResponse[]
   subscription             Subscription?
   usageCounters            UsageCounter[]
@@ -1581,6 +1644,25 @@ model Conversation {
   /// insert time, matching `created_at`.
   lastMessageAt          DateTime           @default(now()) @map("last_message_at") @db.Timestamptz(3)
   unreadCount            Int                @default(0) @map("unread_count")
+
+  /// Who owns the reply (0010 decision 5, TAR-402). `botHandling` in the
+  /// published contract is `botState === 'bot_active'` and keeps its meaning.
+  ///
+  /// Written by three places and no more: `BotTurnService` on the way in
+  /// (compare-and-set against `bot_state <> 'human_active'`), `MessageSendService`
+  /// and the assign/claim path on the way to `human_active`, and the conversation
+  /// status path on the reset to `off`. It is a plain column rather than an
+  /// `AiModule` API precisely so those three need no module edge.
+  botState               ConversationBotState @default(off) @map("bot_state")
+  /// When the bot took this conversation — the start of the window the handoff
+  /// DTO's `botExchange` spans. Null when the bot never replied, and cleared on
+  /// the reset to `off`.
+  ///
+  /// `conversations_bot_engaged_at_requires_engagement` holds the one direction
+  /// that matters (`off` implies null). It is a CHECK, so it lives in the
+  /// migration rather than here.
+  botEngagedAt           DateTime?          @map("bot_engaged_at") @db.Timestamptz(3)
+
   createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -1592,6 +1674,8 @@ model Conversation {
   messages        Message[]
   internalNotes   InternalNote[]
   tickets         Ticket[]
+  botTurns        BotTurn[]
+  handoffEvents   HandoffEvent[]
 
   /// One thread per contact per WhatsApp number.
   @@unique([tenantId, whatsappAccountId, contactId])
@@ -1632,6 +1716,20 @@ model Message {
   /// The agent who sent an outbound message. Null for inbound and for messages
   /// sent by automation.
   senderUserId      String?            @map("sender_user_id") @db.Uuid
+  /// Who authored the message (0010 decision 14, TAR-402).
+  ///
+  /// **The default is a seed value, not the answer.** A column default cannot
+  /// depend on the row, and the correct origin depends on `direction` and
+  /// `senderUserId` — so `contact` is right for every inbound message and is
+  /// completed for outbound ones by the `messages_derive_origin` trigger, which
+  /// applies the same rule the backfill did. A writer that names `bot`, `agent`
+  /// or `system` is left alone, so TAR-406 sets `bot` explicitly.
+  ///
+  /// `messages_origin_matches_direction` — a CHECK, so it lives in the migration
+  /// — makes the invariant exact: a message is `contact`-authored if and only if
+  /// it is inbound. That is also what makes the trigger sound, because `contact`
+  /// on an outbound row can only mean "the writer did not say".
+  origin            MessageOrigin      @default(contact)
   /// The provider's timestamp, never insert order: Meta does not guarantee
   /// delivery order and ingest is concurrent (TAR-39, ordering).
   sentAt            DateTime           @map("sent_at") @db.Timestamptz(3)
@@ -1643,10 +1741,13 @@ model Message {
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  conversation Conversation        @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: Cascade)
-  sender       User?               @relation(fields: [tenantId, senderUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-  attachments  MessageAttachment[]
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation     Conversation        @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: Cascade)
+  sender           User?               @relation(fields: [tenantId, senderUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  attachments      MessageAttachment[]
+  botTurnsHandled  BotTurn[]           @relation("BotTurnInboundMessage")
+  botTurnsReplied  BotTurn[]           @relation("BotTurnReplyMessage")
+  handoffsTriggered HandoffEvent[]
 
   @@unique([tenantId, providerMessageId])
   @@unique([tenantId, id])
@@ -1834,9 +1935,10 @@ model Ticket {
   contact      Contact?      @relation(fields: [tenantId, contactId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
   assignedUser User?         @relation(fields: [tenantId, assignedUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
   assignedTeam Team?         @relation(fields: [tenantId, assignedTeamId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-  events       TicketEvent[]
-  slaTimers    SlaTimer[]
-  slaAlerts    SlaAlert[]
+  events        TicketEvent[]
+  slaTimers     SlaTimer[]
+  slaAlerts     SlaAlert[]
+  handoffEvents HandoffEvent[]
 
   @@unique([tenantId, number])
   @@unique([tenantId, id])
@@ -2285,10 +2387,37 @@ model AiConfig {
   id              String   @id @default(uuid(7)) @db.Uuid
   tenantId        String   @unique @map("tenant_id") @db.Uuid
   isEnabled       Boolean  @default(false) @map("is_enabled")
+  /// Null means "the platform default", so a tenant that never chooses is not
+  /// pinned to whatever model was current the day their row was written.
+  ///
+  /// Free text in the database on purpose (0010 decision 10): the allowlist is
+  /// `AI_MODELS` in `@whatsappcrm/contracts`, checked at the API boundary. A
+  /// CHECK here would make adding a model id a migration, and model ids change
+  /// on the provider's schedule rather than ours.
   model           String?
   systemPrompt    String?  @map("system_prompt")
   /// Phrases that force an immediate handover to a human agent.
   handoffKeywords String[] @default([]) @map("handoff_keywords")
+
+  /// The floor the composite score `min(modelConfidence, retrievalConfidence)`
+  /// must reach for the bot to reply rather than hand off (0010 decision 3).
+  /// 0.60 = "the model must be at least medium, and retrieval at least solid".
+  ///
+  /// A defensible starting value, not a measured one — `bot_turns` stores both
+  /// component scores per turn precisely so re-tuning it is a query.
+  /// `ai_configs_min_confidence_range` bounds it 0..1 in the database and not
+  /// only in zod, because zod guards the one handler that writes this row today
+  /// and the CHECK guards every writer there will ever be.
+  minConfidence   Decimal  @default(0.60) @map("min_confidence") @db.Decimal(3, 2)
+  /// Bot replies allowed in one conversation before `handoff:max_turns` — the
+  /// loop-breaker for a bot and a customer talking past each other. Bounded
+  /// 1..20 by `ai_configs_max_bot_turns_range`.
+  maxBotTurns     Int      @default(5) @map("max_bot_turns")
+  /// Sent to the customer once per conversation on handoff. Null = say nothing,
+  /// and that is the default: a tenant that hands off on every unmatched
+  /// greeting would otherwise spam.
+  handoffMessage  String?  @map("handoff_message")
+
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -2297,24 +2426,209 @@ model AiConfig {
   @@map("ai_configs")
 }
 
-/// Per-tenant knowledge base. No embedding column: whether that is `pgvector`,
-/// an external index, or nothing at all is TAR-28's decision, and adding the
-/// column here would make it look settled.
+/// Per-tenant knowledge base. Still no embedding column, and now that is a
+/// decision rather than a gap: 0010 decision 2 picked PostgreSQL full-text
+/// search plus `pg_trgm` over `pgvector`, because a lexical rank with a floor can
+/// say "nothing here answers this" and cosine similarity cannot — and that
+/// refusal is what TAR-28's empty-knowledge-base criterion rests on. Deferred,
+/// not dismissed: adding a `vector` column to `KnowledgeChunk` and a second
+/// retriever is the whole change if the recorded revisit signal fires.
 model KnowledgeDocument {
-  id        String                  @id @default(uuid(7)) @db.Uuid
-  tenantId  String                  @map("tenant_id") @db.Uuid
-  title     String
-  sourceUrl String?                 @map("source_url")
-  content   String
-  status    KnowledgeDocumentStatus @default(pending)
-  indexedAt DateTime?               @map("indexed_at") @db.Timestamptz(3)
-  createdAt DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id         String                  @id @default(uuid(7)) @db.Uuid
+  tenantId   String                  @map("tenant_id") @db.Uuid
+  title      String
+  sourceUrl  String?                 @map("source_url")
+  content    String
+  status     KnowledgeDocumentStatus @default(pending)
+  /// BCP 47. Stored for the console and for a future per-language partial index;
+  /// **not** consulted by retrieval. The search vector is generated with the
+  /// `'simple'` configuration, which a generated column forces to be a literal,
+  /// so a per-document `regconfig` cannot reach the query at all (0010
+  /// decision 2).
+  language   String?
+  /// Denormalised from `KnowledgeChunk` so the console can render "indexed, 14
+  /// chunks" without a count query per row. Maintained by `KnowledgeIndexer` in
+  /// the same transaction as the delete-and-insert reindex.
+  chunkCount Int                     @default(0) @map("chunk_count")
+  /// Why `status = failed`. Operator-facing; never rendered to a customer, and
+  /// never a prompt or a provider key.
+  indexError String?                 @map("index_error")
+  indexedAt  DateTime?               @map("indexed_at") @db.Timestamptz(3)
+  createdAt  DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  chunks KnowledgeChunk[]
 
+  /// Referenced by `knowledge_chunks` (conventions, rule 2).
+  @@unique([tenantId, id])
   @@index([tenantId, status])
+  /// The console's list endpoint, keyset-paginated per 0002 rule 3. The
+  /// `(tenantId, status)` index above serves the status filter and the readiness
+  /// check; neither serves the default page order.
+  @@index([tenantId, createdAt(sort: Desc), id(sort: Desc)])
   @@map("knowledge_documents")
+}
+
+/// What retrieval actually reads (0010 decision 2, TAR-402).
+///
+/// A document is the unit a tenant authors and edits; a chunk is the unit that is
+/// ranked, put in the prompt and **cited** — which is why `citedChunkIds` and
+/// `BotTurn.citedChunkIds` name chunks rather than documents. Paragraph-packed at
+/// roughly 1200 characters with one paragraph of overlap, so the split follows
+/// boundaries the author already chose and needs no tokenizer at write time.
+model KnowledgeChunk {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  documentId String   @map("document_id") @db.Uuid
+  /// Position within the document. Ordering context for the prompt, and what
+  /// makes a citation locatable in the source the tenant authored.
+  ordinal    Int
+  content    String
+  /// `to_tsvector('simple', content)`, GENERATED ALWAYS ... STORED, so it is
+  /// written once at index time and cannot drift from `content`.
+  ///
+  /// Optional here and NOT NULL in spirit: the column is generated, so nothing
+  /// may write it and PostgreSQL refuses an attempt. Prisma has no syntax for a
+  /// generated column, and a required `Unsupported` field cannot be created
+  /// through the client at all — so it is declared optional, which keeps
+  /// `KnowledgeIndexer`'s inserts possible and matches what the database
+  /// reports. The GIN index over it, and the `gin_trgm_ops` index over
+  /// `content`, live in raw SQL in
+  /// `20260815150000_ai_chatbot_knowledge_base_and_handoff` for the same reason.
+  searchVector Unsupported("tsvector")? @default(dbgenerated("to_tsvector('simple'::regconfig, content)")) @map("search_vector")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document KnowledgeDocument @relation(fields: [tenantId, documentId], references: [tenantId, id], onDelete: Cascade)
+
+  /// The two retrieval indexes. Declared here so `migrate diff` sees them, and
+  /// created by the migration's raw SQL because a `USING GIN` build with an
+  /// operator class is not something `migrate dev` should be trusted to
+  /// reconstruct from this line alone.
+  @@index([searchVector], type: Gin, map: "knowledge_chunks_search_idx")
+  @@index([content(ops: raw("gin_trgm_ops"))], type: Gin, map: "knowledge_chunks_content_trgm_idx")
+  @@unique([tenantId, id])
+  /// Reindexing is delete-and-insert in one transaction, keyed on the document.
+  /// This is what makes a half-written chunk set impossible — a retrieval running
+  /// alongside an edit sees the old set or the new one, never a mixture, and a
+  /// partially reindexed document is exactly a confidently wrong answer.
+  @@unique([tenantId, documentId, ordinal])
+  @@index([tenantId, documentId])
+  @@map("knowledge_chunks")
+}
+
+/// One row per inbound message the bot considered (0010, TAR-402). Three jobs,
+/// each load-bearing: the idempotency ledger, the audit trail, and the data set
+/// that makes decision 3's constants re-tunable by query.
+///
+/// **Inserted before the model call.** A deterministic BullMQ job id
+/// de-duplicates a re-enqueue; it does not de-duplicate a worker that crashed
+/// after the send and before the ack, and a second WhatsApp message to a customer
+/// is visible and unrecoverable. So the guard is `@@unique([tenantId,
+/// inboundMessageId])` rather than a queue property.
+///
+/// **No prompt text and no answer text.** The answer is already a `Message` row;
+/// storing it twice would double a customer's data footprint for no reader and
+/// make retention two problems instead of one.
+model BotTurn {
+  id                String         @id @default(uuid(7)) @db.Uuid
+  tenantId          String         @map("tenant_id") @db.Uuid
+  conversationId    String         @map("conversation_id") @db.Uuid
+  inboundMessageId  String         @map("inbound_message_id") @db.Uuid
+  outcome           BotTurnOutcome
+  /// Set exactly when `outcome = handed_off`, both directions, enforced by
+  /// `bot_turns_handoff_reason_matches_outcome`.
+  handoffReason     HandoffReason? @map("handoff_reason")
+  /// The composite and its two components, stored separately so a re-tune is a
+  /// query rather than a re-derivation from an aggregate. Null when the model was
+  /// never called. Each is bounded 0..1 independently — they genuinely appear in
+  /// combinations, because a `no_match` turn can record a retrieval score with no
+  /// model confidence at all.
+  score             Decimal?       @db.Decimal(4, 3)
+  modelConfidence   Decimal?       @map("model_confidence") @db.Decimal(4, 3)
+  retrievalScore    Decimal?       @map("retrieval_score") @db.Decimal(4, 3)
+  replyMessageId    String?        @map("reply_message_id") @db.Uuid
+  /// Written once, read with the turn, never queried the other way — so a plain
+  /// array rather than a join table, on `InternalNote.mentionedUserIds`'
+  /// precedent.
+  citedChunkIds     String[]       @default([]) @map("cited_chunk_ids") @db.Uuid
+  /// The id actually used, not the configured one: `AiConfig.model` may be null
+  /// for "the platform default", and a turn has to record which model produced it
+  /// after that default moves.
+  model             String?
+  inputTokens       Int?           @map("input_tokens")
+  outputTokens      Int?           @map("output_tokens")
+  /// `usage.cache_read_input_tokens` — the only honest verification that prompt
+  /// caching is working (0010 decision 12).
+  cachedInputTokens Int?           @map("cached_input_tokens")
+  /// The model call only.
+  latencyMs         Int?           @map("latency_ms")
+  /// A classified failure label. Never a prompt, never a provider key, never
+  /// customer content.
+  error             String?
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: Cascade)
+  inboundMessage Message      @relation("BotTurnInboundMessage", fields: [tenantId, inboundMessageId], references: [tenantId, id], onDelete: Cascade)
+  /// `NoAction`, per conventions rule 4 for an optional reference: a cascade here
+  /// would delete the idempotency guard and the audit of why the bot answered,
+  /// because the reply it produced was removed.
+  replyMessage   Message?     @relation("BotTurnReplyMessage", fields: [tenantId, replyMessageId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  handoffEvents  HandoffEvent[]
+
+  /// **The guard that makes a double reply impossible.**
+  @@unique([tenantId, inboundMessageId])
+  /// Referenced by `handoff_events` (conventions, rule 2).
+  @@unique([tenantId, id])
+  /// The handoff-context read (0002 rule 3).
+  @@index([tenantId, conversationId, createdAt(sort: Desc), id(sort: Desc)])
+  /// The tuning queries decisions 2 and 3 name: the outcome mix over time, and
+  /// the `no_match` share that is decision 2's revisit signal for `pgvector`.
+  @@index([tenantId, outcome, createdAt(sort: Desc)])
+  @@map("bot_turns")
+}
+
+/// One row per handoff, newest wins (0010 decision 6, TAR-402).
+///
+/// Carries what the message thread cannot: why the bot stopped and how sure it
+/// was. The bot's replies themselves are ordinary `Message` rows — they were
+/// genuinely sent to the customer over WhatsApp — so the agent's existing thread
+/// already holds the exchange verbatim and in order.
+model HandoffEvent {
+  id               String        @id @default(uuid(7)) @db.Uuid
+  tenantId         String        @map("tenant_id") @db.Uuid
+  conversationId   String        @map("conversation_id") @db.Uuid
+  /// Null when the linker produced no ticket for the triggering message.
+  ticketId         String?       @map("ticket_id") @db.Uuid
+  reason           HandoffReason
+  /// The customer message that ended the bot's run: the question the agent now
+  /// has to answer.
+  triggerMessageId String        @map("trigger_message_id") @db.Uuid
+  /// Null for `customer_requested` and `no_match` — the model was never called,
+  /// so there is no scored turn to point at.
+  botTurnId        String?       @map("bot_turn_id") @db.Uuid
+  /// Start of the window the handoff DTO's `botExchange` spans. Null when the bot
+  /// never replied; `handoff_events_engagement_matches_replies` holds the other
+  /// direction.
+  botEngagedAt     DateTime?     @map("bot_engaged_at") @db.Timestamptz(3)
+  /// How many times the bot replied before giving up.
+  botReplyCount    Int           @map("bot_reply_count")
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: Cascade)
+  ticket         Ticket?      @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  triggerMessage Message      @relation(fields: [tenantId, triggerMessageId], references: [tenantId, id], onDelete: Cascade)
+  botTurn        BotTurn?     @relation(fields: [tenantId, botTurnId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  /// **Not unique per conversation**, deliberately: a conversation can be
+  /// resolved, reopened by a later question, handled by the bot again and handed
+  /// off again. `GET /conversations/{id}/handoff` returns the most recent row,
+  /// which is what this index is for (0002 rule 3).
+  @@index([tenantId, conversationId, createdAt(sort: Desc), id(sort: Desc)])
+  @@map("handoff_events")
 }
 
 // ---------------------------------------------------------------------------
