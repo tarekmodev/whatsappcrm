@@ -1,6 +1,7 @@
 import type {
   AgentAvailability,
   ConversationStatus,
+  FallbackAssignmentReason,
   MessageStatus,
   MessageType,
   SlaTargetKind,
@@ -847,6 +848,77 @@ export const content = {
     unassignedEmptyBody: 'Every conversation in this workspace has an owner.',
     unassignedCount: (count: number) =>
       count === 1 ? '1 conversation waiting' : `${count} conversations waiting`,
+
+    /**
+     * The supervisor's flagged-ticket queue (TAR-23). Auto-assignment leaves a
+     * ticket here when it could not place it, so every line has to say what
+     * happened *and* who can act on it — a supervisor staring at "unassigned"
+     * cannot tell a staffing problem from a configuration one.
+     */
+    flaggedHeading: 'Flagged for you',
+    flaggedDescription:
+      'Auto-assignment could not place these tickets. Assign one to take it off this list.',
+    flaggedLoading: 'Loading flagged tickets',
+    flaggedEmptyHeading: 'Nothing is stuck',
+    flaggedEmptyBody: 'Every ticket in this workspace reached an agent.',
+    flaggedFilteredEmptyHeading: 'No tickets for that reason',
+    flaggedFilteredEmptyBody: 'Other tickets may still be flagged — clear the filter to see them.',
+    flaggedCount: (count: number) =>
+      count === 1 ? '1 ticket flagged' : `${count} tickets flagged`,
+    /**
+     * Shown instead of a count when the queue is longer than one page. It says
+     * what is on screen and admits what is not — a bare number here would be a
+     * claim about the whole queue that the request never made.
+     */
+    flaggedShowingOldest: (count: number) =>
+      `Showing the ${String(count)} longest-waiting. More are flagged than fit on one page.`,
+
+    columnTicket: 'Ticket',
+    columnReason: 'Why it is unassigned',
+    columnWaiting: 'Waiting',
+    columnAssign: 'Assign',
+    waitingSinceLabel: 'Flagged',
+    untitledTicket: (ticketNumber: number) => `Ticket #${String(ticketNumber)}`,
+    ticketNumber: (ticketNumber: number) => `#${String(ticketNumber)}`,
+
+    reasonFilterLabel: 'Reason a ticket is unassigned',
+    reasonFilterAll: 'All reasons',
+
+    /** ADR 0008's three reasons. Each names the person who can actually fix it. */
+    deferredReasons: {
+      all_at_capacity: 'Everyone at capacity',
+      none_available: 'Nobody available',
+      no_candidate_pool: 'No agents to route to',
+    } satisfies Record<FallbackAssignmentReason, string>,
+
+    deferredReasonHints: {
+      all_at_capacity:
+        'Every agent who could take this is at their concurrent-ticket limit. Wait, raise a limit, or assign it anyway.',
+      none_available:
+        'Agents exist for this ticket, but none is available and recently active. This is a staffing gap.',
+      no_candidate_pool:
+        'Nobody could ever have taken this: the team has no members, or the workspace has no agents.',
+    } satisfies Record<FallbackAssignmentReason, string>,
+
+    assignTicket: 'Assign',
+    assignTicketAria: (ticketLabel: string) => `Assign ${ticketLabel}`,
+    assignTicketTitle: (ticketLabel: string) => `Assign ${ticketLabel}`,
+    assignTicketDescription:
+      'The agent you pick takes this ticket now, even if they are at their limit. Auto-assignment will not move it again.',
+    assignTicketAgentLabel: 'Assign to',
+    /**
+     * "Anyone in this list", not "anyone in this workspace": the picker holds the
+     * first page of active people, so a large workspace has more. It still has to
+     * say that being at a limit is no bar and that picking yourself is allowed —
+     * that is the remedy ADR 0008 names for `all_at_capacity`.
+     */
+    assignTicketAgentHint: 'Anyone in this list can take it, including you — even at their limit.',
+    assignTicketSubmit: 'Assign ticket',
+    assignTicketSuccess: (ticketLabel: string, agentName: string) =>
+      `${ticketLabel} assigned to ${agentName}`,
+    assignTicketNoAgentsError: 'Nobody in this workspace is active enough to take a ticket.',
+    routedToTeam: (teamName: string) => `${teamName} team`,
+    routedToNobody: 'Whole workspace',
   },
 
   /**

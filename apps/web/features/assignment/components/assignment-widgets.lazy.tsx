@@ -14,6 +14,13 @@ import { TeamLoadTableSkeleton } from './TeamLoadTable';
  *
  * SSR stays on: these are reporting figures a supervisor should see in the first
  * HTML response, and turning it off would blank the section until hydration.
+ *
+ * ⚠️ The flagged-ticket queue is deliberately **not** here. It is the top section
+ * and the reason a supervisor opened this page, so it is exempt from the
+ * lazy-by-default rule the way any primary, above-the-fold content is. Deferring
+ * it also nested a `dynamic()` (its assign dialog) inside a dynamically-loaded
+ * module, which makes Turbopack's dev server request a chunk URL it never emits —
+ * a 404 on every page load, for a boundary that should not have existed.
  */
 
 export const LazyAgentLoadTable = dynamic(

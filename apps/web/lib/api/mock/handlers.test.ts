@@ -894,7 +894,16 @@ describe('the ticket queue', () => {
 
     const page = await listTickets('?scope=all&limit=100');
 
-    expect(page.items.map((item) => item.priority)).toEqual(['urgent', 'high', 'normal']);
+    // Six, not three: TAR-23's deferred fixtures are `open` and unassigned, so
+    // they are live work and belong in the active queue like any other.
+    expect(page.items.map((item) => item.priority)).toEqual([
+      'urgent',
+      'high',
+      'high',
+      'normal',
+      'normal',
+      'normal',
+    ]);
   });
 
   it('re-sorts when a ticket is raised to urgent', async () => {
@@ -904,9 +913,15 @@ describe('the ticket queue', () => {
     // `createdAt DESC` is the tie-break within a band, not an afterthought.
     asRole('supervisor');
 
+    // TAR-23's three deferred tickets are active work too, so they sit in the
+    // same queue and in the same order — which is what makes the move below a
+    // move *through* them rather than within a set of three.
     expect((await listTickets('?scope=all&limit=100')).items.map((item) => item.id)).toEqual([
       MOCK_IDS.tickets.fatimaUrgent,
+      MOCK_IDS.tickets.deferredAtCapacity,
       MOCK_IDS.tickets.meiUnassigned,
+      MOCK_IDS.tickets.deferredNoCandidatePool,
+      MOCK_IDS.tickets.deferredNoneAvailable,
       MOCK_IDS.tickets.jonasPending,
     ]);
 
@@ -915,7 +930,10 @@ describe('the ticket queue', () => {
     expect((await listTickets('?scope=all&limit=100')).items.map((item) => item.id)).toEqual([
       MOCK_IDS.tickets.fatimaUrgent,
       MOCK_IDS.tickets.jonasPending,
+      MOCK_IDS.tickets.deferredAtCapacity,
       MOCK_IDS.tickets.meiUnassigned,
+      MOCK_IDS.tickets.deferredNoCandidatePool,
+      MOCK_IDS.tickets.deferredNoneAvailable,
     ]);
   });
 
@@ -933,8 +951,11 @@ describe('the ticket queue', () => {
   it('gives `unassigned` to a supervisor and nothing to an agent', async () => {
     // Unlike an unclaimed conversation, an unassigned ticket is triaged work.
     asRole('supervisor');
+    // `unassigned` is "no user **and** no team", so of TAR-23's deferred three
+    // only `no_candidate_pool` qualifies — the other two were routed to a team
+    // by rule before rotation ran out of people.
     expect((await listTickets('?scope=unassigned&limit=100')).items.map((item) => item.id)).toEqual(
-      [MOCK_IDS.tickets.meiUnassigned],
+      [MOCK_IDS.tickets.meiUnassigned, MOCK_IDS.tickets.deferredNoCandidatePool],
     );
 
     asRole('agent');
@@ -1146,5 +1167,246 @@ describe('supervisor SLA alerts (TAR-26)', () => {
     await expect(acknowledgeSlaAlert(MOCK_IDS.slaAlerts.omarFatimaUrgent)).rejects.toMatchObject({
       code: 'not_found',
     });
+  });
+});
+
+// --- The supervisor's flagged queue (TAR-23, ADR 0008) ----------------------
+
+describe('flagged ticket queue', () => {
+  /**
+   * `scope=all`, not `scope=unassigned`.
+   *
+   * TAR-286 fixed `unassigned` as "no user **and** no team", which is right for
+   * the agent queue — but a ticket routed to a team by rule and then deferred
+   * still carries `assignedTeamId`, and that is exactly the `all_at_capacity`
+   * case this view exists to show. `routingState=deferred` already identifies the
+   * flagged set on its own; `scope` only decides how wide the read is, and the
+   * section is gated on `ticket:read_all` either way.
+   */
+  const FLAGGED_PATH = '/v1/tickets?scope=all&routingState=deferred&limit=100';
+
+  async function listFlagged(): Promise<CursorPage<TicketResponse>> {
+    return (await handleMockRequest({
+      method: 'GET',
+      path: FLAGGED_PATH,
+    })) as CursorPage<TicketResponse>;
+  }
+
+  it('returns only tickets routing could not place', async () => {
+    const page = await listFlagged();
+
+    expect(page.items.length).toBeGreaterThan(0);
+    expect(page.items.every((ticket) => ticket.routing.state === 'deferred')).toBe(true);
+    expect(page.items.map((ticket) => ticket.id)).not.toContain(MOCK_IDS.tickets.fatimaUrgent);
+  });
+
+  it('never returns another tenant’s flagged ticket', async () => {
+    const page = await listFlagged();
+
+    expect(page.items.map((ticket) => ticket.id)).not.toContain(
+      MOCK_IDS.tickets.otherTenantDeferred,
+    );
+  });
+
+  /**
+   * The queue's one order, not a deferred-specific one.
+   *
+   * ADR 0008 wanted the flagged list oldest-stuck first and built
+   * `tickets_routing_deferred_idx` for it, but TAR-273 shipped
+   * `TicketQueryService.list` filtering through that index and sorting by
+   * `(priority, created_at, id)` like every other shape. The transport follows
+   * the API, so mock mode cannot teach an ordering the product does not have.
+   */
+  it('orders the flagged queue the way the ticket queue orders everything', async () => {
+    const page = await listFlagged();
+    const priorities = page.items.map((ticket) => ticket.priority);
+    const rank = (priority: (typeof priorities)[number]): number =>
+      ['low', 'normal', 'high', 'urgent'].indexOf(priority);
+
+    expect(priorities).toEqual([...priorities].sort((a, b) => rank(b) - rank(a)));
+  });
+
+  it('carries a reason on every flagged ticket', async () => {
+    const page = await listFlagged();
+
+    expect(page.items.every((ticket) => ticket.routing.deferredReason !== null)).toBe(true);
+  });
+
+  /**
+   * Narrowed, not refused. TAR-286 settled that a caller without `ticket:read_all`
+   * gets their own and their teams' tickets whatever scope they asked for, so a
+   * supervisor's shared link still renders for an agent with less in it. The
+   * flagged section itself is gated on `ticket:read_all` in the page, which is
+   * where "you may not see this queue" belongs.
+   */
+  it('narrows the flagged queue to nothing for an agent who holds none of it', async () => {
+    asRole('agent');
+
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: FLAGGED_PATH,
+    })) as CursorPage<TicketResponse>;
+
+    // Amina holds no deferred ticket: the two that carry a team are Billing's and
+    // Onboarding's, and she is only in Billing — which routes by *team*, and a
+    // deferred ticket has no user on it at all.
+    expect(page.items.map((ticket) => ticket.id)).not.toContain(
+      MOCK_IDS.tickets.deferredNoCandidatePool,
+    );
+  });
+
+  it('takes an assigned ticket off the queue and marks routing manual', async () => {
+    asRole('supervisor');
+
+    const assigned = (await handleMockRequest({
+      method: 'POST',
+      path: `/v1/tickets/${MOCK_IDS.tickets.deferredAtCapacity}/assign`,
+      body: { userId: MOCK_IDS.users.amina },
+    })) as TicketResponse;
+
+    expect(assigned.assignedUserId).toBe(MOCK_IDS.users.amina);
+    // `manual` is what stops a later routing pass overruling the supervisor.
+    expect(assigned.routing).toEqual({
+      state: 'manual',
+      deferredReason: null,
+      deferredSince: null,
+    });
+
+    const page = await listFlagged();
+
+    expect(page.items.map((ticket) => ticket.id)).not.toContain(
+      MOCK_IDS.tickets.deferredAtCapacity,
+    );
+  });
+
+  it('refuses an assignment to a user outside the tenant', async () => {
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/tickets/${MOCK_IDS.tickets.deferredAtCapacity}/assign`,
+        body: { userId: MOCK_IDS.users.otherTenant },
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('refuses an assignment to an account that cannot take work', async () => {
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/tickets/${MOCK_IDS.tickets.deferredAtCapacity}/assign`,
+        // Invited, never accepted.
+        body: { userId: MOCK_IDS.users.noor },
+      }),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+  });
+
+  it('answers not_found for another tenant’s ticket rather than forbidden', async () => {
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/tickets/${MOCK_IDS.tickets.otherTenantDeferred}/assign`,
+        body: { userId: MOCK_IDS.users.amina },
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('refuses a role without ticket:assign', async () => {
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/tickets/${MOCK_IDS.tickets.deferredAtCapacity}/assign`,
+        body: { userId: MOCK_IDS.users.amina },
+      }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  /**
+   * The predicate PR #94's review asked for. Narrowing by reason has to happen
+   * here, in the query, because the console cannot tell a reason with no tickets
+   * from a reason whose tickets sort past the page it was handed.
+   */
+  it('narrows by deferral reason in the query', async () => {
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tickets?scope=all&routingState=deferred&deferredReason=none_available&limit=100',
+    })) as CursorPage<TicketResponse>;
+
+    expect(page.items.map((ticket) => ticket.id)).toEqual([MOCK_IDS.tickets.deferredNoneAvailable]);
+  });
+
+  it('answers an empty page for a reason nothing matches, without a cursor', async () => {
+    // `no_candidate_pool` has exactly one fixture; assigning it leaves the reason
+    // real but empty, which is the state the filtered empty copy describes.
+    await handleMockRequest({
+      method: 'POST',
+      path: `/v1/tickets/${MOCK_IDS.tickets.deferredNoCandidatePool}/assign`,
+      body: { userId: MOCK_IDS.users.amina },
+    });
+
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tickets?scope=all&routingState=deferred&deferredReason=no_candidate_pool&limit=100',
+    })) as CursorPage<TicketResponse>;
+
+    expect(page.items).toEqual([]);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it('rejects a reason the contract does not publish', async () => {
+    await expect(
+      handleMockRequest({
+        method: 'GET',
+        path: '/v1/tickets?scope=all&routingState=deferred&deferredReason=everything_is_fine',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+  });
+
+  /**
+   * A cursor is what lets the view tell "that is all of them" from "that is the
+   * first page". Returning `null` unconditionally is what made a capped page
+   * indistinguishable from a complete queue.
+   */
+  it('returns a cursor when more tickets match than fit on the page', async () => {
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tickets?scope=all&routingState=deferred&limit=1',
+    })) as CursorPage<TicketResponse>;
+
+    expect(page.items).toHaveLength(1);
+    expect(page.nextCursor).not.toBeNull();
+  });
+
+  it('returns no cursor when the page holds every match', async () => {
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tickets?scope=all&routingState=deferred&limit=100',
+    })) as CursorPage<TicketResponse>;
+
+    expect(page.nextCursor).toBeNull();
+  });
+
+  /**
+   * `breachedOnly` is the contract's only boolean on a *query* schema, and every
+   * query value arrives as a string. The client already serialises `true`; before
+   * this it met a `z.boolean()` that could never match one.
+   */
+  it('accepts breachedOnly as the string the client actually sends', async () => {
+    await expect(
+      handleMockRequest({
+        method: 'GET',
+        path: '/v1/tickets?scope=all&routingState=deferred&breachedOnly=true',
+      }),
+    ).resolves.toMatchObject({ items: expect.any(Array) as unknown[] });
+  });
+
+  it('accepts breachedOnly=false too, rather than only the truthy spelling', async () => {
+    await expect(
+      handleMockRequest({
+        method: 'GET',
+        path: '/v1/tickets?scope=all&routingState=deferred&breachedOnly=false',
+      }),
+    ).resolves.toMatchObject({ items: expect.any(Array) as unknown[] });
   });
 });

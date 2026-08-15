@@ -20,7 +20,10 @@ export const routes = {
   ticket: (ticketId: string) => `/tickets/${ticketId}`,
   settings: () => '/settings',
   settingsPeople: (query?: PeopleQuery) => withQuery('/settings/people', peopleSearchParams(query)),
-  settingsAssignment: () => '/settings/assignment',
+  settingsAssignment: (query?: AssignmentQuery) =>
+    withQuery('/settings/assignment', {
+      [searchParamKeys.assignmentReason]: query?.deferredReason,
+    }),
   /** Where a tenant admin connects its own WhatsApp Business Account (TAR-169). */
   settingsWhatsApp: () => '/settings/whatsapp',
   settingsSecurity: () => '/settings/security',
@@ -87,6 +90,12 @@ export const searchParamKeys = {
   peopleTab: 'tab',
   peopleRole: 'role',
   peopleQuery: 'q',
+  /**
+   * Which deferral reason the supervisor's flagged-ticket queue is narrowed to.
+   * In the URL rather than component state because it is the thing a supervisor
+   * shares — "everyone is at capacity, look" is a link, not a screenshot.
+   */
+  assignmentReason: 'reason',
   /** Where sign-in sends the user afterwards. Read through `parseRedirectPath`. */
   redirectTo: 'next',
 } as const;
@@ -222,6 +231,11 @@ export interface PeopleQuery {
   tab?: PeopleTab;
   role?: string;
   q?: string;
+}
+
+export interface AssignmentQuery {
+  /** A `FallbackAssignmentReason`; omitted means every flagged ticket. */
+  deferredReason?: string;
 }
 
 function inboxSearchParams(query: InboxQuery | undefined): Record<string, string | undefined> {

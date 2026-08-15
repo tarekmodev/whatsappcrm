@@ -3,6 +3,7 @@ import 'server-only';
 import {
   TicketResponseSchema,
   type CursorPage,
+  type TicketAssignInput,
   type TicketListQuery,
   type TicketResponse,
   type TicketUpdateInput,
@@ -16,8 +17,8 @@ import { parseCursorPage } from '@/lib/api/parse';
  *
  * `POST /tickets` is deliberately absent and is not coming: tickets are opened by
  * the auto-linking pipeline when a customer writes in, never by an agent pressing
- * a button (ADR 0003). `assign` (TAR-23) and the event log (TAR-32) land with
- * their own stories.
+ * a button (ADR 0003). `assign` has since landed with TAR-23, below; the event
+ * log (TAR-32) still has its own story to come.
  */
 
 const TICKETS_PATH = '/v1/tickets';
@@ -50,6 +51,20 @@ export async function listTickets(query: TicketListQuery): Promise<CursorPage<Ti
 
   if (query.assignedTeamId !== undefined) {
     params.set('assignedTeamId', query.assignedTeamId);
+  }
+
+  // The supervisor's flagged queue (TAR-23): `?routingState=deferred` is what
+  // "auto-assignment could not place this" means on the wire, per ADR 0008.
+  if (query.routingState !== undefined) {
+    params.set('routingState', query.routingState);
+  }
+
+  // Narrowed by the *query*, never by the page it returned: filtering afterwards
+  // asks for the oldest deferred tickets and then hides most of them, so a reason
+  // whose tickets all sort past the page renders as "none of those" while they
+  // sit in the queue.
+  if (query.deferredReason !== undefined) {
+    params.set('deferredReason', query.deferredReason);
   }
 
   if (query.breachedOnly) {
@@ -98,6 +113,28 @@ export async function updateTicket(
   const response = await authenticatedRequest({
     method: 'PATCH',
     path: `${TICKETS_PATH}/${ticketId}`,
+    body: input,
+  });
+
+  return TicketResponseSchema.parse(response);
+}
+
+/**
+ * `POST /api/v1/tickets/{id}/assign` — the supervisor's manual placement (TAR-23),
+ * and the one the doc block above reserved for this story.
+ *
+ * Writes blind, like the conversation assign it mirrors: this is how somebody
+ * takes a ticket nobody could be given and puts a name on it. The API
+ * additionally moves `routing.state` to `manual`, which is what stops a later
+ * routing pass overruling the decision.
+ */
+export async function assignTicket(
+  ticketId: string,
+  input: TicketAssignInput,
+): Promise<TicketResponse> {
+  const response = await authenticatedRequest({
+    method: 'POST',
+    path: `${TICKETS_PATH}/${encodeURIComponent(ticketId)}/assign`,
     body: input,
   });
 

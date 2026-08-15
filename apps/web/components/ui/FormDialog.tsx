@@ -35,6 +35,14 @@ export interface FormDialogProps {
   description?: string;
   /** `danger` for a destructive confirmation. */
   submitVariant?: 'primary' | 'danger';
+  /**
+   * Blocks submit when the dialog has nothing valid to send — an assignee picker
+   * with no assignees, say. For a *precondition the user cannot satisfy from
+   * here*, not for field validation: an invalid value belongs in `Field`'s error
+   * slot after a submit attempt, where it can be read, rather than behind a
+   * button that silently will not press.
+   */
+  isSubmitDisabled?: boolean;
 }
 
 export function FormDialog({
@@ -49,6 +57,7 @@ export function FormDialog({
   requestId,
   description,
   submitVariant = 'primary',
+  isSubmitDisabled = false,
 }: FormDialogProps) {
   const content = useContent();
 
@@ -69,6 +78,7 @@ export function FormDialog({
             variant={submitVariant}
             isBlock
             isPending={isPending}
+            disabled={isSubmitDisabled}
           >
             {submitLabel}
           </Button>
