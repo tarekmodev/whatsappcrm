@@ -76,8 +76,10 @@ the one that produced it.
 | [People and teams API](docs/reference/people-api.md)                                         | Managing agents, teams and roles: permissions, invariants, isolation          |
 | [Tickets API](docs/reference/tickets-api.md)                                                 | The queue, the status/priority write, valid transitions, errors, auto-reopen  |
 | [Assignment rules API](docs/reference/assignment-rules-api.md)                               | Routing-rule CRUD, the condition grammar, and how a new ticket is routed      |
+| [Auto-assignment](docs/reference/auto-assignment.md)                                         | Rotation, eligibility, workload caps, and the flagged-ticket fallback         |
 | [Changing a ticket's status and priority](docs/guides/manage-ticket-status-and-priority.md)  | For agents working in the console, not for API consumers                      |
 | [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)           | For supervisors writing routing rules in the console                          |
+| [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md)                      | For supervisors emptying the flagged queue in the console                     |
 | [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                        |
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                        |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                      |
@@ -1147,8 +1149,11 @@ other status still reaches the section's error boundary.
 is not left alone: it goes to round-robin/load-based rotation (TAR-23), and if rotation has
 nobody free it stays unassigned and surfaces under **Flagged for you** on the same page. The
 endpoints, the condition grammar and the whole evaluation path are in
-[the assignment rules API reference](docs/reference/assignment-rules-api.md); the supervisor's
-version is [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md).
+[the assignment rules API reference](docs/reference/assignment-rules-api.md), and rotation's
+own half — eligibility, the selection order, the workload caps and the three deferral reasons
+— is [the auto-assignment reference](docs/reference/auto-assignment.md). The supervisor's
+versions are [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)
+and [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md).
 
 ### Route groups: signed in and signed out
 

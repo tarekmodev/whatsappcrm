@@ -1,14 +1,19 @@
 # Tickets API reference
 
-The ticket queue and the one write into a ticket: `GET /api/v1/tickets`,
-`GET /api/v1/tickets/{id}` and `PATCH /api/v1/tickets/{id}`. Written for engineers
-building against the API or the console.
+The ticket queue and the two writes into a ticket: `GET /api/v1/tickets`,
+`GET /api/v1/tickets/{id}`, `PATCH /api/v1/tickets/{id}` and
+`POST /api/v1/tickets/{id}/assign`. Written for engineers building against the API or the
+console.
 
 A ticket is a **unit of work on** a conversation, not a copy of it. One conversation
 accumulates many tickets over its life, and messages stay on the conversation so a thread
 is never split. Tickets are opened automatically by TAR-21's linker when a customer writes
-in; this page documents reading the queue and changing a ticket's status, priority and
-subject.
+in; this page documents reading the queue, changing a ticket's status, priority and
+subject, and placing one by hand.
+
+**Who a ticket is assigned to automatically** is not on this page. Rules pick the target
+first ([the assignment rules API reference](assignment-rules-api.md)), and rotation places
+whatever no rule claimed ([the auto-assignment reference](auto-assignment.md)).
 
 Request and response shapes are defined in `packages/contracts/src/tickets.ts` and
 validated at the boundary. Enforcement lives in `apps/api/src/tickets/`. The behaviour
@@ -59,9 +64,10 @@ any handler: **where** the request is (`HostTenantGuard`), **who** is making it
 | `PATCH /api/v1/tickets/{id}` — `subject`, `priority`    | `ticket:update`                  | every role        |
 | `PATCH /api/v1/tickets/{id}` — `→ open`, `→ pending`    | `ticket:update`                  | every role        |
 | `PATCH /api/v1/tickets/{id}` — `→ resolved`, `→ closed` | `ticket:update` + `ticket:close` | every role        |
+| `POST /api/v1/tickets/{id}/assign`                      | `ticket:assign`                  | supervisor, admin |
 | `ticket:read_all` — widens both reads                   | —                                | supervisor, admin |
 
-There is no `ticket:write`. Two things about this table are not obvious from it:
+There is no `ticket:write`. Three things about this table are not obvious from it:
 
 - **`ticket:close` is checked in the service, not in the guard.** The guard is per-route and
   this is per-body: the same `PATCH` that closes a ticket also re-prioritises one, and only
@@ -71,6 +77,10 @@ There is no `ticket:write`. Two things about this table are not obvious from it:
   split buys a future triage-only role that may re-prioritise a queue without finishing
   somebody else's work. The matrix itself is
   [ADR 0004](../architecture/0004-rbac-permission-matrix.md).
+- **`ticket:assign` is the one permission on this surface an agent does not hold.** Every
+  role that holds it also holds `ticket:read_all`, which is what makes the visibility check
+  in front of the write reachable for an _unassigned_ flagged ticket rather than answering
+  404 on the one queue the endpoint exists to empty.
 
 **Visibility is the narrow rule.** A ticket is visible to the principal it is assigned to,
 to their teams, and — with `ticket:read_all` — to the whole tenant. Unlike the shared inbox,
@@ -441,6 +451,176 @@ badge matters.
 Failing to enqueue does not fail the request — the status change is committed and the caller
 is owed their 200 — but it is logged as a warning naming the ticket and the transition.
 
+## `POST /api/v1/tickets/{id}/assign`
+
+Puts a name on a ticket, takes it off somebody, or releases it back to nobody. This is the
+write that empties the flagged queue: a ticket rotation could not place stays there until a
+person places it (TAR-374; the algorithm that flagged it is
+[the auto-assignment reference](auto-assignment.md)).
+
+**Authentication.** Session cookie, as above. `ticket:assign` — supervisor and above.
+
+**Idempotency.** No `Idempotency-Key`. The body carries the target assignment rather than a
+delta, so a repeated submit is the [no-op](#a-repeated-submit-writes-nothing) below.
+
+`200`, not `201`: nothing is created, and the body is the ticket as it now stands — the same
+`TicketResponse` the detail read and the `PATCH` publish, so a client can put the response
+straight back into its cache.
+
+| Parameter | In   | Type       | Required | Default | Notes                                            |
+| --------- | ---- | ---------- | -------- | ------- | ------------------------------------------------ |
+| `id`      | path | uuid       | yes      | —       | Validated before anything is read                |
+| `userId`  | body | uuid\|null | no       | —       | Absent leaves the column alone; `null` clears it |
+| `teamId`  | body | uuid\|null | no       | —       | Absent leaves the column alone; `null` clears it |
+| `reason`  | body | string     | no       | —       | Up to 500 characters. Recorded on the event log  |
+
+**At least one of `userId` and `teamId` is required.** A body carrying neither — `{}`, or
+`reason` on its own — is `validation_failed`.
+
+**The update is partial, and that is the whole reason there is no route per direction.** One
+call can hand a ticket to a named agent inside the team it already belongs to, move it from
+an agent to a team, or release it, depending on which of the two fields the body carries.
+Omitting a field is not the same as sending `null` for it.
+
+```bash
+curl -b cookies.txt -X POST \
+  'http://northwind.app.localhost:3051/api/v1/tickets/0192f008-0000-7000-8000-000000000803/assign' \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":"0192f001-0000-7000-8000-000000000101","reason":"Covering while Liang is offline"}'
+```
+
+```json
+{
+  "id": "0192f008-0000-7000-8000-000000000803",
+  "number": 3,
+  "subject": "Activation link keeps expiring",
+  "status": "open",
+  "priority": "high",
+  "assignedUserId": "0192f001-0000-7000-8000-000000000101",
+  "assignedTeamId": "0192f002-0000-7000-8000-000000000202",
+  "routing": { "state": "manual", "deferredReason": null, "deferredSince": null },
+  "updatedAt": "2026-08-15T12:45:51.156Z"
+}
+```
+
+The response is the whole `TicketResponse`, abbreviated above to the fields that moved.
+`assignedTeamId` survived because the body did not carry `teamId`.
+
+### What it writes to `routing`
+
+| Body leaves the ticket with | `routing.state` | The two deferred fields |
+| --------------------------- | --------------- | ----------------------- |
+| A user, a team, or both     | `manual`        | cleared                 |
+| Neither                     | `pending`       | cleared                 |
+
+**`manual` is terminal for routing.** No background job assigns the ticket again — a
+re-route overruling a supervisor who deliberately placed or parked a ticket is the kind of
+behaviour that gets a feature switched off.
+
+**An explicit release goes to `pending`, not `manual`,** and this is the one rule on this
+endpoint worth reading twice. A body leaving the ticket with neither a user nor a team
+returns it to the state a fresh ticket has: nobody holds it, and no supervisor has judged it
+stuck. It stays out of the flagged queue, because releasing a ticket on purpose is not
+rotation failing to place one. So **`pending` is reachable after the insert** — it is not an
+insert-only value, whatever the column default suggests
+([ADR 0008 amendment 2](../architecture/0008-assignment-rotation-and-workload.md#amendment-2--how-post-apiv1ticketsidassign-behaves-tar-374)).
+
+The four assignment and routing columns move in **one statement**, and the event is appended
+inside the same transaction. That is not a preference:
+`tickets_routing_deferred_consistent` makes `routing_state = 'deferred'` equivalent to both
+deferred columns being non-null, so a deferred ticket cannot leave that state unless the
+same write nulls them — and an event log claiming an assignment the constraint then rejected
+would be worse than no log.
+
+### Last writer wins
+
+There is no compare-and-set here, unlike the `PATCH`. Nothing else writes the assignment
+columns behind this route except the router, and the router only ever moves a ticket **out
+of** unassigned. Two supervisors placing the same flagged ticket in the same second is a race
+whose honest answer is "the later one holds it", and both are on the event log either way.
+
+### A repeated submit writes nothing
+
+A second identical submit returns `200` with the current ticket, writes no columns and
+appends no event — `updatedAt` does not move. A double-clicked **Assign** button and a retry
+after a dropped response both arrive as this, and each would otherwise put another `assigned`
+row in the history an escalation is read from.
+
+The comparison covers the routing columns as well as the assignment ones, so assigning a
+_deferred_ ticket to the team it already carries is a no-op on the assignment and still moves
+the ticket to `manual` and out of the flagged queue.
+
+### Errors
+
+| Status | Code                | Cause                                                                        | Message                                                   |
+| ------ | ------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `200`  | —                   | Applied, or accepted as a no-op                                              |                                                           |
+| `400`  | `validation_failed` | Neither `userId` nor `teamId`, a `reason` over 500 characters, or a bad `id` | Carries `details`                                         |
+| `400`  | `validation_failed` | `userId` or `teamId` does not name an **active** user or team in this tenant | `… does not name an active user in this tenant.`          |
+| `401`  | `unauthenticated`   | No usable session                                                            |                                                           |
+| `403`  | `forbidden`         | Caller lacks `ticket:assign` — every agent                                   | `This account does not have permission to ticket:assign.` |
+| `404`  | `not_found`         | Absent, another tenant's, or not visible to this principal                   | `No ticket matches that id.`                              |
+
+**A body naming an assignee this tenant does not have is `validation_failed`, not
+`not_found`.** The ticket the caller addressed _was_ found; what is wrong is a field of the
+body, and a 404 here would read as "the ticket is gone" — which is the answer a console
+reacts to by dropping the row and refetching, the wrong recovery for a stale name in a
+dropdown. The `details` entry names `userId` or `teamId` so the dialog can highlight the
+input.
+
+```json
+{
+  "error": {
+    "code": "validation_failed",
+    "message": "0192f001-0000-7000-8000-000000000105 does not name an active user in this tenant.",
+    "details": [
+      {
+        "path": "userId",
+        "message": "0192f001-0000-7000-8000-000000000105 does not name an active user in this tenant."
+      }
+    ],
+    "requestId": "2bfd9fe6-9a58-4354-a760-94da8b0473c1"
+  }
+}
+```
+
+**A user in another tenant and a user who is not `active` fold into the same refusal.** The
+first is invisible under row-level security and the second is refused by the same lookup, so
+the message cannot be used to learn that a UUID names somebody real elsewhere. `invited`,
+`suspended` and `removed` accounts are all refused: handing a stuck ticket to one would look
+like a fix and be a second deferral.
+
+The assignee lookup runs **outside** the transaction, knowingly. A user suspended in the
+milliseconds between the check and the write lands assigned, which a supervisor or the next
+routing pass corrects; a lock spanning the two would be a heavier cure than the disease.
+
+### What this endpoint does not do
+
+- **It does not announce anything.** No `ticket.updated` — that event carries status and
+  priority, neither of which moved — and no realtime push. The console refetches.
+- **It does not move an SLA timer.** The fourth SLA trigger is a **status** change; a
+  deadline does not shift because a ticket changed hands.
+- **It does not check capacity.** A supervisor may hand a ticket to an agent already at their
+  concurrent-ticket cap, and the console says so on the dialog. The cap governs _rotation_,
+  not a person's judgement.
+- **It writes no `audit_logs` row.** Assignment is ordinary operational activity;
+  `ticket_events` is the per-ticket history.
+
+### What lands in the event log
+
+| Body leaves the ticket with | `type`       | `data`                                                                                                        | `actorUserId`  |
+| --------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------- | -------------- |
+| An assignee                 | `assigned`   | `{ assignedUserId, assignedTeamId, previousAssignedUserId, previousAssignedTeamId, cause: "agent", reason? }` | the supervisor |
+| Nobody                      | `unassigned` | the same shape                                                                                                | the supervisor |
+
+`reason` appears only when the body carried one. The two `previous…` fields are on this
+event and not on the router's `assigned`: the router only ever assigns a ticket nobody holds,
+whereas a supervisor's re-assignment is exactly the case where "who had it before" is the
+interesting half.
+
+`actorUserId` is the calling principal here, unlike every routing event, where it is null
+because a queue worker has no principal.
+
 ## Auto-reopen: what an API consumer observes
 
 **A customer replying to a `pending` ticket reopens it to `open`, with no agent action and
@@ -520,27 +700,29 @@ permission bypass: a permission check on a queue worker would throw rather than 
 
 ## What is not on this surface
 
-- **`POST /api/v1/tickets/{id}/assign`** (TAR-23) — assignment. **Built by TAR-374** and
-  specified in
-  [ADR 0008 amendment 2](../architecture/0008-assignment-rotation-and-workload.md#amendment-2--how-post-apiv1ticketsidassign-behaves-tar-374);
-  documenting it on this page is still to do.
 - **`GET /api/v1/tickets/{id}/events`** (TAR-32) — the event-log read.
 - **Creating a ticket over HTTP.** Tickets are opened by the inbound-message linker
   ([ADR 0003](../architecture/0003-ticket-auto-linking-contract.md)).
 - **Realtime `ticket.updated`.** Published in `realtime.ts`, emitted by nothing.
-- **Writing `routing.state` through this surface.** The block is read from the row here. Its
-  writers are `RuleEngineService` (TAR-373) and `POST /tickets/{id}/assign` (TAR-374); no route
-  on this page sets it.
+- **Writing `routing.state` through the queue or the `PATCH`.** The block is read from the
+  row on both. Its writers are `RuleEngineService` (TAR-373) and the assign route above
+  (TAR-374); no other route on this page sets it.
+- **Choosing an assignee automatically.** Rules and rotation do that off a queue, before any
+  supervisor sees the ticket — [the auto-assignment reference](auto-assignment.md).
+- **Editing an agent's concurrent-ticket cap.** Specified but not built; the same reference
+  says where it would live.
 - **Changing an SLA policy.** `GET`/`PATCH /api/v1/sla-policies` and the alert routes are
   their own surface (TAR-280). This one only reports the timers and moves them on a status
   change.
 
 ## Verification
 
-Every request and response on this page was executed against a local stack built from `main`
-at `21af387`: `docker compose up -d --wait`, `pnpm db:migrate:deploy`, `pnpm db:roles`,
-`pnpm db:roles:login`, `pnpm db:seed`, then the built API on port `3051`. Ids, timestamps
-and request ids are the values that run returned.
+Every request and response on this page was executed against a local stack: `docker compose
+up -d --wait`, `pnpm db:migrate:deploy`, `pnpm db:roles`, `pnpm db:roles:login`,
+`pnpm db:seed`, then the built API on port `3051`. Ids, timestamps and request ids are the
+values that run returned. The queue, read and `PATCH` sections were run from `main` at
+`21af387`; the assign section was re-run from `main` at `fd5b412`, which is the first commit
+where that route exists.
 
 ⚠️ **The stack ran with `AUTH_STUB_ENABLED=true`** — the interim role stub, driven by
 `x-dev-role` — rather than with real session cookies, because seeded users carry no password
@@ -576,7 +758,29 @@ Confirmed rather than assumed:
   `?routingState=deferred` returns an empty page. A `routingState` outside its enum is
   `400 validation_failed` on `path: "routingState"`. **Superseded in part by TAR-373**: the
   router writes the column now, so a deferred ticket reads `deferred` and appears in that
-  page. The validation half stands.
+  page. The validation half stands, and the empty page is what a seeded tenant is expected to
+  return — only a routing job produces a deferred row.
+
+Confirmed by hand for the assign route:
+
+- Assigning to a user answers `200` with `routing.state: "manual"` and **keeps**
+  `assignedTeamId`, because the body carried no `teamId`. Assigning to a team is the mirror.
+- Releasing with `{"userId": null, "teamId": null}` answers `200`, nulls both assignment
+  columns and leaves `routing.state: "pending"` — the amendment 2 rule, against a real CHECK
+  constraint.
+- Re-sending an identical body answers `200` and leaves `updatedAt` unmoved.
+- A `userId` from the neighbouring tenant and an `invited` user in this one produce the
+  **same** `400 validation_failed` on `path: "userId"`, word for word.
+- `{}` is `400 validation_failed` carrying `Provide at least one of userId or teamId`; an
+  `id` that is not a UUID is refused before anything is looked up.
+- An agent is `403 forbidden`; a supervisor of the other tenant reaching this ticket by id is
+  `404 not_found`.
+
+Exercised by integration test rather than by hand, because they need a deferred row that only
+a routing job writes: a flagged ticket leaving the queue on assignment, both routes out of
+`deferred` passing `tickets_routing_deferred_consistent`, the `assigned` and `unassigned`
+events with their `previous…` fields, and the cross-tenant refusal under RLS —
+`ticket-assign.int-spec.ts`.
 
 Exercised by integration test rather than by hand, because each needs an inbound message
 through the queue, two writers colliding, or a routing state the seed does not produce:

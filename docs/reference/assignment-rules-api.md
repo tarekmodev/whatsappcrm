@@ -432,7 +432,8 @@ The sequence, per ticket:
    and leaves `assigned_team_id` null; a team target does the reverse.
 7. **No match calls rotation** — `resolveFallbackAssignment`, implemented by
    `RotationFallbackResolver` (TAR-23). The resolver decides and writes nothing; the
-   assignment write stays in the engine.
+   assignment write stays in the engine. Who it picks, and what happens when nobody is
+   eligible, is [the auto-assignment reference](auto-assignment.md).
 
 **Bad tenant data never throws.** A rule whose conditions do not parse, a business-hours
 column holding something unexpected, a contact with no tags: each makes a condition false,
@@ -461,7 +462,9 @@ assigns the ticket by hand in the second before the worker runs keeps their assi
 `deferred` carries a `FallbackAssignmentReason`: `all_at_capacity` (every candidate is at
 their concurrent-ticket limit), `none_available` (every candidate is away, offline or not
 seen recently), or `no_candidate_pool` (there was nobody to consider). The ticket stays
-unassigned and is flagged for supervisor attention.
+unassigned and is flagged for supervisor attention — the reasons, their precedence and how
+the flag is read and cleared are in
+[the auto-assignment reference](auto-assignment.md#when-nobody-is-eligible).
 
 ### The ticket event
 
