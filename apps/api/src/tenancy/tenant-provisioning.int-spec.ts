@@ -1,4 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
+import { PLAN_FEATURES } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
@@ -175,19 +176,37 @@ describe('tenant provisioning, end to end', () => {
      * every tenant carries an explicit answer, and an operator-provisioned one
      * says `unlimited` rather than inheriting the column's trial defaults.
      */
-    it('writes an explicit unlimited plan-limits row, readable by the tenant itself', async () => {
+    it('writes an explicit unlimited entitlements row, readable by the tenant itself', async () => {
       const { tenant } = await provisioning.provision({
         slug: SLUG_DEFAULTS,
         name: 'TAR-50 defaults',
       });
 
-      const limits = await asTenant(tenant.id, () =>
-        tenantPrisma.tenantPlanLimits.findMany({
-          select: { planKey: true, seatCap: true, conversationCap: true },
+      const rows = await asTenant(tenant.id, () =>
+        tenantPrisma.tenantEntitlements.findMany({
+          select: { planKey: true, planName: true, entitlements: true },
         }),
       );
 
-      expect(limits).toEqual([{ planKey: 'unlimited', seatCap: null, conversationCap: null }]);
+      // Every one of the five limits, because `TenantLifecycleResponse.plan` is
+      // served from this row and a partial one would not render (ADR 0009
+      // Amendment 1 ruling 3).
+      expect(rows).toEqual([
+        {
+          planKey: 'unlimited',
+          planName: 'Unlimited',
+          entitlements: {
+            features: [...PLAN_FEATURES],
+            limits: {
+              seats: null,
+              conversationsPerPeriod: null,
+              whatsappNumbers: null,
+              teams: null,
+              knowledgeDocuments: null,
+            },
+          },
+        },
+      ]);
     });
   });
 
@@ -238,7 +257,7 @@ describe('tenant provisioning, end to end', () => {
       await systemPrisma.tenantSettings.deleteMany({ where: { tenantId: tenant.id } });
       await systemPrisma.tenantDomain.deleteMany({ where: { tenantId: tenant.id } });
       await systemPrisma.slaPolicy.deleteMany({ where: { tenantId: tenant.id } });
-      await systemPrisma.tenantPlanLimits.deleteMany({ where: { tenantId: tenant.id } });
+      await systemPrisma.tenantEntitlements.deleteMany({ where: { tenantId: tenant.id } });
 
       const repaired = await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
 
@@ -253,7 +272,7 @@ describe('tenant provisioning, end to end', () => {
       // The tenant that predates this change, converging on the same shape as one
       // provisioned after it.
       await expect(
-        systemPrisma.tenantPlanLimits.count({ where: { tenantId: tenant.id } }),
+        systemPrisma.tenantEntitlements.count({ where: { tenantId: tenant.id } }),
       ).resolves.toBe(1);
     });
 
@@ -266,19 +285,30 @@ describe('tenant provisioning, end to end', () => {
     it('does not overwrite the caps of a tenant that already has them', async () => {
       const { tenant } = await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
 
-      await systemPrisma.tenantPlanLimits.update({
+      const sold = {
+        features: ['assignment_rules'],
+        limits: {
+          seats: 10,
+          conversationsPerPeriod: 10_000,
+          whatsappNumbers: 2,
+          teams: 5,
+          knowledgeDocuments: 50,
+        },
+      };
+
+      await systemPrisma.tenantEntitlements.update({
         where: { tenantId: tenant.id },
-        data: { planKey: 'growth', seatCap: 10, conversationCap: 10_000 },
+        data: { planKey: 'growth', planName: 'Growth', entitlements: sold },
       });
 
       await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
 
       await expect(
-        systemPrisma.tenantPlanLimits.findUnique({
+        systemPrisma.tenantEntitlements.findUnique({
           where: { tenantId: tenant.id },
-          select: { planKey: true, seatCap: true, conversationCap: true },
+          select: { planKey: true, planName: true, entitlements: true },
         }),
-      ).resolves.toEqual({ planKey: 'growth', seatCap: 10, conversationCap: 10_000 });
+      ).resolves.toEqual({ planKey: 'growth', planName: 'Growth', entitlements: sold });
     });
 
     it('does not add a second policy to a tenant that configured its own', async () => {
