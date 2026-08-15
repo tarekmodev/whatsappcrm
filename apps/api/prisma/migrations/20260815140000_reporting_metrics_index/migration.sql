@@ -143,6 +143,26 @@
 -- answer is "resolved in range". It is not shipped speculatively.
 --
 -- ---------------------------------------------------------------------------
+-- ⚠️ The index-only scan needs the visibility map, so a bulk load needs VACUUM
+-- ---------------------------------------------------------------------------
+--
+-- `Heap Fetches: 0` is only reachable on pages the visibility map marks
+-- all-visible. Measured on the same fixture immediately after a 500 000-row
+-- bulk insert plus `ANALYZE`, with `relallvisible = 0`:
+--
+--   30-day summary            Bitmap Index Scan, 770 buffers, 13.8 ms
+--   12-month per-agent        **Parallel Seq Scan** — the planner correctly
+--                             declines an index-only scan it knows will have to
+--                             visit the heap for every row
+--
+-- One `VACUUM (ANALYZE) tickets` takes `relallvisible` to 100% and restores the
+-- plans above. This is not a caveat about production — tickets arrive over time
+-- and autovacuum keeps the map current — but it *is* one about any freshly
+-- built database: a restored dump, a seeded CI database, or a performance test
+-- run straight after loading a fixture. **Vacuum before measuring, or the
+-- numbers describe the visibility map rather than the index.**
+--
+-- ---------------------------------------------------------------------------
 -- Impact and risk
 -- ---------------------------------------------------------------------------
 --

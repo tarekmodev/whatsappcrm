@@ -1,4 +1,4 @@
--- Reverses 20260815120000_reporting_metrics_index.
+-- Reverses 20260815140000_reporting_metrics_index.
 --
 -- Drops one index and nothing else. No column, no constraint, no policy, no
 -- data: the up migration was purely additive and this leaves `tickets` exactly
