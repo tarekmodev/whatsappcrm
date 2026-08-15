@@ -1307,8 +1307,9 @@ function listTickets({ principal, query }: RouteContext): CursorPage<TicketRespo
     )
     .filter((item) => priority === undefined || item.priority === priority)
     // `breachedOnly` is an `EXISTS` against `sla_timers` on the API. Here it is
-    // the same predicate the console's own `isTicketOverdue` reads, so a filter
-    // that disagreed with the badge beside it would fail a test rather than ship.
+    // `isSlaBreached`, the same predicate the queue's overdue badge reads through
+    // `ticketRowTone`, so a filter that disagreed with the badge beside it would
+    // fail a test rather than ship.
     .filter((item) => !breachedOnly || isSlaBreached(item.sla))
     .filter((item) => assignedUserId === undefined || item.assignedUserId === assignedUserId)
     .filter((item) => assignedTeamId === undefined || item.assignedTeamId === assignedTeamId)

@@ -18,15 +18,27 @@ import styles from './SlaAlertsMenu.module.css';
  * gate is UX: `GET /sla-alerts` narrows to the calling principal server-side, so
  * an agent who reached this anyway would see their own empty page.
  *
- * ## Where the count comes from
+ * ## Where the count comes from, and what it is not
  *
- * The server render seeds it, and the panel takes it over from its first read.
- * Two things then keep it honest: acknowledging updates it here, in the bell,
- * which outlives the panel — a count held inside the popup would snap back to
- * the server's stale value every time somebody closed it. And a `sla.breached`
- * event refreshes the route, which re-renders this layout with a new `count`;
- * the reconciliation below is what adopts it without losing an acknowledgement
+ * The server render seeds it; the panel takes it over from its first read; and
+ * acknowledging updates it here, in the bell, which outlives the panel — a count
+ * held inside the popup would snap back to the server's stale value every time
+ * somebody closed it.
+ *
+ * **The badge is not live.** `sla.breached` maps to `ignore` in
+ * `lib/realtime/inbox-events.ts`, which is TAR-280's call and the right one: the
+ * event is addressed to a supervisor's own user room and has no business
+ * refetching the conversation list. So a supervisor sitting on `/settings` when a
+ * ticket breaches sees this number stay where it is until the next full render.
+ * Nothing is lost by that — ADR 0006 decision 5 makes the `sla_alerts` row the
+ * record and the socket only an accelerator — but do not read the reconciliation
+ * below as a liveness mechanism. It exists for the ordinary case where something
+ * *else* re-renders the layout (`useTicketUpdate`, the inbox socket), and its job
+ * there is to adopt the server's number without discarding an acknowledgement
  * made a moment earlier.
+ *
+ * Making it genuinely live means a shell-level subscription, which is a change to
+ * TAR-250's realtime client rather than something to bolt on here.
  *
  * `MenuButton` owns the popup behaviour: `aria-expanded`, focus moved in on open
  * and back to the trigger on close, Escape, click-outside, and close on route

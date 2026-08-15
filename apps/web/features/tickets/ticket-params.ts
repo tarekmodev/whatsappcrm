@@ -39,10 +39,12 @@ export function parseTicketQueueParams(raw: {
 /**
  * Only the exact string `'true'` turns the filter on.
  *
- * Deliberately stricter than the contract's `z.coerce.boolean()`, which treats
- * every non-empty string as true — including `'false'`. A hand-edited or
- * truncated `?overdue=` must fall back to the full queue rather than silently
- * hiding every ticket that is on time.
+ * The contract's `breachedOnly` is `z.stringbool()`, which would read `'false'`
+ * correctly on its own — so this is not compensating for a loose parser. It is
+ * the URL-narrowing rule the rest of this module follows: a hand-edited or
+ * truncated `?overdue=` falls back to the default view rather than reaching the
+ * API as a malformed query, exactly as an unknown `?status=` does above. Silently
+ * hiding every ticket that is on time is the one wrong answer here.
  */
 function parseOverdue(value: string | undefined): boolean {
   return value === 'true';

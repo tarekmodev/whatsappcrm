@@ -53,12 +53,43 @@ export interface SlaAlertsData {
   readonly hasMore: boolean;
 }
 
+/** What the bell needs, and the whole of it. */
+export interface SlaAlertSummary {
+  readonly count: number;
+  readonly hasMore: boolean;
+}
+
 /**
- * Unacknowledged alerts for the calling principal.
+ * How many alerts are waiting, without resolving a single name.
  *
- * Request-cached: the shell renders the count and, on a full page load, the
- * panel may render beside it. It memoises per render pass only, so an alert
- * acknowledged between requests is never carried over.
+ * Split from `loadSlaAlerts` because the shell calls it **on every route**, and
+ * the join it used to share was pure waste there: `loadDirectory` is
+ * `listUsers` + `listTeams`, and the bell renders `alerts.length`. `cache()`
+ * dedupes only where the directory is already being read — `/inbox` and the two
+ * ticket routes — so on `/`, `/settings` and every settings child this was two
+ * extra round-trips per render, and on `/settings/people` a *second* user list,
+ * because that page queries with its own filters and shares no cache entry.
+ *
+ * The names are the panel's problem, and the panel is lazy.
+ */
+export const loadSlaAlertSummary = cache(
+  async function loadSlaAlertSummary(): Promise<SlaAlertSummary> {
+    const page = await listSlaAlerts({
+      limit: SLA_ALERTS_PAGE_SIZE,
+      unacknowledgedOnly: true,
+    });
+
+    return { count: page.items.length, hasMore: page.nextCursor !== null };
+  },
+);
+
+/**
+ * Unacknowledged alerts for the calling principal, with the holder of each
+ * resolved to a name. The panel's read — see `loadSlaAlertSummary` for the
+ * shell's.
+ *
+ * Request-cached, memoised per render pass only, so an alert acknowledged
+ * between requests is never carried over.
  */
 export const loadSlaAlerts = cache(async function loadSlaAlerts(): Promise<SlaAlertsData> {
   const [page, directory] = await Promise.all([

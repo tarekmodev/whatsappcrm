@@ -1044,8 +1044,8 @@ describe('changing a ticket', () => {
 
   it('accepts `breachedOnly` as the query string it actually arrives as', async () => {
     // A bare `z.boolean()` answers 400 for `?breachedOnly=true` — the request the
-    // contract's own documentation shows. `BooleanQueryParamSchema` is why it
-    // does not, and this is the regression that would catch a revert.
+    // contract's own documentation shows. `z.stringbool()` is why it does not,
+    // and this is the regression that would catch a revert.
     await expect(listTickets('?breachedOnly=true')).resolves.toBeDefined();
   });
 

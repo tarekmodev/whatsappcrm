@@ -74,3 +74,82 @@ describe('MenuButton', () => {
     expect(document.getElementById(panelId ?? '')).not.toBeNull();
   });
 });
+
+/**
+ * Keeping the panel on screen. jsdom lays nothing out — every box is 0×0 — so
+ * these stub `getBoundingClientRect` to place the panel where a real browser
+ * would, and assert on the custom property the module CSS translates by.
+ *
+ * The bug being pinned: below the layout breakpoint the top bar's controls wrap
+ * to their own line at the inline start, so a panel anchored to a trigger's *end*
+ * edge grows off the side of the screen — and overflow past the inline start
+ * produces no scrollbar, so it reads as a panel that lost half its contents.
+ */
+describe('MenuButton — staying inside the viewport', () => {
+  function openWithPanelAt(left: number, width: number, viewportWidth: number): HTMLElement {
+    vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(viewportWidth);
+
+    render(
+      <MenuButton label="Alerts" accessibleName="Alerts">
+        <p>Nothing overdue</p>
+      </MenuButton>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Alerts' });
+    const panelId = trigger.getAttribute('aria-controls') ?? '';
+
+    // Stubbed before the click, so the layout effect measures these on open.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: left,
+      y: 0,
+      left,
+      right: left + width,
+      top: 0,
+      bottom: 0,
+      width,
+      height: 0,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.click(trigger);
+
+    const panel = document.getElementById(panelId);
+
+    if (panel === null) {
+      throw new Error('The panel did not open.');
+    }
+
+    return panel;
+  }
+
+  it('pushes a panel that opened off the inline start back into view', () => {
+    // 320px phone, bell near the left, 288px panel anchored to its end edge.
+    const panel = openWithPanelAt(-224, 288, 320);
+
+    // 8px margin - (-224px) = 232px right.
+    expect(panel.style.getPropertyValue('--menu-shift')).toBe('232px');
+  });
+
+  it('pulls a panel that overhangs the inline end back inside', () => {
+    const panel = openWithPanelAt(1200, 370, 1440);
+
+    // Right edge 1570 against a 1432px limit: 138px left.
+    expect(panel.style.getPropertyValue('--menu-shift')).toBe('-138px');
+  });
+
+  it('leaves a panel that already fits exactly where the CSS put it', () => {
+    const panel = openWithPanelAt(818, 370, 1440);
+
+    expect(panel.style.getPropertyValue('--menu-shift')).toBe('0px');
+  });
+
+  it('measures the space the panel can use, not the space the scrollbar takes', () => {
+    // `window.innerWidth` counts a classic scrollbar; `clientWidth` does not. A
+    // panel ending at 1435 fits a 1440px window and overhangs a 1425px viewport.
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1440);
+
+    const panel = openWithPanelAt(1065, 370, 1425);
+
+    expect(panel.style.getPropertyValue('--menu-shift')).toBe('-18px');
+  });
+});

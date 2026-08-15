@@ -112,8 +112,13 @@ export function MenuButton({
     panel.style.setProperty('--menu-shift', '0px');
 
     const box = panel.getBoundingClientRect();
+    // `clientWidth`, not `window.innerWidth`: the latter counts a classic
+    // scrollbar's width, which is space the panel cannot occupy. With a ~15px
+    // scrollbar and an 8px margin, a panel overhanging the visible area by up to
+    // 7px would measure as fitting. Overlay scrollbars make the two equal, so
+    // this only shows up on a desktop browser that reserves the gutter.
     const overflowStart = VIEWPORT_MARGIN_PX - box.left;
-    const overflowEnd = box.right - (window.innerWidth - VIEWPORT_MARGIN_PX);
+    const overflowEnd = box.right - (document.documentElement.clientWidth - VIEWPORT_MARGIN_PX);
     // Only one can be positive: `max-inline-size` already caps the panel at the
     // viewport, so it cannot be too wide to fit once moved.
     const shift = overflowStart > 0 ? overflowStart : Math.min(0, -overflowEnd);

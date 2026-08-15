@@ -112,6 +112,10 @@
  * the widest table in the console (the ticket queue, six columns) lays out
  * inside it — and it keeps the un-stacking point at roughly the screen width it
  * used to be, so nothing that fitted before now stacks.
+ *
+ * ⚠️ `TicketQueueTable.module.css` repeats this `40rem` to switch its
+ * `overflow-wrap` on the same boundary. A `@container` condition cannot read a
+ * custom property, so there is no token to share — change one and change both.
  */
 @container (min-width: 40rem) {
   .head {

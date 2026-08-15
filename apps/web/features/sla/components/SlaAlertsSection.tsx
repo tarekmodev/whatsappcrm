@@ -1,25 +1,29 @@
 import { Icon } from '@/components/ui/Icon';
-import { loadSlaAlerts } from '@/features/sla/sla-alerts.data';
+import { loadSlaAlertSummary } from '@/features/sla/sla-alerts.data';
 import { SlaAlertsMenu } from './SlaAlertsMenu';
 import styles from './SlaAlertsMenu.module.css';
 
 /**
- * Reads the supervisor's unacknowledged alerts and hands the count to the bell.
- * Usage: inside a Suspense boundary in the top bar, with
- * `SlaAlertsSectionSkeleton` as the fallback.
+ * Reads how many alerts are waiting and hands the number to the bell. Usage:
+ * inside a Suspense boundary in the top bar, with `SlaAlertsSectionSkeleton` as
+ * the fallback.
  *
  * The read is here rather than in the layout so the shell paints without waiting
  * on it — a bar that blocked on a notification count would delay every route's
  * first paint for a badge nobody is looking at yet.
  *
- * Only the count crosses into the client. The rows themselves are fetched by the
- * panel when it opens, which is what keeps twenty alerts out of the RSC payload
- * of every page in the console.
+ * `loadSlaAlertSummary`, deliberately, not `loadSlaAlerts`: this renders on every
+ * route, and the fuller read joins the user and team directories to put a name on
+ * each alert's holder. The bell shows a number. The panel is where the names are
+ * worth fetching, and the panel is lazy.
+ *
+ * Only the count crosses into the client, which is what keeps twenty alerts out
+ * of the RSC payload of every page in the console.
  */
 export async function SlaAlertsSection() {
-  const { alerts, hasMore } = await loadSlaAlerts();
+  const { count, hasMore } = await loadSlaAlertSummary();
 
-  return <SlaAlertsMenu count={alerts.length} hasMore={hasMore} />;
+  return <SlaAlertsMenu count={count} hasMore={hasMore} />;
 }
 
 /**
