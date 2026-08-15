@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { SlaAlertResponse, TicketResponse } from '@whatsappcrm/contracts';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
-import { SLA_ALERT_PROJECTION, toSlaAlertResponse } from '../sla/sla-alert.mapper';
+import { SLA_ALERT_PROJECTION, SLA_BREACH_ONLY, toSlaAlertResponse } from '../sla/sla-alert.mapper';
 import { TICKET_PROJECTION, toTicketResponse } from '../tickets/ticket.mapper';
 
 /**
@@ -78,8 +78,8 @@ export class SlaBreachResourceService {
       return null;
     }
 
-    const alerts = await this.prisma.slaAlert.findMany({
-      where: { id: { in: [...alertIds] } },
+    const alerts = await this.prisma.notification.findMany({
+      where: { ...SLA_BREACH_ONLY, id: { in: [...alertIds] } },
       select: { ...SLA_ALERT_PROJECTION, recipientUserId: true },
     });
 
