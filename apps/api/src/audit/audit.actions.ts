@@ -30,6 +30,19 @@ export const AUDIT_ACTIONS = {
   userRemoved: 'user.removed',
   teamCreated: 'team.created',
   teamUpdated: 'team.updated',
+  /**
+   * Routing-rule writes (TAR-24). A rule is a standing instruction about where
+   * customer conversations go, which is the same class of change as a team
+   * membership edit — and 0004 audits those, so 0007 audits these.
+   *
+   * The metadata carries the rule's name and target, never its conditions: a
+   * `contact_attribute` value is tenant data and can carry PII, and this table
+   * is exported for compliance review rather than being a place to discover it.
+   */
+  assignmentRuleCreated: 'assignment_rule.created',
+  assignmentRuleUpdated: 'assignment_rule.updated',
+  assignmentRuleDeleted: 'assignment_rule.deleted',
+  assignmentRuleReordered: 'assignment_rule.reordered',
   sessionRevoked: 'session.revoked',
   /**
    * An account crossing `AUTH_POLICY.loginFailureThreshold` (TAR-53,

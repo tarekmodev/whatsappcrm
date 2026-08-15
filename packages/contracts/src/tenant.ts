@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { HexColorSchema, IdSchema, TimestampSchema } from './common';
+import { HexColorSchema, IdSchema, TimestampSchema, type IanaTimezone } from './common';
 
 /**
  * Tenant identity, lifecycle and branding. TAR-19 provisions tenants, TAR-36
@@ -133,6 +133,169 @@ export const TenantUpdateInputSchema = z.object({
   name: TenantNameSchema.optional(),
   branding: TenantBrandingSchema.partial().optional(),
 });
+
+// ---------------------------------------------------------------------------
+// Business hours — TAR-279 / TAR-288
+// ---------------------------------------------------------------------------
+
+/**
+ * `tenant_settings.business_hours` has had a documented shape since TAR-47 and
+ * no interpreter. 0007 is its first consumer, so it publishes the schema and the
+ * predicate here rather than letting each caller invent a private reading of a
+ * shared column.
+ *
+ * **What this owns, and what it does not.** 0006 put business-hours accounting
+ * out of scope for SLA timers on the grounds that turning it on means a holiday
+ * calendar *and* timezone arithmetic. This is the arithmetic half — is this
+ * instant inside the hours — and nothing more. A per-tenant holiday and
+ * exception calendar is still nobody's, and stays 0006's risk 1.
+ */
+export const BUSINESS_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+
+export const BusinessDaySchema = z.enum(BUSINESS_DAYS);
+
+/** `HH:MM`, 24-hour, zero-padded. `24:00` is accepted as an end-of-day `to`. */
+export const ClockTimeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$|^24:00$/);
+
+/** `from` is inclusive, `to` is exclusive: `09:00`–`17:00` excludes 17:00:00. */
+export const BusinessHoursIntervalSchema = z.object({
+  from: ClockTimeSchema,
+  to: ClockTimeSchema,
+});
+
+/**
+ * A day absent from the record is closed. `{}` means the tenant is never open,
+ * which is not the same as the column being `null` — that means the tenant never
+ * configured hours at all, and 0007's decision 3 handles it by refusing to
+ * guess.
+ *
+ * `partialRecord`, not `record`, and that is the one place this deviates from
+ * 0007's transcript. Zod 4 made an enum-keyed `z.record` **exhaustive**: it
+ * requires every member of the key enum to be present, so the document's literal
+ * `z.record(z.enum(BUSINESS_DAYS), …)` refuses the seeded Northwind tenant,
+ * which lists `mon`–`fri` and no weekend. The published *behaviour* — an absent
+ * day is closed — is what this keeps; only the combinator changes.
+ */
+export const BusinessHoursSchema = z.partialRecord(
+  BusinessDaySchema,
+  z.array(BusinessHoursIntervalSchema).max(4),
+);
+
+export type BusinessDay = z.infer<typeof BusinessDaySchema>;
+export type BusinessHoursInterval = z.infer<typeof BusinessHoursIntervalSchema>;
+export type BusinessHours = z.infer<typeof BusinessHoursSchema>;
+
+/** Minutes in a day, and the value `24:00` parses to. */
+const MINUTES_PER_DAY = 24 * 60;
+
+/**
+ * Is `at` inside the tenant's opening hours?
+ *
+ * Four semantics a reader cannot derive from the shape, and that two
+ * implementations would otherwise disagree on:
+ *
+ *   1. **`from` is inclusive, `to` is exclusive.**
+ *   2. **An interval whose `to` is at or before its `from` wraps past
+ *      midnight**, and the day key names the day it *starts*:
+ *      `fri { from: '22:00', to: '02:00' }` covers Saturday 00:00–02:00, which is
+ *      why the previous day is consulted as well as the current one.
+ *   3. **An absent day key is closed.** `null` hours are "never open" here; 0007
+ *      decides separately that a `business_hours` *condition* against an
+ *      unconfigured tenant evaluates false either way rather than matching.
+ *   4. **The comparison happens in `timezone`**, an IANA name. Stored timestamps
+ *      stay `timestamptz`; nothing here changes how a time is stored.
+ *
+ * Daylight saving needs no special case, and that is a property of working from
+ * the formatted wall clock rather than from date arithmetic: `Intl` maps a real
+ * instant to the wall clock that actually occurred. On a spring-forward date the
+ * skipped hour simply has no instants inside it, and on an autumn-back date the
+ * repeated hour has two runs of them — both inside the interval, both correctly
+ * "within". `isWithinBusinessHours.test.ts` pins both.
+ *
+ * An unresolvable `timezone` would make every answer for that tenant silently
+ * wrong, so it throws rather than falling back to UTC. `IanaTimezoneSchema`
+ * validates the column on write; this is the backstop for a row that predates it.
+ */
+export function isWithinBusinessHours(
+  hours: BusinessHours | null,
+  timezone: IanaTimezone,
+  at: Date,
+): boolean {
+  if (hours === null) {
+    return false;
+  }
+
+  const { today, yesterday, minutes } = wallClockIn(timezone, at);
+
+  return (
+    covers(hours[today], minutes) ||
+    // Only a wrapping interval can reach into today, and it reaches `to` minutes
+    // past midnight — so today's clock is compared as if it were yesterday's,
+    // one day on.
+    covers(hours[yesterday], minutes + MINUTES_PER_DAY)
+  );
+}
+
+function covers(intervals: readonly BusinessHoursInterval[] | undefined, minutes: number): boolean {
+  return (intervals ?? []).some((interval) => {
+    const from = toMinutes(interval.from);
+    const to = toMinutes(interval.to);
+    // A `to` at or before `from` wraps past midnight, so the interval runs to
+    // the same clock time on the following day.
+    const end = to <= from ? to + MINUTES_PER_DAY : to;
+
+    return minutes >= from && minutes < end;
+  });
+}
+
+/**
+ * `en-GB` with an explicit `hourCycle`: the locale's own default renders
+ * midnight as `24:00` in some ICU versions, which would parse as 1440 and put
+ * every midnight outside every interval.
+ */
+const WALL_CLOCK_PARTS = { weekday: 'short', hour: '2-digit', minute: '2-digit' } as const;
+
+interface WallClock {
+  readonly today: BusinessDay;
+  /**
+   * The day before `today`, taken from the weekday rather than by subtracting 24
+   * hours from `at`: the previous *calendar* day in a zone is not always 24
+   * hours earlier, and the key is all that is needed to find an interval that
+   * started yesterday and has not ended yet.
+   */
+  readonly yesterday: BusinessDay;
+  readonly minutes: number;
+}
+
+function wallClockIn(timezone: IanaTimezone, at: Date): WallClock {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    hourCycle: 'h23',
+    ...WALL_CLOCK_PARTS,
+  }).formatToParts(at);
+
+  const read = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((part) => part.type === type)?.value ?? '';
+
+  const dayIndex = BUSINESS_DAYS.indexOf(read('weekday').slice(0, 3).toLowerCase() as BusinessDay);
+  const today = BUSINESS_DAYS[dayIndex];
+  const yesterday = BUSINESS_DAYS[(dayIndex + 6) % 7];
+
+  if (today === undefined || yesterday === undefined) {
+    // Unreachable with `en-GB`, whose short weekday is always a three-letter
+    // English abbreviation. Said out loud rather than defaulting to Monday,
+    // which would be a wrong answer disguised as a working one.
+    throw new RangeError(`Could not read a weekday in ${timezone}`);
+  }
+
+  return { today, yesterday, minutes: Number(read('hour')) * 60 + Number(read('minute')) };
+}
+
+function toMinutes(clockTime: string): number {
+  const [hours, minutes] = clockTime.split(':');
+
+  return Number(hours) * 60 + Number(minutes);
+}
 
 /**
  * How a request tells the API which tenant it is for, once it has crossed the
