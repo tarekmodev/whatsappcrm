@@ -158,9 +158,10 @@ Five behaviours a client cannot read off the parameter table:
   or `unassigned` receives `assigned`, so a supervisor's shared URL renders for an agent
   with less in it rather than answering 403.
 - **`routingState=deferred` is the stuck-ticket query** (TAR-274), usually with
-  `scope=unassigned`: the tickets routing ran on and could place with nobody. It returns an
-  empty page until TAR-288's router writes the column, which is the honest answer rather
-  than an unfiltered page pretending to be the stuck set.
+  `scope=unassigned`: the tickets routing ran on and could place with nobody. The router
+  writes the column as of TAR-373, so the page now carries the tickets that are actually
+  stuck, oldest first by `routing_deferred_since` — a value the router sets once, on the
+  first deferral, and does not move when a job is redelivered.
 
 The page is served by `tickets_active_queue_idx` —
 `(tenant_id, priority DESC, created_at DESC, id DESC) WHERE status IN ('open','pending')` —
@@ -553,7 +554,9 @@ Confirmed rather than assumed:
   a `breached` one on another — and `breachedOnly=true` returns exactly the breached ticket.
 - `routing` renders on every ticket as `pending` with both deferred fields null, and
   `?routingState=deferred` returns an empty page. A `routingState` outside its enum is
-  `400 validation_failed` on `path: "routingState"`.
+  `400 validation_failed` on `path: "routingState"`. **Superseded in part by TAR-373**: the
+  router writes the column now, so a deferred ticket reads `deferred` and appears in that
+  page. The validation half stands.
 
 Exercised by integration test rather than by hand, because both need an inbound message
 through the queue or two writers colliding:

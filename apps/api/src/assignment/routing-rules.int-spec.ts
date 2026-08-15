@@ -1031,6 +1031,123 @@ describe('routing rules and the evaluation engine', () => {
       expect(result).toMatchObject({ outcome: 'deferred', reason: 'no_candidate_pool' });
     });
 
+    /**
+     * 0008 amendment 1, against the constraint that enforces it.
+     *
+     * `tickets_routing_deferred_consistent` ties `routing_state = 'deferred'` to
+     * both nullable columns in both directions, so a write that moved the state
+     * without its companions — or left a stale reason on a ticket that has since
+     * been assigned — is rejected by PostgreSQL rather than by a reviewer. That
+     * is not something the unit test's fake can say, which is why these four are
+     * here as well.
+     */
+    describe('the routing state a supervisor’s queue reads', () => {
+      it('marks a routed ticket `assigned`, with no deferred residue', async () => {
+        await createRule(HOST_A, {
+          name: 'Billing keywords',
+          conditions: BILLING_KEYWORDS,
+          target: { kind: 'team', teamId: BILLING_TEAM_A },
+        });
+
+        await route(TENANT_A, TICKET_A, MESSAGE_A, CONTACT_A);
+
+        expect(
+          await systemPrisma.ticket.findUniqueOrThrow({ where: { id: TICKET_A } }),
+        ).toMatchObject({
+          routingState: 'assigned',
+          routingDeferredReason: null,
+          routingDeferredSince: null,
+        });
+      });
+
+      it('marks a rotated ticket `assigned` too', async () => {
+        await makeAvailable(SARA_A);
+
+        await route(TENANT_A, TICKET_A, MESSAGE_A, CONTACT_A);
+
+        expect(
+          (await systemPrisma.ticket.findUniqueOrThrow({ where: { id: TICKET_A } })).routingState,
+        ).toBe('assigned');
+      });
+
+      it('flags a deferred ticket with its reason and the moment it got stuck', async () => {
+        // The row TAR-274's `?scope=all&routingState=deferred` reads. Before this
+        // write existed the query was correct and its page was always empty.
+        const before = new Date();
+
+        await route(TENANT_A, TICKET_A, MESSAGE_A, CONTACT_A);
+
+        const ticket = await systemPrisma.ticket.findUniqueOrThrow({ where: { id: TICKET_A } });
+
+        expect(ticket.routingState).toBe('deferred');
+        expect(ticket.routingDeferredReason).toBe('none_available');
+        expect(ticket.routingDeferredSince?.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      });
+
+      it('does not move `routing_deferred_since` when the job is redelivered', async () => {
+        await route(TENANT_A, TICKET_A, MESSAGE_A, CONTACT_A);
+
+        const first = await systemPrisma.ticket.findUniqueOrThrow({ where: { id: TICKET_A } });
+
+        await route(TENANT_A, TICKET_A, MESSAGE_A, CONTACT_A);
+
+        const second = await systemPrisma.ticket.findUniqueOrThrow({ where: { id: TICKET_A } });
+
+        // The ageing key the supervisor sorts on: overwriting it would make an
+        // old stuck ticket look new, and the original is not recoverable.
+        expect(second.routingDeferredSince).toEqual(first.routingDeferredSince);
+        // The event log is a history, and the second deferral did happen.
+        expect(await systemPrisma.ticketEvent.count({ where: { ticketId: TICKET_A } })).toBe(2);
+      });
+
+      it('clears the deferred pair when a ticket that was stuck is finally assigned', async () => {
+        await systemPrisma.ticket.update({
+          where: { id: TICKET_A },
+          data: {
+            routingState: 'deferred',
+            routingDeferredReason: 'all_at_capacity',
+            routingDeferredSince: new Date('2026-08-10T09:05:00.000Z'),
+          },
+        });
+        await makeAvailable(SARA_A);
+
+        await route(TENANT_A, TICKET_A, MESSAGE_A, CONTACT_A);
+
+        // A partial write here would not be a stale cell in a view — the CHECK
+        // rejects it and the transaction fails.
+        expect(
+          await systemPrisma.ticket.findUniqueOrThrow({ where: { id: TICKET_A } }),
+        ).toMatchObject({
+          assignedUserId: SARA_A,
+          routingState: 'assigned',
+          routingDeferredReason: null,
+          routingDeferredSince: null,
+        });
+      });
+
+      it('leaves the column alone on a ticket it skips', async () => {
+        // `manual` is what `POST /tickets/{id}/assign` will write, and it is
+        // terminal for routing: a redelivered job must not relabel a supervisor's
+        // decision.
+        await systemPrisma.ticket.update({
+          where: { id: TICKET_A },
+          data: { assignedUserId: SARA_A, routingState: 'manual' },
+        });
+        await createRule(HOST_A, {
+          name: 'Billing keywords',
+          conditions: BILLING_KEYWORDS,
+          target: { kind: 'team', teamId: BILLING_TEAM_A },
+        });
+
+        expect((await route(TENANT_A, TICKET_A, MESSAGE_A, CONTACT_A)).reason).toBe(
+          'already_assigned',
+        );
+        expect(
+          (await systemPrisma.ticket.findUniqueOrThrow({ where: { id: TICKET_A } })).routingState,
+        ).toBe('manual');
+      });
+    });
+
     it('matches nothing on a ticket with no message and no contact, rather than failing', async () => {
       await createRule(HOST_A, {
         name: 'Everything a ticket might have',

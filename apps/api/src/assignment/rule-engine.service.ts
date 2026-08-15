@@ -508,10 +508,27 @@ export class RuleEngineService implements TicketRouter {
   }
 
   /**
-   * Rotation had nobody. The ticket stays unassigned and the reason goes on its
-   * event log, which is what makes it a supervisor-visible state rather than a
-   * ticket that quietly nobody owns — the distinction 0007 decision 5 widened
-   * the return type to carry.
+   * Rotation had nobody. The ticket stays unassigned, the reason goes on its
+   * event log, and `routing_state` is flipped to `deferred` — which is what
+   * makes it a supervisor-visible state rather than a ticket that quietly
+   * nobody owns. The event carries the distinction 0007 decision 5 widened the
+   * return type to hold; the column is what TAR-274's
+   * `?routingState=deferred` list reads, so without it the supervisor's queue
+   * is permanently empty (0008 amendment 1).
+   *
+   * ## The column write is first-transition-only; the event is not
+   *
+   * `routing_state: { not: 'deferred' }` in the `WHERE` is the whole of it, and
+   * it is a guard rather than a read-then-write for the same reason the
+   * compare-and-set below is. `routing_deferred_since` is the supervisor's
+   * ageing key: a redelivered job that reset it would make an hour-old stuck
+   * ticket look like it arrived just now, and the original timestamp is not
+   * recoverable. A repeat appends its event — the log is a history and a second
+   * deferral did happen — and moves no column.
+   *
+   * The three columns move in one statement because
+   * `tickets_routing_deferred_consistent` requires it: the state and its two
+   * nullable companions have to agree at statement end.
    */
   private async defer(
     tenantId: string,
@@ -521,6 +538,19 @@ export class RuleEngineService implements TicketRouter {
     const reason = decision.reason ?? 'no_candidate_pool';
 
     await this.prisma.$tenantTransaction(async (tx) => {
+      await tx.ticket.updateMany({
+        where: {
+          tenantId,
+          id: ticket.id,
+          routingState: { not: 'deferred' },
+        },
+        data: {
+          routingState: 'deferred',
+          routingDeferredReason: reason,
+          routingDeferredSince: new Date(),
+        },
+      });
+
       await tx.ticketEvent.create({
         data: {
           tenantId,
@@ -551,6 +581,14 @@ export class RuleEngineService implements TicketRouter {
    * `tenantId` is supplied explicitly on both statements: TAR-49's extension does
    * not inject it, and RLS's `WITH CHECK` is the backstop rather than the
    * mechanism (0003, rule 3).
+   *
+   * `routing_state` rides along in the same `data` rather than in a second
+   * statement, so both branches that reach here — a matched rule and rotation —
+   * get it, and so a ticket cannot exist assigned but still reading `pending`.
+   * The deferred pair is cleared rather than left: a ticket deferred earlier and
+   * assigned now would otherwise carry a stale reason, and
+   * `tickets_routing_deferred_consistent` would reject the row for it (0008
+   * amendment 1).
    */
   private async assign(
     tenantId: string,
@@ -566,7 +604,12 @@ export class RuleEngineService implements TicketRouter {
           assignedUserId: null,
           assignedTeamId: null,
         },
-        data: assignment,
+        data: {
+          ...assignment,
+          routingState: 'assigned',
+          routingDeferredReason: null,
+          routingDeferredSince: null,
+        },
       });
 
       if (count === 0) {
