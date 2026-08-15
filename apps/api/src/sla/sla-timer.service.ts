@@ -40,6 +40,17 @@ import { slaTimerTargetFor, type SlaTimerTarget } from './sla-timer-target';
  * under the scope `QueueService` opened from the job's own `tenantId`. A payload
  * naming another tenant's ticket reads zero rows under RLS and fails as
  * `SlaTicketNotVisibleError` rather than writing anything.
+ *
+ * ## Two entry points, one body
+ *
+ * `evaluate` is the queue handler and owns the transaction. `reconcile` is the
+ * same work against a transaction somebody else opened, and exists because the
+ * breach sweep has to run this derivation **in the transaction it claims in**
+ * (TAR-380): the enqueue that would have called `evaluate` is allowed to be
+ * dropped, so a sweep that trusted it to have run turned a ticket answered
+ * inside its window into a permanent `breached` and alerted a supervisor about
+ * it. The sweep calls this rather than re-deriving "has a person replied" in its
+ * own SQL, so there is one answer to that question and not two that can drift.
  */
 
 const EVALUATION_PROJECTION = {
@@ -76,27 +87,49 @@ export class SlaTimerService {
   ) {}
 
   async evaluate(trigger: SlaEvaluateTicketTrigger): Promise<SlaEvaluationSummary> {
-    return await this.prisma.$tenantTransaction(async (tx) => {
-      const ticket = await tx.ticket.findUnique({
-        where: { id: trigger.ticketId },
-        select: EVALUATION_PROJECTION,
-      });
+    return await this.prisma.$tenantTransaction(
+      async (tx) => await this.reconcile(tx, trigger.tenantId, trigger.ticketId),
+    );
+  }
 
-      if (ticket === null) {
-        throw new SlaTicketNotVisibleError(trigger.ticketId);
-      }
-
-      const firstRespondedAt = await this.stampFirstResponse(tx, trigger.tenantId, ticket);
-      const created = await this.createMissingTimers(tx, trigger.tenantId, ticket);
-      const transitioned = await this.reconcile(tx, ticket, firstRespondedAt, created > 0);
-
-      return {
-        ticketId: ticket.id,
-        created,
-        transitioned,
-        firstResponseStamped: ticket.firstRespondedAt === null && firstRespondedAt !== null,
-      };
+  /**
+   * One ticket's whole reconciliation, against a transaction the caller owns.
+   *
+   * The body of `evaluate`, exposed so the breach sweep can run it inside the
+   * transaction that claims — the caller is responsible for having opened it on
+   * `TenantPrisma` under the scope of `tenantId`, which is what puts every
+   * statement below under RLS.
+   *
+   * Nothing here is conditional on having been reached by a job: it reads the
+   * ticket, derives the state each timer should be in, and applies only the
+   * transitions that actually move a row. A ticket with nothing to change costs
+   * three reads and writes nothing, so a caller may run it over every ticket it
+   * is about to act on without taking a lock it does not need.
+   */
+  async reconcile(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    ticketId: string,
+  ): Promise<SlaEvaluationSummary> {
+    const ticket = await tx.ticket.findUnique({
+      where: { id: ticketId },
+      select: EVALUATION_PROJECTION,
     });
+
+    if (ticket === null) {
+      throw new SlaTicketNotVisibleError(ticketId);
+    }
+
+    const firstRespondedAt = await this.stampFirstResponse(tx, tenantId, ticket);
+    const created = await this.createMissingTimers(tx, tenantId, ticket);
+    const transitioned = await this.reconcileTimers(tx, ticket, firstRespondedAt, created > 0);
+
+    return {
+      ticketId: ticket.id,
+      created,
+      transitioned,
+      firstResponseStamped: ticket.firstRespondedAt === null && firstRespondedAt !== null,
+    };
   }
 
   /**
@@ -236,7 +269,7 @@ export class SlaTimerService {
    * a `pending` ticket is paused in the same transaction that created it rather
    * than running until the next trigger.
    */
-  private async reconcile(
+  private async reconcileTimers(
     tx: Prisma.TransactionClient,
     ticket: EvaluationTicket,
     firstRespondedAt: Date | null,

@@ -289,7 +289,7 @@ describe('SLA breach detection against a real database', () => {
 
     alerts = new SlaAlertService(tenantPrisma, tenantContext);
     timers = new SlaTimerService(tenantPrisma, policies);
-    sweep = new SlaSweepService(systemPrisma, tenantPrisma, tenantContext, alerts, events);
+    sweep = new SlaSweepService(systemPrisma, tenantPrisma, tenantContext, timers, alerts, events);
 
     await removeFixture();
 
@@ -693,6 +693,101 @@ describe('SLA breach detection against a real database', () => {
 
       await sweep.sweep();
       expect(await breachedTimerCount(TENANT_B)).toBe(SLA_SWEEP_TENANT_BATCH * 2);
+    });
+
+    /**
+     * TAR-380, and the reason the whole reconciliation runs inside the chunk's
+     * transaction.
+     *
+     * The reply is stored and **no evaluation follows it** — which is exactly
+     * what a `QueueService.enqueue` that answered `failed` or `unavailable`
+     * leaves behind, and 0006's failure table promises that a Redis outage loses
+     * nothing. Before the fix the sweep read `state = 'running'`, saw a deadline
+     * in the past, and wrote a terminal `breached` plus an alert about a ticket
+     * answered nineteen minutes inside its window. `breached` is excluded from
+     * `MUTABLE_STATES`, so no later evaluation could undo it.
+     *
+     * Nothing here simulates a queue: not calling `evaluate` *is* the dropped
+     * enqueue, and it is the only faithful way to express one.
+     */
+    it('does not breach a ticket answered while its evaluation was dropped', async () => {
+      const breaches: SlaBreachedEvent[] = [];
+      events.on(SLA_BREACHED_EVENT, (event: SlaBreachedEvent) => breaches.push(event));
+
+      const ticketId = await openTicket(TENANT_A, CONTACT_A, CONVERSATION_A, WINDOW_MINUTES + 5, {
+        assignedUserId: AGENT_A,
+      });
+
+      await evaluate(TENANT_A, ticketId, 'ticket_created');
+      // Minute 45 of a 60-minute window — the ticket was opened 65 minutes ago —
+      // and the trigger for this reply never arrives.
+      await storeAgentReply(TENANT_A, CONVERSATION_A, AGENT_A, 20);
+
+      const report = await sweep.sweep();
+
+      const ticket = await systemPrisma.ticket.findUniqueOrThrow({
+        where: { id: ticketId },
+        select: { firstRespondedAt: true },
+      });
+
+      expect(report).toMatchObject({ breached: 0, alerted: 0 });
+      expect((await timerFor(ticketId)).state).toBe('met');
+      expect(await alertsFor(ticketId)).toEqual([]);
+      expect(await breachEventsFor(ticketId)).toEqual([]);
+      expect(breaches).toEqual([]);
+      // The sweep did the dropped job's whole work, not just the part that
+      // spared the alert: TAR-30 reports cycle time off this column.
+      expect(ticket.firstRespondedAt).not.toBeNull();
+      expect(
+        await systemPrisma.ticketEvent.findMany({ where: { ticketId, type: 'first_response' } }),
+      ).toHaveLength(1);
+    });
+
+    /**
+     * The same dropped enqueue on the other trigger. A ticket closed unanswered
+     * is `cancelled`, never a breach — and a `status_changed` trigger is dropped
+     * by the same blip as an `agent_replied` one.
+     */
+    it('does not breach a ticket closed while its evaluation was dropped', async () => {
+      const ticketId = await openTicket(TENANT_A, CONTACT_A, CONVERSATION_A, WINDOW_MINUTES + 5);
+
+      await evaluate(TENANT_A, ticketId, 'ticket_created');
+      await systemPrisma.ticket.update({ where: { id: ticketId }, data: { status: 'closed' } });
+
+      const report = await sweep.sweep();
+
+      expect(report).toMatchObject({ breached: 0, alerted: 0 });
+      expect((await timerFor(ticketId)).state).toBe('cancelled');
+      expect(await alertsFor(ticketId)).toEqual([]);
+      expect(await breachEventsFor(ticketId)).toEqual([]);
+    });
+
+    /**
+     * The settle has to be a transition, not a filter. A timer the sweep merely
+     * declined to claim would stay `running` and past due, and an unclaimed timer
+     * only gets older — so it would lead this tenant's slice of every subsequent
+     * batch for ever. TAR-381's per-tenant cap above means that starves one
+     * tenant rather than the platform, which makes it quieter, not better:
+     * `SLA_SWEEP_TENANT_BATCH` permanently-declined timers would consume the
+     * whole allowance and this tenant's real breaches would never be examined.
+     *
+     * The assertion is the state itself: the answered ticket has left `running`,
+     * so phase 1 cannot return it again.
+     */
+    it('leaves no due timer running after settling it, so the batch drains', async () => {
+      const ticketId = await openTicket(TENANT_A, CONTACT_A, CONVERSATION_A, WINDOW_MINUTES + 5);
+
+      await evaluate(TENANT_A, ticketId, 'ticket_created');
+      await storeAgentReply(TENANT_A, CONVERSATION_A, AGENT_A, 20);
+      await sweep.sweep();
+
+      const settled = await timerFor(ticketId);
+      const second = await sweep.sweep();
+
+      // Settled to the state the ticket implies, not left running and not
+      // breached — and therefore no longer a candidate phase 1 can return.
+      expect(settled.state).toBe('met');
+      expect(second).toMatchObject({ due: 0, breached: 0, alerted: 0 });
     });
 
     /**

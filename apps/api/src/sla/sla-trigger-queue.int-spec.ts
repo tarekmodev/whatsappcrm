@@ -158,7 +158,14 @@ describe('the SLA triggers, through the real queue', () => {
     const policies = new SlaPolicyService(tenantPrisma);
     const alerts = new SlaAlertService(tenantPrisma, tenantContext);
     const timers = new SlaTimerService(tenantPrisma, policies);
-    const sweep = new SlaSweepService(systemPrisma, tenantPrisma, tenantContext, alerts, events());
+    const sweep = new SlaSweepService(
+      systemPrisma,
+      tenantPrisma,
+      tenantContext,
+      timers,
+      alerts,
+      events(),
+    );
 
     // The shipped registration, so what is under test is the wiring that ships.
     runner = new SlaQueueRunner(config, queue, timers, sweep);
