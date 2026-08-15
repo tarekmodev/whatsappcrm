@@ -37,6 +37,20 @@
   inset-block-start: calc(100% + var(--space-1));
   z-index: var(--z-nav);
   min-inline-size: var(--size-menu);
+  /*
+   * A panel is never wider than the screen it opens on. Without this a 22rem
+   * panel on a 320px phone overflows by 32px, and it does so past the *inline
+   * start* edge, which produces no scrollbar — so it reads as a panel that
+   * simply lost half its contents rather than as a layout that is too wide.
+   */
+  max-inline-size: calc(100vw - var(--space-6));
+  /*
+   * How far the panel was nudged to stay on screen, measured by `MenuButton`
+   * after it opens. A physical px offset rather than a logical one on purpose:
+   * it is computed from the panel's own geometry, so it is already correct under
+   * `dir="rtl"` — there is no side to mirror.
+   */
+  translate: var(--menu-shift, 0) 0;
   padding: var(--space-2);
   background: var(--color-surface-raised);
   border: var(--border-hairline) solid var(--color-border);

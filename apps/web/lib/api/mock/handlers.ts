@@ -18,6 +18,7 @@ import {
   PasswordResetConfirmInputSchema,
   PasswordResetRequestInputSchema,
   SendMessageInputSchema,
+  SlaAlertListQuerySchema,
   TICKET_ACTIVE_STATUSES,
   TICKET_PRIORITIES,
   TICKET_STATUS_REQUIRES_CLOSE,
@@ -30,6 +31,7 @@ import {
   WhatsAppEmbeddedSignupInputSchema,
   canAgentTransition,
   isRoleWithin,
+  isSlaBreached,
   renderTemplateBody,
   roleHasPermission,
   whatsAppSignupFailureDetails,
@@ -49,6 +51,7 @@ import {
   type SendMessageInput,
   type SessionPrincipal,
   type SessionResponse,
+  type SlaAlertResponse,
   type Tag,
   type TeamResponse,
   type TicketListQuery,
@@ -65,6 +68,7 @@ import type {
   MockInternalNote,
   MockMessage,
   MockMessageTemplate,
+  MockSlaAlert,
   MockTag,
   MockTeam,
   MockTicket,
@@ -333,6 +337,21 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}$`),
     permission: 'ticket:read',
     handle: getTicket,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/sla-alerts$/,
+    // `ticket:read`, not `sla:read`: every row names its recipient and the
+    // handler narrows to the caller, so an agent may ask and gets nothing
+    // (ADR 0006 — Security and Access).
+    permission: 'ticket:read',
+    handle: listSlaAlerts,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/sla-alerts/${UUID_SEGMENT}/acknowledge$`),
+    permission: 'ticket:read',
+    handle: acknowledgeSlaAlert,
   },
   {
     method: 'PATCH',
@@ -1268,6 +1287,9 @@ function assignConversation({ principal, params, body }: RouteContext): Conversa
  *      conversation, an unassigned ticket is triaged work rather than a shared
  *      pool, so a caller without the permission is narrowed to their own rather
  *      than refused.
+ *   4. **`breachedOnly` narrows to a breached timer** (TAR-26), *after* scope
+ *      and status — so a supervisor's "everything overdue" link is still their
+ *      tenant's, and still the active queue unless they asked otherwise.
  */
 function listTickets({ principal, query }: RouteContext): CursorPage<TicketResponse> {
   const parsed = TicketListQuerySchema.safeParse(Object.fromEntries(query));
@@ -1276,13 +1298,19 @@ function listTickets({ principal, query }: RouteContext): CursorPage<TicketRespo
     throw validationFailed();
   }
 
-  const { status, priority, scope, assignedUserId, assignedTeamId, limit } = parsed.data;
+  const { status, priority, scope, assignedUserId, assignedTeamId, breachedOnly, limit } =
+    parsed.data;
 
   const items = tenantTickets(principal)
     .filter((item) =>
       status === undefined ? TICKET_ACTIVE_STATUSES.includes(item.status) : item.status === status,
     )
     .filter((item) => priority === undefined || item.priority === priority)
+    // `breachedOnly` is an `EXISTS` against `sla_timers` on the API. Here it is
+    // `isSlaBreached`, the same predicate the queue's overdue badge reads through
+    // `ticketRowTone`, so a filter that disagreed with the badge beside it would
+    // fail a test rather than ship.
+    .filter((item) => !breachedOnly || isSlaBreached(item.sla))
     .filter((item) => assignedUserId === undefined || item.assignedUserId === assignedUserId)
     .filter((item) => assignedTeamId === undefined || item.assignedTeamId === assignedTeamId)
     .filter((item) => matchesTicketScope(item, scope, principal))
@@ -1479,6 +1507,86 @@ function findTicketInTenant(principal: SessionPrincipal, id: string | undefined)
   }
 
   return ticket;
+}
+
+// --- SLA alerts (TAR-26, ADR 0006) -----------------------------------------
+
+/**
+ * `GET /v1/sla-alerts` — the supervisor's own breaches.
+ *
+ * Two narrowings, both of which the console's role-scoping claim rests on, so
+ * both are modelled rather than assumed:
+ *
+ *   1. **Tenant**, like every other read here.
+ *   2. **Recipient.** `recipient_user_id = principal.userId`, on top of the
+ *      tenant filter. The fixtures seed Priya's and Omar's own copies of the
+ *      same breach precisely so a handler that forgot this would fail a test.
+ *
+ * Newest first, which is the keyset order the index in ADR 0006 serves.
+ */
+function listSlaAlerts({ principal, query }: RouteContext): CursorPage<SlaAlertResponse> {
+  const parsed = SlaAlertListQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { unacknowledgedOnly, limit } = parsed.data;
+
+  const items = principalAlerts(principal)
+    .filter((alert) => !unacknowledgedOnly || alert.acknowledgedAt === null)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, limit)
+    .map(toSlaAlertResponse);
+
+  return { items, nextCursor: null };
+}
+
+/**
+ * `POST /v1/sla-alerts/{id}/acknowledge`.
+ *
+ * **Idempotent, and modelled as such**: a second call returns the same row with
+ * its original `acknowledgedAt` rather than a 409. The panel's optimistic
+ * removal is only safe to retry because of that, so a fixture layer that
+ * answered `conflict` would let a bug through review.
+ *
+ * Another principal's alert answers `not_found`, never `forbidden` — a 403 would
+ * confirm the id exists (0002's rule).
+ */
+function acknowledgeSlaAlert({ principal, params }: RouteContext): SlaAlertResponse {
+  const alert = principalAlerts(principal).find((candidate) => candidate.id === params[0]);
+
+  if (alert === undefined) {
+    throw notFound();
+  }
+
+  if (alert.acknowledgedAt !== null) {
+    return toSlaAlertResponse(alert);
+  }
+
+  const updated: MockSlaAlert = { ...alert, acknowledgedAt: new Date().toISOString() };
+
+  mockState().slaAlerts.set(updated.id, updated);
+
+  return toSlaAlertResponse(updated);
+}
+
+/** This tenant's alerts, addressed to this principal. Never one without the other. */
+function principalAlerts(principal: SessionPrincipal): MockSlaAlert[] {
+  return [...mockState().slaAlerts.values()].filter(
+    (alert) => alert.tenantId === principal.tenantId && alert.recipientUserId === principal.userId,
+  );
+}
+
+/** `recipientUserId` never crosses the wire — the API narrows instead of publishing it. */
+function toSlaAlertResponse(alert: MockSlaAlert): SlaAlertResponse {
+  const { recipientUserId, ...scoped } = stripTenant(alert);
+
+  if (recipientUserId.length === 0) {
+    throw new Error('Mock SLA alert is missing its recipient.');
+  }
+
+  return scoped;
 }
 
 // --- Sending, and the templates that survive a closed window (TAR-20g) ------

@@ -8,6 +8,8 @@ import { Stack } from '@/components/layout/Stack';
 import { content } from '@/content/en';
 import { routes } from '@/lib/routes';
 import { assigneeLabelFor } from '@/features/tickets/presentation';
+import { SlaIndicator } from '@/features/sla/components/SlaIndicator';
+import { firstResponseIndicator, resolutionIndicator } from '@/features/sla/presentation';
 import { TicketPriorityBadge, TicketStatusBadge } from './TicketBadges';
 import styles from './TicketSummary.module.css';
 
@@ -31,6 +33,9 @@ export interface TicketSummaryProps {
 }
 
 export function TicketSummary({ ticket, conversation, userNames, teamNames }: TicketSummaryProps) {
+  const firstResponse = firstResponseIndicator(ticket.sla);
+  const resolution = resolutionIndicator(ticket.sla);
+
   return (
     <Stack gap="4">
       <Cluster gap="2">
@@ -47,6 +52,19 @@ export function TicketSummary({ ticket, conversation, userNames, teamNames }: Ti
         <Fact term={content.tickets.columnAssignee}>
           {assigneeLabelFor(ticket, userNames, teamNames)}
         </Fact>
+        {/* Omitted rather than rendered as "not applicable": a tenant with no
+            active SLA policy has no first-response deadline, and a row saying so
+            on every ticket is a line of noise on every ticket (TAR-26). */}
+        {firstResponse === null ? null : (
+          <Fact term={content.sla.firstResponse}>
+            <SlaIndicator indicator={firstResponse} />
+          </Fact>
+        )}
+        {resolution === null ? null : (
+          <Fact term={content.sla.resolution}>
+            <SlaIndicator indicator={resolution} />
+          </Fact>
+        )}
         <Fact term={content.tickets.openedAt}>
           <RelativeTime isoTimestamp={ticket.createdAt} label={content.tickets.openedAt} />
         </Fact>

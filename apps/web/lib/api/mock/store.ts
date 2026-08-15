@@ -7,6 +7,7 @@ import {
   MOCK_INTERNAL_NOTES,
   MOCK_MESSAGES,
   MOCK_MESSAGE_TEMPLATES,
+  MOCK_SLA_ALERTS,
   MOCK_TAGS,
   MOCK_TEAMS,
   MOCK_TICKETS,
@@ -17,6 +18,7 @@ import {
   type MockInternalNote,
   type MockMessage,
   type MockMessageTemplate,
+  type MockSlaAlert,
   type MockTag,
   type MockTeam,
   type MockTicket,
@@ -44,6 +46,7 @@ interface MockState {
   tags: Map<string, MockTag>;
   customFieldDefinitions: Map<string, MockCustomFieldDefinition>;
   assignmentRules: Map<string, MockAssignmentRule>;
+  slaAlerts: Map<string, MockSlaAlert>;
   /**
    * `Idempotency-Key` → the request it was spent on, and what it produced.
    *
@@ -90,6 +93,7 @@ function seed(): MockState {
     assignmentRules: new Map(
       MOCK_ASSIGNMENT_RULES.map((rule) => [rule.id, { ...rule, conditions: [...rule.conditions] }]),
     ),
+    slaAlerts: new Map(MOCK_SLA_ALERTS.map((item) => [item.id, item])),
     sentByIdempotencyKey: new Map(),
     nextId: 1,
   };

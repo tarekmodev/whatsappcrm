@@ -1,0 +1,15 @@
+.indicator {
+  display: inline-flex;
+  /* Wraps rather than forcing the column wide: in a queue row the badge and the
+     deadline stack happily, and holding them on one line was costing the ticket
+     subject beside them the width it needed to stay readable. */
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-inline-size: 0;
+}
+
+.none {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}

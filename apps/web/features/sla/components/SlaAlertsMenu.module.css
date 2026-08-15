@@ -1,0 +1,48 @@
+.menu {
+  flex: 0 0 auto;
+}
+
+/*
+ * Wider than the quick-create trigger because the count sits beside the bell
+ * rather than on top of it. A badge floated over the icon reads as decoration
+ * and clips at 200% zoom; inline, it grows with the text.
+ */
+.trigger {
+  flex: 0 0 auto;
+  justify-content: center;
+  min-inline-size: var(--size-touch-target);
+  color: var(--color-on-surface-muted);
+}
+
+/* The same box the trigger occupies, for the Suspense fallback — which is a
+   `span` and so inherits none of `MenuButton`'s own button layout. */
+.triggerPlaceholder {
+  composes: trigger;
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--size-touch-target);
+}
+
+.count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: var(--space-5);
+  padding-inline: var(--space-1);
+  padding-block: 0;
+  background: var(--color-danger-subtle);
+  border-radius: var(--radius-pill);
+  color: var(--color-on-danger-subtle);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-strong);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--line-height-tight);
+}
+
+/* Forced colors drops the tone background, so the count needs an outline to stay
+   a discrete object rather than merging into the trigger's label. */
+@media (forced-colors: active) {
+  .count {
+    border: var(--border-hairline) solid CanvasText;
+  }
+}

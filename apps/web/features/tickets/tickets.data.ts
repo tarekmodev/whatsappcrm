@@ -34,7 +34,7 @@ export async function loadTicketQueue(query: TicketQueueParams): Promise<TicketQ
       scope: query.scope,
       status: query.status,
       priority: query.priority,
-      breachedOnly: false,
+      breachedOnly: query.isOverdueOnly,
       limit: TICKETS_PAGE_SIZE,
     }),
     loadDirectory(),

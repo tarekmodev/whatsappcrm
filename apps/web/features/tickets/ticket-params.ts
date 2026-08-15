@@ -18,18 +18,36 @@ export interface TicketQueueParams {
   /** `undefined` is the active queue (`open` and `pending`), the API's default. */
   status: TicketStatusFilter | undefined;
   priority: TicketPriorityFilter | undefined;
+  /** Narrows to breached tickets — `TicketListQuery.breachedOnly` (TAR-26). */
+  isOverdueOnly: boolean;
 }
 
 export function parseTicketQueueParams(raw: {
   scope: string | undefined;
   status: string | undefined;
   priority: string | undefined;
+  overdue: string | undefined;
 }): TicketQueueParams {
   return {
     scope: parseScope(raw.scope),
     status: parseStatus(raw.status),
     priority: parsePriority(raw.priority),
+    isOverdueOnly: parseOverdue(raw.overdue),
   };
+}
+
+/**
+ * Only the exact string `'true'` turns the filter on.
+ *
+ * The contract's `breachedOnly` is `z.stringbool()`, which would read `'false'`
+ * correctly on its own — so this is not compensating for a loose parser. It is
+ * the URL-narrowing rule the rest of this module follows: a hand-edited or
+ * truncated `?overdue=` falls back to the default view rather than reaching the
+ * API as a malformed query, exactly as an unknown `?status=` does above. Silently
+ * hiding every ticket that is on time is the one wrong answer here.
+ */
+function parseOverdue(value: string | undefined): boolean {
+  return value === 'true';
 }
 
 function parseScope(value: string | undefined): TicketScope {

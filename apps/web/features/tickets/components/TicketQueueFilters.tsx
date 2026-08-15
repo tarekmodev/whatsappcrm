@@ -12,10 +12,10 @@ import type { TicketQueueParams } from '@/features/tickets/ticket-params';
 import styles from './TicketQueueFilters.module.css';
 
 /**
- * Scope, status and priority for the queue. Usage:
+ * Scope, status, priority and SLA for the queue. Usage:
  * `<TicketQueueFilters params={params} canReadAll={…} />`.
  *
- * Three strips of links rather than three selects, so the whole bar is server
+ * Four strips of links rather than four selects, so the whole bar is server
  * rendered, ships no JavaScript, and puts every filter in the URL — a refresh, a
  * copied link and the back button all reproduce the same view. `FilterPills`
  * renders nothing for a strip with fewer than two entries, so an agent without
@@ -46,6 +46,7 @@ export function TicketQueueFilters({ params, canReadAll }: TicketQueueFiltersPro
         label={content.tickets.priorityFilterLabel}
         items={priorityItems(params)}
       />
+      <FilterPills isLabelVisible label={content.sla.filterLabel} items={slaItems(params)} />
     </div>
   );
 }
@@ -103,6 +104,29 @@ function priorityItems(params: TicketQueueParams): FilterPillItem[] {
       href: href(params, { priority }),
       isCurrent: params.priority === priority,
     })),
+  ];
+}
+
+/**
+ * Two pills rather than a checkbox, so the whole bar stays one kind of control
+ * and the filter stays a link — which is what puts it in the URL and makes a
+ * supervisor's "everything that has breached" view something they can send
+ * somebody (TAR-26).
+ */
+function slaItems(params: TicketQueueParams): FilterPillItem[] {
+  return [
+    {
+      id: 'sla-any',
+      label: content.common.all,
+      href: href(params, { isOverdueOnly: false }),
+      isCurrent: !params.isOverdueOnly,
+    },
+    {
+      id: 'sla-overdue',
+      label: content.sla.filterOverdue,
+      href: href(params, { isOverdueOnly: true }),
+      isCurrent: params.isOverdueOnly,
+    },
   ];
 }
 

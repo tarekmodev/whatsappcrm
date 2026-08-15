@@ -47,7 +47,10 @@ export async function TicketQueueSection({ params, isScopeNarrowed }: TicketQueu
 /** Anything beyond the default view — the active queue, assigned to me. */
 function isFiltered(params: TicketQueueParams): boolean {
   return (
-    params.status !== undefined || params.priority !== undefined || params.scope !== 'assigned'
+    params.status !== undefined ||
+    params.priority !== undefined ||
+    params.scope !== 'assigned' ||
+    params.isOverdueOnly
   );
 }
 

@@ -66,6 +66,36 @@ describe('DataTable', () => {
 
     expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(ROWS.length);
   });
+
+  it('flags only the rows `getRowTone` names, and leaves the rest unmarked', () => {
+    // The ticket queue's overdue rule. One line from silently regressing: drop
+    // the prop from the `<tr>` and nothing else in the suite would notice.
+    render(
+      <DataTable
+        caption="Agents"
+        columns={COLUMNS}
+        rows={ROWS}
+        getRowKey={(row) => row.id}
+        getRowTone={(row) => (row.count > 3 ? 'danger' : undefined)}
+      />,
+    );
+
+    const rows = document.querySelectorAll('tbody tr');
+
+    expect(rows).toHaveLength(2);
+    // Amina, count 2 — under the threshold, so no attribute at all rather than
+    // an empty one, which CSS would still match on `[data-tone]`.
+    expect(rows[0]?.hasAttribute('data-tone')).toBe(false);
+    expect(rows[1]).toHaveAttribute('data-tone', 'danger');
+  });
+
+  it('marks no row when no `getRowTone` is given, which is every other caller', () => {
+    render(
+      <DataTable caption="Agents" columns={COLUMNS} rows={ROWS} getRowKey={(row) => row.id} />,
+    );
+
+    expect(document.querySelectorAll('tbody tr[data-tone]')).toHaveLength(0);
+  });
 });
 
 describe('DataTableSkeleton', () => {

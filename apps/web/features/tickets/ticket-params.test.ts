@@ -12,17 +12,33 @@ const VALID_ID = '0192f00a-0000-7000-8000-000000000a01';
 describe('parseTicketQueueParams', () => {
   it('defaults to the active queue, assigned to me', () => {
     expect(
-      parseTicketQueueParams({ scope: undefined, status: undefined, priority: undefined }),
-    ).toEqual({ scope: 'assigned', status: undefined, priority: undefined });
+      parseTicketQueueParams({
+        scope: undefined,
+        status: undefined,
+        priority: undefined,
+        overdue: undefined,
+      }),
+    ).toEqual({
+      scope: 'assigned',
+      status: undefined,
+      priority: undefined,
+      isOverdueOnly: false,
+    });
   });
 
   it('keeps every value the contract publishes', () => {
     expect(
-      parseTicketQueueParams({ scope: 'all', status: 'resolved', priority: 'urgent' }),
+      parseTicketQueueParams({
+        scope: 'all',
+        status: 'resolved',
+        priority: 'urgent',
+        overdue: 'true',
+      }),
     ).toEqual({
       scope: 'all',
       status: 'resolved',
       priority: 'urgent',
+      isOverdueOnly: true,
     });
   });
 
@@ -30,8 +46,31 @@ describe('parseTicketQueueParams', () => {
     // The alternative is an error card for a link somebody truncated, or a 422
     // from the API for a query the console built out of a hand-edited URL.
     expect(
-      parseTicketQueueParams({ scope: 'everything', status: 'archived', priority: 'critical' }),
-    ).toEqual({ scope: 'assigned', status: undefined, priority: undefined });
+      parseTicketQueueParams({
+        scope: 'everything',
+        status: 'archived',
+        priority: 'critical',
+        overdue: 'yes',
+      }),
+    ).toEqual({
+      scope: 'assigned',
+      status: undefined,
+      priority: undefined,
+      isOverdueOnly: false,
+    });
+  });
+
+  it('reads `?overdue=false` as the full queue, not as an empty one', () => {
+    // `z.coerce.boolean()` would make this `true` — every non-empty string is.
+    // A truncated link must not silently hide every ticket that is on time.
+    expect(
+      parseTicketQueueParams({
+        scope: undefined,
+        status: undefined,
+        priority: undefined,
+        overdue: 'false',
+      }).isOverdueOnly,
+    ).toBe(false);
   });
 });
 

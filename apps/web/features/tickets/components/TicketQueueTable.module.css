@@ -34,3 +34,23 @@
   color: var(--color-on-surface-muted);
   overflow-wrap: anywhere;
 }
+
+/*
+ * Once `DataTable` un-stacks — its wrapper is the query container — `anywhere`
+ * becomes the wrong guard. It collapses each column's min-content to a single
+ * character, so the table's auto layout hands the subject almost no width and
+ * breaks "Activation" into "Activatio / n" while the nowrap columns beside it
+ * keep their full size. `break-word` still protects against the one case
+ * `anywhere` was added for: a 200-character subject with no spaces in it.
+ *
+ * ⚠️ **`40rem` must match `DataTable.module.css`'s un-stacking query.** A
+ * `@container` condition cannot read a custom property, so the two literals
+ * cannot share a token — and tuning one without the other puts this rule on the
+ * wrong side of the switch, which is the "Activatio / n" break above.
+ */
+@container (min-width: 40rem) {
+  .subject,
+  .assignee {
+    overflow-wrap: break-word;
+  }
+}

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Suspense, type ReactNode } from 'react';
 import { webEnv } from '@/lib/config/env';
 import { verifySession } from '@/lib/session/session';
 import { readTheme } from '@/lib/theme/read-theme';
@@ -12,6 +12,11 @@ import { ThemeToggle } from '@/components/theme/ThemeToggle';
 import { RoleStubSwitcher } from '@/components/shell/RoleStubSwitcher';
 import { SignOutButton } from '@/components/shell/SignOutButton';
 import { SkipLink } from '@/components/shell/SkipLink';
+import { SlaAlertsBoundary } from '@/features/sla/components/SlaAlertsBoundary';
+import {
+  SlaAlertsSection,
+  SlaAlertsSectionSkeleton,
+} from '@/features/sla/components/SlaAlertsSection';
 
 /**
  * The signed-in console shell. Composition only: it resolves the principal and
@@ -49,6 +54,26 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     </>
   );
 
+  /*
+   * The SLA bell, for the roles that can actually receive an alert. Three
+   * layers, each doing one job:
+   *
+   *   * the permission check omits it entirely for an agent, rather than
+   *     offering a bell whose panel would always be empty;
+   *   * Suspense keeps the shell painting while the alert read is in flight —
+   *     the bar must not wait on a notification count;
+   *   * the boundary keeps a failed read from blanking the whole console. A
+   *     bell that could take the shell down would be the most expensive
+   *     possible notification.
+   */
+  const alerts = checker.can('sla:read') ? (
+    <SlaAlertsBoundary>
+      <Suspense fallback={<SlaAlertsSectionSkeleton />}>
+        <SlaAlertsSection />
+      </Suspense>
+    </SlaAlertsBoundary>
+  ) : undefined;
+
   return (
     <>
       <SkipLink />
@@ -60,6 +85,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             items={navItems}
             principal={principal}
             quickCreateItems={quickCreateItems}
+            alerts={alerts}
             utilities={utilities}
           />
         }
