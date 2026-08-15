@@ -252,7 +252,9 @@ Four fields behave in ways the shape does not show:
   so is a cancelled one — `SLA_STATES` publishes no `cancelled`, and "there is no deadline
   here" is what a badge needs to know. `policyId` is null for a tenant with SLA turned off.
   No deadline is copied onto `tickets` deliberately: `dueAt` moves on every pause and
-  resume, so a copy would drift into reporting a breach that never happened.
+  resume, so a copy would drift into reporting a breach that never happened. Where the window
+  comes from, what moves a timer, and who is alerted when one breaches are in
+  [the SLA timers reference](sla-timers.md).
 - **`routing` says whether routing may still act on this ticket**, and is not part of its
   lifecycle. `state` is `pending`, `assigned`, `deferred` or `manual`; `deferredReason` and
   `deferredSince` are non-null exactly when it is `deferred`. `RuleEngineService` writes it in
