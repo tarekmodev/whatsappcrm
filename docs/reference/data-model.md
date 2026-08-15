@@ -136,8 +136,11 @@ an index predicate.
 Host → tenant resolution. The first half of tenant resolution on every request.
 
 - **Unique:** `hostname` (`citext`, **globally** unique — an unauthenticated request has
-  only the host to go on, so two tenants claiming one host has no correct answer)
-- **Indexes:** `(tenant_id)`
+  only the host to go on, so two tenants claiming one host has no correct answer);
+  `(tenant_id) WHERE is_primary` (partial, TAR-417)
+- **Indexes:** `(tenant_id)`; `(verification_requested_at) WHERE verified_at IS NULL`
+  (partial, the verification sweeper's queue)
+- **Checks:** `tenant_domains_custom_needs_token`, `tenant_domains_verification_token_format`
 - **Relations:** `tenants` → `tenant_domains`, `Cascade`
 - **Owned by:** TAR-19, custom domains TAR-29
 
@@ -146,12 +149,53 @@ unverified row must not resolve a request. Provisioning issues the platform subd
 under our own zone and stamps `verified_at` immediately — there is nothing for the
 customer to prove.
 
+A custom domain proves ownership with a DNS `TXT` record at
+`_whatsappcrm-challenge.<hostname>` carrying `verification_token` — 32 lowercase hex
+characters, stored in plaintext because it is published in public DNS and is therefore not
+a credential. `verification_requested_at` starts the squat-expiry clock,
+`verification_attempts` drives the sweeper's backoff, and `verification_failure_reason` is
+a native enum matching `DOMAIN_VERIFICATION_FAILURE_REASONS` in the contracts package.
+
+**Verification and activation are separate, and both must hold.** `verified_at` says the
+tenant proved ownership; `activated_at` says a platform operator attached the domain at
+the edge and its certificate issued. A verified-but-unattached domain receives no traffic;
+an attached-but-unverified one resolves to nothing. Neither party controls both halves,
+which is the isolation argument for custom domains (TAR-416).
+
+The exported `status` — `pending_verification`, `verified`, `live`, `expired` — is derived
+from these columns and deliberately **not stored**: a stored status is a second source of
+truth that disagrees with its own columns after one failed write.
+
+The global unique index on `hostname` is the collision rule, and it works under RLS
+because unique indexes are enforced **below** row-level security: a tenant claiming a
+hostname another tenant holds gets a unique violation without being able to read, or learn
+anything about, the conflicting row. The API maps that to `conflict` and must not read the
+row back.
+
 #### `tenant_branding`
 
-White-label presentation. One row per tenant, all columns nullable.
+White-label presentation. One row per tenant, created lazily on the first branding write
+rather than at provisioning. All columns nullable.
 
 - **Unique:** `tenant_id`
+- **Checks:** `tenant_branding_logo_complete`, `tenant_branding_favicon_complete` (an
+  asset's four columns are all null or all set); `tenant_branding_primary_color_hex`,
+  `tenant_branding_accent_color_hex` (`#rrggbb`, matching `HexColorSchema`)
 - **Owned by:** TAR-29
+
+Every column stays nullable by decision: `BRANDING_DEFAULTS` in the contracts package fills
+the product name and both colours when a row or column is absent, so the response is always
+fully populated. A `NOT NULL DEFAULT` here would bake the platform's own brand into every
+row and make "has this tenant customised anything" unanswerable.
+
+Logo and favicon are four columns each — storage key, sniffed mime type, size in bytes and
+an updated-at that doubles as the `?v=` cache-buster. **No URL is stored** (TAR-417 dropped
+`logo_url`/`favicon_url`, which nothing had ever written): the same row is served under a
+platform subdomain and under a custom domain, so an absolute URL would name whichever host
+existed at write time and make the browser fetch cross-origin under the other — dropping
+the session cookie. The bytes live in the `MediaStorage` port under
+`tenants/<tenantId>/branding/<storageId>`, not in `media_objects`, whose kinds, mime
+allow-list and retention sweep are Meta's Cloud API vocabulary.
 
 #### `tenant_settings`
 
