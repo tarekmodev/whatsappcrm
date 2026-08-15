@@ -725,7 +725,7 @@ and both permissions are supervisor-and-above already (0004):
 ```
 GET  /api/v1/tickets?scope=unassigned&routingState=deferred  → CursorPage<TicketResponse>  ticket:read_all
 POST /api/v1/tickets/{id}/assign                             → TicketResponse              ticket:assign
-                                                               [TO BUILD — see the correction below]
+                                                               [built by TAR-374 — see amendment 2]
 ```
 
 > ⚠️ **Corrected — `POST /tickets/{id}/assign` did not exist when this was written.** The line above
@@ -736,7 +736,8 @@ POST /api/v1/tickets/{id}/assign                             → TicketResponse 
 > mistake; a schema is not a route. TAR-274 built its **Assign** control against this table and
 > shipped a button that 404s outside mock mode. The endpoint is **TAR-374**, and it is specified in
 > full there — including the `userId: null` unassign case this document never ruled on. See
-> _Amendment 1_.
+> _Amendment 1_ for how the gap happened, and _Amendment 2_ for how the endpoint that closed it
+> behaves.
 
 **Specified, and required by no acceptance criterion** — the cap-editing surface. Recorded so nobody
 has to invent it, and so it is clear it is _not_ in TAR-273's or TAR-274's scope:
@@ -940,3 +941,54 @@ including the `userId: null` unassign case this document never ruled on.
 Both corrections are marked ⚠️ at their original locations rather than only here, because the
 second gap was caused by a reader trusting a line in a table, and a reader who trusts that line will
 not scroll to an amendment.
+
+### Amendment 2 — how `POST /api/v1/tickets/{id}/assign` behaves (TAR-374)
+
+Amendment 1 records _that_ the endpoint was missing. This records what was built in its place, and
+the two decisions the specification left open. Nothing in the contract changes:
+`TicketAssignInputSchema` has been published since TAR-39.
+
+**The routing write is one statement with the assignment.**
+`tickets_routing_deferred_consistent` makes `routing_state = 'deferred'` equivalent to both deferred
+columns being non-null, so a ticket cannot leave `deferred` unless the same statement nulls them.
+The assignment columns, `routing_state`, both deferred columns and the ticket event therefore land
+in one `$tenantTransaction` — the constraint makes the column set indivisible, and an event log that
+claimed an assignment the constraint then rejected would be worse than no log.
+
+**An explicit release sets `routing_state = 'pending'`, not `manual`.** A body leaving the ticket
+with neither a user nor a team returns it to the state a fresh ticket has: nobody holds it, and no
+supervisor has judged it stuck. It stays out of the flagged queue, because a supervisor releasing a
+ticket deliberately is not rotation failing to place one.
+
+⚠️ **This corrects decision 3's table row**, which reads "`manual` — A human assigned, reassigned
+_or released_ it". Released is now `pending`; assigned and reassigned stay `manual`. The consequence
+is deliberate and worth stating: when a re-route path exists, it may pick a released ticket up
+again — which is what a supervisor handing work back to the pool is asking for — while a ticket a
+human put a name on stays untouchable. The alternative, `manual` on a ticket nobody holds, makes the
+column say "a human owns this decision" about a row no human is on, and leaves a released ticket
+permanently invisible to routing with nothing flagging it.
+
+**`pending` is therefore reachable after the insert.** The column default is not an insert-only
+value. The CHECK accepts it with both deferred columns null, `TicketQueryService`'s `routingState`
+filter reads it like any other, and `ticket-assign.int-spec.ts` asserts both against a real database.
+
+**A body naming an assignee this tenant does not have is `validation_failed`, not `not_found` and
+not 422.** The ticket the caller addressed was found; what is wrong is a field of the body, and the
+error carries a `details` entry pointing at `userId` or `teamId` so the dialog can highlight the
+input. This follows `POST /conversations/{id}/assign`, which is the same act on the neighbouring
+resource, and it keeps 0002's rule that one condition answers one status across the API. A user in
+another tenant and a user who is not `active` fold into the same refusal — the first is invisible
+under RLS, and folding them keeps the endpoint from confirming that a UUID names somebody real
+elsewhere. **The mock in `apps/web/lib/api/mock/handlers.ts` answers 404 and 422 for these two
+cases** and now differs from the API; its 422 is a mock-wide deviation from `API_ERROR_STATUS`,
+which puts `validation_failed` at 400. The console reads `error.code` rather than the status, so
+nothing in it changes.
+
+**A repeated submit writes nothing** — the rule 0002 amendment 9 states for the PATCH, applied here
+so a double-clicked **Assign** button cannot grow a second identical `assigned` row in the history an
+escalation is read from. "Nothing changed" covers the routing columns as well as the assignment
+ones, so assigning a deferred ticket to the team it already carries still leaves the flagged queue.
+
+**Nothing is announced and nothing is enqueued.** The Realtime section above already rules that
+pushing a routing change is not in this chain, and 0006's fourth SLA trigger is a _status_ change —
+a timer does not move because a ticket changed hands.
