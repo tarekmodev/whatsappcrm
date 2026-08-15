@@ -27,10 +27,11 @@ import {
   TicketNotFoundError,
   TicketStatusChangedConcurrentlyError,
   TicketTransitionNotAllowedError,
+  UnknownTicketAssigneeError,
 } from './tickets.errors';
 
 /**
- * The HTTP contract of the three ticket routes.
+ * The HTTP contract of the four ticket routes.
  *
  * Proved with the **real** `PrincipalGuard` and `PermissionGuard`, registered as
  * `APP_GUARD` the way `RequestPipelineModule` registers them (TAR-58), and a
@@ -67,6 +68,12 @@ function principalWith(permissions: readonly Permission[]): SessionPrincipal {
 }
 
 const AGENT = principalWith(permissionsForRole('agent'));
+/** `ticket:assign` is supervisor-and-above (0004), so the assign route needs one. */
+const SUPERVISOR: SessionPrincipal = {
+  ...principalWith(permissionsForRole('supervisor')),
+  role: 'supervisor',
+};
+const TEAMMATE = '25444444-4444-7444-8444-4444444444d2';
 
 const TICKET_RESPONSE = {
   id: TICKET,
@@ -108,11 +115,13 @@ describe('ticket routes', () => {
   let list: jest.Mock;
   let get: jest.Mock;
   let update: jest.Mock;
+  let assign: jest.Mock;
 
   beforeAll(async () => {
     list = jest.fn();
     get = jest.fn();
     update = jest.fn();
+    assign = jest.fn();
 
     const moduleRef = await Test.createTestingModule({
       imports: [TenantContextModule],
@@ -120,7 +129,7 @@ describe('ticket routes', () => {
       providers: [
         ApiExceptionFilter,
         { provide: TicketQueryService, useValue: { list, get } },
-        { provide: TicketCommandService, useValue: { update } },
+        { provide: TicketCommandService, useValue: { update, assign } },
         // Read by `configureApp` for the CORS allow-list; nothing here needs it.
         { provide: ConfigService, useValue: { get: () => undefined } },
         {
@@ -325,6 +334,96 @@ describe('ticket routes', () => {
         .expect(403);
 
       expect(ApiErrorSchema.parse(response.body).error.code).toBe('forbidden');
+    });
+  });
+
+  describe('POST /api/v1/tickets/{id}/assign', () => {
+    const path = `/api/v1/tickets/${TICKET}/assign`;
+
+    beforeEach(() => {
+      principal = SUPERVISOR;
+    });
+
+    it('refuses a caller without ticket:assign', async () => {
+      // An agent, which is every role below supervisor: the console offers the
+      // control on the supervisor's page only, and this is what enforces it.
+      principal = AGENT;
+
+      await request(server).post(path).send({ userId: TEAMMATE }).expect(403);
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unauthenticated caller before reaching the service', async () => {
+      signedIn = false;
+
+      const response = await request(server).post(path).send({ userId: TEAMMATE }).expect(401);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('unauthenticated');
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('refuses an id that is not a UUID', async () => {
+      const response = await request(server)
+        .post('/api/v1/tickets/not-a-uuid/assign')
+        .send({ userId: TEAMMATE })
+        .expect(400);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('validation_failed');
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('refuses a body naming neither a user nor a team', async () => {
+      const response = await request(server).post(path).send({}).expect(400);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('validation_failed');
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('answers 200 with the assigned ticket, in the published shape', async () => {
+      // 200 and not 201: nothing was created, and the body is the ticket as it
+      // now stands — the shape the console puts straight back in its cache.
+      assign.mockResolvedValue({
+        ...TICKET_RESPONSE,
+        assignedUserId: TEAMMATE,
+        routing: { state: 'manual', deferredReason: null, deferredSince: null },
+      });
+
+      const response = await request(server).post(path).send({ userId: TEAMMATE }).expect(200);
+      const ticket = TicketResponseSchema.parse(response.body);
+
+      expect(ticket.assignedUserId).toBe(TEAMMATE);
+      expect(ticket.routing.state).toBe('manual');
+      expect(assign).toHaveBeenCalledWith(TICKET, { userId: TEAMMATE });
+    });
+
+    it('passes an explicit null through rather than dropping it', async () => {
+      // `{ userId: null }` is a release, not an absent field, and a pipe that
+      // stripped it would turn the one into the other.
+      assign.mockResolvedValue(TICKET_RESPONSE);
+
+      await request(server).post(path).send({ userId: null, reason: 'Parked' }).expect(200);
+
+      expect(assign).toHaveBeenCalledWith(TICKET, { userId: null, reason: 'Parked' });
+    });
+
+    it('maps an assignee this tenant does not have to validation_failed, naming the field', async () => {
+      // Not `not_found`: the ticket was found, and a 404 here would read as "the
+      // ticket is gone" — the wrong recovery for a stale name in a dropdown.
+      assign.mockRejectedValue(new UnknownTicketAssigneeError('userId', 'user', TEAMMATE));
+
+      const response = await request(server).post(path).send({ userId: TEAMMATE }).expect(400);
+      const { error } = ApiErrorSchema.parse(response.body);
+
+      expect(error.code).toBe('validation_failed');
+      expect(error.details).toEqual([{ path: 'userId', message: expect.any(String) as string }]);
+    });
+
+    it('answers not_found for a ticket this principal may not see', async () => {
+      assign.mockRejectedValue(new TicketNotFoundError(TICKET));
+
+      const response = await request(server).post(path).send({ userId: TEAMMATE }).expect(404);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('not_found');
     });
   });
 });

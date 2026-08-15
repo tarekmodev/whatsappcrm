@@ -119,6 +119,40 @@ export class TicketCloseNotPermittedError extends TicketError {
   }
 }
 
+/**
+ * An assign body naming a user or a team this tenant does not have — or a user
+ * who has one but cannot take work.
+ *
+ * `validation_failed` naming the offending field, and **not** `not_found`, which
+ * is the answer TAR-374's acceptance criteria asked for. Three reasons, and the
+ * third is the one that settles it:
+ *
+ *   * the resource the caller addressed — the ticket — *was* found, and the
+ *     offending id is a field of the body. `UnknownTenantMemberError` makes
+ *     exactly this argument for `POST /conversations/{id}/assign`, which is the
+ *     same act on the neighbouring resource;
+ *   * a 404 on this route is indistinguishable from the ticket itself being
+ *     gone, which is the answer the console reacts to by dropping the row and
+ *     refetching — the wrong recovery for a stale name in a dropdown;
+ *   * `tickets.http.ts` exists so that one condition cannot answer two statuses
+ *     on two routes. A stranger's user id is one condition.
+ *
+ * The two cases are folded — an id in another tenant is invisible under RLS and
+ * a suspended user is refused by the same lookup — so the message cannot be used
+ * to learn that a UUID names somebody real elsewhere. `field` is what the
+ * error's `details` entry points at, so the dialog can highlight the input
+ * rather than showing a banner.
+ */
+export class UnknownTicketAssigneeError extends TicketError {
+  constructor(
+    readonly field: 'userId' | 'teamId',
+    readonly kind: 'user' | 'team',
+    readonly id: string,
+  ) {
+    super(`${id} does not name an active ${kind} in this tenant.`);
+  }
+}
+
 /** A cursor this build cannot act on. `tickets.http.ts` turns it into `validation_failed`. */
 export class InvalidTicketCursorError extends TicketError {
   constructor(readonly parameter: string) {

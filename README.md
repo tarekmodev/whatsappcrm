@@ -1271,8 +1271,12 @@ environment; `.env.example` turns both on, and its comments say why:
   offered, because there would be nothing to end. Its API half is `AUTH_STUB_ENABLED`,
   which binds `StubPrincipalSource` in place of the session reader and is refused under
   `NODE_ENV=production`; the two are driven by the same `wac_role_stub` cookie so they
-  cannot disagree. What the stub replaces is the source of the principal, never a guard —
-  see
+  cannot disagree. The browser reaches the API through the rewrite and carries that cookie
+  itself; server rendering and server actions do not, so the transport translates it to the
+  API's `x-dev-role` header on every server-side call (`lib/session/role-stub-request.ts`).
+  Without that the switcher moved the chrome and nothing else, and every call resolved as
+  the tenant's default admin (TAR-366). What the stub replaces is the source of the
+  principal, never a guard — see
   [Driving this surface locally](docs/reference/people-api.md#driving-this-surface-locally).
 
 ## License

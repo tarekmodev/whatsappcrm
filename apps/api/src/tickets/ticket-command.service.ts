@@ -6,22 +6,27 @@ import {
   TICKET_STATUS_REQUIRES_CLOSE,
   canAgentTransition,
   type SlaEvaluateTicketTrigger,
+  type TicketAssignInput,
   type TicketPriority,
   type TicketResponse,
+  type TicketRoutingState,
   type TicketStatus,
   type TicketUpdateInput,
 } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { TICKET_UPDATED_EVENT, type TicketUpdatedEvent } from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
+import { UserStatus } from '../generated/prisma/enums';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { QueueService } from '../queue/queue.service';
 import { TICKET_PROJECTION, toTicketResponse, type TicketRow } from './ticket.mapper';
 import { TicketQueryService } from './ticket-query.service';
 import {
   TicketCloseNotPermittedError,
+  TicketNotFoundError,
   TicketStatusChangedConcurrentlyError,
   TicketTransitionNotAllowedError,
+  UnknownTicketAssigneeError,
 } from './tickets.errors';
 
 /** Everything an agent-driven change writes, recorded as `agent` on the event log. */
@@ -34,12 +39,18 @@ interface TicketChange {
   readonly subject: string | null;
 }
 
+/** Who holds the ticket once an assign body has been applied to the current row. */
+interface TicketAssignment {
+  readonly assignedUserId: string | null;
+  readonly assignedTeamId: string | null;
+}
+
 /**
- * `PATCH /api/v1/tickets/{id}` — the one write an agent makes to a ticket
- * (TAR-25, ruled by 0006).
+ * The two writes into a ticket: the agent's `PATCH /api/v1/tickets/{id}`
+ * (TAR-25, ruled by 0006) and the supervisor's
+ * `POST /api/v1/tickets/{id}/assign` (TAR-23, ruled by 0008 decision 3).
  *
- * Assignment (`POST /tickets/{id}/assign`, TAR-23) is not here and neither is
- * the event log read (TAR-32); both are additive when they land.
+ * The event log read (TAR-32) is not here and is additive when it lands.
  *
  * ## Every path goes through `TicketQueryService.require` first
  *
@@ -79,11 +90,12 @@ interface TicketChange {
  *
  * ## Not audited, deliberately
  *
- * `audit_logs` carries security-relevant events. Resolving a ticket or bumping
- * its priority is ordinary operational activity that happens hundreds of times a
- * day per tenant, and writing it there would drown the trail an auditor reads —
- * the same rule `ConversationCommandService` states. `ticket_events` is the
- * per-ticket history.
+ * `audit_logs` carries security-relevant events. Resolving a ticket, bumping its
+ * priority or handing it to a colleague is ordinary operational activity that
+ * happens hundreds of times a day per tenant, and writing it there would drown
+ * the trail an auditor reads — the same rule `ConversationCommandService`
+ * states. `ticket_events` is the per-ticket history, and the assign write
+ * appends to it.
  */
 @Injectable()
 export class TicketCommandService {
@@ -134,6 +146,72 @@ export class TicketCommandService {
     await this.triggerSlaEvaluation(before, after);
 
     return toTicketResponse(after);
+  }
+
+  /**
+   * `POST /api/v1/tickets/{id}/assign` — the supervisor putting a name on a
+   * ticket rotation could not place (0008 decision 3, amendment 2).
+   *
+   * ## Partial, like the conversation's assign
+   *
+   * `userId` and `teamId` are each applied only when the body carries them, so
+   * one call can move a ticket from an agent to a team, hand it to a named agent
+   * inside a team, or release it — without a route per direction. Absent leaves
+   * the column alone, `null` clears it, an id sets it.
+   *
+   * ## The routing columns move with the assignment, in one statement
+   *
+   * `tickets_routing_deferred_consistent` requires `routing_deferred_reason` and
+   * `routing_deferred_since` to be non-null **exactly** when
+   * `routing_state = 'deferred'`, so a deferred ticket cannot leave that state
+   * without both being nulled in the same write. That makes the four columns one
+   * indivisible change rather than a preference, and it is why the event is
+   * appended inside the same transaction: a log claiming an assignment the
+   * constraint then rejected would be worse than no log.
+   *
+   * ## An explicit release goes to `pending`, not `manual`
+   *
+   * 0008 amendment 2. A body that leaves the ticket with neither a user nor a
+   * team returns it to the state a fresh ticket has: nobody holds it, and no
+   * supervisor has judged it stuck. `manual` would say "a human owns this
+   * decision" about a ticket no human is on, and `deferred` would put a
+   * deliberate release in the queue of things rotation failed to place — two
+   * different events that must not read the same.
+   *
+   * **So `pending` is reachable after the insert.** It is not an insert-only
+   * value, whatever the column default suggests; `ticket-query.service.ts`'s
+   * `routingState` filter and the CHECK constraint both accept it, and a reader
+   * who assumes otherwise is the one this paragraph is for.
+   *
+   * ## Last writer wins, deliberately
+   *
+   * No compare-and-set. `update` above guards on `status` because a *second
+   * writer* — the linker's reopen — touches the same column off a queue; nothing
+   * writes the assignment columns behind this route except the router, and the
+   * router only ever moves a ticket **out of** unassigned. Two supervisors
+   * assigning the same flagged ticket in the same second is a race whose honest
+   * answer is "the later one holds it", and it is on the event log either way.
+   *
+   * ## Nothing is announced and nothing is enqueued
+   *
+   * No `ticket.updated`: that event carries status and priority, neither of which
+   * moved, and 0008's Realtime section is explicit that pushing a routing change
+   * is not in this story — TAR-274's view refetches. No SLA job either: 0006's
+   * fourth trigger is a **status** change, and a timer does not move because the
+   * ticket changed hands.
+   */
+  async assign(ticketId: string, input: TicketAssignInput): Promise<TicketResponse> {
+    const before = await this.tickets.require(ticketId);
+
+    await this.assertAssigneesExist(input);
+
+    const assignment = assignmentAfter(before, input);
+
+    if (!movesAnything(before, assignment)) {
+      return toTicketResponse(before);
+    }
+
+    return toTicketResponse(await this.writeAssignment(before, assignment, input.reason));
   }
 
   /**
@@ -273,6 +351,110 @@ export class TicketCommandService {
   }
 
   /**
+   * The four assignment and routing columns and the one event, in one
+   * transaction — the indivisibility the CHECK constraint imposes, and the
+   * ordering that stops the log claiming an assignment that did not commit.
+   *
+   * `updateMany` rather than `update` for the reason `write` above gives:
+   * `$tenantTransaction` hands back the **un-extended** client, so `tenantId` is
+   * named explicitly here. It is a filter and not a compare-and-set — the row
+   * was admitted by `require` moments ago, so zero rows matched means it was
+   * deleted underneath the request, which is `not_found` and not a conflict.
+   *
+   * `previousAssignedUserId` and `previousAssignedTeamId` go on the event beside
+   * the new pair: the router's `assigned` event omits them because it only ever
+   * assigns a ticket nobody holds, but a supervisor's re-assignment is exactly
+   * the case where "who had it before" is the interesting half, and TAR-32's
+   * `fromValue` has to come from somewhere.
+   */
+  private async writeAssignment(
+    before: TicketRow,
+    assignment: TicketAssignment,
+    reason: string | undefined,
+  ): Promise<TicketRow> {
+    const tenantId = this.tenantContext.requireTenantId();
+    const actorUserId = this.tenantContext.requirePrincipal().userId;
+
+    return this.prisma.$tenantTransaction(async (tx) => {
+      const { count } = await tx.ticket.updateMany({
+        where: { tenantId, id: before.id },
+        data: {
+          ...assignment,
+          routingState: routingStateFor(assignment),
+          routingDeferredReason: null,
+          routingDeferredSince: null,
+        },
+      });
+
+      if (count === 0) {
+        throw new TicketNotFoundError(before.id);
+      }
+
+      await tx.ticketEvent.create({
+        data: {
+          tenantId,
+          ticketId: before.id,
+          type: hasAssignee(assignment) ? 'assigned' : 'unassigned',
+          // A person did this, unlike the router's system-null actor.
+          actorUserId,
+          data: {
+            ...assignment,
+            previousAssignedUserId: before.assignedUserId,
+            previousAssignedTeamId: before.assignedTeamId,
+            cause: AGENT_CAUSE,
+            ...(reason === undefined ? {} : { reason }),
+          } satisfies Prisma.InputJsonObject,
+        },
+      });
+
+      return tx.ticket.findUniqueOrThrow({ where: { id: before.id }, select: TICKET_PROJECTION });
+    });
+  }
+
+  /**
+   * Refuses an assignee this tenant does not have, or one that cannot take work.
+   *
+   * Both lookups go through `TenantPrisma`, so RLS supplies the tenant equality
+   * and an id belonging to another tenant simply is not there — the id in the
+   * body is never trusted as a key. Without this the foreign key would refuse it
+   * anyway, but as a driver error and a 500; this turns it into a
+   * `validation_failed` naming the offending field.
+   *
+   * `active` only, exactly as `ConversationCommandService` argues it: a removed
+   * account cannot answer, a suspended one has had its access cut, and an
+   * `invited` user has no session to open the ticket with. Handing a stuck
+   * ticket to any of them would look like a fix and be a second deferral.
+   *
+   * Outside the transaction, and knowingly: a user suspended in the milliseconds
+   * between this read and the write lands assigned, which the next routing pass
+   * or a supervisor corrects. A lock spanning the two would be a heavier cure
+   * than the disease.
+   */
+  private async assertAssigneesExist(input: TicketAssignInput): Promise<void> {
+    if (typeof input.userId === 'string') {
+      const user = await this.prisma.user.findUnique({
+        where: { id: input.userId, status: UserStatus.active },
+        select: { id: true },
+      });
+
+      if (user === null) {
+        throw new UnknownTicketAssigneeError('userId', 'user', input.userId);
+      }
+    }
+
+    if (typeof input.teamId === 'string') {
+      const team = await this.prisma.team.findUnique({
+        where: { id: input.teamId },
+        select: { id: true },
+      });
+
+      if (team === null) {
+        throw new UnknownTicketAssigneeError('teamId', 'team', input.teamId);
+      }
+    }
+  }
+
+  /**
    * Tells the in-process bus a ticket changed, **after** the transaction has
    * committed — pushing a change that a rollback then un-wrote is the failure
    * every other producer of these events avoids the same way.
@@ -321,6 +503,58 @@ function changesIn(before: TicketRow, input: TicketUpdateInput): TicketChange {
       input.priority === undefined || input.priority === before.priority ? null : input.priority,
     subject: input.subject === undefined || input.subject === before.subject ? null : input.subject,
   };
+}
+
+/**
+ * Who holds the ticket once the body has been applied — the current row for a
+ * field the request left out, the body's value for one it carried.
+ *
+ * Resolved against the row rather than passed through, because every question
+ * the rest of the assign path asks — is anybody on it, did anything move, is it
+ * `manual` or `pending` — is about the *result*, and `{ userId: null }` alone
+ * does not say whether the ticket still belongs to a team.
+ */
+function assignmentAfter(before: TicketRow, input: TicketAssignInput): TicketAssignment {
+  return {
+    assignedUserId: input.userId === undefined ? before.assignedUserId : input.userId,
+    assignedTeamId: input.teamId === undefined ? before.assignedTeamId : input.teamId,
+  };
+}
+
+/**
+ * Whether the write would change anything at all — the assignment columns or the
+ * three routing ones.
+ *
+ * A second identical submit writes nothing and answers 200 with the current
+ * ticket, the rule `update` states at length: a double-clicked **Assign** button
+ * and a retry after a dropped response both arrive as this, and each would
+ * otherwise put another `assigned` row in the history an escalation is read
+ * from. The routing columns are part of the comparison because assigning a
+ * ticket to the team it already carries is a no-op on the assignment and still
+ * has to move a `deferred` ticket to `manual`.
+ */
+function movesAnything(before: TicketRow, assignment: TicketAssignment): boolean {
+  return (
+    before.assignedUserId !== assignment.assignedUserId ||
+    before.assignedTeamId !== assignment.assignedTeamId ||
+    before.routingState !== routingStateFor(assignment) ||
+    before.routingDeferredReason !== null ||
+    before.routingDeferredSince !== null
+  );
+}
+
+function hasAssignee(assignment: TicketAssignment): boolean {
+  return assignment.assignedUserId !== null || assignment.assignedTeamId !== null;
+}
+
+/**
+ * `manual` while somebody holds the ticket — routing must not overrule a
+ * person's decision (0008 decision 3) — and `pending` once nobody does, per
+ * amendment 2. Never `deferred` from this route: a supervisor releasing a ticket
+ * on purpose is not rotation failing to place one.
+ */
+function routingStateFor(assignment: TicketAssignment): TicketRoutingState {
+  return hasAssignee(assignment) ? 'manual' : 'pending';
 }
 
 /**

@@ -9,6 +9,7 @@ import { SLA_EVALUATE_TICKET_JOB, SLA_QUEUE } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { TICKET_UPDATED_EVENT } from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
+import type { UserStatus } from '../generated/prisma/enums';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import type { QueueService } from '../queue/queue.service';
 import type { TicketRow } from './ticket.mapper';
@@ -18,6 +19,7 @@ import {
   TicketCloseNotPermittedError,
   TicketStatusChangedConcurrentlyError,
   TicketTransitionNotAllowedError,
+  UnknownTicketAssigneeError,
 } from './tickets.errors';
 
 /**
@@ -36,6 +38,13 @@ import {
 const TENANT = '25444444-4444-7444-8444-444444444401';
 const TICKET = '25444444-4444-7444-8444-4444444444f1';
 const AGENT = '25444444-4444-7444-8444-4444444444d1';
+/** The supervisor's chosen assignee, and the one who can actually take work. */
+const TEAMMATE = '25444444-4444-7444-8444-4444444444d2';
+const SUSPENDED = '25444444-4444-7444-8444-4444444444d3';
+/** In another tenant, so RLS makes the tenant-scoped lookup answer nothing. */
+const STRANGER = '25444444-4444-7444-8444-4444444444d9';
+const TEAM = '25444444-4444-7444-8444-4444444444b1';
+const OTHER_TENANT_TEAM = '25444444-4444-7444-8444-4444444444b9';
 
 /** Every status, so a loop over the ❌ cells cannot silently skip one. */
 const STATUSES: TicketStatus[] = ['open', 'pending', 'resolved', 'closed'];
@@ -94,6 +103,18 @@ function ticket(overrides: Partial<TicketRow> = {}): TicketRow {
   };
 }
 
+/** The flagged ticket the supervisor's queue is built from (0008 decision 3). */
+function deferredTicket(overrides: Partial<TicketRow> = {}): TicketRow {
+  return ticket({
+    assignedUserId: null,
+    assignedTeamId: null,
+    routingState: 'deferred',
+    routingDeferredReason: 'all_at_capacity',
+    routingDeferredSince: new Date('2026-08-14T08:00:00.000Z'),
+    ...overrides,
+  });
+}
+
 function principalWith(permissions: readonly Permission[]): SessionPrincipal {
   return {
     userId: AGENT,
@@ -107,6 +128,15 @@ function principalWith(permissions: readonly Permission[]): SessionPrincipal {
     expiresAt: '2036-12-31T23:59:59.000Z',
   };
 }
+
+/** This tenant's users, as the tenant-scoped lookup in `assign` can see them. */
+const TENANT_USERS: readonly { id: string; status: UserStatus }[] = [
+  { id: AGENT, status: 'active' },
+  { id: TEAMMATE, status: 'active' },
+  { id: SUSPENDED, status: 'suspended' },
+];
+
+const TENANT_TEAMS: readonly string[] = [TEAM];
 
 /** An agent holds `ticket:update` and `ticket:close` today; 0006 §7 relies on that. */
 const FULL_PERMISSIONS = permissionsForRole('agent');
@@ -150,8 +180,25 @@ function harnessFor(
     },
   };
 
+  // The two reads `assign` makes before it writes. They stand for a
+  // **tenant-scoped** lookup: `STRANGER` and `OTHER_TENANT_TEAM` are simply not
+  // in these tables, which is what RLS does to another tenant's row, and the
+  // `status` filter is applied here because the real `findUnique` carries it.
   const prisma = {
     $tenantTransaction: <T>(work: (client: typeof tx) => Promise<T>): Promise<T> => work(tx),
+    user: {
+      findUnique: ({ where }: { where: { id: string; status?: UserStatus } }) =>
+        Promise.resolve(
+          TENANT_USERS.find(
+            (user) =>
+              user.id === where.id && (where.status === undefined || user.status === where.status),
+          ) ?? null,
+        ),
+    },
+    team: {
+      findUnique: ({ where }: { where: { id: string } }) =>
+        Promise.resolve(TENANT_TEAMS.includes(where.id) ? { id: where.id } : null),
+    },
   } as unknown as TenantPrisma;
 
   // `require` keeps no rule of its own here: the visibility check it really
@@ -502,5 +549,236 @@ describe('the SLA evaluation a status change triggers', () => {
     await expect(
       asAgent(async (commands) => commands.update(TICKET, { status: 'pending' })),
     ).resolves.toMatchObject({ status: 'pending' });
+  });
+});
+
+/**
+ * `POST /api/v1/tickets/{id}/assign` — the supervisor's manual placement
+ * (TAR-23, 0008 decision 3 and amendment 2).
+ *
+ * The load-bearing assertion in most of these is about the **single statement**:
+ * `tickets_routing_deferred_consistent` makes the assignment columns and the
+ * three routing ones one indivisible write, so a test that only checked the
+ * assignee would pass against a version the database rejects.
+ */
+describe('assigning a ticket by hand', () => {
+  it('puts a user on the ticket and marks routing manual in one statement', async () => {
+    const { asAgent, written } = harnessFor(ticket({ assignedUserId: null }));
+
+    const response = await asAgent(async (commands) =>
+      commands.assign(TICKET, { userId: TEAMMATE }),
+    );
+
+    expect(written).toEqual([
+      {
+        assignedUserId: TEAMMATE,
+        assignedTeamId: null,
+        routingState: 'manual',
+        routingDeferredReason: null,
+        routingDeferredSince: null,
+      },
+    ]);
+    expect(response.assignedUserId).toBe(TEAMMATE);
+    expect(response.routing.state).toBe('manual');
+  });
+
+  it('routes to a team the same way', async () => {
+    const { asAgent, written } = harnessFor(ticket({ assignedUserId: null }));
+
+    const response = await asAgent(async (commands) => commands.assign(TICKET, { teamId: TEAM }));
+
+    expect(written[0]).toMatchObject({ assignedTeamId: TEAM, routingState: 'manual' });
+    expect(response.assignedTeamId).toBe(TEAM);
+  });
+
+  it('takes a deferred ticket out of the flagged queue, both columns nulled', async () => {
+    // The CHECK constraint refuses `routing_state <> 'deferred'` while either
+    // column is still set, so this is the write that would fail at the database
+    // if the four columns were not moved together.
+    const { asAgent, written } = harnessFor(deferredTicket());
+
+    const response = await asAgent(async (commands) =>
+      commands.assign(TICKET, { userId: TEAMMATE }),
+    );
+
+    expect(written[0]).toMatchObject({
+      routingState: 'manual',
+      routingDeferredReason: null,
+      routingDeferredSince: null,
+    });
+    expect(response.routing).toEqual({
+      state: 'manual',
+      deferredReason: null,
+      deferredSince: null,
+    });
+  });
+
+  it('applies one column without clearing the other', async () => {
+    // The partial semantics the schema's `.refine` allows and the mock models:
+    // absent leaves the column alone.
+    const { asAgent, written } = harnessFor(ticket({ assignedUserId: null, assignedTeamId: TEAM }));
+
+    const response = await asAgent(async (commands) =>
+      commands.assign(TICKET, { userId: TEAMMATE }),
+    );
+
+    expect(written[0]).toMatchObject({ assignedUserId: TEAMMATE, assignedTeamId: TEAM });
+    expect(response.assignedTeamId).toBe(TEAM);
+  });
+
+  it('sends an explicit release back to pending, not manual', async () => {
+    // 0008 amendment 2. Nobody holds it and no supervisor has judged it stuck,
+    // which is the state a fresh ticket has — and `pending` is therefore
+    // reachable after the insert.
+    const { asAgent, written } = harnessFor(deferredTicket());
+
+    const response = await asAgent(async (commands) =>
+      commands.assign(TICKET, { userId: null, teamId: null }),
+    );
+
+    expect(written[0]).toMatchObject({
+      assignedUserId: null,
+      assignedTeamId: null,
+      routingState: 'pending',
+      routingDeferredReason: null,
+      routingDeferredSince: null,
+    });
+    expect(response.routing.state).toBe('pending');
+  });
+
+  it('keeps manual when clearing the user leaves the team on the ticket', async () => {
+    // `{ userId: null }` is not by itself a release: somebody still holds it.
+    const { asAgent, written } = harnessFor(
+      ticket({ assignedUserId: AGENT, assignedTeamId: TEAM }),
+    );
+
+    await asAgent(async (commands) => commands.assign(TICKET, { userId: null }));
+
+    expect(written[0]).toMatchObject({
+      assignedUserId: null,
+      assignedTeamId: TEAM,
+      routingState: 'manual',
+    });
+  });
+
+  it('writes nothing when the same assignment is submitted twice', async () => {
+    // A double-clicked Assign button, and a retry after a dropped response. The
+    // rule `update` states, and here it also keeps the escalation history from
+    // growing a second identical `assigned` row.
+    const { asAgent, written, appended } = harnessFor(
+      ticket({ assignedUserId: TEAMMATE, assignedTeamId: null, routingState: 'manual' }),
+    );
+
+    const response = await asAgent(async (commands) =>
+      commands.assign(TICKET, { userId: TEAMMATE }),
+    );
+
+    expect(written).toEqual([]);
+    expect(appended).toEqual([]);
+    expect(response.assignedUserId).toBe(TEAMMATE);
+  });
+
+  it('still writes when only the routing state would move', async () => {
+    // Assigning a deferred ticket to the team it already carries changes no
+    // assignment column and still has to leave the flagged queue.
+    const { asAgent, written } = harnessFor(deferredTicket({ assignedTeamId: TEAM }));
+
+    await asAgent(async (commands) => commands.assign(TICKET, { teamId: TEAM }));
+
+    expect(written[0]).toMatchObject({ routingState: 'manual', routingDeferredReason: null });
+  });
+});
+
+describe('the event an assignment appends', () => {
+  it('records the actor, the new pair, the previous pair and the reason', async () => {
+    const { asAgent, appended } = harnessFor(ticket({ assignedUserId: AGENT }));
+
+    await asAgent(async (commands) =>
+      commands.assign(TICKET, { userId: TEAMMATE, reason: 'Ada is at capacity' }),
+    );
+
+    expect(appended).toEqual([
+      {
+        type: 'assigned',
+        // A person, unlike the router's system-null actor.
+        actorUserId: AGENT,
+        data: {
+          assignedUserId: TEAMMATE,
+          assignedTeamId: null,
+          previousAssignedUserId: AGENT,
+          previousAssignedTeamId: null,
+          cause: 'agent',
+          reason: 'Ada is at capacity',
+        },
+      },
+    ]);
+  });
+
+  it('omits reason entirely when the body carried none', async () => {
+    const { asAgent, appended } = harnessFor(ticket({ assignedUserId: null }));
+
+    await asAgent(async (commands) => commands.assign(TICKET, { userId: TEAMMATE }));
+
+    expect(appended[0]?.data).not.toHaveProperty('reason');
+  });
+
+  it('writes unassigned rather than assigned when nobody is left on it', async () => {
+    const { asAgent, appended } = harnessFor(ticket({ assignedUserId: AGENT }));
+
+    await asAgent(async (commands) => commands.assign(TICKET, { userId: null }));
+
+    expect(appended.map((event) => event.type)).toEqual(['unassigned']);
+  });
+
+  it('announces nothing and enqueues nothing', async () => {
+    // `ticket.updated` carries status and priority, neither of which moved, and
+    // 0006's fourth SLA trigger is a status change.
+    const { asAgent, emitted, enqueue } = harnessFor(ticket({ assignedUserId: null }));
+
+    await asAgent(async (commands) => commands.assign(TICKET, { userId: TEAMMATE }));
+
+    expect(emitted).toEqual([]);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('the assignee an assign body names', () => {
+  it('refuses a userId from another tenant, and writes nothing', async () => {
+    // Invisible to the tenant-scoped lookup, exactly as RLS leaves it — the id
+    // in the body is never trusted as a key.
+    const { asAgent, written } = harnessFor(deferredTicket());
+
+    await expect(
+      asAgent(async (commands) => commands.assign(TICKET, { userId: STRANGER })),
+    ).rejects.toBeInstanceOf(UnknownTicketAssigneeError);
+    expect(written).toEqual([]);
+  });
+
+  it('refuses a user who is not active', async () => {
+    // A suspended account has had its access cut: handing it a stuck ticket
+    // would look like a fix and be a second deferral.
+    const { asAgent, written } = harnessFor(deferredTicket());
+
+    await expect(
+      asAgent(async (commands) => commands.assign(TICKET, { userId: SUSPENDED })),
+    ).rejects.toBeInstanceOf(UnknownTicketAssigneeError);
+    expect(written).toEqual([]);
+  });
+
+  it('points the failure at the offending field', async () => {
+    const { asAgent } = harnessFor(deferredTicket());
+
+    await expect(
+      asAgent(async (commands) => commands.assign(TICKET, { teamId: OTHER_TENANT_TEAM })),
+    ).rejects.toMatchObject({ field: 'teamId' });
+  });
+
+  it('refuses a teamId from another tenant', async () => {
+    const { asAgent, written } = harnessFor(deferredTicket());
+
+    await expect(
+      asAgent(async (commands) => commands.assign(TICKET, { teamId: OTHER_TENANT_TEAM })),
+    ).rejects.toBeInstanceOf(UnknownTicketAssigneeError);
+    expect(written).toEqual([]);
   });
 });

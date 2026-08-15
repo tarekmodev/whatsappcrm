@@ -6,6 +6,7 @@ import {
   TicketNotFoundError,
   TicketStatusChangedConcurrentlyError,
   TicketTransitionNotAllowedError,
+  UnknownTicketAssigneeError,
 } from './tickets.errors';
 
 /**
@@ -30,6 +31,10 @@ import {
  *     visibility check, so the resource's existence is not a secret from them —
  *     what is refused is the act, and answering `not_found` would send an agent
  *     hunting for a ticket they are looking at.
+ *   * **An assign body naming a stranger is `validation_failed`, not
+ *     `not_found`.** The ticket was found; what is wrong is a field of the body,
+ *     and a 404 here would read as "the ticket is gone" — see
+ *     `UnknownTicketAssigneeError`.
  *
  * Both conflict cases share `conflict`, and deliberately: a refused transition
  * and a lost compare-and-set are the same fact to a client — the row's state
@@ -59,6 +64,12 @@ export function translateTicketFailure(error: unknown): never {
   if (error instanceof InvalidTicketCursorError) {
     throw new ApiException('validation_failed', error.message, [
       { path: error.parameter, message: error.message },
+    ]);
+  }
+
+  if (error instanceof UnknownTicketAssigneeError) {
+    throw new ApiException('validation_failed', error.message, [
+      { path: error.field, message: error.message },
     ]);
   }
 
