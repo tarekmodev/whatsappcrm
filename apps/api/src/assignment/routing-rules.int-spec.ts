@@ -688,6 +688,20 @@ describe('routing rules and the evaluation engine', () => {
       expect(errorCodeOf(response)).toBe('validation_failed');
     });
 
+    it('refuses a rule whose tag condition names a tag outside this tenant', async () => {
+      // Only tenant A holds `VIP_TAG_A`. Accepting it here would not leak
+      // anything — the engine's tag read is tenant-scoped — but it would save B
+      // a rule that can never match, with no error to explain why.
+      const response = await createRule(HOST_B, {
+        name: 'Someone else’s VIPs',
+        conditions: [{ type: 'tag', match: 'any', tagIds: [VIP_TAG_A] }],
+        target: { kind: 'team', teamId: BILLING_TEAM_B },
+      });
+
+      expect(response.status).toBe(400);
+      expect(errorCodeOf(response)).toBe('validation_failed');
+    });
+
     it('routes each tenant’s ticket by its own rules only', async () => {
       // Both tenants have a rule with the same name matching the same word
       // against a ticket opened by the same message text. The only thing that
@@ -859,6 +873,44 @@ describe('routing rules and the evaluation engine', () => {
       });
 
       expect((await route(TENANT_A, TICKET_A, MESSAGE_A, CONTACT_A)).outcome).toBe('routed');
+    });
+
+    it('routes a brand-new contact on `is_not_set`, whose column is null and not `{}`', async () => {
+      // Tenant B's contact was never edited, so `contacts.custom_fields` is NULL
+      // — the state every contact auto-created from a first inbound message is
+      // in. "Plan not set → Onboarding" has to fire for exactly that population,
+      // and it only can if a null column reaches the evaluator as "no fields set"
+      // rather than as "no contact".
+      expect(
+        (await systemPrisma.contact.findUniqueOrThrow({ where: { id: CONTACT_B } })).customFields,
+      ).toBeNull();
+
+      await createRule(HOST_B, {
+        name: 'Plan not set',
+        conditions: [
+          { type: 'contact_attribute', key: 'plan', operator: 'is_not_set', value: null },
+        ],
+        target: { kind: 'team', teamId: BILLING_TEAM_B },
+      });
+
+      expect(await route(TENANT_B, TICKET_B, MESSAGE_B, CONTACT_B)).toMatchObject({
+        outcome: 'routed',
+        assignedTeamId: BILLING_TEAM_B,
+      });
+    });
+
+    it('does not match `is_not_set` on a contact that has the field', async () => {
+      // Tenant A's contact carries `plan: gold`. The pair is what makes the case
+      // above an assertion about the operator rather than about the fixture.
+      await createRule(HOST_A, {
+        name: 'Plan not set',
+        conditions: [
+          { type: 'contact_attribute', key: 'plan', operator: 'is_not_set', value: null },
+        ],
+        target: { kind: 'team', teamId: BILLING_TEAM_A },
+      });
+
+      expect((await route(TENANT_A, TICKET_A, MESSAGE_A, CONTACT_A)).outcome).toBe('deferred');
     });
 
     it('routes on business hours, read from the tenant’s own timezone', async () => {

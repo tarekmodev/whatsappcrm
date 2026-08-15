@@ -28,6 +28,12 @@ const TEAM = '0192f0ff-0000-7000-8000-0000000000t1';
 const SARA = '0192f0ff-0000-7000-8000-0000000000u1';
 const RULE_A = '0192f0ff-0000-7000-8000-00000000r001';
 const RULE_B = '0192f0ff-0000-7000-8000-00000000r002';
+// Real UUIDs, unlike the ids above: `IdSchema` validates every `tagIds` entry on
+// the way in, so a readable placeholder would fail the grammar before reaching
+// the check under test.
+const TAG = '0192f0ff-0000-7000-8000-00000000a001';
+/** Deleted, or another tenant's — indistinguishable from here, and deliberately so. */
+const OTHER_TENANT_TAG = '0192f0ff-0000-7000-8000-00000000a999';
 
 const KEYWORD: RoutingCondition = { type: 'keyword', match: 'any', values: ['invoice'] };
 
@@ -49,6 +55,7 @@ interface WorldOptions {
   teams?: string[];
   users?: string[];
   customFieldKeys?: string[];
+  tags?: string[];
 }
 
 interface Recorded {
@@ -136,6 +143,14 @@ function buildWorld(options: WorldOptions = {}): {
           where.key.in
             .filter((key) => (options.customFieldKeys ?? []).includes(key))
             .map((key) => ({ key })),
+        ),
+    },
+    tag: {
+      // Tenant-scoped in the real query, and the fake honours that by listing
+      // only this tenant's tags: an id belonging to anyone else is simply absent.
+      findMany: ({ where }: { where: { id: { in: string[] } } }) =>
+        Promise.resolve(
+          where.id.in.filter((id) => (options.tags ?? []).includes(id)).map((id) => ({ id })),
         ),
     },
   };
@@ -234,6 +249,50 @@ describe('creating a rule', () => {
     ).resolves.toBeDefined();
   });
 
+  it('refuses a tag id that is not in this tenant, naming the field', async () => {
+    // A tag the supervisor deleted, or one belonging to another tenant. Neither
+    // is a leak — the engine's `contact_tags` read is tenant-scoped, so the id
+    // simply matches nothing — but the rule saves, reports success, and then
+    // never fires again with no error anywhere. That is the version of this bug
+    // nobody can debug from the console, which is why it is refused on write.
+    const { rules } = buildWorld({ teams: [TEAM], tags: [TAG] });
+
+    await expect(
+      rules.create({
+        name: 'Dead tag',
+        conditions: [{ type: 'tag', match: 'any', tagIds: [OTHER_TENANT_TAG] }],
+        target: { kind: 'team', teamId: TEAM },
+        isActive: true,
+      }),
+    ).rejects.toThrow(UnknownRuleReferenceError);
+  });
+
+  it('refuses the rule when only one id of several is unknown', async () => {
+    const { rules } = buildWorld({ teams: [TEAM], tags: [TAG] });
+
+    await expect(
+      rules.create({
+        name: 'One good one dead',
+        conditions: [{ type: 'tag', match: 'any', tagIds: [TAG, OTHER_TENANT_TAG] }],
+        target: { kind: 'team', teamId: TEAM },
+        isActive: true,
+      }),
+    ).rejects.toThrow(UnknownRuleReferenceError);
+  });
+
+  it('accepts tag ids the tenant holds', async () => {
+    const { rules } = buildWorld({ teams: [TEAM], tags: [TAG] });
+
+    await expect(
+      rules.create({
+        name: 'VIPs',
+        conditions: [{ type: 'tag', match: 'any', tagIds: [TAG] }],
+        target: { kind: 'team', teamId: TEAM },
+        isActive: true,
+      }),
+    ).resolves.toBeDefined();
+  });
+
   it('refuses a rule past the per-tenant cap, as a conflict rather than a plan limit', async () => {
     // The cap is a property of the engine — one ticket costs
     // `rules × conditions × values` comparisons on a shared worker — not of the
@@ -288,6 +347,20 @@ describe('updating a rule', () => {
     });
 
     await expect(rules.update(RULE_A, { name: 'Renamed' })).resolves.toBeDefined();
+  });
+
+  it('refuses an edit that resubmits a tag id that has since been deleted', async () => {
+    // The realistic path to a dead reference, and the one the write check exists
+    // for: the supervisor is renaming the rule, and the console sends the whole
+    // condition list back — including a tag somebody removed in the meantime.
+    const { rules } = buildWorld({ rules: [{ id: RULE_A }], teams: [TEAM], tags: [] });
+
+    await expect(
+      rules.update(RULE_A, {
+        name: 'Renamed',
+        conditions: [{ type: 'tag', match: 'any', tagIds: [TAG] }],
+      }),
+    ).rejects.toThrow(UnknownRuleReferenceError);
   });
 
   it('is a not-found for a rule this tenant cannot see', async () => {

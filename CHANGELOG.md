@@ -995,6 +995,24 @@ sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the 
 
 ### Fixed
 
+- **A routing rule on "this field is not set" now fires for a brand-new customer** (TAR-370) —
+  the engine resolved a contact's custom fields to `null` both when the ticket had no contact
+  and when the contact existed with `custom_fields IS NULL`, and every operator is false against
+  a null fact. `contacts.custom_fields` is nullable and a contact auto-created from a first
+  inbound WhatsApp message leaves it null, so "`plan_tier` is not set → Onboarding team" never
+  matched the exact population it targets — while looking correct in any test written against a
+  contact somebody had edited once, because an edit writes `{}` or a populated object. A contact
+  that exists now resolves to `{}` and a null fact means only "there is no contact to read", so
+  `is_not_set` is true of a new contact and still false on a contact-less ticket. Corrupt
+  `custom_fields` that do not parse stay unreadable rather than being reported as empty.
+- **A routing rule can no longer be saved against a tag this tenant does not have** (TAR-370) —
+  rule writes validated the target team, the target user and every `contact_attribute` key
+  against `custom_field_defs`, but not the ids a `tag` condition names. Nothing leaked — the
+  engine's `contact_tags` read is tenant-scoped, so a foreign id simply matches nothing — but a
+  supervisor saving any other edit on a rule that referenced a since-deleted tag resubmitted the
+  dead id, the API accepted it, and the rule silently never fired again with no error anywhere.
+  `POST` and `PATCH` now answer `validation_failed` on `conditions.tagIds`, which is what the
+  console's fixtures already did, so the two halves agree. ADR 0007's request table updated.
 - **The ticket-ensure job id no longer depends on an undocumented BullMQ exemption**
   (TAR-249) — `ticketEnsureJobId` published `ticket.ensure-for-message:<tenant>:<message>`,
   the one colon-bearing job id in the repo. BullMQ reserves `:` for its own Redis key

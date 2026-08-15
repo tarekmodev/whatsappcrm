@@ -257,6 +257,26 @@ export class RuleEngineService implements TicketRouter {
     return new Set(tags.map((tag) => tag.tagId));
   }
 
+  /**
+   * The contact's `custom_fields`, where **"there is no contact" and "the contact
+   * has no fields set" are different answers**.
+   *
+   * `null` is the first: no contact on the ticket, or no contact row visible in
+   * this tenant. Every `contact_attribute` condition is false against it, on
+   * 0007's "no data to read is false" rule.
+   *
+   * `{}` is the second, and it has to reach the evaluator as an empty object
+   * rather than as `null`, because `is_not_set` is *true* of a contact who exists
+   * with nothing set. The column is nullable and every contact auto-created from
+   * a first inbound message leaves it null (`whatsapp-inbound.writer.ts`), so
+   * conflating the two would make "`plan_tier` is not set → Onboarding" never
+   * fire for a brand-new customer — the exact population that rule targets — and
+   * it would only look correct when tested against a contact somebody had already
+   * edited once.
+   *
+   * Fields that do not parse stay `null`: that is corrupt data rather than an
+   * empty field, and answering `is_not_set` from it would be a guess.
+   */
   private async readCustomFields(
     ticket: RoutableTicket,
   ): Promise<Readonly<Record<string, string | null>> | null> {
@@ -271,8 +291,12 @@ export class RuleEngineService implements TicketRouter {
       select: { customFields: true },
     });
 
-    if (contact === null || contact.customFields === null) {
+    if (contact === null) {
       return null;
+    }
+
+    if (contact.customFields === null) {
+      return {};
     }
 
     const parsed = CustomFieldValuesSchema.safeParse(contact.customFields);
