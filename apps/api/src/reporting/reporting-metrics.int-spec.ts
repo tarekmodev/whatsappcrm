@@ -282,10 +282,18 @@ describe('the reporting dashboard against a real database', () => {
         closedWithoutResolution: 1,
       });
       // 300 s, 900 s, 600 s (ticket 3) and 1 800 s (ticket 6, unattributed).
+      // `percentile_cont` **interpolates** rather than picking a member, so an
+      // even-sized set has no element as its median: sorted [300, 600, 900,
+      // 1800], the answer is the midpoint of the middle pair, 750.
       expect(report.summary.firstResponse.count).toBe(4);
       expect(report.summary.firstResponse.medianSeconds).toBe(750);
+      // Two resolutions, 2 h and 4 h; interpolated, that is 3 h.
       expect(report.summary.resolution.count).toBe(2);
-      expect(report.summary.resolution.medianSeconds).toBe(12_600);
+      expect(report.summary.resolution.medianSeconds).toBe(10_800);
+      // The mean agrees here only because there are two values. It is asserted
+      // beside the median so that a future fixture change that makes them
+      // diverge has to say which one moved.
+      expect(report.summary.resolution.averageSeconds).toBe(10_800);
     });
 
     it('attributes work to who did it, and renders the rest as unattributed', async () => {
@@ -343,8 +351,12 @@ describe('the reporting dashboard against a real database', () => {
     });
 
     it('returns null durations rather than zeros for an empty range', async () => {
+      // 2025, deliberately: no fixture in this file writes a ticket there, so
+      // this stays empty however the seeds below it grow. January 2026 would
+      // read as empty today and silently stop being empty the moment the
+      // query-plan fixture lands.
       const report = await asPrincipal(principalFor(TENANT_A, AGENT_A2, 'supervisor'), () =>
-        reports.dashboard({ from: '2026-01-01', to: '2026-01-03', scope: 'all' }),
+        reports.dashboard({ from: '2025-01-01', to: '2025-01-03', scope: 'all' }),
       );
 
       expect(report.summary.firstResponse).toEqual({
@@ -362,8 +374,16 @@ describe('the reporting dashboard against a real database', () => {
   describe('the query plans (ADR 0010 risk 3)', () => {
     /**
      * A tenant with a real backlog, so the planner has a reason to prefer an
-     * index. Seeded here rather than in `beforeAll` because every assertion
-     * above is about values and would only be slower for it.
+     * index. Seeded here rather than in the outer `beforeAll` because every
+     * assertion above is about values and would only be slower for it.
+     *
+     * All four anchor columns are written on every row, `closed_at` included.
+     * Leaving it NULL would put 4 000 NULLs in `tickets_tenant_id_closed_at_idx`
+     * and give the planner no reason to choose it, so the closed-unworked
+     * assertion below would be measuring an empty index rather than the access
+     * path a real tenant pays for. Every row is a distinct minute in January
+     * 2026, which is outside the August range the value assertions above use —
+     * so this fixture cannot move any of their numbers.
      */
     beforeAll(async () => {
       await ownerPrisma.$executeRawUnsafe(`
@@ -371,20 +391,36 @@ describe('the reporting dashboard against a real database', () => {
           (id, tenant_id, number, status, priority, created_at,
            first_response_at, resolved_at, closed_at, updated_at)
         SELECT
-          gen_random_uuid(), '${TENANT_A}', 1000 + n, 'resolved', 'normal',
+          gen_random_uuid(), '${TENANT_A}', 1000 + n, 'closed', 'normal',
           '2026-01-01T00:00:00Z'::timestamptz + (n || ' minutes')::interval,
           '2026-01-01T00:10:00Z'::timestamptz + (n || ' minutes')::interval,
           '2026-01-01T02:00:00Z'::timestamptz + (n || ' minutes')::interval,
-          NULL,
+          '2026-01-01T03:00:00Z'::timestamptz + (n || ' minutes')::interval,
           now()
         FROM generate_series(1, ${BULK_TICKETS}) AS n;
 
-        -- The visibility map is what an index-only scan needs, and a freshly
-        -- bulk-loaded table has none — the caveat 20260815140000's header
-        -- records. Without this the planner correctly declines an index-only
-        -- scan and these assertions measure the wrong thing.
-        VACUUM (ANALYZE) tickets;
+        ANALYZE tickets;
       `);
+
+      // Separate call, and **not** part of the statement above: Prisma sends a
+      // multi-statement raw string as one implicit transaction, and Postgres
+      // refuses `VACUUM` inside a transaction block (SQLSTATE 25001) — which
+      // fails the whole seed rather than just the vacuum.
+      //
+      // Best-effort on purpose. It refreshes the visibility map so an
+      // index-only scan is available, which is the caveat 20260815140000's
+      // header records for a freshly bulk-loaded table. The assertions below do
+      // not depend on it: they require the right index and no sequential scan,
+      // and an `Index Scan` and an `Index Only Scan` both satisfy that. The
+      // `ANALYZE` above is what actually decides index-versus-seq, and it runs
+      // either way.
+      await ownerPrisma
+        .$executeRawUnsafe('VACUUM (ANALYZE) tickets')
+        .catch((error: unknown) =>
+          console.info(
+            `VACUUM skipped; plans are measured without a visibility map: ${String(error)}`,
+          ),
+        );
     });
 
     const supervisor = () => principalFor(TENANT_A, AGENT_A2, 'supervisor');
