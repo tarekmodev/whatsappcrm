@@ -167,6 +167,28 @@ describe('tenant provisioning, end to end', () => {
         },
       ]);
     });
+
+    /**
+     * The seat cap reads a missing row as unlimited, which is the right answer
+     * for a tenant nobody capped and the wrong thing to *rely* on: a limit whose
+     * absence means "no limit" fails open silently the day a write is missed. So
+     * every tenant carries an explicit answer, and an operator-provisioned one
+     * says `unlimited` rather than inheriting the column's trial defaults.
+     */
+    it('writes an explicit unlimited plan-limits row, readable by the tenant itself', async () => {
+      const { tenant } = await provisioning.provision({
+        slug: SLUG_DEFAULTS,
+        name: 'TAR-50 defaults',
+      });
+
+      const limits = await asTenant(tenant.id, () =>
+        tenantPrisma.tenantPlanLimits.findMany({
+          select: { planKey: true, seatCap: true, conversationCap: true },
+        }),
+      );
+
+      expect(limits).toEqual([{ planKey: 'unlimited', seatCap: null, conversationCap: null }]);
+    });
   });
 
   describe('idempotency', () => {
@@ -216,6 +238,7 @@ describe('tenant provisioning, end to end', () => {
       await systemPrisma.tenantSettings.deleteMany({ where: { tenantId: tenant.id } });
       await systemPrisma.tenantDomain.deleteMany({ where: { tenantId: tenant.id } });
       await systemPrisma.slaPolicy.deleteMany({ where: { tenantId: tenant.id } });
+      await systemPrisma.tenantPlanLimits.deleteMany({ where: { tenantId: tenant.id } });
 
       const repaired = await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
 
@@ -227,6 +250,35 @@ describe('tenant provisioning, end to end', () => {
       await expect(systemPrisma.slaPolicy.count({ where: { tenantId: tenant.id } })).resolves.toBe(
         1,
       );
+      // The tenant that predates this change, converging on the same shape as one
+      // provisioned after it.
+      await expect(
+        systemPrisma.tenantPlanLimits.count({ where: { tenantId: tenant.id } }),
+      ).resolves.toBe(1);
+    });
+
+    /**
+     * A tenant whose caps were set deliberately — by TAR-37's plan sync, or by an
+     * operator — must not have them reset to `unlimited` by a replayed
+     * provisioning script. Same rule as the SLA policy above: repair what is
+     * missing, never reassert over what is there.
+     */
+    it('does not overwrite the caps of a tenant that already has them', async () => {
+      const { tenant } = await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
+
+      await systemPrisma.tenantPlanLimits.update({
+        where: { tenantId: tenant.id },
+        data: { planKey: 'growth', seatCap: 10, conversationCap: 10_000 },
+      });
+
+      await provisioning.provision({ slug: SLUG_REPEAT, name: 'TAR-50 repeat' });
+
+      await expect(
+        systemPrisma.tenantPlanLimits.findUnique({
+          where: { tenantId: tenant.id },
+          select: { planKey: true, seatCap: true, conversationCap: true },
+        }),
+      ).resolves.toEqual({ planKey: 'growth', seatCap: 10, conversationCap: 10_000 });
     });
 
     it('does not add a second policy to a tenant that configured its own', async () => {
@@ -257,12 +309,24 @@ describe('tenant provisioning, end to end', () => {
     it('rolls the whole thing back when the platform hostname belongs to someone else', async () => {
       // Another tenant already holds the host this slug maps to — the shape of
       // a custom domain (TAR-29) registered before the slug was provisioned.
+      //
+      // The token is not what this case is about, but every custom domain
+      // carries one: `tenant_domains_custom_needs_token` (TAR-417) makes a
+      // tokenless custom row unrepresentable, because nothing could ever verify
+      // it by DNS challenge. Thirty-two lowercase hex characters, per the format
+      // constraint beside it.
       const squatter = await systemPrisma.tenant.create({
         data: {
           slug: SLUG_SQUATTER,
           name: 'TAR-50 squatter',
           status: 'active',
-          domains: { create: { hostname: `${SLUG_SQUATTED}.${PLATFORM_DOMAIN}`, kind: 'custom' } },
+          domains: {
+            create: {
+              hostname: `${SLUG_SQUATTED}.${PLATFORM_DOMAIN}`,
+              kind: 'custom',
+              verificationToken: '50505050505050505050505050505050',
+            },
+          },
         },
         select: { id: true },
       });

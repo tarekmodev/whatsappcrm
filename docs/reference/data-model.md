@@ -102,11 +102,19 @@ The retention timers, all nullable, all written by TAR-404's lifecycle engine:
 | `cancelled_at`         | When the tenant last entered `cancelled`, kept through a reactivation      |
 | `grace_period_ends_at` | When the grace period currently running expires. Null when no timer is set |
 | `purge_at`             | The earliest instant hard-delete may run                                   |
+| `purge_started_at`     | When the first purge batch began, so a crashed purge resumes               |
 | `deleted_at`           | When the purge ran                                                         |
 
 Only the **instants** are stored. The grace-period and retention _lengths_ are TAR-397's,
 published as constants, so revising one does not need a migration and cannot silently
 reinterpret a timer already running for a live tenant.
+
+`purge_started_at` is stamped in the same transaction that enqueues the `tenant_deleted`
+email and before the first `DELETE`. Without it a purge that crashed half-way is
+indistinguishable from one that has not begun — both read `suspended`, `purge_at` elapsed,
+`deleted_at` null — so the sweep restarts it from the first batch, and the stuck-purge
+alert has no condition to fire on. Not indexed: the sweep finds the row through
+`tenants_purge_at_idx` and reads this off the row it already has.
 
 `tenants_deleted_at_matches_status` makes `status = 'deleted'` and a non-null `deleted_at`
 imply each other in both directions: a tenant reported as deleted with no purge timestamp
@@ -128,8 +136,11 @@ an index predicate.
 Host → tenant resolution. The first half of tenant resolution on every request.
 
 - **Unique:** `hostname` (`citext`, **globally** unique — an unauthenticated request has
-  only the host to go on, so two tenants claiming one host has no correct answer)
-- **Indexes:** `(tenant_id)`
+  only the host to go on, so two tenants claiming one host has no correct answer);
+  `(tenant_id) WHERE is_primary` (partial, TAR-417)
+- **Indexes:** `(tenant_id)`; `(verification_requested_at) WHERE verified_at IS NULL`
+  (partial, the verification sweeper's queue)
+- **Checks:** `tenant_domains_custom_needs_token`, `tenant_domains_verification_token_format`
 - **Relations:** `tenants` → `tenant_domains`, `Cascade`
 - **Owned by:** TAR-19, custom domains TAR-29
 
@@ -138,12 +149,53 @@ unverified row must not resolve a request. Provisioning issues the platform subd
 under our own zone and stamps `verified_at` immediately — there is nothing for the
 customer to prove.
 
+A custom domain proves ownership with a DNS `TXT` record at
+`_whatsappcrm-challenge.<hostname>` carrying `verification_token` — 32 lowercase hex
+characters, stored in plaintext because it is published in public DNS and is therefore not
+a credential. `verification_requested_at` starts the squat-expiry clock,
+`verification_attempts` drives the sweeper's backoff, and `verification_failure_reason` is
+a native enum matching `DOMAIN_VERIFICATION_FAILURE_REASONS` in the contracts package.
+
+**Verification and activation are separate, and both must hold.** `verified_at` says the
+tenant proved ownership; `activated_at` says a platform operator attached the domain at
+the edge and its certificate issued. A verified-but-unattached domain receives no traffic;
+an attached-but-unverified one resolves to nothing. Neither party controls both halves,
+which is the isolation argument for custom domains (TAR-416).
+
+The exported `status` — `pending_verification`, `verified`, `live`, `expired` — is derived
+from these columns and deliberately **not stored**: a stored status is a second source of
+truth that disagrees with its own columns after one failed write.
+
+The global unique index on `hostname` is the collision rule, and it works under RLS
+because unique indexes are enforced **below** row-level security: a tenant claiming a
+hostname another tenant holds gets a unique violation without being able to read, or learn
+anything about, the conflicting row. The API maps that to `conflict` and must not read the
+row back.
+
 #### `tenant_branding`
 
-White-label presentation. One row per tenant, all columns nullable.
+White-label presentation. One row per tenant, created lazily on the first branding write
+rather than at provisioning. All columns nullable.
 
 - **Unique:** `tenant_id`
+- **Checks:** `tenant_branding_logo_complete`, `tenant_branding_favicon_complete` (an
+  asset's four columns are all null or all set); `tenant_branding_primary_color_hex`,
+  `tenant_branding_accent_color_hex` (`#rrggbb`, matching `HexColorSchema`)
 - **Owned by:** TAR-29
+
+Every column stays nullable by decision: `BRANDING_DEFAULTS` in the contracts package fills
+the product name and both colours when a row or column is absent, so the response is always
+fully populated. A `NOT NULL DEFAULT` here would bake the platform's own brand into every
+row and make "has this tenant customised anything" unanswerable.
+
+Logo and favicon are four columns each — storage key, sniffed mime type, size in bytes and
+an updated-at that doubles as the `?v=` cache-buster. **No URL is stored** (TAR-417 dropped
+`logo_url`/`favicon_url`, which nothing had ever written): the same row is served under a
+platform subdomain and under a custom domain, so an absolute URL would name whichever host
+existed at write time and make the browser fetch cross-origin under the other — dropping
+the session cookie. The bytes live in the `MediaStorage` port under
+`tenants/<tenantId>/branding/<storageId>`, not in `media_objects`, whose kinds, mime
+allow-list and retention sweep are Meta's Cloud API vocabulary.
 
 #### `tenant_settings`
 
@@ -169,7 +221,8 @@ it.
 
 Every tenant lifecycle transition, one row each. **Append-only.**
 
-- **Indexes:** `(tenant_id, occurred_at DESC, id DESC)` — the read endpoint, keyset-paginated
+- **Indexes:** `(tenant_id, occurred_at DESC, id DESC)` — the read endpoint, keyset-paginated;
+  `(occurred_at) WHERE notified_at IS NULL` — the notification sweep's backlog
 - **Relations:** `tenants` → `lifecycle_audit_log`, `Cascade`; `(tenant_id, actor_user_id)`
   → `users`, `NoAction`
 - **Owned by:** TAR-403; written by TAR-404
@@ -184,14 +237,37 @@ across both audit tables, and made to agree with each other by
 default**: a table that starts empty has no rollout window, so every writer states who
 acted or the insert fails.
 
+`trigger` records **what kind of event** caused the edge — `user_action`,
+`operator_action`, `billing_event`, `timer` or `system` — which is a different question
+from `actor_type`'s _who_, and both are needed to say a transition was legitimate: an
+operator can cause a `billing_event` by hand-posting a webhook, and a `timer` fires with
+`system` as its actor and nobody behind it. It carries no default for the same reason
+`actor_type` does not, and that is what makes ADR 0009's "no `active → past_due` from a
+button" rule assertable rather than aspirational. Rows backfilled by TAR-403 carry
+`system`; their `actor_type` stays `unattributed`.
+
+`notified_at` is the notification backstop (ADR 0009 decision 7). **Null means a
+tenant-admin notification is owed**, and the lifecycle sweep re-enqueues any row still
+holding null a minute after it was written — the row is the truth, the queue is an
+accelerator, and a transition committed while Redis is down still notifies.
+
 Append-only is enforced twice, and the two halves constrain different people:
 
-- `prisma/sql/app-roles.sql` grants `SELECT, INSERT` and withholds `UPDATE, DELETE` from
-  **both** application roles — including `whatsappcrm_system`, which is unrestricted
-  everywhere else in the schema.
+- `prisma/sql/app-roles.sql` grants `SELECT, INSERT` and withholds table-level
+  `UPDATE, DELETE` from **both** application roles — including `whatsappcrm_system`, which
+  is unrestricted everywhere else in the schema.
 - `lifecycle_audit_log_append_only`, a `BEFORE UPDATE` trigger, raises `TN002` on any
   update including the owner's. That is the half that constrains us; the grants do not
   bind the role migrations run as.
+
+`notified_at` is the single exception, and it is kept to a one-way stamp by both halves at
+once. The grant is **column-level** — `GRANT UPDATE ("notified_at")` to
+`whatsappcrm_system` alone, so `has_table_privilege(…, 'UPDATE')` stays false and the
+tenant role gets nothing; the sweep and the mailer are cross-tenant workers with no request
+context. The trigger then refuses the update anyway unless the old value was null and every
+other column is byte-identical, which it establishes by comparing the two rows rather than
+trusting the `SET` list. So the stamp can be set once, by one role, and never moved,
+cleared or used as cover for editing something else.
 
 `DELETE` is deliberately **not** blocked by the trigger. It is reachable only through the
 `ON DELETE CASCADE` from `tenants`, and PostgreSQL runs a referential cascade as an
@@ -1019,28 +1095,30 @@ definitions — stays text or JSON.
 Applied in this order. Every directory carries a hand-written `down.sql` beside Prisma's
 `migration.sql`.
 
-| Migration                                                    | What it does                                                                                                                                                                                                                                                                                        | Story   |
-| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `20260810120000_baseline_extensions`                         | `pgcrypto` and `citext`. Creates no tables                                                                                                                                                                                                                                                          | TAR-42  |
-| `20260810130000_initial_data_model`                          | Every table and enum above, as TAR-47 shipped them                                                                                                                                                                                                                                                  | TAR-47  |
-| `20260810140000_tenant_isolation_rls`                        | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                                                                                                                                                                  | TAR-48  |
-| `20260810150000_tenant_deactivation_guard`                   | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                                                                                                                                                          | TAR-51  |
-| `20260810160000_whatsapp_business_account_entity`            | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                                                                                                                                                          | TAR-52  |
-| `20260810170000_harden_tenant_deactivation_guard`            | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                                                                                                                                                         | TAR-51  |
-| `20260810180000_message_content_type_unsupported`            | `ALTER TYPE message_content_type ADD VALUE 'unsupported'`                                                                                                                                                                                                                                           | TAR-67  |
-| `20260810180000_message_template_list_index`                 | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                                                                                                                                                                | TAR-20a |
-| `20260810190000_agent_team_role_alignment`                   | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes                                                                                                                                     | TAR-80  |
-| `20260811120000_conversations_last_message_at_not_null`      | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                                                                                                                                                         | TAR-92  |
-| `20260811130000_ticket_active_constraint_and_counters`       | `tickets_one_active_per_contact`; the `ticket_counters` allocator and the 35th policy                                                                                                                                                                                                               | TAR-74  |
-| `20260811140000_media_pipeline`                              | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable                                                                                                                                    | TAR-20e |
-| `20260811150000_auth_schema_and_policies`                    | `password_reset_tokens` and `invite_teams` and the 37th and 38th policies; lockout columns on `users`; `absolute_expires_at` and `revoked_reason` on `sessions`; `revoked_at` and the live-invite index on `invites`                                                                                | TAR-54  |
-| `20260811170000_conversation_status_closed`                  | `ALTER TYPE conversation_status ADD VALUE 'closed'`                                                                                                                                                                                                                                                 | TAR-68  |
-| `20260813120000_sla_timer_state_paused`                      | `ALTER TYPE sla_timer_state ADD VALUE 'paused'`, alone in its own migration                                                                                                                                                                                                                         | TAR-270 |
-| `20260813130000_sla_pause_accounting_and_alerts`             | `paused_at`, `paused_ms`, `breached_at` and the `(state, due_at)` sweep index on `sla_timers`; adds `sla_alerts` and the 39th policy; backfills the default `sla_policies` row for existing tenants                                                                                                 | TAR-270 |
-| `20260813140000_assignment_workload_and_routing_state`       | `ticket_routing_state` and `ticket_routing_deferred_reason`; the three routing columns and `tickets_routing_deferred_idx` on `tickets`; the workload cap on `users` and `tenant_settings`; `assignment_state.team_id` nullable under `UNIQUE … NULLS NOT DISTINCT`. Adds no table, so no new policy | TAR-272 |
-| `20260813150000_ticket_active_queue_index`                   | `tickets_active_queue_idx`. One partial index and nothing else: no column, no constraint, no policy. Plain `CREATE INDEX`, not `CONCURRENTLY` — Prisma wraps a migration in a transaction and Postgres forbids the concurrent form there, the same resolution `tickets_one_active_per_contact` took | TAR-284 |
-| `20260815120000_tenant_lifecycle_status_vocabulary`          | Renames `tenant_status`'s `pending` to `created` and adds `trialing`, `past_due`, `deleted`. Nothing else — Postgres forbids _using_ an enum value in the transaction that added it, so everything that does is the next migration                                                                  | TAR-403 |
-| `20260815130000_tenant_lifecycle_retention_audit_and_limits` | The four retention timers on `tenants`, `lifecycle_audit_log`, `tenant_plan_limits`, their policies and the append-only trigger; backfills a genesis audit row and an `unlimited` limits row per existing tenant; teaches `assert_tenant_active` to admit `trialing` and `past_due`                 | TAR-403 |
+| Migration                                                                 | What it does                                                                                                                                                                                                                                                                                                                                                       | Story   |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `20260810120000_baseline_extensions`                                      | `pgcrypto` and `citext`. Creates no tables                                                                                                                                                                                                                                                                                                                         | TAR-42  |
+| `20260810130000_initial_data_model`                                       | Every table and enum above, as TAR-47 shipped them                                                                                                                                                                                                                                                                                                                 | TAR-47  |
+| `20260810140000_tenant_isolation_rls`                                     | `ENABLE`/`FORCE ROW LEVEL SECURITY` and one `tenant_isolation` policy on 33 tables                                                                                                                                                                                                                                                                                 | TAR-48  |
+| `20260810150000_tenant_deactivation_guard`                                | `public.assert_tenant_active(text)`, the deactivation gate                                                                                                                                                                                                                                                                                                         | TAR-51  |
+| `20260810160000_whatsapp_business_account_entity`                         | Splits `whatsapp_business_accounts` out; re-keys `message_templates`; adds the 34th policy                                                                                                                                                                                                                                                                         | TAR-52  |
+| `20260810170000_harden_tenant_deactivation_guard`                         | Pins the gate's `search_path`; refuses a malformed tenant id as `TN001` rather than `22P02`                                                                                                                                                                                                                                                                        | TAR-51  |
+| `20260810180000_message_content_type_unsupported`                         | `ALTER TYPE message_content_type ADD VALUE 'unsupported'`                                                                                                                                                                                                                                                                                                          | TAR-67  |
+| `20260810180000_message_template_list_index`                              | `message_templates (tenant_id, status, name, language, id)`, for the template picker                                                                                                                                                                                                                                                                               | TAR-20a |
+| `20260810190000_agent_team_role_alignment`                                | Drops `user_role.owner`; adds `users.last_seen_at` and `teams.description`; `teams.name` to `citext`; sort keys on the four role-scoped inbox and queue indexes                                                                                                                                                                                                    | TAR-80  |
+| `20260811120000_conversations_last_message_at_not_null`                   | `conversations.last_message_at` to `NOT NULL DEFAULT now()`                                                                                                                                                                                                                                                                                                        | TAR-92  |
+| `20260811130000_ticket_active_constraint_and_counters`                    | `tickets_one_active_per_contact`; the `ticket_counters` allocator and the 35th policy                                                                                                                                                                                                                                                                              | TAR-74  |
+| `20260811140000_media_pipeline`                                           | Adds `media_objects` and the 36th policy; grows `message_attachments` with `kind`, `download_state`, `download_error`, `media_object_id`; `url` becomes nullable                                                                                                                                                                                                   | TAR-20e |
+| `20260811150000_auth_schema_and_policies`                                 | `password_reset_tokens` and `invite_teams` and the 37th and 38th policies; lockout columns on `users`; `absolute_expires_at` and `revoked_reason` on `sessions`; `revoked_at` and the live-invite index on `invites`                                                                                                                                               | TAR-54  |
+| `20260811170000_conversation_status_closed`                               | `ALTER TYPE conversation_status ADD VALUE 'closed'`                                                                                                                                                                                                                                                                                                                | TAR-68  |
+| `20260813120000_sla_timer_state_paused`                                   | `ALTER TYPE sla_timer_state ADD VALUE 'paused'`, alone in its own migration                                                                                                                                                                                                                                                                                        | TAR-270 |
+| `20260813130000_sla_pause_accounting_and_alerts`                          | `paused_at`, `paused_ms`, `breached_at` and the `(state, due_at)` sweep index on `sla_timers`; adds `sla_alerts` and the 39th policy; backfills the default `sla_policies` row for existing tenants                                                                                                                                                                | TAR-270 |
+| `20260813140000_assignment_workload_and_routing_state`                    | `ticket_routing_state` and `ticket_routing_deferred_reason`; the three routing columns and `tickets_routing_deferred_idx` on `tickets`; the workload cap on `users` and `tenant_settings`; `assignment_state.team_id` nullable under `UNIQUE … NULLS NOT DISTINCT`. Adds no table, so no new policy                                                                | TAR-272 |
+| `20260813150000_ticket_active_queue_index`                                | `tickets_active_queue_idx`. One partial index and nothing else: no column, no constraint, no policy. Plain `CREATE INDEX`, not `CONCURRENTLY` — Prisma wraps a migration in a transaction and Postgres forbids the concurrent form there, the same resolution `tickets_one_active_per_contact` took                                                                | TAR-284 |
+| `20260815120000_tenant_lifecycle_status_vocabulary`                       | Renames `tenant_status`'s `pending` to `created` and adds `trialing`, `past_due`, `deleted`. Nothing else — Postgres forbids _using_ an enum value in the transaction that added it, so everything that does is the next migration                                                                                                                                 | TAR-403 |
+| `20260815130000_tenant_lifecycle_retention_audit_and_limits`              | The four retention timers on `tenants`, `lifecycle_audit_log`, `tenant_plan_limits`, their policies and the append-only trigger; backfills a genesis audit row and an `unlimited` limits row per existing tenant; teaches `assert_tenant_active` to admit `trialing` and `past_due`                                                                                | TAR-403 |
+| `20260815160000_lifecycle_trigger_notification_backstop_and_purge_resume` | `lifecycle_trigger` and `lifecycle_audit_log.trigger`; `notified_at` and its backlog index, with the append-only trigger narrowed to permit that one null-to-value stamp; `tenants.purge_started_at`. Both new columns fill existing rows through a constant default that is dropped immediately, so no `UPDATE` runs and the append-only trigger is never tripped | TAR-413 |
+| `20260815170000_assert_tenant_serviceable`                                | `public.assert_tenant_serviceable(text)`, which admits `suspended`, created **alongside** `assert_tenant_active` and with no callers. Phase 1 of ADR 0009 decision 2's expand → migrate → contract rename: applying it changes no behaviour                                                                                                                        | TAR-413 |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's
