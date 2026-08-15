@@ -18,6 +18,8 @@ import {
   type TicketRouting,
   type TicketSla,
   type UserResponse,
+  type WorkflowResponse,
+  type WorkflowRunResponse,
 } from '@whatsappcrm/contracts';
 import { MOCK_AUDIO_URL, MOCK_DOCUMENT_URL, MOCK_IMAGE_URL } from '@/lib/api/mock/media-fixtures';
 
@@ -121,6 +123,8 @@ const TICKET_IDS = {
 const TAG_IDS = {
   vip: '0192f00b-0000-7000-8000-000000000b01',
   refundRequested: '0192f00b-0000-7000-8000-000000000b02',
+  /** TAR-27's own worked example: "escalate it and tag it `escalated`". */
+  escalated: '0192f00b-0000-7000-8000-000000000b03',
   otherTenant: '0192f00b-0000-7000-8000-000000000b99',
 } as const;
 
@@ -1201,6 +1205,7 @@ export const MOCK_TAGS: readonly MockTag[] = [
     name: 'Refund requested',
     color: '#dc2626',
   },
+  { tenantId: MOCK_TENANT_ID, id: TAG_IDS.escalated, name: 'Escalated', color: '#ea580c' },
   {
     // Present only so tenant scoping can be asserted, never rendered.
     tenantId: OTHER_TENANT_ID,
@@ -1388,6 +1393,206 @@ export const MOCK_SLA_ALERTS: readonly MockSlaAlert[] = [
   },
 ];
 
+// --- Workflows (TAR-27, ADR 0009) -------------------------------------------
+//
+// The prefixes continue the file's one-per-entity-type rule. They were `…010`
+// and `…011` on the branch that wrote them, and moved to `…012` and `…013` on
+// the rebase: TAR-407 landed `SLA_POLICY_ID` on `…010` in the meantime, and two
+// fixtures sharing an id is precisely the collision git merges without a word —
+// which is what the convention exists to make visible.
+//
+// Three in this tenant, chosen so every state the console has to render is
+// reachable without editing a fixture:
+//
+//   1. an armed elapsed-trigger workflow — TAR-27's own worked example;
+//   2. an armed event-trigger workflow with a team target, so the two trigger
+//      shapes and the reassign action are both visible;
+//   3. one deactivated by the removal of a user it notified, which is the
+//      broken-reference state ADR 0009 decision 6 makes visible rather than
+//      silent. Its `userId` deliberately resolves to nobody.
+
+const WORKFLOW_IDS = {
+  escalateStale: '0192f012-0000-7000-8000-000000001201',
+  urgentToBilling: '0192f012-0000-7000-8000-000000001202',
+  /** Deactivated by the removal of the agent it notified, so it has a dead id. */
+  brokenNotify: '0192f012-0000-7000-8000-000000001203',
+  otherTenant: '0192f012-0000-7000-8000-000000001299',
+} as const;
+
+const WORKFLOW_RUN_IDS = {
+  escalatedFatima: '0192f013-0000-7000-8000-000000001301',
+  skippedJonas: '0192f013-0000-7000-8000-000000001302',
+  failedMei: '0192f013-0000-7000-8000-000000001303',
+  otherTenant: '0192f013-0000-7000-8000-000000001399',
+} as const;
+
+/** An agent who was removed after a workflow named them. Resolves to nobody. */
+const REMOVED_USER_ID = '0192f001-0000-7000-8000-0000000001fe';
+
+/**
+ * `references` is **not** stored: ADR 0009 decision 6 resolves it live at read
+ * time from the ids in the definition, so a rename needs no migration and a
+ * delete shows as `exists: false`. Omitting it here is what keeps the mock
+ * honest about that — `toWorkflowResponse` recomputes it on every read.
+ */
+export type MockWorkflow = Omit<WorkflowResponse, 'references'> & TenantScoped;
+export type MockWorkflowRun = WorkflowRunResponse & TenantScoped;
+
+export const MOCK_WORKFLOWS: readonly MockWorkflow[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_IDS.escalateStale,
+    name: 'Escalate stale tickets',
+    position: 0,
+    isActive: true,
+    brokenReason: null,
+    version: 2,
+    trigger: { type: 'ticket_unresolved_for', minutes: 240 },
+    conditions: [{ type: 'ticket_status', operator: 'in', values: ['open', 'pending'] }],
+    actions: [
+      {
+        type: 'notify',
+        audience: 'supervisors',
+        userId: null,
+        teamId: null,
+        message: 'Unresolved for 4 hours',
+      },
+      { type: 'add_ticket_tag', tagId: TAG_IDS.escalated },
+    ],
+    createdAt: '2026-08-12T09:00:00.000Z',
+    updatedAt: '2026-08-13T11:30:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_IDS.urgentToBilling,
+    name: 'Urgent tickets go to Billing',
+    position: 1,
+    isActive: true,
+    brokenReason: null,
+    version: 1,
+    trigger: { type: 'ticket_created' },
+    conditions: [{ type: 'ticket_priority', operator: 'in', values: ['urgent'] }],
+    actions: [{ type: 'reassign', target: { kind: 'team', teamId: TEAM_IDS.billing } }],
+    createdAt: '2026-08-12T09:05:00.000Z',
+    updatedAt: '2026-08-12T09:05:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_IDS.brokenNotify,
+    name: 'Tell Noor about breaches',
+    position: 2,
+    isActive: false,
+    brokenReason: 'reference_removed',
+    version: 1,
+    trigger: { type: 'ticket_sla_breached' },
+    conditions: [],
+    actions: [
+      {
+        type: 'notify',
+        audience: 'user',
+        userId: REMOVED_USER_ID,
+        teamId: null,
+        message: null,
+      },
+    ],
+    createdAt: '2026-08-12T09:10:00.000Z',
+    updatedAt: '2026-08-14T16:45:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: WORKFLOW_IDS.otherTenant,
+    name: 'Rival tenant automation',
+    position: 0,
+    isActive: true,
+    brokenReason: null,
+    version: 1,
+    trigger: { type: 'ticket_created' },
+    conditions: [],
+    actions: [{ type: 'set_priority', priority: 'high' }],
+    createdAt: '2026-08-12T09:00:00.000Z',
+    updatedAt: '2026-08-12T09:00:00.000Z',
+  },
+];
+
+/**
+ * Three runs of the escalation workflow, one per outcome the run panel has to
+ * render: it ran and changed something, it ran and its conditions did not match,
+ * and it failed. A fixture set holding only successes would leave two thirds of
+ * that panel — and the copy that explains a failure — unreachable.
+ */
+export const MOCK_WORKFLOW_RUNS: readonly MockWorkflowRun[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_RUN_IDS.escalatedFatima,
+    workflowId: WORKFLOW_IDS.escalateStale,
+    workflowVersion: 2,
+    ticketId: TICKET_IDS.fatimaUrgent,
+    ticketNumber: 1042,
+    status: 'succeeded',
+    triggerType: 'ticket_unresolved_for',
+    results: [
+      { index: 0, type: 'notify', outcome: 'applied', reason: null },
+      { index: 1, type: 'add_ticket_tag', outcome: 'applied', reason: null },
+    ],
+    failureReason: null,
+    startedAt: '2026-08-14T13:00:01.000Z',
+    finishedAt: '2026-08-14T13:00:02.000Z',
+    createdAt: '2026-08-14T13:00:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_RUN_IDS.skippedJonas,
+    workflowId: WORKFLOW_IDS.escalateStale,
+    workflowVersion: 2,
+    ticketId: TICKET_IDS.jonasPending,
+    ticketNumber: 1043,
+    status: 'skipped',
+    triggerType: 'ticket_unresolved_for',
+    // Empty on `skipped`: nothing was attempted, which is the point.
+    results: [],
+    failureReason: null,
+    startedAt: '2026-08-14T12:00:01.000Z',
+    finishedAt: '2026-08-14T12:00:01.000Z',
+    createdAt: '2026-08-14T12:00:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_RUN_IDS.failedMei,
+    workflowId: WORKFLOW_IDS.escalateStale,
+    workflowVersion: 1,
+    ticketId: TICKET_IDS.meiClosed,
+    ticketNumber: 1044,
+    status: 'failed',
+    triggerType: 'ticket_unresolved_for',
+    // The first action succeeded and stayed done; the second stopped the run.
+    results: [
+      { index: 0, type: 'notify', outcome: 'applied', reason: null },
+      { index: 1, type: 'add_ticket_tag', outcome: 'failed', reason: 'reference_missing' },
+    ],
+    failureReason: 'reference_missing',
+    startedAt: '2026-08-13T18:00:01.000Z',
+    finishedAt: '2026-08-13T18:00:02.000Z',
+    createdAt: '2026-08-13T18:00:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: WORKFLOW_RUN_IDS.otherTenant,
+    workflowId: WORKFLOW_IDS.otherTenant,
+    workflowVersion: 1,
+    ticketId: TICKET_IDS.otherTenant,
+    ticketNumber: 7,
+    status: 'succeeded',
+    triggerType: 'ticket_created',
+    results: [{ index: 0, type: 'set_priority', outcome: 'applied', reason: null }],
+    failureReason: null,
+    startedAt: '2026-08-12T10:00:01.000Z',
+    finishedAt: '2026-08-12T10:00:02.000Z',
+    createdAt: '2026-08-12T10:00:00.000Z',
+  },
+];
+
 export const MOCK_IDS = {
   teams: TEAM_IDS,
   users: USER_IDS,
@@ -1402,5 +1607,9 @@ export const MOCK_IDS = {
   assignmentRules: ASSIGNMENT_RULE_IDS,
   slaAlerts: SLA_ALERT_IDS,
   tenantDomains: TENANT_DOMAIN_IDS,
+  workflows: WORKFLOW_IDS,
+  workflowRuns: WORKFLOW_RUN_IDS,
+  /** The agent a workflow still names and who no longer exists. */
+  removedUser: REMOVED_USER_ID,
   whatsappAccount: WHATSAPP_ACCOUNT_ID,
 } as const;
