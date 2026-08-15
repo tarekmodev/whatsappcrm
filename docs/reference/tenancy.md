@@ -202,23 +202,30 @@ Two things to know about the client handed to your callback:
 The extension's hook is `async`, so the extended client returns ordinary promises rather than
 the `PrismaPromise`s an array batch needs. Use `$tenantTransaction`.
 
-### The four tables with no RLS policy
+### The five tables with no RLS policy
 
-`tenants`, `plans`, `webhook_events` and `tenant_signups` carry no `tenant_isolation` policy,
-so `TenantPrisma` applies its own rule instead. Anything not listed here is tenant-scoped and
-needs nothing from the client beyond the GUC.
+`tenants`, `plans`, `webhook_events`, `tenant_signups` and `lifecycle_events` carry no
+`tenant_isolation` policy, so `TenantPrisma` applies its own rule instead. Anything not listed
+here is tenant-scoped and needs nothing from the client beyond the GUC.
 
-| Model          | Rule               | Reads                            | Writes                                          |
-| -------------- | ------------------ | -------------------------------- | ----------------------------------------------- |
-| `Tenant`       | `own-row`          | Narrowed to the tenant in scope  | Refused — `UnscopedModelAccessError`            |
-| `Plan`         | `shared-read-only` | Allowed; platform-wide catalogue | Refused — `UnscopedModelAccessError`            |
-| `WebhookEvent` | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
-| `TenantSignup` | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
+| Model            | Rule               | Reads                            | Writes                                          |
+| ---------------- | ------------------ | -------------------------------- | ----------------------------------------------- |
+| `Tenant`         | `own-row`          | Narrowed to the tenant in scope  | Refused — `UnscopedModelAccessError`            |
+| `Plan`           | `shared-read-only` | Allowed; platform-wide catalogue | Refused — `UnscopedModelAccessError`            |
+| `WebhookEvent`   | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
+| `TenantSignup`   | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
+| `LifecycleEvent` | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
 
-The last two are the tables where the **grant is the enforcement** rather than a policy, and
-both are written before there is a tenant to scope to: a webhook arrives before it is routed,
-and a signup exists before its tenant is provisioned (TAR-440, ADR 0009 decision 3). Signup
-runs on `SystemPrisma`.
+The last three are the tables where the **grant is the enforcement** rather than a policy. The
+first two are written before there is a tenant to scope to: a webhook arrives before it is
+routed, and a signup exists before its tenant is provisioned (TAR-440, ADR 0009 decision 3).
+
+`lifecycle_events` is there for the opposite reason — it is written after, and outlives what it
+describes (ADR 0009 Amendment 1 ruling 2). It is also the one to be careful with: unlike the
+other two it **does** carry `tenant_id`, so nothing about its shape signals that a grant would
+expose every tenant's lifecycle history to every tenant connection. `verify-tenant-isolation.sql`
+asserts the absent grant by name for exactly that reason. The tenant-facing event list is an
+unscoped read through `SystemPrisma`, confined to one repository method that takes a `tenantId`.
 
 The narrowing on `Tenant` appends `AND: [{ id: tenantId }]` rather than setting `id`, so a
 caller's own `id` filter is intersected with it and cannot overwrite it: asking for another
@@ -277,20 +284,33 @@ the direction this failure should point.
 > right. TAR-403 kept the stricter behaviour, because loosening a security gate is not a schema
 > migration's call, and left the decision to TAR-397 and TAR-404.
 
-**That decision is now in flight, and this section still describes what runs.** ADR 0009
-decision 2 resolves the inconsistency the other way: `public.assert_tenant_serviceable(text)`
-admits `suspended` as well, because inbound WhatsApp messages must still be received and stored
-for a suspended tenant — they are written through `TenantPrisma` under RLS, and a gate that
-refused them would push the highest-volume write path in the product onto `SystemPrisma`.
-Refusing the _principal_ is `TenantStatusGuard`'s job at request pipeline stage 4, which knows
-who is asking and which route they want; the two gates answer different questions and 0009 says
-they must not be collapsed.
+**That decision is now settled, and this section still describes what runs.** ADR 0009
+Amendment 1 ruling 1 resolves the inconsistency the other way, and states the invariant once:
+**the database gate answers "does this tenant's data exist and is it intact";
+`TenantStatusGuard` at stage 4 answers "may this principal reach this route right now".**
+Neither carries a copy of the other's policy.
+
+So `public.assert_tenant_serviceable(text)` refuses `created` and `deleted` and nothing else —
+allow-list `trialing, active, past_due, suspended, cancelled`:
+
+- `suspended`, because inbound WhatsApp messages must still be received and stored for a
+  suspended tenant. They are written through `TenantPrisma` under RLS, and a gate that refused
+  them would push the highest-volume write path in the product onto `SystemPrisma`.
+- `cancelled`, because the recovery allowlist that undoes a cancellation reads through
+  `TenantPrisma` — `identity/auth.service.ts` and `identity/session.service.ts` both inject
+  `TENANT_PRISMA`, so every one of those routes would have raised `TN001` before reaching the
+  guard meant to allow it, and the seven-day undo window could not work.
 
 `20260815170000_assert_tenant_serviceable` creates that function **alongside** the one above and
 gives it no callers — phase 1 of an expand → migrate → contract rename, so applying it changes
-nothing. `TenantPrisma` still calls `assert_tenant_active`, and everything in this section holds
-until TAR-404's engine PR moves the call site; this page and `verify-tenant-isolation.sql` move
-with it.
+nothing; `20260815180000` corrects its allow-list to the amended one. `TenantPrisma` still calls
+`assert_tenant_active`, and everything in this section holds until TAR-404's engine PR moves the
+call site; this page and `verify-tenant-isolation.sql` move with it.
+
+The cost is named rather than discovered later: once the call site moves, `TenantStatusGuard` is
+the only thing between a suspended tenant's agent and the API. It has to be default-deny with an
+explicit allowlist, and TAR-412 has to test it directly — status × role × route — rather than
+observing that the database refuses.
 
 Observed on a local stack, as the app role:
 
