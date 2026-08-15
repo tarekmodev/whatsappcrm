@@ -169,6 +169,129 @@ change.
 
 ### Added
 
+- **A new ticket nobody's rule claimed now goes to whoever has least, and agents take turns**
+  (TAR-23, TAR-273, TAR-274) — ADR 0007 published a `FallbackAssignmentResolver` seam and
+  bound nothing behind it, so every ticket no rule matched was deferred with "nobody
+  available". `RotationFallbackResolver` fills it in, to ADR 0008. Eligible agents are ordered
+  `active_count ASC, coalesce(id > cursor, false) DESC, id ASC` and the first one under their
+  cap takes the ticket. That composition is one `ORDER BY` and it is deliberately not two
+  modes with a switch: with everyone equally loaded — the ordinary morning — the first key is
+  a no-op and this **is** round-robin, which is what the acceptance criterion literally asks
+  for; the moment loads diverge because one agent's tickets are slow to close, work goes to
+  whoever has least. Nothing configures which. The ring is `users.id` ascending, and since ids
+  are UUID v7 that is join order, so rotation reads as "round the team in the order people
+  arrived" and survives a rename.
+  **Eligibility is four predicates where the story named two**: the account is `active`, the
+  agent set themselves `available`, they are under their cap — and `last_seen_at` is inside a
+  15-minute presence window. The third is the addition, and it is the one worth arguing:
+  `availability` is only ever written by the agent, so somebody who set themselves available
+  on Monday and shut the laptop would otherwise keep drawing a share of every ticket into a
+  black hole. That is the worse failure of the two because it is **silent** — the tickets look
+  assigned. The window is longer than the session-slide throttle, so a working agent cannot
+  age out between two writes of their own session, and short enough that a closed laptop stops
+  receiving work inside one coffee break.
+  **The cap is `coalesce(users.max_concurrent_tickets, tenant_settings.default_max_concurrent_tickets)`,
+  defaulting to 5.** Nullable-means-inherit rather than copying the default onto every user, so
+  raising the tenant number moves everyone who has not been singled out. Five is defensible,
+  not measured. The **tenant pool excludes supervisors** — a supervisor holds every agent
+  permission, so without the role filter every tenant's supervisor is quietly put in the
+  rotation and starts receiving customer tickets between doing their own job; one who genuinely
+  works a queue joins the team that owns it, which is explicit and audited. Inside a team,
+  membership is the statement of intent and role is not re-checked.
+  **When nobody is eligible the ticket stays unassigned and is flagged**, with one of three
+  reasons rather than one: `all_at_capacity` (wait, raise a cap, or take it yourself),
+  `none_available` (a staffing problem) and `no_candidate_pool` (a configuration problem — an
+  empty team, or a tenant with no agents). Collapsing the last two would send a supervisor
+  hunting for absent colleagues who were never configured. `all_at_capacity` wins a mixed tie
+  because it is the state that resolves itself as tickets close. The console side is **Flagged
+  for you** on **Settings → Assignment**: the queue, the reason on every row with the remedy
+  beside it, and an assign dialog that deliberately does **not** hide agents who are at their
+  limit or away — the reason the ticket is there is that nobody passed those tests, so a
+  filtered picker would be empty exactly when it is needed.
+  Three costs, stated rather than discovered. **The cap is exact only at worker concurrency 1**:
+  the resolver decides and the engine writes, no lock spans the two, so raising concurrency or
+  running two API processes makes the cap approximate — overshoot bounded by concurrent workers
+  minus one, per agent, self-correcting on the next ticket. The concurrency is pinned and the
+  reason is in the code. **The cursor can drift by one** when the engine's compare-and-set
+  loses to a manual assignment after the cursor moved; it is a fairness hint rather than a
+  ledger, and the load key corrects for it on the next ticket. And **the load count is derived,
+  not denormalised** — a counter column would make selection a single scan and has to be
+  maintained by every path that assigns, unassigns, resolves, closes or reopens, and a counter
+  that drifts is a cap that is silently wrong, which is the failure this design exists to make
+  visible.
+  ⚠️ Three things ship knowingly absent. **A deferred ticket is never retried** — it waits for
+  a person even if capacity frees a minute later, which matches the acceptance criterion and
+  means clearing the flagged queue is real work. **Nothing rebalances**: an agent who goes
+  offline holding six tickets keeps them, because taking work off a person is a supervisor's
+  decision rather than a background job's. And **no surface edits a cap** — ADR 0008 specifies
+  `/api/v1/assignment-settings` and `maxConcurrentTickets` on the user PATCH, both behind
+  `assignment_rule:write` rather than `user:update`, and neither is built or has a story, so
+  every tenant runs on the column default. The two writers that made the flag real arrived
+  after this landed and have their own entries: TAR-373 for the `routing_state` write, TAR-365
+  for the queue's order and its reason filter.
+
+- **A supervisor can place a ticket auto-assignment could not** (TAR-374) —
+  `POST /api/v1/tickets/{id}/assign`, on `ticket:assign`. `TicketAssignInputSchema` had been in
+  the contracts package since TAR-39 and ADR 0008's endpoint table recorded the route as
+  already existing; it never did, and TAR-274 built its **Assign** button against that line and
+  shipped a control that 404s outside mock mode. **A schema is not a route** — the mistake was
+  checking the contracts package instead of the controller, and a mock that implements the
+  claimed route confirms the claim rather than testing it.
+  The body is partial like the conversation's assign: `userId` and `teamId` are each applied
+  only when present, so one call hands a ticket to a named agent inside the team it already
+  belongs to, moves it from an agent to a team, or releases it — absent leaves the column
+  alone, `null` clears it. The assignment columns, `routing_state`, both deferred columns and
+  the `ticket_events` row land in **one** transaction, because
+  `tickets_routing_deferred_consistent` makes the column set indivisible and an event log
+  claiming an assignment the constraint then rejected would be worse than no log.
+  Two decisions the specification left open are recorded as ADR 0008 amendment 2. **An explicit
+  release goes to `pending`, not `manual`** — it returns the ticket to the state a fresh one
+  has, keeps it out of the flagged queue because a deliberate release is not rotation failing
+  to place anything, and leaves it re-routable if a re-route path is ever built, while a ticket
+  a human put a name on stays untouchable. That makes **`pending` reachable after the insert**,
+  which the CHECK and the queue filter both accept and which a reader would otherwise assume it
+  is not. And **an assignee this tenant does not have is `validation_failed`, not 404**: the
+  ticket was found, what is wrong is a field of the body, and a 404 is what a console reacts to
+  by dropping the row. A user in another tenant and a user who is not `active` fold into one
+  refusal, so the error cannot be used to learn that a UUID names somebody real elsewhere.
+  Last writer wins, deliberately — nothing but the router writes these columns behind the
+  route, and it only ever moves a ticket out of unassigned, so two supervisors racing have the
+  honest answer "the later one holds it" with both on the event log. A repeated submit writes
+  nothing and appends no second event, the routing columns included, so a double-clicked button
+  cannot grow a second `assigned` row in the history an escalation is read from. Nothing is
+  announced and no SLA job is enqueued: a timer does not move because a ticket changed hands.
+  ⚠️ The mock in `apps/web/lib/api/mock/handlers.ts` answers 404 and 422 for the two assignee
+  cases and now differs from the API. The console reads `error.code` rather than the status, so
+  nothing in it changes.
+
+- **Auto-assignment is documented, for the people who call it and the supervisors who clear up
+  after it** (TAR-277) — `docs/reference/auto-assignment.md` is new: where rotation sits in the
+  routing pipeline, the four eligibility predicates and why the third is not in the story text,
+  the selection order key by key, the cursor and its accepted drift, the policy constants and
+  where a cap lives, the three deferral reasons with their precedence, and the operational
+  limits an owner needs — the concurrency-1 caveat, the breaking points for the derived load
+  count and the un-indexed candidate scan, and what to monitor. It also states the relationship
+  the issue tracker reads backwards: TAR-23 was planned as the behaviour TAR-24 would later
+  override, and in the event rotation landed first, so no `NullFallbackAssignmentResolver` was
+  ever bound — the seam is load-bearing in production rather than a placeholder, and the three
+  obligations it places on any resolver behind that token are written down.
+  `docs/reference/tickets-api.md` gains `POST /api/v1/tickets/{id}/assign`, which it had been
+  carrying as a "still to do" line: parameters, the partial-update rule, what it writes to
+  `routing`, the release-goes-to-`pending` rule, the repeated-submit no-op, every status and
+  error code with the message it actually returns, and the two event types.
+  `docs/guides/clear-flagged-tickets.md` is the same subject for a supervisor in the console,
+  written against the labels on screen — what puts a ticket in the list, what each reason means
+  and who can fix it, and why the assign picker shows agents who are at their limit.
+  Verified rather than asserted: the unit and integration suites were run (223 and 460 tests),
+  and every request, response body, status code and error message on the assign section was
+  executed against a local stack.
+  ⚠️ Two gaps are marked in the documents rather than papered over. There is still no surface
+  for editing a concurrent-ticket cap and no story id to point a reader at, which the guide has
+  to admit at exactly the moment a supervisor would want to act on **Everyone at capacity**.
+  And no deferral could be produced by hand — only a routing job writes the flag — so a seeded
+  tenant returns an empty flagged page and every claim about what a deferral writes rests on
+  the integration specs.
+
 - **A supervisor can say where new tickets go, and the first matching rule decides**
   (TAR-24) — `assignment_rules` has existed since TAR-47 under a comment reading "TAR-24
   owns the condition and action grammar", and nothing read or wrote it. It is filled in now,
