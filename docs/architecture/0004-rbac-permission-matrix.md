@@ -157,19 +157,36 @@ their own availability. That is already how the endpoint surface is written.
 
 ### Routing, SLA and automation
 
-| Permission               | agent | supervisor | admin | Notes                                   |
-| ------------------------ | :---: | :--------: | :---: | --------------------------------------- |
-| `assignment_rule:read`   |   —   |     ✅     |  ✅   | TAR-22 AC3 "assignment settings"        |
-| `assignment_rule:write`  |   —   |     ✅     |  ✅   | TAR-23/24                               |
-| `sla:read` / `sla:write` |   —   |     ✅     |  ✅   | TAR-26                                  |
-| `canned_response:read`   |  ✅   |     ✅     |  ✅   | TAR-31                                  |
-| `canned_response:write`  |   —   |     ✅     |  ✅   | Curated, not crowd-sourced              |
-| `workflow:read/write`    |   —   |     —      |  ✅   | TAR-27 — can send messages autonomously |
-| `ai:read` / `ai:write`   |   —   |     —      |  ✅   | TAR-28 — same reasoning                 |
+| Permission               | agent | supervisor | admin | Notes                                |
+| ------------------------ | :---: | :--------: | :---: | ------------------------------------ |
+| `assignment_rule:read`   |   —   |     ✅     |  ✅   | TAR-22 AC3 "assignment settings"     |
+| `assignment_rule:write`  |   —   |     ✅     |  ✅   | TAR-23/24                            |
+| `sla:read` / `sla:write` |   —   |     ✅     |  ✅   | TAR-26                               |
+| `canned_response:read`   |  ✅   |     ✅     |  ✅   | TAR-31                               |
+| `canned_response:write`  |   —   |     ✅     |  ✅   | Curated, not crowd-sourced           |
+| `workflow:read/write`    |   —   |     ✅     |  ✅   | TAR-27 — amended, see below          |
+| `workflow:send_message`  |   —   |     —      |  ✅   | Reserved. No action carries it at v1 |
+| `ai:read` / `ai:write`   |   —   |     —      |  ✅   | TAR-28 — same reasoning              |
 
-Workflows and the AI chatbot are admin-only because both can act on a customer
-conversation without a human in the loop. A misconfigured workflow is a mass-messaging
-incident, and that is not a supervisor-shift-level decision.
+The AI chatbot is admin-only because it acts on a customer conversation without a human
+in the loop. A misconfigured chatbot is a mass-messaging incident, and that is not a
+supervisor-shift-level decision.
+
+**⚠️ Amended by TAR-392.** `workflow:read` / `workflow:write` were admin-only here for the
+same reason, and TAR-27's user story opens "As a supervisor". The reason does not survive
+contact with the action set TAR-27 actually ships:
+[0009 decision on access](./0009-workflow-triggers-conditions-actions.md#the-permission-question-0004-leaves-open)
+grants both to supervisor, because `tag`, `reassign`, `notify` and `change status/priority`
+are every one of them something a supervisor can already do by hand with `ticket:update`,
+`ticket:assign` and `ticket:read_all`, on tickets they can already see. Automating them
+changes the speed, not the blast radius.
+
+The risk this paragraph names is real and moves rather than disappears: the mass-messaging
+incident needs an action that reaches a customer. `workflow:send_message` is reserved for
+the first such action, stays admin-only, and is checked **at workflow-write time on the
+action type** — a workflow runs with no principal, so there is nobody to check when it
+fires. A supervisor holding `workflow:write` alone may use every action published in
+`WORKFLOW_ACTION_TYPES` and none added later carrying that flag.
 
 ### Reporting — TAR-22 AC3, TAR-30
 
