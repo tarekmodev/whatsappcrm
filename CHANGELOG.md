@@ -373,8 +373,11 @@ change.
   alerted, so two replicas sweeping the same timer produce one alert and one `sla_breached`
   ticket event — the audit row is written in the same transaction as the flip precisely
   because `ticket_events` has no unique constraint to fall back on. `UNIQUE (tenant_id,
-sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the third; only
-  the first is load-bearing.
+sla_timer_id, recipient_user_id)` is the second layer; only the first is load-bearing. A
+  BullMQ job id was specified as a third and **is not shipped** — keyed on the ticket, whose
+  id is stable for its whole life, it collapsed every trigger into the completed key of the
+  one before it and silently dropped the reply that should have stopped the timer. Anything
+  reintroducing one must key it on the event, never on the ticket.
   Recipients are derived from TAR-22's model as it stands — the tenant's active supervisors
   and admins, narrowed to those sharing a team with whoever holds the ticket, falling back to
   all of them when that yields nobody. A broad alert is worse than a narrow one; an alert
@@ -387,6 +390,10 @@ sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the 
   permission because every row names its recipient and the query narrows to the calling
   principal on top of RLS; an agent may call it and gets an empty page, and another
   supervisor's alert answers `not_found` rather than `forbidden`.
+  Documented in [the SLA timers reference](docs/reference/sla-timers.md) and, for supervisors,
+  [Watch tickets that miss their deadline](docs/guides/track-overdue-tickets.md). Two defects
+  found in post-merge review are corrected below under **Fixed** (TAR-380, TAR-381), and both
+  changed behaviour this entry describes.
   ⚠️ Two things are stated rather than built. Business hours stay modelled and unimplemented
   (`business_hours_only` is always false), so a timer started at 17:30 breaches overnight —
   ADR 0006 risk 1, and its own story if any tenant's SLA is contractual against working
@@ -1143,6 +1150,67 @@ sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the 
   incremental sort inside one millisecond. Recorded as ADR 0008 amendment 3.
 
 ### Fixed
+
+- **A ticket answered in time is no longer breached because a queue job did not survive Redis**
+  (TAR-380) — the breach sweep claimed timers with `WHERE state = 'running'`, which reads as
+  "not yet answered" only if something reliably moves an answered timer out of `running`. The
+  only thing that did was the `sla.evaluate-ticket` job, and `QueueService.enqueue` is
+  contractually allowed to report `failed` or `unavailable` and drop it — a two-second
+  `PRODUCER_COMMAND_TIMEOUT_MS` breach was enough. An agent replied at minute 40 of a 60-minute
+  window, the `agent_replied` enqueue was lost, and the next sweep flipped the timer to
+  `breached`, wrote the `sla_breached` event and alerted a supervisor about a ticket answered
+  twenty minutes early. Because `breached` is terminal and outside `MUTABLE_STATES`, a later
+  evaluation stamped `first_response_at` but **could not undo the state** — a permanent false
+  breach, and the exact inverse of TAR-26's second acceptance criterion. It also contradicted
+  ADR 0006's own failure table, which promised "Redis down — nothing is lost".
+  The sweep now re-derives every due ticket through `SlaTimerService.reconcile` **inside the
+  transaction it claims in**, so the claim reads state this sweep just established rather than
+  state a job was trusted to have written. The obvious patch —
+  `AND NOT EXISTS (… first_response_at IS NOT NULL)` — was rejected because it does not work:
+  that column's only writer is the same dropped job, so it is null in precisely the failing
+  case. Re-deriving also fixes the whole class rather than the first-response case; a dropped
+  `status_changed` on a resolved ticket and a dropped pause were the same bug.
+  It **settles** those timers as `met` rather than skipping them, which is not a detail: an
+  unclaimed timer only gets older, so a declined one would lead its tenant's slice of every
+  subsequent batch for ever and starve that tenant's real breaches. Cost, stated: three reads
+  per due ticket, taking no lock when the ticket really is overdue — a full 200-timer
+  single-tenant batch measured 1047 ms before and 1594 ms after. `ORDER BY ticket_id` on the
+  re-derivation is load-bearing, not cosmetic: `DISTINCT` guarantees no ordering, and two
+  sweeps meeting the same tickets in opposite orders would deadlock.
+  ⚠️ Timers already sitting at a false `breached` are left alone. `breached` is terminal by
+  design and unwinding one is a data decision rather than a code one. Recorded as ADR 0006
+  amendment 2.
+
+- **One stuck tenant no longer starves breach detection for every other tenant** (TAR-381) —
+  the predicate that makes catch-up free, `due_at <= now()` ordered oldest-first, is also what
+  makes a stuck tenant contagious: an unclaimed timer only gets _older_, so it sorts to the
+  head of the next batch and of every batch after it. The global `ORDER BY due_at LIMIT 200`
+  therefore handed the entire batch to one tenant's backlog for as long as that backlog
+  existed. ADR 0006 had already closed one instance of this — a deactivated tenant, whose
+  timers phase 2 can never claim, is excluded by joining `tenants.status` — and nothing guarded
+  the general case: an **active** tenant whose phase 2 keeps failing, or simply one recovering
+  from an outage with 200 due timers. `claimAndAlert` issued roughly four sequential round
+  trips per timer inside one transaction, so a full batch was ~800 statements against a
+  20-second timeout; it overran, rolled back **entirely**, and the identical 200 rows led the
+  next sweep into the identical timeout. Platform-wide detection stopped, and the only symptom
+  was one `SLA sweep failed for tenant …` line per tick — a warning that reads like one
+  tenant's problem.
+  Two bounds close it and neither is redundant. Phase 1 became a per-tenant `LATERAL` probe
+  capped at `SLA_SWEEP_TENANT_BATCH` (50), so **at least four tenants are served by every
+  sweep** whatever any one of them is doing — the half that survives a tenant failing
+  permanently, which no amount of chunking helps. Phase 2 commits in chunks of
+  `SLA_SWEEP_TENANT_CHUNK` (25), so partial progress survives and a tenant that overruns keeps
+  what already landed — the half that stops a full rollback discarding successful work.
+  `SLA_SWEEP_TENANT_TIMEOUT_MS` was renamed `SLA_SWEEP_CHUNK_TIMEOUT_MS` to match what it now
+  bounds; the value is unchanged.
+  The cost is drain rate for a single large tenant: 50 timers per sweep rather than 200, so a
+  10 000-timer backlog takes ~100 minutes instead of ~25. Against a batch that previously
+  committed _nothing_, that is a trade worth making. The access path changes with it — one
+  bounded index probe per active tenant, against a `tenants` table that is small by definition,
+  rather than one range scan. Also in this change: the sweep log line now carries `in Xms`,
+  which ADR 0006 named as TAR-280's deliverable and which had been left out; a sweep drifting
+  towards the 30-second interval is now visible before it becomes an overlap. Recorded as ADR
+  0006 amendment 1.
 
 - **A routing rule on "this field is not set" now fires for a brand-new customer** (TAR-370) —
   the engine resolved a contact's custom fields to `null` both when the ticket had no contact
