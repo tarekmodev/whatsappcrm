@@ -1303,6 +1303,13 @@ function assignConversation({ principal, params, body }: RouteContext): Conversa
  *      equality filters here because they are equalities in the database too —
  *      `tickets_routing_deferred_idx` exists so that finding stuck tickets is a
  *      predicate rather than a subquery over the event log.
+ *   6. **A request pinned to the deferred set pages oldest-stuck first**, not in
+ *      rule 2's order (ADR 0008 decision 3, amendment 3; TAR-365). The one place
+ *      the list has two orders, and mirrored rather than simplified for the same
+ *      reason as the rest: a mock that sorted the flagged queue by priority would
+ *      teach mock mode an ordering the product does not have, and the console's
+ *      "showing the N longest-waiting" line would be a claim only fixtures hold
+ *      up.
  */
 function listTickets({ principal, query }: RouteContext): CursorPage<TicketResponse> {
   const parsed = TicketListQuerySchema.safeParse(Object.fromEntries(query));
@@ -1340,19 +1347,15 @@ function listTickets({ principal, query }: RouteContext): CursorPage<TicketRespo
       (item) => deferredReason === undefined || item.routing.deferredReason === deferredReason,
     )
     .filter((item) => matchesTicketScope(item, scope, principal))
-    // One order for every shape, including the flagged queue — because that is
-    // what the real API does. ADR 0008 wanted the deferred list oldest-stuck
-    // first and built `tickets_routing_deferred_idx` on
-    // `(tenant_id, routing_deferred_since)` for it, but TAR-273 shipped
-    // `TicketQueryService.list` filtering through that index and sorting by the
-    // queue's own `(priority, created_at, id)`, with the reasoning written down
-    // beside the predicate.
-    //
-    // A mock that sorted differently would teach mock mode an ordering the
-    // product does not have, and the console would render a "longest-waiting"
-    // claim that only holds against fixtures. Whether to revisit the ADR here is
-    // TAR-273's call; the transport follows the API.
-    .sort(byQueueOrder);
+    // The flagged queue is the list's one second order, and which one applies
+    // follows from the set that was asked for rather than from a `sort`
+    // parameter. `deferredReason` pins the deferred set on its own: the API's
+    // `tickets_routing_deferred_consistent` makes a non-null reason equivalent to
+    // `routing_state = 'deferred'`, so the two entry conditions cannot describe
+    // different sets.
+    .sort(
+      routingState === 'deferred' || deferredReason !== undefined ? byFlaggedOrder : byQueueOrder,
+    );
 
   // A real cursor, not `null`: the supervisor's queue has to be able to tell
   // "that is all of them" from "that is the first page", and a transport that
@@ -1536,6 +1539,27 @@ function byQueueOrder(left: MockTicket, right: MockTicket): number {
 
 function orderIndex(priority: MockTicket['priority']): number {
   return TICKET_PRIORITIES.indexOf(priority);
+}
+
+/**
+ * `routing_deferred_since ASC, id ASC` — the flagged queue, oldest stuck first
+ * (ADR 0008 decision 3, amendment 3).
+ *
+ * The id tie-break is not decoration: the API pages this order on a keyset and
+ * one column is not a total order, so two tickets deferred in the same
+ * millisecond would straddle a page boundary and one would be dropped. Mirroring
+ * it here keeps a mock-mode page in the same order a real one arrives in.
+ *
+ * `deferredSince` is nullable on the wire and never null in this order's input:
+ * every caller of it has filtered to the deferred set, where the API's `CHECK`
+ * makes the column non-null. The `?? ''` is what a fixture that broke that would
+ * sort as — first, and visibly — rather than a crash in a comparator.
+ */
+function byFlaggedOrder(left: MockTicket, right: MockTicket): number {
+  return (
+    (left.routing.deferredSince ?? '').localeCompare(right.routing.deferredSince ?? '') ||
+    left.id.localeCompare(right.id)
+  );
 }
 
 function isTicketAssignedTo(ticket: MockTicket, principal: SessionPrincipal): boolean {

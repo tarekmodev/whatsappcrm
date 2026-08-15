@@ -1209,21 +1209,41 @@ describe('flagged ticket queue', () => {
   });
 
   /**
-   * The queue's one order, not a deferred-specific one.
+   * Oldest stuck first, which is the list's one second order.
    *
-   * ADR 0008 wanted the flagged list oldest-stuck first and built
-   * `tickets_routing_deferred_idx` for it, but TAR-273 shipped
-   * `TicketQueryService.list` filtering through that index and sorting by
-   * `(priority, created_at, id)` like every other shape. The transport follows
-   * the API, so mock mode cannot teach an ordering the product does not have.
+   * ADR 0008 decision 3 gives `routing_deferred_since` to the schema for exactly
+   * this ordering, and TAR-365 implemented it after TAR-273 had shipped the
+   * predicate on the queue's own `(priority, created_at, id)` — 0008's
+   * amendment 3 records the decision. The transport follows the API, so mock mode
+   * cannot teach an ordering the product does not have.
+   *
+   * Asserted as ids and not as a sorted-ness property: the fixtures' priorities
+   * happen to descend in this order too, so a check on priority alone would pass
+   * against either sort and prove nothing.
    */
-  it('orders the flagged queue the way the ticket queue orders everything', async () => {
+  it('orders the flagged queue oldest-stuck first, not by priority', async () => {
     const page = await listFlagged();
-    const priorities = page.items.map((ticket) => ticket.priority);
-    const rank = (priority: (typeof priorities)[number]): number =>
-      ['low', 'normal', 'high', 'urgent'].indexOf(priority);
 
-    expect(priorities).toEqual([...priorities].sort((a, b) => rank(b) - rank(a)));
+    expect(page.items.map((ticket) => ticket.id)).toEqual([
+      MOCK_IDS.tickets.deferredAtCapacity,
+      MOCK_IDS.tickets.deferredNoneAvailable,
+      MOCK_IDS.tickets.deferredNoCandidatePool,
+    ]);
+  });
+
+  it('is a different order from the one the same tickets take in the queue', async () => {
+    // Where the two orders disagree, written down rather than left implicit: in
+    // the queue the newest-created of the two `normal` tickets comes first, in the
+    // flagged queue the longest-waiting does. If a change ever collapses the two
+    // orders into one, this fails instead of the ordering quietly reverting.
+    const flagged = (await listFlagged()).items.map((ticket) => ticket.id);
+    const queue = await listTickets('?scope=all&limit=100');
+    const deferredInQueueOrder = queue.items
+      .filter((ticket) => ticket.routing.state === 'deferred')
+      .map((ticket) => ticket.id);
+
+    expect(deferredInQueueOrder).not.toEqual(flagged);
+    expect([...deferredInQueueOrder].sort()).toEqual([...flagged].sort());
   });
 
   it('carries a reason on every flagged ticket', async () => {

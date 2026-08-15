@@ -217,12 +217,21 @@ export const TicketListQuerySchema = CursorPageQuerySchema.extend({
   assignedUserId: IdSchema.optional(),
   assignedTeamId: IdSchema.optional(),
   /**
-   * The supervisor's stuck-ticket landing query is
-   * `?scope=unassigned&routingState=deferred` — one indexed predicate against
-   * `tickets_routing_deferred_idx`, rather than a new endpoint (TAR-274).
+   * The supervisor's stuck-ticket landing query is `?routingState=deferred` — one
+   * indexed predicate against `tickets_routing_deferred_idx`, rather than a new
+   * endpoint (TAR-274).
    *
    * An enum rather than a boolean, so it takes its value straight from the query
    * string and needs none of the coercion `breachedOnly` below documents.
+   *
+   * ⚠️ **`deferred` also changes the page's order**, to
+   * `routingDeferredSince ASC, id ASC` — oldest stuck first, which is what ADR
+   * 0008 decision 3 gives that column to the schema for (0008 amendment 3,
+   * TAR-365). Every other value pages in the queue's own
+   * `priority DESC, createdAt DESC, id DESC`. That makes the two shapes' cursors
+   * incompatible **by arity**, which is deliberate: a deferred cursor carries one
+   * sort value and a queue cursor carries two, so replaying one against the other
+   * is `validation_failed` rather than a page from the wrong place.
    */
   routingState: TicketRoutingStateSchema.optional(),
   /**
@@ -237,14 +246,13 @@ export const TicketListQuerySchema = CursorPageQuerySchema.extend({
    * `tickets_routing_deferred_idx` already narrows to, which is small by
    * construction.
    *
-   * ⚠️ **`TicketQueryService.list` does not implement this yet.** TAR-273 landed
-   * the `routingState` predicate beside it but could not have known about this
-   * one — it arrives with this story. Until the predicate exists the API accepts
-   * the parameter and drops it, so the console checks the answer against the
-   * question rather than trusting it; see `assertRoutingFilterHonoured` in
-   * `apps/web/features/assignment/flagged-tickets.data.ts`.
+   * **Pins the deferred set on its own**, so it selects the same oldest-first
+   * order and cursor arity `routingState=deferred` does — a non-null reason is
+   * equivalent to `routing_state = 'deferred'` under
+   * `tickets_routing_deferred_consistent`, so there is no combination where this
+   * parameter and that order could describe different sets.
    *
-   * The console also sends `?scope=all`, not `unassigned`: TAR-286 settled
+   * The console sends `?scope=all`, not `unassigned`: TAR-286 settled
    * `unassigned` as "no user **and** no team", but a ticket a rule routed to a
    * team and rotation then deferred still carries `assignedTeamId` — precisely
    * the `all_at_capacity` case the flagged queue exists to show.

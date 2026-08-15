@@ -108,8 +108,8 @@ describe('loadFlaggedTickets', () => {
   });
 
   it('returns the page the API answered with, in its order and entire', async () => {
-    // Not narrowed a second time and not re-sorted: the API owns both, and the
-    // the API owns the order, and the view no longer claims one of its own.
+    // Not narrowed a second time and not re-sorted: the API owns the filter and
+    // the order, and the view claims neither of its own.
     //
     // A *mixed* page used to be the fixture for this, on the grounds that an
     // in-memory filter would drop the odd row out. It cannot be any more —
@@ -136,11 +136,16 @@ describe('loadFlaggedTickets', () => {
   });
 
   /**
-   * The Major found on the rebased PR #94. `TicketListQuerySchema` accepts
-   * `routingState`, but `TicketQueryService.list` does not implement it yet and an
-   * unknown parameter is dropped rather than refused — so against the real API the
-   * response is a valid page of the *active* queue. Rendering it produced "Showing
-   * "Showing 0" above "Nothing is stuck".
+   * The Major found on the rebased PR #94: `TicketListQuerySchema` accepted
+   * `routingState` and `TicketQueryService.list` did not implement it, and an
+   * unimplemented parameter is dropped rather than refused — so the response was a
+   * valid page of the *active* queue, which rendered as "Showing 0" above
+   * "Nothing is stuck".
+   *
+   * TAR-365 shipped both predicates, so this is no longer the live state of the
+   * API. The guard stays: a filter that stops being honoured — a rollback, an
+   * older API behind a newer console — is worth an error boundary rather than a
+   * contradiction rendered calmly, and the check is one pass over a page.
    */
   it('refuses a page the routing filter was never applied to', async () => {
     listTickets.mockResolvedValue(
@@ -178,7 +183,7 @@ describe('loadFlaggedTickets', () => {
     ).rejects.toBeInstanceOf(RoutingFilterNotHonouredError);
   });
 
-  it('accepts a page that matches the filter, which is the cost once TAR-273 lands', async () => {
+  it('accepts a page that matches the filter, which is what it costs now it does', async () => {
     listTickets.mockResolvedValue(
       page([ticket('a', 'none_available'), ticket('b', 'none_available')]),
     );
@@ -189,8 +194,8 @@ describe('loadFlaggedTickets', () => {
   });
 
   it('accepts an empty page rather than reading it as a dropped filter', async () => {
-    // Nothing deferred is the ordinary state of a healthy workspace, and the
-    // state of every workspace until TAR-273's resolver starts writing.
+    // Nothing deferred is the ordinary state of a healthy workspace, and an
+    // empty page is not evidence that the filter was dropped.
     listTickets.mockResolvedValue(page([]));
 
     await expect(loadFlaggedTickets({})).resolves.toMatchObject({ tickets: [] });

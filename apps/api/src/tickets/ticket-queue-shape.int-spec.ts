@@ -47,6 +47,16 @@ const TENANT = '25999999-9999-7999-8999-999999999901';
 const ACTIVE_TICKETS = 4_000;
 const PAGE = 25;
 
+/**
+ * Every tenth ticket is flagged, so `tickets_routing_deferred_idx` holds 400
+ * entries against a 4 000-row table — a partial index worth choosing, and a
+ * ratio at which reading the whole table and sorting is clearly the wrong plan.
+ * The deferred set really is small by construction; this is the size at which
+ * that stops being an excuse for the plan.
+ */
+const DEFERRED_EVERY = 10;
+const DEFERRED_TICKETS = ACTIVE_TICKETS / DEFERRED_EVERY;
+
 /** Verbatim the shape `TicketQueryService.list` emits for a supervisor's first page. */
 const QUEUE_PAGE = `
   SELECT "id", "number", "status", "priority", "created_at"
@@ -56,11 +66,56 @@ const QUEUE_PAGE = `
   LIMIT ${PAGE}
 `;
 
+/**
+ * Verbatim the shape `TicketQueryService.list` emits for the flagged queue —
+ * `?routingState=deferred`, ordered oldest-stuck first (ADR 0008 decision 3,
+ * amendment 3).
+ *
+ * `id` is the tie-breaker and `tickets_routing_deferred_idx` does not carry it,
+ * so an incremental sort inside a millisecond group is expected and accepted; a
+ * plain `Sort` over the tenant's whole deferred set is not, and is what the
+ * assertion below separates it from.
+ */
+const FLAGGED_PAGE = `
+  SELECT "id", "number", "status", "priority", "routing_deferred_since"
+  FROM "public"."tickets"
+  WHERE "status" IN ('open', 'pending')
+    AND "routing_state" = 'deferred'
+  ORDER BY "routing_deferred_since" ASC, "id" ASC
+  LIMIT ${PAGE}
+`;
+
 /** The row a first page ends on — what the next page's cursor is built from. */
 interface CursorRow {
   priority: string;
   created_at: Date;
   id: string;
+}
+
+/** The same, for the flagged queue's one sort column. */
+interface DeferredCursorRow {
+  routing_deferred_since: Date;
+  id: string;
+}
+
+/**
+ * The flagged queue's **second** page, in the `bound`/`exclude` form
+ * `deferredResumeClauses` emits: an inclusive bound the index can start the scan
+ * on, minus the part of the boundary's tie group already returned.
+ */
+function resumedFlaggedPage(cursor: DeferredCursorRow): string {
+  const at = cursor.routing_deferred_since.toISOString();
+
+  return `
+    SELECT "id", "number", "status", "priority", "routing_deferred_since"
+    FROM "public"."tickets"
+    WHERE "status" IN ('open', 'pending')
+      AND "routing_state" = 'deferred'
+      AND "routing_deferred_since" >= '${at}'
+      AND NOT ("routing_deferred_since" = '${at}' AND "id" <= '${cursor.id}')
+    ORDER BY "routing_deferred_since" ASC, "id" ASC
+    LIMIT ${PAGE}
+  `;
 }
 
 /**
@@ -198,6 +253,17 @@ describe('the ticket queue query shape', () => {
         FROM contacts c
         WHERE c.tenant_id = '${TENANT}';
 
+      -- Every tenth ticket flagged, with the three deferred columns written
+      -- together because \`tickets_routing_deferred_consistent\` refuses any
+      -- other combination. Ages are spread over the set, so the flagged page's
+      -- ORDER BY has work to do and the ties are the ones the modulus creates.
+      UPDATE tickets
+         SET routing_state = 'deferred',
+             routing_deferred_reason = 'all_at_capacity',
+             routing_deferred_since = now() - ((number % 500) || ' minutes')::interval
+       WHERE tenant_id = '${TENANT}'
+         AND number % ${DEFERRED_EVERY} = 0;
+
       ANALYZE tickets;
     `);
   });
@@ -257,6 +323,72 @@ describe('the ticket queue query shape', () => {
 
     expect(measured.nodes.filter((node) => node.startsWith('Sort'))).toEqual([]);
     expect(measured.nodes.some((node) => node.includes('tickets_active_queue_idx'))).toBe(true);
+  });
+
+  describe('the flagged queue (TAR-365)', () => {
+    it('has a deferred set worth planning for', async () => {
+      // Guards the two assertions below from passing on an empty partial index,
+      // where any plan is the right plan.
+      const [counted] = await tenantContext.run(
+        { requestId: 'tar365-count', tenantId: TENANT, userId: null, principal: null },
+        async () =>
+          await appPrisma.$queryRawUnsafe<{ count: bigint }[]>(
+            `SELECT count(*) FROM "public"."tickets" WHERE "routing_state" = 'deferred'`,
+          ),
+      );
+
+      expect(Number(counted?.count ?? 0)).toBe(DEFERRED_TICKETS);
+    });
+
+    it('reads the flagged page off tickets_routing_deferred_idx', async () => {
+      // The claim `ticket-query.service.ts` makes about the deferred order: the
+      // partial index supplies both the predicate and the leading sort key, so
+      // the page costs what the page costs rather than what the backlog does.
+      // Prisma's describer skips predicated indexes, so nothing regenerates this
+      // one and nothing but a spec notices it going missing.
+      const measured = await explain(FLAGGED_PAGE);
+
+      console.info(`flagged page: ${measured.nodes.join(' / ')}`);
+
+      expect(measured.nodes.some((node) => node.includes('tickets_routing_deferred_idx'))).toBe(
+        true,
+      );
+    });
+
+    it('sorts inside a tie group rather than over the tenant’s deferred set', async () => {
+      // `Incremental Sort` is accepted: the index orders by
+      // `routing_deferred_since` and the `id` tie-breaker is resolved within each
+      // millisecond group, which is one row in practice. A plain `Sort` node
+      // means the index stopped supplying the order and the whole deferred set is
+      // being ordered in memory — the regression, and the point at which adding
+      // `id` to the index earns its migration.
+      const measured = await explain(FLAGGED_PAGE);
+
+      expect(measured.nodes.filter((node) => node.startsWith('Sort'))).toEqual([]);
+    });
+
+    it('serves a cursor-resumed flagged page off the same index', async () => {
+      const [cursor] = await tenantContext.run(
+        { requestId: 'tar365-cursor', tenantId: TENANT, userId: null, principal: null },
+        async () =>
+          await appPrisma.$queryRawUnsafe<DeferredCursorRow[]>(
+            `${FLAGGED_PAGE} OFFSET ${PAGE - 1}`,
+          ),
+      );
+
+      if (cursor === undefined) {
+        throw new Error('the fixture produced no flagged first page to resume from');
+      }
+
+      const measured = await explain(resumedFlaggedPage(cursor));
+
+      console.info(`resumed flagged page: ${measured.nodes.join(' / ')}`);
+
+      expect(measured.nodes.some((node) => node.includes('tickets_routing_deferred_idx'))).toBe(
+        true,
+      );
+      expect(measured.nodes.filter((node) => node.startsWith('Sort'))).toEqual([]);
+    });
   });
 });
 

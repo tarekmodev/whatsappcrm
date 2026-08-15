@@ -26,16 +26,15 @@ import { FLAGGED_TICKETS_PAGE_SIZE } from './constants';
  * predicate applied after the fact describes the page and gets rendered as though
  * it described the queue.
  *
- * **And the answer is checked against the question.** `TicketListQuerySchema`
- * accepts `routingState`/`deferredReason`, but `TicketQueryService.list` does not
- * implement them yet — TAR-273 owes that predicate — and an unknown parameter is
- * dropped rather than refused. A dropped filter is invisible: the response parses,
- * so the queue would render the tenant's *active* tickets, find none of them
- * deferred, and report "Showing 0" directly above "Nothing is
- * stuck". `assertRoutingFilterHonoured` turns that into the error it is, so the
- * section says it is broken instead of quietly contradicting itself. It costs
- * nothing once the predicate lands: a response that matches the request passes it
- * in one pass and never throws.
+ * **And the answer is still checked against the question.** Both predicates ship
+ * in `TicketQueryService.list` as of TAR-365, so `assertRoutingFilterHonoured`
+ * passes in one pass and never throws — and it stays, because the failure it
+ * guards is invisible by construction: an accepted-then-dropped parameter answers
+ * with a *valid* page of the wrong set, so the queue would render the tenant's
+ * active tickets, find none of them deferred, and report "Showing 0" directly
+ * above "Nothing is stuck". A filter that stops being honoured — a rollback, an
+ * older API behind a new console — is worth an error boundary rather than a
+ * contradiction rendered calmly.
  */
 
 export interface FlaggedTicketsFilters {
@@ -47,10 +46,11 @@ export interface FlaggedTicketsReport {
   /**
    * The page the API returned, already narrowed by `filters`, in the API's order.
    *
-   * Not re-sorted here. ADR 0008 wanted the flagged list oldest-stuck first, but
-   * TAR-273 shipped it on the ticket queue's own `(priority, created_at, id)`;
-   * re-sorting a *page* of that would reorder 25 rows chosen by a different key,
-   * which is a different list rather than a better-sorted one.
+   * Not re-sorted here, and now it does not need to be: `?routingState=deferred`
+   * pages oldest-stuck first, which is the order ADR 0008 decision 3 asked for and
+   * the one this view's copy claims (TAR-365). Re-sorting a *page* would be wrong
+   * whatever the order — it would reorder 25 rows chosen by a different key, which
+   * is a different list rather than a better-sorted one.
    */
   tickets: readonly TicketResponse[];
   /**

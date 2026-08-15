@@ -84,17 +84,18 @@ ticket the caller may not see answers `not_found` on every route including the w
 The queue. With no `status` parameter it returns the tenant's **active** tickets —
 `status IN ('open','pending')` — ordered `priority DESC, createdAt DESC, id DESC`.
 
-| Parameter        | In    | Type   | Required | Default    | Notes                                                                  |
-| ---------------- | ----- | ------ | -------- | ---------- | ---------------------------------------------------------------------- |
-| `cursor`         | query | string | no       | —          | The `nextCursor` from the previous page. Opaque; pass it back verbatim |
-| `limit`          | query | int    | no       | `25`       | 1–100                                                                  |
-| `status`         | query | enum   | no       | active     | `open` \| `pending` \| `resolved` \| `closed`. One value, not a list   |
-| `priority`       | query | enum   | no       | —          | `low` \| `normal` \| `high` \| `urgent`                                |
-| `scope`          | query | enum   | no       | `assigned` | `assigned` \| `unassigned` \| `all`                                    |
-| `assignedUserId` | query | uuid   | no       | —          | Narrows the scope; never widens it                                     |
-| `assignedTeamId` | query | uuid   | no       | —          | Narrows the scope; never widens it                                     |
-| `routingState`   | query | enum   | no       | —          | `pending` \| `assigned` \| `deferred` \| `manual`                      |
-| `breachedOnly`   | query | bool   | no       | `false`    | Tickets whose SLA has breached                                         |
+| Parameter        | In    | Type   | Required | Default    | Notes                                                                   |
+| ---------------- | ----- | ------ | -------- | ---------- | ----------------------------------------------------------------------- |
+| `cursor`         | query | string | no       | —          | The `nextCursor` from the previous page. Opaque; pass it back verbatim  |
+| `limit`          | query | int    | no       | `25`       | 1–100                                                                   |
+| `status`         | query | enum   | no       | active     | `open` \| `pending` \| `resolved` \| `closed`. One value, not a list    |
+| `priority`       | query | enum   | no       | —          | `low` \| `normal` \| `high` \| `urgent`                                 |
+| `scope`          | query | enum   | no       | `assigned` | `assigned` \| `unassigned` \| `all`                                     |
+| `assignedUserId` | query | uuid   | no       | —          | Narrows the scope; never widens it                                      |
+| `assignedTeamId` | query | uuid   | no       | —          | Narrows the scope; never widens it                                      |
+| `routingState`   | query | enum   | no       | —          | `pending` \| `assigned` \| `deferred` \| `manual`. `deferred` re-orders |
+| `deferredReason` | query | enum   | no       | —          | `all_at_capacity` \| `none_available` \| `no_candidate_pool`            |
+| `breachedOnly`   | query | bool   | no       | `false`    | Tickets whose SLA has breached                                          |
 
 ```bash
 curl -b cookies.txt 'http://northwind.app.localhost:3051/api/v1/tickets?scope=all&limit=1'
@@ -140,7 +141,7 @@ curl -b cookies.txt 'http://northwind.app.localhost:3051/api/v1/tickets?scope=al
 is opaque and versioned, and a cursor minted by a list with a different sort key is refused
 rather than silently paged from the wrong place.
 
-Five behaviours a client cannot read off the parameter table:
+Six behaviours a client cannot read off the parameter table:
 
 - **Resolving a ticket removes it from this list with no client change.** That is the whole
   mechanism behind "a resolved ticket leaves the active queue": the row stops matching the
@@ -157,15 +158,29 @@ Five behaviours a client cannot read off the parameter table:
 - **`scope` is narrowed, not refused.** A caller without `ticket:read_all` asking for `all`
   or `unassigned` receives `assigned`, so a supervisor's shared URL renders for an agent
   with less in it rather than answering 403.
-- **`routingState=deferred` is the stuck-ticket query** (TAR-274), usually with
-  `scope=unassigned`: the tickets routing ran on and could place with nobody. The router
-  writes the column as of TAR-373, so the page now carries the tickets that are actually
-  stuck, oldest first by `routing_deferred_since` — a value the router sets once, on the
-  first deferral, and does not move when a job is redelivered.
+- **`routingState=deferred` is the stuck-ticket query** (TAR-274): the tickets routing ran on
+  and could place with nobody. The router writes the column as of TAR-373, so the page carries
+  the tickets that are actually stuck, and `routing_deferred_since` is a value the router sets
+  once, on the first deferral, and does not move when a job is redelivered. `deferredReason`
+  narrows it to one reason. Send it with `scope=all` rather than `scope=unassigned` —
+  `unassigned` means "no user **and** no team", and a ticket a rule routed to a team and
+  rotation then deferred still carries `assignedTeamId`, which is exactly the
+  `all_at_capacity` case this query is for.
+- **That one query pages in a different order: `routingDeferredSince ASC, id ASC`** — oldest
+  stuck first, because this is a triage list and a customer waiting since yesterday outranks
+  an urgent ticket flagged a minute ago (ADR 0008 decision 3 and amendment 3). It applies to
+  `routingState=deferred` and to any `deferredReason`, and to nothing else. **A cursor cannot
+  cross between the two orders**: a deferred cursor carries one sort value and a queue cursor
+  carries two, so replaying one against the other is `validation_failed` rather than a page
+  from the wrong place. Both orders emit a real `nextCursor` — the flagged queue included, so
+  a supervisor with more stuck tickets than fit on a page can reach the rest.
 
-The page is served by `tickets_active_queue_idx` —
+The default page is served by `tickets_active_queue_idx` —
 `(tenant_id, priority DESC, created_at DESC, id DESC) WHERE status IN ('open','pending')` —
-so a default queue page carries no sort over the tenant's active set. A request with an
+so it carries no sort over the tenant's active set. The flagged page is served by
+`tickets_routing_deferred_idx` — `(tenant_id, routing_deferred_since)
+WHERE routing_state = 'deferred'` — which supplies the predicate and the leading sort key,
+leaving the `id` tie-break as an incremental sort inside one millisecond. A request with an
 explicit non-active `status`, or a scoped queue, falls back to a bounded sort.
 
 | Status | Code                | Cause                                                                              |
@@ -230,9 +245,11 @@ Four fields behave in ways the shape does not show:
   resume, so a copy would drift into reporting a breach that never happened.
 - **`routing` says whether routing may still act on this ticket**, and is not part of its
   lifecycle. `state` is `pending`, `assigned`, `deferred` or `manual`; `deferredReason` and
-  `deferredSince` are non-null exactly when it is `deferred`. Every ticket reads `pending`
-  today apart from those a backfill classified `manual`, because the writer is the router
-  (TAR-288) and it has not landed.
+  `deferredSince` are non-null exactly when it is `deferred`. `RuleEngineService` writes it in
+  the branch that decided it (TAR-373) and `POST /tickets/{id}/assign` writes it on a manual
+  placement (TAR-374); a ticket a backfill classified `manual` keeps that. `pending` means the
+  routing job has not reached a conclusion, and it is reachable again after a release —
+  [ADR 0008 amendment 2](../architecture/0008-assignment-rotation-and-workload.md#amendment-2--how-post-apiv1ticketsidassign-behaves-tar-374).
 - **`subject` is null on an auto-created ticket.** The first inbound message is as likely to
   be an image or a sticker as a sentence, so there is nothing honest to derive a subject
   from. Clients fall back to `number`, which is what agents and customers quote anyway.
@@ -503,14 +520,17 @@ permission bypass: a permission check on a queue worker would throw rather than 
 
 ## What is not on this surface
 
-- **`POST /api/v1/tickets/{id}/assign`** (TAR-23) — assignment. Published in ADR 0002, not
-  implemented.
+- **`POST /api/v1/tickets/{id}/assign`** (TAR-23) — assignment. **Built by TAR-374** and
+  specified in
+  [ADR 0008 amendment 2](../architecture/0008-assignment-rotation-and-workload.md#amendment-2--how-post-apiv1ticketsidassign-behaves-tar-374);
+  documenting it on this page is still to do.
 - **`GET /api/v1/tickets/{id}/events`** (TAR-32) — the event-log read.
 - **Creating a ticket over HTTP.** Tickets are opened by the inbound-message linker
   ([ADR 0003](../architecture/0003-ticket-auto-linking-contract.md)).
 - **Realtime `ticket.updated`.** Published in `realtime.ts`, emitted by nothing.
-- **Writing `routing.state`.** The block is published and read from the row; the router that
-  sets it is TAR-288.
+- **Writing `routing.state` through this surface.** The block is read from the row here. Its
+  writers are `RuleEngineService` (TAR-373) and `POST /tickets/{id}/assign` (TAR-374); no route
+  on this page sets it.
 - **Changing an SLA policy.** `GET`/`PATCH /api/v1/sla-policies` and the alert routes are
   their own surface (TAR-280). This one only reports the timers and moves them on a status
   change.
@@ -558,8 +578,8 @@ Confirmed rather than assumed:
   router writes the column now, so a deferred ticket reads `deferred` and appears in that
   page. The validation half stands.
 
-Exercised by integration test rather than by hand, because both need an inbound message
-through the queue or two writers colliding:
+Exercised by integration test rather than by hand, because each needs an inbound message
+through the queue, two writers colliding, or a routing state the seed does not produce:
 
 - The auto-reopen itself, its `cause: "inbound_message"` event and the absence of a second
   ticket — `ticket-queue.int-spec.ts`, "the customer replying to a pending ticket".
@@ -567,3 +587,8 @@ through the queue or two writers colliding:
   ticket — same file, "the reopen race".
 - `403 forbidden` for a principal holding `ticket:update` but not `ticket:close`. No shipped
   role is in that position, so it cannot be produced against a seeded tenant.
+- The flagged queue — its oldest-stuck-first order, `deferredReason`, paging across a
+  same-millisecond tie, the two cursor arities refusing each other, and one tenant's stuck
+  tickets staying invisible to the other — `ticket-flagged-queue.int-spec.ts`. The seed writes
+  no deferred ticket — only a routing job does — so the fixture sets the three columns itself
+  and every case runs against a real database rather than a stubbed page.
