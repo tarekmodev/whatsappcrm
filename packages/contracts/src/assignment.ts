@@ -429,7 +429,9 @@ export type FallbackAssignmentDecision = z.infer<typeof FallbackAssignmentDecisi
  * Implemented by TAR-273 as `RotationFallbackResolver`, in `AssignmentModule`.
  */
 export interface FallbackAssignmentResolver {
-  resolveFallbackAssignment(request: FallbackAssignmentRequest): Promise<FallbackAssignmentDecision>;
+  resolveFallbackAssignment(
+    request: FallbackAssignmentRequest,
+  ): Promise<FallbackAssignmentDecision>;
 }
 
 /**

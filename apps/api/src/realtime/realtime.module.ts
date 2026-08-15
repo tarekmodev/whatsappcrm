@@ -6,6 +6,7 @@ import { MessageResourceService } from './message-resource.service';
 import { RealtimeGateway } from './realtime.gateway';
 import { RealtimeHandshakeService } from './realtime-handshake.service';
 import { RealtimeRelayService } from './realtime-relay.service';
+import { SlaBreachResourceService } from './sla-breach-resource.service';
 import { TenantHostnameService } from './tenant-hostname.service';
 
 /**
@@ -46,6 +47,7 @@ import { TenantHostnameService } from './tenant-hostname.service';
     ConversationAccessService,
     ConversationResourceService,
     MessageResourceService,
+    SlaBreachResourceService,
     TenantHostnameService,
     ResponseOriginService,
   ],

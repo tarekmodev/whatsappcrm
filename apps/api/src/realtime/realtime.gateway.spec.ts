@@ -22,6 +22,7 @@ import { REALTIME_PATH } from './realtime.constants';
 import { RealtimeGateway } from './realtime.gateway';
 import { RealtimeHandshakeService } from './realtime-handshake.service';
 import { RealtimeRelayService } from './realtime-relay.service';
+import { SlaBreachResourceService } from './sla-breach-resource.service';
 import type { RealtimeSocketData } from './realtime-socket';
 import { TenantHostnameService } from './tenant-hostname.service';
 
@@ -269,6 +270,8 @@ describe('the realtime gateway', () => {
         { provide: ConversationAccessService, useValue: conversations },
         { provide: MessageResourceService, useValue: messages },
         { provide: ConversationResourceService, useValue: conversationResources },
+        // Nothing in this file emits an SLA breach; that relay has its own spec.
+        { provide: SlaBreachResourceService, useValue: {} },
         { provide: TenantHostnameService, useValue: hostnames },
         { provide: SessionService, useValue: sessions },
       ],

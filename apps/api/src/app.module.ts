@@ -19,6 +19,7 @@ import { QueueModule } from './queue/queue.module';
 import { RbacModule } from './rbac/rbac.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { REPOSITORY_ENV_FILE } from './repository-env-file';
+import { SlaModule } from './sla/sla.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
@@ -74,6 +75,10 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     // path and for turning a `mediaId` into a handle Meta holds.
     ConversationsModule,
     WebhooksModule,
+    // L4, and last: it may import the domain modules below it, and nothing below
+    // may import it. Every trigger reaching it is a queue job for exactly that
+    // reason, so it needs no `imports` of its own.
+    SlaModule,
   ],
 })
 export class AppModule implements NestModule {

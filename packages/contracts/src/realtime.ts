@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { IdSchema, TimestampSchema } from './common';
 import { ConversationResponseSchema } from './conversations';
 import { MessageResponseSchema } from './messages';
+import { SlaAlertResponseSchema } from './sla';
 import { TicketResponseSchema } from './tickets';
 
 /**
@@ -187,6 +188,31 @@ export const ServerEventSchema = z.discriminatedUnion('event', [
     conversationId: IdSchema,
     userId: IdSchema,
     expiresAt: TimestampSchema,
+  }),
+  /**
+   * A ticket missed its SLA deadline, sent to `user:{recipientUserId}` — once
+   * per `sla_alerts` row the breach actually inserted, and to nobody else
+   * (TAR-26, 0006 decision 5).
+   *
+   * Deliberately **not** `tenantReadersRoom`. The read rule for an alert is "you
+   * are a named recipient", the rows say who that is, and the amendment above
+   * rules that a fan-out wider than the read rule is an authorization bypass.
+   *
+   * The socket is the immediacy; the row is the record. A supervisor who was
+   * offline when this fired sees the same alert on their next
+   * `GET /api/v1/sla-alerts`, which is what makes "the supervisor is notified"
+   * true rather than "a message was emitted".
+   *
+   * `ticket` rides along so the console can render the alert without a second
+   * fetch, per this file's whole-resources rule. The ticket's own queue row also
+   * moved, and that is published separately as `ticket.updated` to the
+   * conversation audience — the two events have different audiences and neither
+   * substitutes for the other.
+   */
+  z.object({
+    event: z.literal('sla.breached'),
+    alert: SlaAlertResponseSchema,
+    ticket: TicketResponseSchema,
   }),
   /**
    * Sent to `user:{id}` when that user's session is revoked, so an open tab

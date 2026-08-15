@@ -15,15 +15,18 @@ import {
   MESSAGE_CREATED_EVENT,
   MESSAGE_STATUS_CHANGED_EVENT,
   SESSIONS_REVOKED_EVENT,
+  SLA_BREACHED_EVENT,
   type ConversationAssignedEvent,
   type MessageCreatedEvent,
   type MessageStatusChangedEvent,
   type SessionsRevokedEvent,
+  type SlaBreachedEvent,
 } from '../events/domain-events';
 import { SessionService } from '../identity/session.service';
 import { ConversationResourceService } from './conversation-resource.service';
 import { MessageResourceService } from './message-resource.service';
 import type { RealtimeSocketData } from './realtime-socket';
+import { SlaBreachResourceService } from './sla-breach-resource.service';
 import { TenantHostnameService } from './tenant-hostname.service';
 
 /**
@@ -102,6 +105,7 @@ export class RealtimeRelayService {
   constructor(
     private readonly messages: MessageResourceService,
     private readonly conversations: ConversationResourceService,
+    private readonly breaches: SlaBreachResourceService,
     private readonly hostnames: TenantHostnameService,
     private readonly sessions: SessionService,
     private readonly tenantContext: TenantContextService,
@@ -174,6 +178,81 @@ export class RealtimeRelayService {
     } catch (error: unknown) {
       this.logger.error(
         `Could not relay conversation ${event.conversationId} to tenant ${event.tenantId}: ${describe(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Puts a missed SLA deadline in front of the people who can act on it
+   * (TAR-26, 0006 decision 5).
+   *
+   * **Two events, two audiences, and neither substitutes for the other.**
+   *
+   *   * `sla.breached` goes to `user:{recipientUserId}` — one emit per
+   *     `sla_alerts` row the sweep actually inserted, and to nobody else.
+   *     Deliberately not `tenantReadersRoom`: the read rule for an alert is "you
+   *     are a named recipient", the rows say who that is, and this file's own
+   *     amendment rules that a fan-out wider than the read rule is an
+   *     authorization bypass.
+   *   * `ticket.updated` goes to `conversationAudienceRooms` read off the
+   *     **ticket**, because the ticket's queue row changed too and everybody
+   *     entitled to see it should watch the badge move. That function is
+   *     structural rather than tied to a row type — its own docblock says so —
+   *     and reusing it is what keeps the ticket queue's live audience identical
+   *     to the inbox's rule instead of a second one drifting beside it.
+   *
+   * A supervisor who is both a recipient and in the ticket's audience receives
+   * one of each, which is correct: they are different facts.
+   *
+   * The row is the record and this is the accelerator, so a failure here costs
+   * one page load. That is why it is caught and logged like every other relay
+   * rather than allowed to reject.
+   */
+  @OnEvent(SLA_BREACHED_EVENT)
+  async onSlaBreached(event: SlaBreachedEvent): Promise<void> {
+    const server = this.server;
+
+    if (server === null) {
+      this.logger.warn(
+        `No Socket.IO server attached; dropping an SLA breach for ticket ${event.ticketId}.`,
+      );
+      return;
+    }
+
+    try {
+      const breach = await this.tenantContext.run(
+        { requestId: randomUUID(), tenantId: event.tenantId, userId: null, principal: null },
+        async () => await this.breaches.findForRelay(event.ticketId, event.alertIds),
+      );
+
+      if (breach === null) {
+        return;
+      }
+
+      for (const delivery of breach.deliveries) {
+        const payload: ServerEvent = {
+          event: 'sla.breached',
+          alert: delivery.alert,
+          ticket: breach.ticket,
+        };
+
+        server.to(userRoom(delivery.recipientUserId)).emit(payload.event, payload);
+      }
+
+      const updated: ServerEvent = { event: 'ticket.updated', ticket: breach.ticket };
+
+      server
+        .to(
+          conversationAudienceRooms({
+            tenantId: event.tenantId,
+            assignedUserId: breach.ticket.assignedUserId,
+            assignedTeamId: breach.ticket.assignedTeamId,
+          }),
+        )
+        .emit(updated.event, updated);
+    } catch (error: unknown) {
+      this.logger.error(
+        `Could not relay the SLA breach on ticket ${event.ticketId} to tenant ${event.tenantId}: ${describe(error)}`,
       );
     }
   }
