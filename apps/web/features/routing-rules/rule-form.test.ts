@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AssignmentRuleResponse } from '@whatsappcrm/contracts';
+import { ROUTING_RULE_LIMITS, type AssignmentRuleResponse } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { draftFromRule, validateRuleDraft, type RuleDraft } from './rule-form';
 
@@ -103,6 +103,30 @@ describe('validateRuleDraft', () => {
 
     if (result.status === 'invalid') {
       expect(result.errors.byCondition[0]).toBe(content.routingRules.tagsRequiredError);
+    }
+  });
+
+  it('names the tag limit against the field rather than failing the whole submit', () => {
+    // The picker caps nothing, so a workspace with more than 25 tags can check 26.
+    // Before this was checked here, the schema refused it and the supervisor got
+    // the generic submit error with no field named.
+    const tagIds = Array.from(
+      { length: ROUTING_RULE_LIMITS.valuesPerCondition + 1 },
+      (_unused, index) => `0192f00c-0000-7000-8000-${String(index).padStart(12, '0')}`,
+    );
+
+    const result = validateRuleDraft(
+      draft({ conditions: [{ type: 'tag', match: 'any', tagIds }] }),
+      content,
+    );
+
+    expect(result.status).toBe('invalid');
+
+    if (result.status === 'invalid') {
+      expect(result.errors.byCondition[0]).toBe(
+        content.routingRules.tagsTooManyError(ROUTING_RULE_LIMITS.valuesPerCondition),
+      );
+      expect(result.errors.form).toBeUndefined();
     }
   });
 

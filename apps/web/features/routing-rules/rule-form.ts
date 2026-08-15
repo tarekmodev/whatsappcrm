@@ -174,8 +174,18 @@ function conditionError(condition: RoutingCondition, content: Content): string |
       return tooLong ? copy.keywordTooLongError(ROUTING_RULE_LIMITS.keywordLength) : null;
     }
 
-    case 'tag':
-      return condition.tagIds.length === 0 ? copy.tagsRequiredError : null;
+    case 'tag': {
+      if (condition.tagIds.length === 0) {
+        return copy.tagsRequiredError;
+      }
+
+      // The picker caps nothing, so a workspace with more than 25 tags can check
+      // 26. Without this the schema refuses it and the form falls back to the
+      // generic submit error, with no field named and no mention of the limit.
+      return condition.tagIds.length > ROUTING_RULE_LIMITS.valuesPerCondition
+        ? copy.tagsTooManyError(ROUTING_RULE_LIMITS.valuesPerCondition)
+        : null;
+    }
 
     case 'business_hours':
       return null;

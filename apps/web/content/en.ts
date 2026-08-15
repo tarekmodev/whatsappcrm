@@ -1001,6 +1001,7 @@ export const content = {
 
     tagsLabel: 'Tags',
     tagsRequiredError: 'Choose at least one tag',
+    tagsTooManyError: (maxCount: number) => `Choose at most ${String(maxCount)} tags`,
     tagsUnavailable:
       'This workspace has no contact tags yet, so a tag condition has nothing to match on.',
 
