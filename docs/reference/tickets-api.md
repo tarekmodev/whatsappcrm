@@ -93,7 +93,8 @@ The queue. With no `status` parameter it returns the tenant's **active** tickets
 | `scope`          | query | enum   | no       | `assigned` | `assigned` \| `unassigned` \| `all`                                    |
 | `assignedUserId` | query | uuid   | no       | —          | Narrows the scope; never widens it                                     |
 | `assignedTeamId` | query | uuid   | no       | —          | Narrows the scope; never widens it                                     |
-| `breachedOnly`   | query | bool   | no       | `false`    | Tickets with a breached SLA timer. Returns nothing until TAR-26 lands  |
+| `routingState`   | query | enum   | no       | —          | `pending` \| `assigned` \| `deferred` \| `manual`                      |
+| `breachedOnly`   | query | bool   | no       | `false`    | Tickets whose SLA has breached                                         |
 
 ```bash
 curl -b cookies.txt 'http://northwind.app.localhost:3051/api/v1/tickets?scope=all&limit=1'
@@ -112,21 +113,26 @@ curl -b cookies.txt 'http://northwind.app.localhost:3051/api/v1/tickets?scope=al
       "priority": "high",
       "assignedUserId": "0192f001-0000-7000-8000-000000000101",
       "assignedTeamId": "0192f002-0000-7000-8000-000000000201",
+      "routing": {
+        "state": "pending",
+        "deferredReason": null,
+        "deferredSince": null
+      },
       "sla": {
-        "policyId": null,
-        "firstResponseState": "not_applicable",
-        "firstResponseDueAt": null,
+        "policyId": "01a002cd-0a7f-7599-8a2b-279c225661fc",
+        "firstResponseState": "met",
+        "firstResponseDueAt": "2026-08-14T22:23:06.911Z",
         "resolutionState": "not_applicable",
         "resolutionDueAt": null
       },
-      "firstRespondedAt": "2026-08-14T20:57:47.702Z",
+      "firstRespondedAt": "2026-08-14T21:28:06.911Z",
       "resolvedAt": null,
       "closedAt": null,
-      "createdAt": "2026-08-14T20:52:47.702Z",
-      "updatedAt": "2026-08-14T23:52:48.545Z"
+      "createdAt": "2026-08-14T21:23:06.911Z",
+      "updatedAt": "2026-08-15T00:23:07.233Z"
     }
   ],
-  "nextCursor": "eyJ2IjoxLCJrIjpbImhpZ2giLCIyMDI2LTA4LTE0VDIwOjUyOjQ3LjcwMloiXSwiaWQiOiIwMTkyZjAwOC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMDA4MDEifQ"
+  "nextCursor": "eyJ2IjoxLCJrIjpbImhpZ2giLCIyMDI2LTA4LTE0VDIxOjIzOjA2LjkxMVoiXSwiaWQiOiIwMTkyZjAwOC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMDA4MDEifQ"
 }
 ```
 
@@ -134,7 +140,7 @@ curl -b cookies.txt 'http://northwind.app.localhost:3051/api/v1/tickets?scope=al
 is opaque and versioned, and a cursor minted by a list with a different sort key is refused
 rather than silently paged from the wrong place.
 
-Four behaviours a client cannot read off the parameter table:
+Five behaviours a client cannot read off the parameter table:
 
 - **Resolving a ticket removes it from this list with no client change.** That is the whole
   mechanism behind "a resolved ticket leaves the active queue": the row stops matching the
@@ -151,6 +157,10 @@ Four behaviours a client cannot read off the parameter table:
 - **`scope` is narrowed, not refused.** A caller without `ticket:read_all` asking for `all`
   or `unassigned` receives `assigned`, so a supervisor's shared URL renders for an agent
   with less in it rather than answering 403.
+- **`routingState=deferred` is the stuck-ticket query** (TAR-274), usually with
+  `scope=unassigned`: the tickets routing ran on and could place with nobody. It returns an
+  empty page until TAR-288's router writes the column, which is the honest answer rather
+  than an unfiltered page pretending to be the stuck set.
 
 The page is served by `tickets_active_queue_idx` —
 `(tenant_id, priority DESC, created_at DESC, id DESC) WHERE status IN ('open','pending')` —
@@ -188,34 +198,46 @@ curl -b cookies.txt \
   "priority": "high",
   "assignedUserId": "0192f001-0000-7000-8000-000000000104",
   "assignedTeamId": "0192f002-0000-7000-8000-000000000202",
+  "routing": {
+    "state": "pending",
+    "deferredReason": null,
+    "deferredSince": null
+  },
   "sla": {
-    "policyId": null,
-    "firstResponseState": "not_applicable",
-    "firstResponseDueAt": null,
+    "policyId": "01a002cd-0a7f-7599-8a2b-279c225661fc",
+    "firstResponseState": "breached",
+    "firstResponseDueAt": "2026-08-13T19:23:06.911Z",
     "resolutionState": "not_applicable",
     "resolutionDueAt": null
   },
   "firstRespondedAt": null,
   "resolvedAt": null,
   "closedAt": null,
-  "createdAt": "2026-08-13T17:52:47.702Z",
-  "updatedAt": "2026-08-14T23:52:48.545Z"
+  "createdAt": "2026-08-13T18:23:06.911Z",
+  "updatedAt": "2026-08-15T00:23:07.233Z"
 }
 ```
 
-Three fields behave in ways the shape does not show:
+Four fields behave in ways the shape does not show:
 
-- **`sla` is a fixed placeholder.** It is required and non-nullable, and there is no timer to
-  fill it: `sla_timers` rows are TAR-26's and nothing writes one yet. Every ticket therefore
-  reports `not_applicable` on both targets with null due dates — the honest reading of "no
-  SLA policy attached" rather than an invented `running` state. TAR-26 replaces the
-  placeholder with a real read, and **the response shape does not change when it does**.
+- **`sla` is derived from the ticket's timers, not stored on the ticket.** Each target
+  reports one of `not_applicable`, `running`, `paused`, `met` or `breached`, with the
+  deadline beside it. A target with no timer is `not_applicable` with a null deadline, and
+  so is a cancelled one — `SLA_STATES` publishes no `cancelled`, and "there is no deadline
+  here" is what a badge needs to know. `policyId` is null for a tenant with SLA turned off.
+  No deadline is copied onto `tickets` deliberately: `dueAt` moves on every pause and
+  resume, so a copy would drift into reporting a breach that never happened.
+- **`routing` says whether routing may still act on this ticket**, and is not part of its
+  lifecycle. `state` is `pending`, `assigned`, `deferred` or `manual`; `deferredReason` and
+  `deferredSince` are non-null exactly when it is `deferred`. Every ticket reads `pending`
+  today apart from those a backfill classified `manual`, because the writer is the router
+  (TAR-288) and it has not landed.
 - **`subject` is null on an auto-created ticket.** The first inbound message is as likely to
   be an image or a sticker as a sentence, so there is nothing honest to derive a subject
   from. Clients fall back to `number`, which is what agents and customers quote anyway.
-- **`firstRespondedAt` is not written by any application code yet.** First-response tracking
-  is TAR-26's. The column is emitted rather than a literal null so that nothing here needs
-  editing the day something writes it; demo seed data carries a value, real traffic does not.
+- **`firstRespondedAt` is stamped by the first reply from a person** on the ticket's
+  conversation — the same event that stops the first-response timer. A bot reply writes no
+  sender and does not stop the clock, so it does not fill this field either.
 
 `number` is per-tenant and sequential. Two tenants both holding ticket #1 is correct.
 
@@ -264,9 +286,10 @@ curl -b cookies.txt -X PATCH \
   "number": 3,
   "status": "open",
   "priority": "urgent",
+  "routing": { "state": "pending", "deferredReason": null, "deferredSince": null },
   "resolvedAt": null,
   "closedAt": null,
-  "updatedAt": "2026-08-14T23:55:25.735Z"
+  "updatedAt": "2026-08-15T00:24:16.282Z"
 }
 ```
 
@@ -383,6 +406,23 @@ the act.
 No new error codes were added for this surface; every refusal maps onto the taxonomy in
 `packages/contracts/src/error-codes.ts`.
 
+### A status change moves the SLA timers
+
+A `PATCH` that changes `status` enqueues an SLA evaluation on the `sla` queue after the
+transaction commits, so the ticket's timers pause, resume, stop or are cancelled to match
+the new state. A priority or subject edit enqueues nothing: a running deadline keeps the
+policy it started under.
+
+The evaluation is a durable job rather than an in-process event, because a missed SLA
+transition leaves a paused clock running against an agent or a breach nobody is told about,
+with nothing recording that it was lost. It is also **asynchronous**: the `sla` block in the
+response is read before the evaluation runs, so a client that resolves a ticket and reads
+the resolution state in the same breath may see the timer's previous state. Refetch if the
+badge matters.
+
+Failing to enqueue does not fail the request — the status change is committed and the caller
+is owed their 200 — but it is logged as a warning naming the ticket and the transition.
+
 ## Auto-reopen: what an API consumer observes
 
 **A customer replying to a `pending` ticket reopens it to `open`, with no agent action and
@@ -468,12 +508,16 @@ permission bypass: a permission check on a queue worker would throw rather than 
 - **Creating a ticket over HTTP.** Tickets are opened by the inbound-message linker
   ([ADR 0003](../architecture/0003-ticket-auto-linking-contract.md)).
 - **Realtime `ticket.updated`.** Published in `realtime.ts`, emitted by nothing.
-- **SLA timers.** `sla` is the placeholder described above until TAR-26 lands.
+- **Writing `routing.state`.** The block is published and read from the row; the router that
+  sets it is TAR-288.
+- **Changing an SLA policy.** `GET`/`PATCH /api/v1/sla-policies` and the alert routes are
+  their own surface (TAR-280). This one only reports the timers and moves them on a status
+  change.
 
 ## Verification
 
 Every request and response on this page was executed against a local stack built from `main`
-at `d4d5686`: `docker compose up -d --wait`, `pnpm db:migrate:deploy`, `pnpm db:roles`,
+at `21af387`: `docker compose up -d --wait`, `pnpm db:migrate:deploy`, `pnpm db:roles`,
 `pnpm db:roles:login`, `pnpm db:seed`, then the built API on port `3051`. Ids, timestamps
 and request ids are the values that run returned.
 
@@ -505,6 +549,11 @@ Confirmed rather than assumed:
   two `status_changed` rows, each with `{ from, to, cause: "agent" }` and a non-null actor.
 - Another tenant's ticket answers `404 not_found` on both the read and the `PATCH`, and the
   row is untouched afterwards.
+- `sla` carries real timer states — a `met` first response with its deadline on one ticket,
+  a `breached` one on another — and `breachedOnly=true` returns exactly the breached ticket.
+- `routing` renders on every ticket as `pending` with both deferred fields null, and
+  `?routingState=deferred` returns an empty page. A `routingState` outside its enum is
+  `400 validation_failed` on `path: "routingState"`.
 
 Exercised by integration test rather than by hand, because both need an inbound message
 through the queue or two writers colliding:
