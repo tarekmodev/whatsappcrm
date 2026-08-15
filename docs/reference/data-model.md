@@ -496,10 +496,23 @@ with the note, and never queried the other way round.
   ones do; `(tenant_id, conversation_id)`, `(tenant_id, contact_id)`;
   **`tickets_one_active_per_contact`** — `UNIQUE (tenant_id, contact_id)`
   `WHERE status IN ('open','pending')`; **`tickets_routing_deferred_idx`** —
-  `(tenant_id, routing_deferred_since) WHERE routing_state = 'deferred'`
+  `(tenant_id, routing_deferred_since) WHERE routing_state = 'deferred'`;
+  **`tickets_active_queue_idx`** — `(tenant_id, priority DESC, created_at DESC, id DESC)`
+  `WHERE status IN ('open','pending')`
 - **Checks:** `tickets_routing_deferred_consistent`
 - **Owned by:** TAR-21 / TAR-25, sort keys added by TAR-80, the partial unique index by
-  TAR-74, the routing columns by TAR-272
+  TAR-74, the routing columns by TAR-272, the active-queue index by TAR-284
+
+`tickets_active_queue_idx` serves `GET /api/v1/tickets` — the active queue in
+`priority DESC, created_at DESC, id DESC` order, paged by keyset
+([tickets API](tickets-api.md)). The index above it cannot: `status` sits before `priority`,
+so `status IN ('open','pending')` is two ranges no single scan can deliver in priority
+order, a btree yields `priority DESC` only on a backward scan that flips `created_at` to
+ASC, and it carries no `id` for the keyset to resume on. Without it every page is a Bitmap
+Heap Scan plus a top-N Sort over the tenant's whole active set — correct, and the queue's
+dominant cost by the low thousands of active tickets. Hand-written, like
+`tickets_one_active_per_contact`, because Prisma's schema language has no partial-index
+syntax; nothing in `schema.prisma` will regenerate it.
 
 `number` is allocated by [`ticket_counters`](#ticket_counters); the unique constraint is
 what makes a racy allocator fail loudly instead of duplicating.
@@ -868,6 +881,7 @@ Applied in this order. Every directory carries a hand-written `down.sql` beside 
 | `20260813120000_sla_timer_state_paused`                 | `ALTER TYPE sla_timer_state ADD VALUE 'paused'`, alone in its own migration                                                                                                                                                                                                                         | TAR-270 |
 | `20260813130000_sla_pause_accounting_and_alerts`        | `paused_at`, `paused_ms`, `breached_at` and the `(state, due_at)` sweep index on `sla_timers`; adds `sla_alerts` and the 39th policy; backfills the default `sla_policies` row for existing tenants                                                                                                 | TAR-270 |
 | `20260813140000_assignment_workload_and_routing_state`  | `ticket_routing_state` and `ticket_routing_deferred_reason`; the three routing columns and `tickets_routing_deferred_idx` on `tickets`; the workload cap on `users` and `tenant_settings`; `assignment_state.team_id` nullable under `UNIQUE … NULLS NOT DISTINCT`. Adds no table, so no new policy | TAR-272 |
+| `20260813150000_ticket_active_queue_index`              | `tickets_active_queue_idx`. One partial index and nothing else: no column, no constraint, no policy. Plain `CREATE INDEX`, not `CONCURRENTLY` — Prisma wraps a migration in a transaction and Postgres forbids the concurrent form there, the same resolution `tickets_one_active_per_contact` took | TAR-284 |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's

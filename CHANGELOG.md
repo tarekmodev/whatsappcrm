@@ -214,6 +214,60 @@ sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the 
   gets no timer until something else evaluates it, which a sweep for
   ticket-with-no-timer would close.
 
+- **An agent can move a ticket through its life, and the queue puts urgent work first**
+  (TAR-284) — `tickets` has carried a status, a priority and a `resolved_at` column since
+  TAR-21, and nothing wrote them: there was no endpoint, so a ticket opened by a customer's
+  first message stayed open for ever. `PATCH /api/v1/tickets/{id}` is that write — subject,
+  status and priority in one call, because a status change and a re-prioritisation are one
+  triage action an agent takes in one form. `GET /api/v1/tickets` and
+  `GET /api/v1/tickets/{id}` publish the queue and one ticket beside it.
+  **Resolving a ticket takes it out of the queue with no client change**: the list defaults
+  to the active statuses (`open`, `pending`), so a resolved ticket stops matching, and its
+  `resolved_at` is stamped on the way in. **Urgent sorts to the top** —
+  `priority DESC, created_at DESC, id DESC`, with no sort parameter, served by a new partial
+  index `tickets_active_queue_idx` so the page carries no sort over the tenant's active set.
+  That order rests on `ticket_priority` being declared `low, normal, high, urgent`, which is
+  load-bearing and invisible, so `schema.prisma` warns and an integration test asserts it.
+  `resolved` and `closed` are terminal: re-activating either is `conflict`, because
+  `tickets_one_active_per_contact` would refuse the row anyway and there is no reopen window
+  at v1. `open → closed` is allowed and does **not** back-fill a resolution time — closing
+  spam is not resolving it, and cycle-time reporting reads that column. Setting the value a
+  ticket already holds is a 200 no-op that writes no event, not a 409: a double-clicked
+  button achieved what was asked. Every change appends one `ticket_events` row carrying
+  `{ from, to, cause }`, where `cause` is new on `TicketEventSchema` and is how a client
+  tells an agent reopening a ticket by hand from the customer reopening it by replying.
+  The write is a compare-and-set on `status`, the same shape `TicketLinkerService` already
+  used, so the two writers cannot corrupt each other: the customer's reply landing mid-resolve
+  answers `conflict` and sends the console to a refetch rather than silently resolving a
+  ticket the customer just added to. Terminal moves additionally need `ticket:close`,
+  checked per-body in the service because the guard is per-route. Recorded as ADR 0002
+  amendment 9.
+  ⚠️ Not wired: `realtime.ts` publishes `ticket.updated` and nothing emits it, so an
+  auto-reopen becomes visible on the console's next refetch rather than being pushed. The
+  domain event exists; the socket relay is a subscriber away and needs a ticket audience
+  room, which a status-change story deliberately did not amend.
+
+- **The ticket queue and the ticket view** (TAR-286) — the console side of the same story.
+  `/tickets` lists work urgent-first with Status, Priority and Scope filters and says what
+  the order is, because it is not a control; `/tickets/{id}` shows the ticket, its
+  conversation and its status and priority controls. Status is a row of verbs — one per move
+  `TICKET_STATUS_TRANSITIONS` allows out of the current status, so a closed ticket renders
+  none and nothing on screen can produce a transition the API refuses — while priority is a
+  select, because it is a value rather than an act and it is reversible. Resolving and
+  closing are confirmed first and the copy names what happens instead of asking "are you
+  sure?", since neither is undoable at v1. Controls are permission-gated, and a role that
+  may re-prioritise but not finish work is told so rather than shown a screen with nothing on
+  it. A ticket the reader may not see renders as unavailable, matching the API's `not_found`.
+  A `status_changed` carrying `cause: 'inbound_message'` reads as "Reopened — customer
+  replied".
+
+- **Ticket status and priority are documented** (TAR-295) —
+  `docs/reference/tickets-api.md` for engineers (the three routes, the transition table, the
+  no-op rule, the timestamps, every error and the isolation guarantees, verified against a
+  local stack) and `docs/guides/manage-ticket-status-and-priority.md` for agents working in
+  the console. The first tenant-user document in the repository; `docs/STYLE.md` gains the
+  rule it is written under.
+
 - **A template an agent cannot find is now explained rather than absent** (TAR-91) —
   `GET /api/v1/message-templates` deliberately hides two kinds of template from the
   composer's picker: the ones Meta has not approved, and the ones whose buttons need a

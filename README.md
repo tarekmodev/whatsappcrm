@@ -61,6 +61,7 @@ the one that produced it.
 | `docs/architecture`        | Cross-cutting design documents                                |
 | `docs/design`              | The visual design language every screen is built against      |
 | `docs/reference`           | Data model, admin API and tenant isolation reference          |
+| `docs/guides`              | Task-oriented how-tos, one goal per file                      |
 
 ## Documentation
 
@@ -73,6 +74,8 @@ the one that produced it.
 | [Tenant isolation contract](docs/reference/tenancy.md)                                       | Which Prisma client to inject, and what the database refuses                  |
 | [Platform admin API](docs/reference/admin-api.md)                                            | Provisioning and deactivation: request, response, errors, retention           |
 | [People and teams API](docs/reference/people-api.md)                                         | Managing agents, teams and roles: permissions, invariants, isolation          |
+| [Tickets API](docs/reference/tickets-api.md)                                                 | The queue, the status/priority write, valid transitions, errors, auto-reopen  |
+| [Changing a ticket's status and priority](docs/guides/manage-ticket-status-and-priority.md)  | For agents working in the console, not for API consumers                      |
 | [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                        |
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                        |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                      |
