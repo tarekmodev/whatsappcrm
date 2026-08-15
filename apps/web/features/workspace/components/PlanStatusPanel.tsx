@@ -127,20 +127,27 @@ function usageSummary(
 }
 
 /**
- * At most one line under the seat meter, and the more urgent one wins: "every
- * seat is taken" is what an admin has to act on, and repeating the outstanding
- * count under it would bury it.
+ * One line under the seat meter, carrying whichever facts are true.
+ *
+ * The at-cap case has to keep naming the outstanding invitations rather than
+ * replacing them. `seatsUsed + seatsPending` is what the summary counts against
+ * the cap, so at 4 active agents and 1 unaccepted invitation the meter reads
+ * "5 of 5 seats in use" while only four people can actually sign in — and
+ * withdrawing that invitation is the cheapest way to free a seat. A line that
+ * said only "every seat is taken" would hide the one action that costs nothing.
  */
 function seatNote(
   lifecycle: TenantLifecycleResponse,
   seats: UsageReading,
   content: Content,
 ): string | undefined {
+  const { seatsPending } = lifecycle.usage;
+
   if (seats.isAtCap) {
-    return content.workspace.seatsAtCapNote;
+    return seatsPending === 0
+      ? content.workspace.seatsAtCapNote
+      : content.workspace.seatsAtCapPendingNote(seatsPending);
   }
 
-  return lifecycle.usage.seatsPending === 0
-    ? undefined
-    : content.workspace.seatsPendingNote(lifecycle.usage.seatsPending);
+  return seatsPending === 0 ? undefined : content.workspace.seatsPendingNote(seatsPending);
 }

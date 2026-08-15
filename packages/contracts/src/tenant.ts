@@ -131,8 +131,8 @@ export const TenantPublicResponseSchema = z.object({
 });
 
 /**
- * `GET /api/v1/tenant/lifecycle` — what the organisation settings page's plan
- * panel renders (0009, TAR-409).
+ * `GET /api/v1/tenant/lifecycle` — what the workspace settings page's plan panel
+ * renders (0009, TAR-409).
  *
  * Deliberately **not** `BillingSummaryResponse`. That one is TAR-37's and
  * describes a subscription; this describes a lifecycle, and the two coexist —

@@ -55,15 +55,23 @@ describe('PlanStatusPanel', () => {
   });
 
   /**
-   * The at-cap line replaces the outstanding-invitations line rather than
-   * joining it: "every seat is taken" is what the admin has to act on, and
-   * burying it under a count would be the wrong emphasis.
+   * The case the default fixture puts on screen, and the one worth pinning: at
+   * the cap *because of* an invitation nobody has accepted. The summary reads
+   * "5 of 5 seats in use" while only four people can sign in, so the note has to
+   * say that one is outstanding — withdrawing it is the cheapest way to free a
+   * seat, and a bare "every seat is taken" hides that there is one to withdraw.
    */
-  it('replaces the outstanding count with the at-cap line once the cap is reached', () => {
+  it('names the outstanding invitations when they are what pushed it to the cap', () => {
     render(<PlanStatusPanel lifecycle={lifecycle({ usage: seats(4, 1) })} />);
 
+    expect(screen.getByText(content.workspace.seatsUsage('5', '5'))).toBeInTheDocument();
+    expect(screen.getByText(content.workspace.seatsAtCapPendingNote(1))).toBeInTheDocument();
+  });
+
+  it('drops the invitation clause when the cap is reached by active agents alone', () => {
+    render(<PlanStatusPanel lifecycle={lifecycle({ usage: seats(5, 0) })} />);
+
     expect(screen.getByText(content.workspace.seatsAtCapNote)).toBeInTheDocument();
-    expect(screen.queryByText(content.workspace.seatsPendingNote(1))).not.toBeInTheDocument();
   });
 
   /** ADR 0009 risk 4: there is no self-service upgrade until billing ships. */

@@ -1358,8 +1358,17 @@ export const content = {
       pending === 1
         ? '1 invitation is outstanding and counts against the cap.'
         : `${pending} invitations are outstanding and count against the cap.`,
-    seatsAtCapNote:
-      'Every seat is taken. Remove an agent or withdraw an invitation before inviting anyone else.',
+    seatsAtCapNote: 'Every seat is taken. Remove an agent before inviting anyone else.',
+    /**
+     * The at-cap line when some of those seats are invitations nobody has
+     * accepted. It has to name them: withdrawing one is the cheapest way to free
+     * a seat, and "5 of 5 seats in use" on its own hides that there is anything
+     * to withdraw.
+     */
+    seatsAtCapPendingNote: (pending: number) =>
+      pending === 1
+        ? 'Every seat is taken, and one of them is an invitation nobody has accepted yet. Withdraw it, or remove an agent, before inviting anyone else.'
+        : `Every seat is taken, and ${pending} of them are invitations nobody has accepted yet. Withdraw one, or remove an agent, before inviting anyone else.`,
 
     conversationsHeading: 'Conversations this period',
     conversationsUsage: (used: string, cap: string) => `${used} of ${cap} conversations`,
