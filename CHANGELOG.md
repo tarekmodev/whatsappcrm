@@ -188,6 +188,49 @@ change.
   and share its `tenant:settings` gate. `set_branding` links nowhere until TAR-29 builds the
   editor — the step says so and offers the skip rather than pointing at a route that would 404.
 
+- **A tenant's own hostname can now be given TLS and pointed at the platform, and the
+  operator steps for it are written down** (TAR-419) — TAR-416 settled how a custom domain
+  is verified and resolved, and left the delivery half open: nothing said how a connection
+  to `support.acme.com` reaches us, or where its certificate comes from. Two questions it
+  flagged are now answered against Render's and Let's Encrypt's current documentation
+  rather than assumed. Render **does** issue and renew wildcard certificates, over DNS-01
+  with an `_acme-challenge` CNAME delegated to it — so `*.$PLATFORM_DOMAIN` is one
+  certificate per environment and the per-subdomain fallback TAR-416 described is not
+  needed. That matters because Let's Encrypt's cap is **50 new certificates per registered
+  domain per 7 days**: a certificate per tenant would have been a 50-signups-a-week ceiling
+  on the product, and the wildcard removes the ceiling rather than raising it.
+  `PLATFORM_EDGE_HOSTNAME` is now declared per environment in `render.yaml` and in
+  `env.schema.ts` — the bare web-service host a tenant publishes as its CNAME target.
+  Prompted, not `fromService`: that property yields the _private network_ name, which no
+  customer's resolver can see, and the failure would have been a CNAME that dead-ends
+  rather than a deploy that fails. It is optional and has no default, because every
+  plausible guess is a hostname that resolves somewhere wrong — absent, the domain routes
+  must refuse a claim rather than publish an unfollowable record.
+  docs/runbooks/custom-domains.md is the operator's half: the one-time wildcard setup, the
+  per-tenant attach with the checks that separate a DNS problem from a certificate problem
+  from a tenant-routing one, detaching, and the per-domain cost beyond a plan's allowance.
+  It leads with the isolation argument, because the reassuring part is that attaching a
+  domain cannot leak anything — an attached-but-unverified host serves no tenant at all —
+  and the dangerous part is the one thing nothing downstream catches: attaching a
+  production tenant's domain to the staging service, which resolves, and shows the customer
+  a working, branded, wrong product.
+  Two deliberate limits, stated rather than discovered. **Apex domains are refused**:
+  `acme.com` cannot take a CNAME, and the alternatives are an `ALIAS` record many
+  registrars do not offer or an `A` record baking Render's load-balancer address into every
+  tenant's zone — which makes a future address change a migration we cannot perform for
+  them. That also makes the `ALIAS`/`A` members of TAR-416's `DomainRoutingSchema`
+  unreachable in v1; they are kept so apex support is not a contract change. And **the
+  blueprint deliberately declares no custom domains at all**, wildcard included: `domains:`
+  is a list, Render overwrites conflicting Dashboard configuration on sync, and whether a
+  partial list prunes domains added outside it is undocumented — if it does, one unrelated
+  sync drops every white-label customer's TLS with no failed deploy to point at. The
+  experiment that would settle it is written down in the runbook.
+  ⚠️ Attaching a domain stays a manual Dashboard step. Render has an API for it and nobody
+  has integrated it here, so a verified domain waits until someone looks; the runbook asks
+  for a daily digest of domains verified over 24 hours ago with no activation. The
+  `/api/v1/admin/domains*` endpoints the procedure calls are TAR-420's and are not deployed
+  yet — until they are, that queue is a message from the tenant.
+
 - **A new ticket nobody's rule claimed now goes to whoever has least, and agents take turns**
   (TAR-23, TAR-273, TAR-274) — ADR 0007 published a `FallbackAssignmentResolver` seam and
   bound nothing behind it, so every ticket no rule matched was deferred with "nobody

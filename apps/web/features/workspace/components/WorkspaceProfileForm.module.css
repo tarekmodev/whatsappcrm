@@ -1,0 +1,22 @@
+.form {
+  /*
+   * Caps the controls at a readable measure on a wide screen. A name field that
+   * stretches to 1600px is harder to use, not easier — and the cap is on the
+   * form rather than on each control so the two stay the same width.
+   */
+  max-inline-size: var(--size-container-sm);
+}
+
+/*
+ * The skeleton's stand-in for the submit button. Sized from the button's own
+ * box — touch target, inline padding, radius — rather than from its label
+ * alone, so the action row is exactly as tall before the form arrives as after.
+ */
+.actionPlaceholder {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-4);
+  border-radius: var(--radius-md);
+  background-color: var(--color-skeleton-base);
+}
