@@ -143,7 +143,8 @@ but the rule is doing nothing — check the target if a rule never seems to fire
 **Nobody is available at all.** If no rule matched and the rotation has nobody free — every
 agent is at their ticket limit, away, or offline — the ticket stays unassigned and appears
 under **Flagged for you** at the top of the same **Assignment and reporting** page.
-Assigning it by hand takes it off that list.
+Assigning it by hand takes it off that list;
+[Clear tickets nobody could take](clear-flagged-tickets.md) covers that list in full.
 
 ## Why a ticket went where it did
 

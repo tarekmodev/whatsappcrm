@@ -26,7 +26,8 @@ Nothing under `docs/reference/` targets a tenant user. Tenant-user documentation
 [Change a ticket's status and priority](guides/manage-ticket-status-and-priority.md)
 (TAR-295), once TAR-286 shipped a console surface worth describing;
 [Route new tickets to the right team](guides/route-new-tickets-with-rules.md) (TAR-292) is
-the second. A guide for a tenant user names its reader in the first line and refers to every
+the second and [Clear tickets nobody could take](guides/clear-flagged-tickets.md) (TAR-277)
+the third. A guide for a tenant user names its reader in the first line and refers to every
 control by its **visible label**, taken from `apps/web/content/en.ts` rather than from a
 component name.
 
