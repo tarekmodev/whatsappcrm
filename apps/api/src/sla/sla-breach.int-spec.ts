@@ -263,7 +263,7 @@ describe('SLA breach detection against a real database', () => {
   }
 
   function alertsFor(ticketId: string) {
-    return systemPrisma.slaAlert.findMany({
+    return systemPrisma.notification.findMany({
       where: { ticketId },
       select: { recipientUserId: true, tenantId: true, dueAt: true, kind: true },
     });
@@ -395,7 +395,9 @@ describe('SLA breach detection against a real database', () => {
   });
 
   beforeEach(async () => {
-    await systemPrisma.slaAlert.deleteMany({ where: { tenantId: { in: [TENANT_A, TENANT_B] } } });
+    await systemPrisma.notification.deleteMany({
+      where: { tenantId: { in: [TENANT_A, TENANT_B] } },
+    });
     await systemPrisma.slaTimer.deleteMany({ where: { tenantId: { in: [TENANT_A, TENANT_B] } } });
     await systemPrisma.ticketEvent.deleteMany({
       where: { tenantId: { in: [TENANT_A, TENANT_B] } },
