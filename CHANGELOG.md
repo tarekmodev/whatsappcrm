@@ -1013,6 +1013,29 @@ sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the 
   dead id, the API accepted it, and the rule silently never fired again with no error anywhere.
   `POST` and `PATCH` now answer `validation_failed` on `conditions.tagIds`, which is what the
   console's fixtures already did, so the two halves agree. ADR 0007's request table updated.
+- **The supervisor's stuck-ticket queue is no longer permanently empty** (TAR-373) —
+  `tickets.routing_state` shipped with TAR-272, was published by TAR-273 and was filtered on
+  by TAR-274, and nothing in the API ever wrote it: ADR 0008 allocated the write to
+  "whichever of TAR-273 and TAR-288 lands the router first", and TAR-288 landed the router
+  without it. Every ticket therefore sat at the migration default `pending` for life, so
+  `?routingState=deferred` returned an empty page and the supervisor view rendered "nothing
+  is stuck" over tickets that were. TAR-23's second acceptance criterion — an unplaceable
+  ticket "stays unassigned and is **flagged for supervisor attention**" — was met in its
+  first half only, and the second half is what this restores. `RuleEngineService` now writes
+  the column in the branch that decided it: `assigned` with both deferred fields cleared
+  when a rule or rotation places the ticket, `deferred` with the rotation's reason and the
+  moment it got stuck when nobody could take it. Both writes ride in the `UPDATE` that
+  branch already issued rather than a second statement, because
+  `tickets_routing_deferred_consistent` ties the state to its two nullable companions in
+  both directions and would reject the row in between — which is also why assigning clears
+  the pair instead of leaving a stale "all at capacity" on a ticket that is fine. The
+  deferral is **first-transition-only** (`WHERE routing_state <> 'deferred'`, ADR 0008's
+  one obligation on the router): `routing_deferred_since` is the ageing key the supervisor's
+  list sorts on and it is not recoverable once overwritten, so a redelivered job appends its
+  `assignment_deferred` event — the log is a history — and moves no column. A `skipped`
+  outcome, including a supervisor winning the compare-and-set race, writes nothing at all,
+  so `manual` stays terminal for routing. No migration: the columns, enums, index and CHECK
+  all shipped with TAR-272.
 - **The ticket-ensure job id no longer depends on an undocumented BullMQ exemption**
   (TAR-249) — `ticketEnsureJobId` published `ticket.ensure-for-message:<tenant>:<message>`,
   the one colon-bearing job id in the repo. BullMQ reserves `:` for its own Redis key

@@ -49,18 +49,21 @@ import type { SlaTimerState } from '../generated/prisma/enums';
  * so it now carries a value, and needed no edit here, exactly as that docblock
  * predicted.
  *
- * ## `routing` is read from the row, and nothing writes it yet
+ * ## `routing` is read from the row, and the router writes it
  *
- * The three columns land with TAR-272 and are published by TAR-273. Their writer
- * is the router (TAR-288), so today every ticket reads `pending` — bar the ones
- * TAR-272's backfill classified `manual` — and TAR-274's
- * `?routingState=deferred` returns an empty page rather than a wrong one.
+ * The three columns land with TAR-272, are published by TAR-273, and are written
+ * by `RuleEngineService` (TAR-373, 0008 amendment 1): `assigned` with the
+ * deferred pair cleared when a rule or rotation places the ticket, `deferred`
+ * with a reason and a first-transition-only timestamp when rotation had nobody.
+ * `pending` is now what an unrouted ticket reads — one whose routing job has not
+ * reached a conclusion — rather than what every ticket reads, and TAR-274's
+ * `?routingState=deferred` returns the tickets that are actually stuck.
  *
  * Plain columns rather than a derived block, so unlike `sla` above this costs no
  * relation load. 0008 risk 6 names this mapper as the thing that has to carry
  * the field from the start rather than be retrofitted once the router starts
  * writing — which is the same bet the `firstRespondedAt` paragraph above just
- * won.
+ * won, and this paragraph settles.
  */
 
 /** The timer states a deadline is worth publishing for. */
