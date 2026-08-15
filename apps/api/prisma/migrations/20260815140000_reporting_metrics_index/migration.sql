@@ -1,0 +1,213 @@
+-- The reporting dashboard's index (TAR-427, serving TAR-30).
+--
+-- One statement, additive, no column and no table: a covering btree that turns
+-- every metric on the supervisor's performance dashboard — and the export that
+-- must agree with it — into a single index-only scan of the selected date
+-- range.
+--
+-- ---------------------------------------------------------------------------
+-- No new columns, no aggregate table, no materialized view
+-- ---------------------------------------------------------------------------
+--
+-- TAR-427 asks whether the four metrics need new aggregation support. They do
+-- not. Every one is a plain aggregate over columns `tickets` already carries:
+--
+--   ticket volume     count(*)
+--   response time     first_response_at - created_at
+--   resolution time   resolved_at       - created_at
+--   per agent         GROUP BY assigned_user_id
+--
+-- `first_response_at` is live — TAR-26's `SlaTimerService.stampFirstResponse`
+-- writes it on the first human reply, and `ticket.mapper.ts` publishes it. The
+-- response-time metric has a real column behind it, not a placeholder.
+--
+-- A **materialized view was rejected on isolation grounds**, not on complexity.
+-- Postgres does not apply row-level security to a matview, and reading one does
+-- not evaluate the policies on its base tables — so a matview over `tickets`
+-- would be a surface on which TAR-48's `tenant_isolation` simply does not
+-- exist, reachable by any role holding SELECT on it. That is precisely the
+-- bypass TAR-427 forbids. It would also have to be refreshed, and a dashboard
+-- reading a stale refresh while the export reads live rows is the "two numbers
+-- that drift apart" failure TAR-30's second acceptance criterion exists to
+-- prevent.
+--
+-- A plain view is not needed either, but if one is ever added it must be
+-- declared `WITH (security_invoker = true)` — a view runs base-table RLS as its
+-- *owner* by default, which has the same consequence.
+--
+-- An aggregate/rollup table would be a second copy of the numbers, maintained
+-- by a job, with its own staleness window. Same objection, and nothing in the
+-- measurements below justifies paying for it.
+--
+-- ---------------------------------------------------------------------------
+-- What is actually wrong today
+-- ---------------------------------------------------------------------------
+--
+-- `tickets` carries no index leading with `(tenant_id, created_at)`. The
+-- closest is `tickets_tenant_id_status_priority_created_at_idx`, and `status`
+-- sits *between* the tenant and the timestamp: the dashboard deliberately does
+-- not constrain `status` — a report over "every ticket in March" spans all four
+-- — so `created_at` is not reachable as a range boundary through it. Postgres
+-- 16 has no btree skip scan (that arrives in 18), so there is no plan in which
+-- that index serves this query.
+--
+-- Measured on 500 000 tickets across 20 tenants, 300 000 under the largest,
+-- spread over 24 months, as `whatsappcrm_app` with the tenant GUC set — so the
+-- plan includes the RLS predicate a real request pays for:
+--
+--   Before   Parallel Seq Scan on tickets, 9 608 buffers, every time
+--            30-day tenant summary          38.5 ms
+--            30-day per-agent breakdown     33.5 ms
+--            12-month per-agent breakdown   72.3 ms
+--
+-- The shape of that failure matters more than the milliseconds: **the cost does
+-- not depend on the date range.** A supervisor asking for last week reads the
+-- whole table, all tenants included, exactly as one asking for two years does.
+-- It scales with the fleet's total ticket count and with nothing the supervisor
+-- can choose.
+--
+--   After    Index Only Scan using tickets_reporting_metrics_idx
+--            30-day tenant summary            213 buffers    5.3 ms   (45x fewer)
+--            30-day per-agent breakdown       214 buffers    5.3 ms   (45x fewer)
+--            12-month per-agent breakdown   2 584 buffers   31.4 ms   (3.7x fewer)
+--            single-agent drill-down          214 buffers    0.7 ms
+--            5 000-row export page            157 buffers    1.6 ms
+--
+-- `Heap Fetches: 0` on the ranges that fit — the scan never touches the heap,
+-- which is the whole point of carrying the aggregated columns in the index.
+--
+-- ---------------------------------------------------------------------------
+-- Why these six columns, in this order
+-- ---------------------------------------------------------------------------
+--
+--   tenant_id           Leads, per TAR-39 decision 1 rule 3. Not written by the
+--                       handler — `tenant_isolation` supplies it as an equality
+--                       predicate on every query — which is exactly why it has
+--                       to lead, so the RLS predicate and the application
+--                       filter share one access path.
+--   created_at          The range. ASC, not DESC: a report is read
+--                       chronologically and the export streams
+--                       `ORDER BY created_at, id`, so ascending is a forward
+--                       scan with no reversal. Every other timestamp index in
+--                       this schema is DESC because queues are newest-first;
+--                       this one is not a queue.
+--   assigned_user_id    The `GROUP BY` of the per-agent breakdown, and the
+--                       equality of a single-agent drill-down. Read out of the
+--                       index rather than off the heap.
+--   status              Volume broken down by state, without which every row
+--                       needs a heap visit and the index-only scan is lost.
+--   first_response_at   Response time.
+--   resolved_at         Resolution time.
+--
+-- The last four are ordinary key columns rather than `INCLUDE` payload. Both
+-- forms were built and measured against the same fixture: **identical size
+-- (41 MB), identical plans, identical buffer counts, execution times within
+-- noise.** The key-column form wins the tie because Prisma's schema language
+-- cannot express `INCLUDE`, and an index this file could not declare would be
+-- one more entry on the list of objects `schema.prisma` can never regenerate.
+-- This one is declared there, so `migrate dev` will recreate it and report its
+-- absence as drift — unlike every other bespoke index on `tickets`.
+--
+-- ---------------------------------------------------------------------------
+-- One index, for the dashboard and the export both
+-- ---------------------------------------------------------------------------
+--
+-- TAR-427 asks for no separate index set behind the export, and there is none:
+-- the export reuses the dashboard's query layer (TAR-426's single-source-of-
+-- truth decision), so it reuses this access path unchanged. Measured above, the
+-- export's row stream is served by the same index — the `Incremental Sort` on
+-- the `id` tie-breaker works inside one-millisecond `created_at` groups, not
+-- over the range, the same accepted shape as `tickets_routing_deferred_idx`.
+--
+-- No index is made redundant by this one and this one is redundant with none:
+-- no existing index on `tickets` shares the `(tenant_id, created_at)` prefix.
+-- The status/priority index stays — supervisor queues pin `status`, which is
+-- the shape it does serve.
+--
+-- ---------------------------------------------------------------------------
+-- What this index does not cover, deliberately
+-- ---------------------------------------------------------------------------
+--
+-- If TAR-426 specifies **working time** rather than wall-clock — the reason
+-- `sla_timers.paused_ms` exists — the metric joins `tickets` to `sla_timers`.
+-- Measured at 90-105 ms for a 30-day per-agent breakdown, because the planner
+-- hash-joins the tenant's whole `resolution` timer set. A covering index on
+-- `sla_timers (tenant_id, kind, ticket_id) INCLUDE (paused_ms)` was built and
+-- measured: **the planner did not use it and the timing did not move**, so it
+-- is not in this migration. 34 MB for nothing is not a trade worth making, and
+-- if that shape ever needs to be faster the fix is in the query, not here.
+--
+-- Bucketing by *resolution* date rather than creation date (`WHERE resolved_at
+-- BETWEEN ...`) cannot use this index at all. TAR-426 owns that choice; see the
+-- note on TAR-427 for the one-statement partial index that serves it if the
+-- answer is "resolved in range". It is not shipped speculatively.
+--
+-- ---------------------------------------------------------------------------
+-- ⚠️ The index-only scan needs the visibility map, so a bulk load needs VACUUM
+-- ---------------------------------------------------------------------------
+--
+-- `Heap Fetches: 0` is only reachable on pages the visibility map marks
+-- all-visible. Measured on the same fixture immediately after a 500 000-row
+-- bulk insert plus `ANALYZE`, with `relallvisible = 0`:
+--
+--   30-day summary            Bitmap Index Scan, 770 buffers, 13.8 ms
+--   12-month per-agent        **Parallel Seq Scan** — the planner correctly
+--                             declines an index-only scan it knows will have to
+--                             visit the heap for every row
+--
+-- One `VACUUM (ANALYZE) tickets` takes `relallvisible` to 100% and restores the
+-- plans above. This is not a caveat about production — tickets arrive over time
+-- and autovacuum keeps the map current — but it *is* one about any freshly
+-- built database: a restored dump, a seeded CI database, or a performance test
+-- run straight after loading a fixture. **Vacuum before measuring, or the
+-- numbers describe the visibility map rather than the index.**
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+--   Additive    One CREATE INDEX. No column, constraint, type, policy or row is
+--               changed, so code running against the previous schema is
+--               unaffected and every existing query keeps the plan it had.
+--   Idempotent  IF NOT EXISTS, so a re-run over a database that already has it
+--               succeeds quietly.
+--   Duration    395 ms measured over 500 000 tickets. Milliseconds on every
+--               environment today, which holds seed data only.
+--   Locks       SHARE on `tickets` for the build — blocks writes to that table,
+--               not reads. Not CONCURRENTLY: Prisma runs a migration inside one
+--               transaction and Postgres forbids CREATE INDEX CONCURRENTLY
+--               there, the same constraint and the same resolution as
+--               20260813150000_ticket_active_queue_index.
+--   Blocking    `lock_timeout` caps the wait at three seconds, so a conflicting
+--               long-running transaction aborts this migration cleanly rather
+--               than queueing ahead of every new query. Re-run once it clears.
+--   Write cost  41 MB at 500 000 tickets, and one more index maintained on
+--               insert and on any update touching `created_at`,
+--               `assigned_user_id`, `status`, `first_response_at` or
+--               `resolved_at`. That is the honest cost: assignment and
+--               resolution both move a column in this list, so a ticket's
+--               lifecycle pays for a handful of index updates. It buys the
+--               45x read reduction above and it is not partial, because the
+--               dashboard counts open tickets too.
+--   Data loss   None. `down.sql` drops the index and nothing else.
+--
+-- ⚠️ If this ever has to reach a `tickets` with a real fleet-wide backlog,
+-- prefer the out-of-band build instead of the pre-deploy hook:
+--
+--   CREATE INDEX CONCURRENTLY tickets_reporting_metrics_idx
+--     ON tickets (tenant_id, created_at, assigned_user_id, status,
+--                 first_response_at, resolved_at);
+--
+-- run outside a transaction, then check for `indisvalid = false` — a concurrent
+-- build that fails leaves an INVALID index that has to be dropped and rebuilt
+-- rather than retried.
+--
+-- No `pnpm db:roles` re-run: this adds no table, so no grant and no policy
+-- changes. Tenant isolation is untouched — the index carries `tenant_id` as its
+-- leading column and `tenant_isolation` keeps filtering every read through it.
+
+SET LOCAL lock_timeout = '3s';
+
+-- CreateIndex
+CREATE INDEX IF NOT EXISTS "tickets_reporting_metrics_idx"
+    ON "public"."tickets" ("tenant_id", "created_at", "assigned_user_id", "status", "first_response_at", "resolved_at");
