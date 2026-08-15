@@ -24,9 +24,15 @@ subject serves two readers, split it into two documents or two clearly labelled 
 Nothing under `docs/reference/` targets a tenant user. Tenant-user documentation lives in
 `docs/guides/` and started with
 [Change a ticket's status and priority](guides/manage-ticket-status-and-priority.md)
-(TAR-295), once TAR-286 shipped a console surface worth describing. A guide for a tenant
-user names its reader in the first line and refers to every control by its **visible
-label**, taken from `apps/web/content/en.ts` rather than from a component name.
+(TAR-295), once TAR-286 shipped a console surface worth describing;
+[Route new tickets to the right team](guides/route-new-tickets-with-rules.md) (TAR-292) is
+the second. A guide for a tenant user names its reader in the first line and refers to every
+control by its **visible label**, taken from `apps/web/content/en.ts` rather than from a
+component name.
+
+**A guide that documents a surface should link the reference for the same subject, and the
+reference should link back.** The two readers meet at that link and nowhere else: it is what
+lets each page refuse the other's material instead of hedging.
 
 ## Information architecture
 
@@ -65,20 +71,20 @@ one-line pointer — a summary that drifts from the reference is worse than a li
 
 Fixed vocabulary. Use the left column; never rotate synonyms.
 
-| Term                             | Not                                      | Notes                                                    |
-| -------------------------------- | ---------------------------------------- | -------------------------------------------------------- |
-| tenant                           | organisation, workspace, account, client | One customer business on the platform                    |
-| platform operator                | admin, superadmin, us                    | Operates the platform; not a user inside any tenant      |
-| agent                            | user, rep, operator                      | A person working inside a tenant. Never means "AI agent" |
-| provision                        | create, onboard, sign up                 | `POST /api/v1/admin/tenants`                             |
-| deactivate                       | suspend, disable, delete, offboard       | `POST /api/v1/admin/tenants/{slug}/deactivate`           |
-| WhatsApp Business Account (WABA) | business account, Meta account           | Spell out at first use per document, then `WABA`         |
-| `TenantPrisma` / `SystemPrisma`  | the tenant client / the system client    | Exact casing; they are type and token names              |
-| row-level security (RLS)         | row security, database policies          | Spell out at first use per document                      |
-| tenant-scoped                    | multi-tenant, isolated                   | Carries a non-null `tenant_id` and an RLS policy         |
-| ticket                           | case, issue, request                     | One unit of work on a conversation                       |
-| active queue                     | open queue, active list, the backlog     | `GET /tickets` with no `status`: `open` and `pending`    |
-| auto-reopen                      | reopen, un-resolve                       | `pending → open` written by the customer's reply         |
+| Term                             | Not                                      | Notes                                                                                                                                                              |
+| -------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| tenant                           | organisation, workspace, account, client | One customer business on the platform. **Except in `docs/guides/` written for a tenant user**, which says _workspace_ — the word the console itself uses on screen |
+| platform operator                | admin, superadmin, us                    | Operates the platform; not a user inside any tenant                                                                                                                |
+| agent                            | user, rep, operator                      | A person working inside a tenant. Never means "AI agent"                                                                                                           |
+| provision                        | create, onboard, sign up                 | `POST /api/v1/admin/tenants`                                                                                                                                       |
+| deactivate                       | suspend, disable, delete, offboard       | `POST /api/v1/admin/tenants/{slug}/deactivate`                                                                                                                     |
+| WhatsApp Business Account (WABA) | business account, Meta account           | Spell out at first use per document, then `WABA`                                                                                                                   |
+| `TenantPrisma` / `SystemPrisma`  | the tenant client / the system client    | Exact casing; they are type and token names                                                                                                                        |
+| row-level security (RLS)         | row security, database policies          | Spell out at first use per document                                                                                                                                |
+| tenant-scoped                    | multi-tenant, isolated                   | Carries a non-null `tenant_id` and an RLS policy                                                                                                                   |
+| ticket                           | case, issue, request                     | One unit of work on a conversation                                                                                                                                 |
+| active queue                     | open queue, active list, the backlog     | `GET /tickets` with no `status`: `open` and `pending`                                                                                                              |
+| auto-reopen                      | reopen, un-resolve                       | `pending → open` written by the customer's reply                                                                                                                   |
 
 Product entity names take their schema spelling in prose: `conversations`, `tickets`,
 `message_templates`. TypeScript identifiers take theirs: `MessageTemplate`,
@@ -185,6 +191,11 @@ Notable columns only — the ones whose semantics are not obvious from the name.
 
 ### Changelog entry
 
+Group under **Added**, **Changed**, **Fixed**, **Removed**, **Security** — never invent a
+sixth group. Story id in parentheses after the lead.
+
+**A small change is one line:**
+
 ```markdown
 ### Added
 
@@ -192,6 +203,19 @@ Notable columns only — the ones whose semantics are not obvious from the name.
   authenticated by `PLATFORM_ADMIN_TOKEN`. (TAR-50)
 ```
 
-One line per change, imperative mood dropped in favour of a noun phrase, story id in
-trailing parentheses. Group under **Added**, **Changed**, **Fixed**, **Removed**,
-**Security** — never invent a sixth group.
+**A story-sized change is a bolded lead in the present tense, saying what a reader can now
+do, then the reasoning** — what was there before, what was decided, what it cost, and what
+was deliberately left out. That is what `CHANGELOG.md` actually contains for every entry
+above a line or two, and it is the form to match: this project's changelog is where a
+decision's _why_ survives, because the pull request that carried it will not be read again.
+
+```markdown
+- **A supervisor can say where new tickets go, and the first matching rule decides**
+  (TAR-24) — `assignment_rules` has existed since TAR-47 and nothing read it. …
+  ⚠️ Anything stated rather than built goes last, marked, with its follow-up story.
+```
+
+Two rules for the long form. **Say the cost, not only the win** — an entry that reads as
+unqualified good news is an entry a reader learns to skim. And **⚠️ marks what shipped
+knowingly incomplete**, with the story that closes it, so the gap is documented rather than
+discovered.

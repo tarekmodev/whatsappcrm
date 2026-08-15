@@ -589,13 +589,38 @@ make each of them a migration. `actor_user_id` is null when the actor is the sys
 
 #### `assignment_rules`
 
-- **Indexes:** `(tenant_id, is_active, position)`, `(tenant_id, target_user_id)`,
-  `(tenant_id, target_team_id)`
-- **Owned by:** TAR-24
+A supervisor's standing instruction about where a new ticket goes. Read by the rule engine
+once per ticket created, and written only by
+[the assignment rules API](assignment-rules-api.md).
 
-Rules are evaluated in ascending `position`; the first match wins. `conditions` and
-`action` are JSONB, which keeps TAR-24's grammar out of the schema so evolving it is not a
-migration.
+- **Unique:** `(tenant_id, name)`, with `name` as `citext`
+- **Indexes:** `(tenant_id, is_active, position, id)`, `(tenant_id, target_user_id)`,
+  `(tenant_id, target_team_id)`
+- **Owned by:** TAR-24, schema delta by TAR-285
+
+Rules are evaluated in ascending `position` and the first match wins; ties break on `id`,
+which is creation order. That tie-break is load-bearing rather than cosmetic — `position`
+defaults to `0` and carries no unique constraint, so without it two rules created normally
+have no defined order. `id` is therefore part of the index that serves the engine's one
+read per ticket.
+
+`name` is `citext` for `teams.name`' reason, applied to a second name column: the rule
+_name_ goes into the `ticket_events` row that records why a ticket was routed, and `Billing`
+next to `billing` is indistinguishable to whoever reads that log.
+
+`conditions` is JSONB, which keeps TAR-24's grammar — `RoutingConditionSchema` in
+`@whatsappcrm/contracts` — out of the schema, so evolving it is not a migration. **The
+`action` column TAR-47 shipped beside it was dropped by TAR-285**: the target is the two
+foreign-key columns, and two representations of one fact is a drift surface with no owner.
+A non-assignment action belongs to TAR-27's automation engine.
+
+⚠️ **One constraint is not in `schema.prisma`**, because Prisma cannot express a CHECK:
+`assignment_rules_active_has_one_target`, reading
+`NOT is_active OR num_nonnulls(target_user_id, target_team_id) = 1`. It is conditional on
+`is_active` deliberately — `users.service.ts` clears `target_user_id` and sets
+`is_active = false` on every rule pointing at a removed user, so a target-less **inactive**
+rule is a state the shipped code creates on purpose. The API completes the constraint by
+refusing to enable such a rule.
 
 #### `assignment_state`
 
