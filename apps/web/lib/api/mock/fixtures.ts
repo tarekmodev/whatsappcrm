@@ -10,6 +10,7 @@ import type {
   TeamResponse,
   TenantRole,
   TicketResponse,
+  TicketRouting,
   TicketSla,
   UserResponse,
 } from '@whatsappcrm/contracts';
@@ -723,6 +724,18 @@ const NO_SLA: TicketSla = {
   resolutionDueAt: null,
 };
 
+/**
+ * What routing says about a ticket it has not reached a conclusion on (ADR 0008
+ * decision 3). Every fixture below is `pending` because nothing writes the
+ * column until TAR-288's router does; TAR-274's supervisor view overrides it to
+ * `deferred` with a reason on the tickets it needs stuck.
+ */
+const NOT_ROUTED: TicketRouting = {
+  state: 'pending',
+  deferredReason: null,
+  deferredSince: null,
+};
+
 function ticket(
   overrides: Partial<MockTicket> &
     Pick<MockTicket, 'id' | 'number' | 'status' | 'priority' | 'createdAt'>,
@@ -737,6 +750,7 @@ function ticket(
     subject: null,
     assignedUserId: null,
     assignedTeamId: null,
+    routing: NOT_ROUTED,
     sla: NO_SLA,
     // Nothing writes this column yet; TAR-26 owns the first-response timer.
     firstRespondedAt: null,

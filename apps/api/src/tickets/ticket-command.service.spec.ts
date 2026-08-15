@@ -74,6 +74,12 @@ function ticket(overrides: Partial<TicketRow> = {}): TicketRow {
     priority: 'normal',
     assignedUserId: AGENT,
     assignedTeamId: null,
+    // The column default. Routing has no writer until TAR-288's router, and a
+    // status or priority change is not a routing decision, so nothing in this
+    // service moves it.
+    routingState: 'pending',
+    routingDeferredReason: null,
+    routingDeferredSince: null,
     firstRespondedAt: null,
     resolvedAt: null,
     closedAt: null,

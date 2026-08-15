@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FallbackAssignmentReasonSchema } from './assignment';
 import { IdSchema, TimestampSchema } from './common';
 import { CursorPageQuerySchema } from './pagination';
 
@@ -127,6 +128,45 @@ export const TICKET_STATUS_PAUSES_SLA: Record<TicketStatus, boolean> = {
 export const SLA_STATES = ['not_applicable', 'running', 'paused', 'met', 'breached'] as const;
 export const SlaStateSchema = z.enum(SLA_STATES);
 
+/**
+ * Whether routing may still act on this ticket, and if not, why — one fact,
+ * four values (0008 decision 3). Deliberately coarser than the four routing
+ * outcomes: *how* a ticket got here is the event log's job, and the `assigned`
+ * event already carries the rule id and name.
+ *
+ * | State      | Meaning                                                                                     |
+ * | ---------- | ------------------------------------------------------------------------------------------- |
+ * | `pending`  | Created; the routing job has not reached a conclusion. The column default.                  |
+ * | `assigned` | Routing placed it — by rule or by rotation. The event log says which.                       |
+ * | `deferred` | Routing ran and nobody was eligible. **This is TAR-23's "flagged for supervisor attention".** |
+ * | `manual`   | A human assigned, reassigned or released it. Routing never touches it again.                |
+ *
+ * `manual` is load-bearing and not obvious: without it a future re-route would
+ * overrule a supervisor who deliberately parked a ticket, and a background job
+ * beating a person's decision is the kind of thing that gets a feature switched
+ * off.
+ *
+ * Not a `TicketStatus` value: `status` is the ticket's *lifecycle*, and
+ * overloading it would break `TICKET_STATUS_IS_ACTIVE`, `TICKET_STATUS_PAUSES_SLA`
+ * and every status filter and report bucket, for a fact that is not about
+ * lifecycle at all.
+ */
+export const TICKET_ROUTING_STATES = ['pending', 'assigned', 'deferred', 'manual'] as const;
+export const TicketRoutingStateSchema = z.enum(TICKET_ROUTING_STATES);
+
+/** Nested rather than flattened, matching `sla` and `UserResponse.security`. */
+export const TicketRoutingSchema = z.object({
+  state: TicketRoutingStateSchema,
+  /** Non-null exactly when `state` is `deferred`. */
+  deferredReason: FallbackAssignmentReasonSchema.nullable(),
+  /**
+   * When the flag was raised, and only ever on the first transition into
+   * `deferred`. Not derivable from `createdAt` — a ticket that was assigned,
+   * released and then deferred would report an age that is a lie.
+   */
+  deferredSince: TimestampSchema.nullable(),
+});
+
 export const TicketSlaSchema = z.object({
   policyId: IdSchema.nullable(),
   firstResponseState: SlaStateSchema,
@@ -161,6 +201,7 @@ export const TicketResponseSchema = z.object({
   priority: TicketPrioritySchema,
   assignedUserId: IdSchema.nullable(),
   assignedTeamId: IdSchema.nullable(),
+  routing: TicketRoutingSchema,
   sla: TicketSlaSchema,
   firstRespondedAt: TimestampSchema.nullable(),
   resolvedAt: TimestampSchema.nullable(),
@@ -175,6 +216,15 @@ export const TicketListQuerySchema = CursorPageQuerySchema.extend({
   scope: z.enum(['assigned', 'unassigned', 'all']).default('assigned'),
   assignedUserId: IdSchema.optional(),
   assignedTeamId: IdSchema.optional(),
+  /**
+   * The supervisor's stuck-ticket landing query is
+   * `?scope=unassigned&routingState=deferred` — one indexed predicate against
+   * `tickets_routing_deferred_idx`, rather than a new endpoint (TAR-274).
+   *
+   * An enum rather than a boolean, so it takes its value straight from the query
+   * string and needs none of the coercion `breachedOnly` below documents.
+   */
+  routingState: TicketRoutingStateSchema.optional(),
   /**
    * Filters to tickets whose SLA has breached — the supervisor's landing view.
    *
@@ -248,6 +298,18 @@ export const TICKET_EVENT_TYPES = [
   'priority_changed',
   'assigned',
   'unassigned',
+  /**
+   * Routing ran and nobody was eligible, so the ticket stayed unassigned
+   * (0007's `deferred` branch). The event's `reason` is a
+   * `FallbackAssignmentReason`, and it is the audit record of the deferral;
+   * `routing.state` is what says the deferral is *still true*, which is what a
+   * supervisor's list filters on. Both are written — an event records that
+   * something happened, a column records that it has not been fixed.
+   *
+   * Additive with no migration: `ticket_events.type` is text precisely so later
+   * stories add types without one.
+   */
+  'assignment_deferred',
   'first_response',
   'sla_breached',
   /**
@@ -296,6 +358,8 @@ export const TicketEventSchema = z.object({
 });
 
 export type TicketPriority = z.infer<typeof TicketPrioritySchema>;
+export type TicketRoutingState = z.infer<typeof TicketRoutingStateSchema>;
+export type TicketRouting = z.infer<typeof TicketRoutingSchema>;
 export type SlaState = z.infer<typeof SlaStateSchema>;
 export type TicketSla = z.infer<typeof TicketSlaSchema>;
 export type TicketResponse = z.infer<typeof TicketResponseSchema>;

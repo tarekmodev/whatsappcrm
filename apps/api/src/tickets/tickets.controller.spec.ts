@@ -78,6 +78,13 @@ const TICKET_RESPONSE = {
   priority: 'normal' as const,
   assignedUserId: AGENT.userId,
   assignedTeamId: null,
+  // The column default: routing has reached no conclusion on this ticket, and
+  // will not until TAR-288's router runs.
+  routing: {
+    state: 'pending' as const,
+    deferredReason: null,
+    deferredSince: null,
+  },
   sla: {
     policyId: null,
     firstResponseState: 'not_applicable' as const,

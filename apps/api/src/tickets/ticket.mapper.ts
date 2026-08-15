@@ -48,6 +48,19 @@ import type { SlaTimerState } from '../generated/prisma/enums';
  * ticket's conversation — the same event that stops the first-response timer —
  * so it now carries a value, and needed no edit here, exactly as that docblock
  * predicted.
+ *
+ * ## `routing` is read from the row, and nothing writes it yet
+ *
+ * The three columns land with TAR-272 and are published by TAR-273. Their writer
+ * is the router (TAR-288), so today every ticket reads `pending` — bar the ones
+ * TAR-272's backfill classified `manual` — and TAR-274's
+ * `?routingState=deferred` returns an empty page rather than a wrong one.
+ *
+ * Plain columns rather than a derived block, so unlike `sla` above this costs no
+ * relation load. 0008 risk 6 names this mapper as the thing that has to carry
+ * the field from the start rather than be retrofitted once the router starts
+ * writing — which is the same bet the `firstRespondedAt` paragraph above just
+ * won.
  */
 
 /** The timer states a deadline is worth publishing for. */
@@ -76,6 +89,9 @@ export const TICKET_PROJECTION = {
   priority: true,
   assignedUserId: true,
   assignedTeamId: true,
+  routingState: true,
+  routingDeferredReason: true,
+  routingDeferredSince: true,
   firstRespondedAt: true,
   resolvedAt: true,
   closedAt: true,
@@ -100,6 +116,11 @@ export function toTicketResponse(ticket: TicketRow): TicketResponse {
     priority: ticket.priority,
     assignedUserId: ticket.assignedUserId,
     assignedTeamId: ticket.assignedTeamId,
+    routing: {
+      state: ticket.routingState,
+      deferredReason: ticket.routingDeferredReason,
+      deferredSince: ticket.routingDeferredSince?.toISOString() ?? null,
+    },
     sla: toTicketSla(ticket.slaTimers),
     firstRespondedAt: ticket.firstRespondedAt?.toISOString() ?? null,
     resolvedAt: ticket.resolvedAt?.toISOString() ?? null,

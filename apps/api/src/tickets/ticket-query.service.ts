@@ -133,6 +133,19 @@ export class TicketQueryService {
         // needs no special-casing later. A `where` predicate, never a selection:
         // it decides which rows come back, not what is read off them.
         ...(query.breachedOnly ? { slaTimers: { some: { state: 'breached' } } } : {}),
+        // TAR-274's supervisor landing query is `?scope=unassigned&routingState=deferred`
+        // (0008 decision 3) — the set of tickets rotation could place with
+        // nobody. Like `breachedOnly` it is correct today and returns nothing
+        // until TAR-288's router writes the column, which is the honest answer
+        // rather than an unfiltered page pretending to be the stuck set.
+        //
+        // `tickets_routing_deferred_idx` is partial on this predicate, but the
+        // queue's sort is `(priority, created_at, id)` rather than the index's
+        // `routing_deferred_since`, so it filters through the index and sorts
+        // over what comes back. That is the right trade at this size: the
+        // deferred set is small by definition, and if it is not, the tenant has
+        // a staffing problem its supervisor can already see.
+        ...(query.routingState === undefined ? {} : { routingState: query.routingState }),
         // Both clauses are an `OR` on the same object, so they go in `AND` —
         // spreading them side by side would have the second silently replace the
         // first and page an unscoped queue.
