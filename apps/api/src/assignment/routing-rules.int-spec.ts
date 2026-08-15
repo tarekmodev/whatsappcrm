@@ -677,6 +677,22 @@ describe('routing rules and the evaluation engine', () => {
       ).not.toBeNull();
     });
 
+    it('refuses a rule whose tag condition names another tenant’s tag', async () => {
+      // Tenant B holds no tags at all, so A's `VIP` is the only tag in the
+      // database — and it must be as unusable from B as an id that never
+      // existed. Not an isolation break in the engine (`readTagIds` is scoped,
+      // so a foreign id simply never matches), but a rule that can never fire
+      // is refused rather than stored.
+      const response = await createRule(HOST_B, {
+        name: 'Other tenant’s VIPs',
+        conditions: [{ type: 'tag', match: 'any', tagIds: [VIP_TAG_A] }],
+        target: { kind: 'team', teamId: BILLING_TEAM_B },
+      });
+
+      expect(response.status).toBe(400);
+      expect(errorCodeOf(response)).toBe('validation_failed');
+    });
+
     it('refuses a rule targeting another tenant’s team, as validation and not not_found', async () => {
       const response = await createRule(HOST_A, {
         name: 'Cross-tenant',
@@ -859,6 +875,35 @@ describe('routing rules and the evaluation engine', () => {
       });
 
       expect((await route(TENANT_A, TICKET_A, MESSAGE_A, CONTACT_A)).outcome).toBe('routed');
+    });
+
+    it('routes a brand-new contact on `is_not_set`, against a null `custom_fields`', async () => {
+      // Tenant B's contact is what the inbound webhook creates: a row with the
+      // column left NULL. "Nothing is set" is an answer, so an onboarding rule
+      // aimed at exactly this customer has to fire on their first message —
+      // rather than only once somebody has edited the contact by hand.
+      await createRule(HOST_B, {
+        name: 'No plan yet',
+        conditions: [
+          { type: 'contact_attribute', key: 'plan', operator: 'is_not_set', value: null },
+        ],
+        target: { kind: 'team', teamId: BILLING_TEAM_B },
+      });
+
+      expect(await route(TENANT_B, TICKET_B, MESSAGE_B, CONTACT_B)).toMatchObject({
+        outcome: 'routed',
+        assignedTeamId: BILLING_TEAM_B,
+      });
+    });
+
+    it('leaves `is_set` false for that same contact', async () => {
+      await createRule(HOST_B, {
+        name: 'Has a plan',
+        conditions: [{ type: 'contact_attribute', key: 'plan', operator: 'is_set', value: null }],
+        target: { kind: 'team', teamId: BILLING_TEAM_B },
+      });
+
+      expect((await route(TENANT_B, TICKET_B, MESSAGE_B, CONTACT_B)).outcome).toBe('deferred');
     });
 
     it('routes on business hours, read from the tenant’s own timezone', async () => {

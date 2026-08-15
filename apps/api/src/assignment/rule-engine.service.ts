@@ -257,6 +257,22 @@ export class RuleEngineService implements TicketRouter {
     return new Set(tags.map((tag) => tag.tagId));
   }
 
+  /**
+   * `contacts.custom_fields`, with the two ways of having none kept apart.
+   *
+   * `null` is "there is nobody to ask" — a ticket with no contact, or a contact
+   * this scope cannot see — and makes every `contact_attribute` operator false.
+   * `{}` is a contact who exists with nothing set, which is an answer: it leaves
+   * `is_set`, `equals`, `not_equals` and `contains` false and makes `is_not_set`
+   * true, which is what the operator says.
+   *
+   * The distinction is load-bearing rather than pedantic. The column is nullable
+   * with no default and the inbound webhook creates contacts without it, so a
+   * brand-new customer's first ticket arrives with `custom_fields IS NULL` —
+   * exactly the population a rule like "`plan_tier` is not set → Onboarding"
+   * targets. Conflating the two made that rule fire only once somebody had
+   * edited the contact by hand.
+   */
   private async readCustomFields(
     ticket: RoutableTicket,
   ): Promise<Readonly<Record<string, string | null>> | null> {
@@ -271,8 +287,12 @@ export class RuleEngineService implements TicketRouter {
       select: { customFields: true },
     });
 
-    if (contact === null || contact.customFields === null) {
+    if (contact === null) {
       return null;
+    }
+
+    if (contact.customFields === null) {
+      return {};
     }
 
     const parsed = CustomFieldValuesSchema.safeParse(contact.customFields);

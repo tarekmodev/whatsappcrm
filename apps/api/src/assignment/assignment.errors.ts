@@ -96,8 +96,8 @@ export class TooManyAssignmentRulesError extends Error {
 }
 
 /**
- * A `target`, or a `contact_attribute` key, naming something that is not in this
- * tenant.
+ * A `target`, a `contact_attribute` key, or a `tag` condition's id, naming
+ * something that is not in this tenant.
  *
  * `validation_failed` naming the field, never `not_found` (0007, REST surface):
  * row-level security means another tenant's team is simply not visible, so the

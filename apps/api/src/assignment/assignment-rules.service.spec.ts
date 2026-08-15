@@ -28,6 +28,9 @@ const TEAM = '0192f0ff-0000-7000-8000-0000000000t1';
 const SARA = '0192f0ff-0000-7000-8000-0000000000u1';
 const RULE_A = '0192f0ff-0000-7000-8000-00000000r001';
 const RULE_B = '0192f0ff-0000-7000-8000-00000000r002';
+const VIP_TAG = '0192f0ff-0000-7000-8000-00000000ba01';
+/** A tag somebody deleted after a rule was written against it. */
+const DELETED_TAG = '0192f0ff-0000-7000-8000-00000000ba09';
 
 const KEYWORD: RoutingCondition = { type: 'keyword', match: 'any', values: ['invoice'] };
 
@@ -49,6 +52,7 @@ interface WorldOptions {
   teams?: string[];
   users?: string[];
   customFieldKeys?: string[];
+  tags?: string[];
 }
 
 interface Recorded {
@@ -136,6 +140,12 @@ function buildWorld(options: WorldOptions = {}): {
           where.key.in
             .filter((key) => (options.customFieldKeys ?? []).includes(key))
             .map((key) => ({ key })),
+        ),
+    },
+    tag: {
+      findMany: ({ where }: { where: { id: { in: string[] } } }) =>
+        Promise.resolve(
+          where.id.in.filter((id) => (options.tags ?? []).includes(id)).map((id) => ({ id })),
         ),
     },
   };
@@ -234,6 +244,36 @@ describe('creating a rule', () => {
     ).resolves.toBeDefined();
   });
 
+  it('refuses a tag id that is not in this tenant', async () => {
+    // Same reasoning as the target and the custom field key, and the same answer
+    // the console's mock already gives: an id that resolves to nothing is a
+    // condition that can never be true, and a rule that never fires is the
+    // hardest kind of routing bug to see.
+    const { rules } = buildWorld({ teams: [TEAM], tags: [VIP_TAG] });
+
+    await expect(
+      rules.create({
+        name: 'Dead tag',
+        conditions: [{ type: 'tag', match: 'any', tagIds: [VIP_TAG, DELETED_TAG] }],
+        target: { kind: 'team', teamId: TEAM },
+        isActive: true,
+      }),
+    ).rejects.toThrow(UnknownRuleReferenceError);
+  });
+
+  it('accepts tag ids the tenant holds', async () => {
+    const { rules } = buildWorld({ teams: [TEAM], tags: [VIP_TAG] });
+
+    await expect(
+      rules.create({
+        name: 'VIPs',
+        conditions: [{ type: 'tag', match: 'any', tagIds: [VIP_TAG] }],
+        target: { kind: 'team', teamId: TEAM },
+        isActive: true,
+      }),
+    ).resolves.toBeDefined();
+  });
+
   it('refuses a rule past the per-tenant cap, as a conflict rather than a plan limit', async () => {
     // The cap is a property of the engine — one ticket costs
     // `rules × conditions × values` comparisons on a shared worker — not of the
@@ -288,6 +328,20 @@ describe('updating a rule', () => {
     });
 
     await expect(rules.update(RULE_A, { name: 'Renamed' })).resolves.toBeDefined();
+  });
+
+  it('refuses conditions naming a tag that has since been deleted', async () => {
+    // The realistic path to a dead id: the console renders it as a checked row
+    // it can no longer name, and resubmits it with whatever else the supervisor
+    // changed. Accepting it would leave the rule active and unable to ever fire.
+    const { rules } = buildWorld({ rules: [{ id: RULE_A }], teams: [TEAM], tags: [] });
+
+    await expect(
+      rules.update(RULE_A, {
+        name: 'Renamed',
+        conditions: [{ type: 'tag', match: 'any', tagIds: [DELETED_TAG] }],
+      }),
+    ).rejects.toThrow(UnknownRuleReferenceError);
   });
 
   it('is a not-found for a rule this tenant cannot see', async () => {

@@ -337,19 +337,35 @@ async function assertUnderRuleCap(tx: Prisma.TransactionClient): Promise<void> {
 }
 
 /**
- * Every id a rule points at, checked in tenant scope before the write.
+ * Every id and key a rule points at, checked in tenant scope before the write.
  *
- * Three kinds, and all three answer `validation_failed` naming the field: a
- * target team, a target user, and the `custom_field_defs.key` a
- * `contact_attribute` condition names. The last one matters more than it looks —
- * a key that names no definition is a typo that would silently never match, and
- * a rule that never fires is the hardest kind of routing bug to see.
+ * Four kinds, and all four answer `validation_failed` naming the field: a target
+ * team, a target user, the `custom_field_defs.key` a `contact_attribute`
+ * condition names, and the `tags.id`s a `tag` condition names. The last two
+ * matter more than they look — a key or a tag id that resolves to nothing is a
+ * typo, or a tag somebody has since deleted, and either way it is a condition
+ * that can never be true again. A rule that never fires is the hardest kind of
+ * routing bug to see, so it is refused on the way in rather than discovered by a
+ * supervisor wondering where their tickets went.
+ *
+ * The console already refuses both, so this is also what keeps the API and the
+ * mock it is developed against telling the same story.
  */
 async function assertReferencesExist(
   tx: Prisma.TransactionClient,
   tenantId: string,
   target: RoutingTarget | null,
   conditions: readonly RoutingCondition[],
+): Promise<void> {
+  await assertTargetExists(tx, tenantId, target);
+  await assertCustomFieldKeysExist(tx, tenantId, conditions);
+  await assertTagIdsExist(tx, tenantId, conditions);
+}
+
+async function assertTargetExists(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  target: RoutingTarget | null,
 ): Promise<void> {
   if (target?.kind === 'team') {
     const team = await tx.team.findUnique({
@@ -372,7 +388,13 @@ async function assertReferencesExist(
       throw new UnknownRuleReferenceError('target.userId', target.userId);
     }
   }
+}
 
+async function assertCustomFieldKeysExist(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  conditions: readonly RoutingCondition[],
+): Promise<void> {
   const keys = [
     ...new Set(
       conditions
@@ -394,6 +416,42 @@ async function assertReferencesExist(
 
   if (unknown !== undefined) {
     throw new UnknownRuleReferenceError('conditions.key', unknown);
+  }
+}
+
+/**
+ * One query for every `tag` condition in the rule, out of `(tenant_id, id)`.
+ *
+ * The tenant predicate is the same one RLS applies, so a tag id belonging to
+ * another tenant resolves to nothing and is refused exactly like an id that
+ * never existed — which is the answer that confirms least.
+ */
+async function assertTagIdsExist(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  conditions: readonly RoutingCondition[],
+): Promise<void> {
+  const tagIds = [
+    ...new Set(
+      conditions
+        .filter((condition) => condition.type === 'tag')
+        .flatMap((condition) => condition.tagIds),
+    ),
+  ];
+
+  if (tagIds.length === 0) {
+    return;
+  }
+
+  const found = await tx.tag.findMany({
+    where: { tenantId, id: { in: tagIds } },
+    select: { id: true },
+  });
+  const known = new Set(found.map((tag) => tag.id));
+  const unknown = tagIds.find((tagId) => !known.has(tagId));
+
+  if (unknown !== undefined) {
+    throw new UnknownRuleReferenceError('conditions.tagIds', unknown);
   }
 }
 

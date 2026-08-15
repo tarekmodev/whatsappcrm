@@ -65,6 +65,12 @@ interface WorldOptions {
     assignedTeamId: string | null;
   }>;
   messageBody?: string | null;
+  /**
+   * The contact row the engine reads, or `null` for a contact this scope cannot
+   * see. Defaults to one that exists with `custom_fields IS NULL`, which is what
+   * the inbound webhook creates.
+   */
+  contact?: { customFields: unknown } | null;
   /** Users the tenant has, by id, with the status the engine reads. */
   users?: Record<string, string>;
   /** Teams that have at least one active member. */
@@ -161,7 +167,9 @@ function buildWorld(options: WorldOptions = {}): {
     contact: {
       findUnique: () => {
         written.read.push('contact');
-        return Promise.resolve({ customFields: null });
+        return Promise.resolve(
+          options.contact === undefined ? { customFields: null } : options.contact,
+        );
       },
     },
     tenantSettings: {
@@ -516,6 +524,102 @@ describe('routing a created ticket', () => {
 
       expect((await engine.routeTicket(TRIGGER)).outcome).toBe('deferred');
       expect(written.assignments).toHaveLength(0);
+    });
+  });
+
+  /**
+   * "The contact has nothing set" and "there is no contact to ask" are different
+   * answers, and only one of them makes `is_not_set` true.
+   *
+   * The column is nullable with no default and the inbound webhook creates
+   * contacts without it, so `custom_fields IS NULL` is the shape a brand-new
+   * customer's first ticket arrives in — the exact population an onboarding rule
+   * written as "`plan_tier` is not set" is aimed at.
+   */
+  describe('a contact with no custom fields', () => {
+    const ONBOARDING = (operator: 'is_set' | 'is_not_set'): RuleFixture => ({
+      id: 'r1',
+      name: 'Onboarding',
+      position: 0,
+      conditions: [{ type: 'contact_attribute', key: 'plan_tier', operator, value: null }],
+      targetTeamId: BILLING_TEAM,
+    });
+
+    it('matches `is_not_set` when the contact row holds a null `custom_fields`', async () => {
+      const { engine, written } = buildWorld({
+        rules: [ONBOARDING('is_not_set')],
+        contact: { customFields: null },
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      const result = await engine.routeTicket(TRIGGER);
+
+      expect(result.outcome).toBe('routed');
+      expect(written.assignments).toEqual([{ assignedUserId: null, assignedTeamId: BILLING_TEAM }]);
+    });
+
+    it('matches `is_not_set` when the object is there but the key is not', async () => {
+      const { engine } = buildWorld({
+        rules: [ONBOARDING('is_not_set')],
+        contact: { customFields: { plan: 'gold' } },
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      expect((await engine.routeTicket(TRIGGER)).outcome).toBe('routed');
+    });
+
+    it('leaves `is_set` false for the same contact', async () => {
+      const { engine, written } = buildWorld({
+        rules: [ONBOARDING('is_set')],
+        contact: { customFields: null },
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      expect((await engine.routeTicket(TRIGGER)).outcome).toBe('deferred');
+      expect(written.assignments).toHaveLength(0);
+    });
+
+    it('matches nothing at all when there is no contact to ask', async () => {
+      // Unanswerable rather than "nothing is set": a ticket with no contact
+      // cannot make `is_not_set` true, or every such ticket would route to
+      // whichever team an onboarding rule names.
+      const { engine } = buildWorld({
+        rules: [ONBOARDING('is_not_set')],
+        ticket: { contactId: null },
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      expect((await engine.routeTicket(TRIGGER)).outcome).toBe('deferred');
+    });
+
+    it('matches nothing when the contact is not visible in this scope', async () => {
+      const { engine } = buildWorld({
+        rules: [ONBOARDING('is_not_set')],
+        contact: null,
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      expect((await engine.routeTicket(TRIGGER)).outcome).toBe('deferred');
+    });
+
+    it('still compares a populated field the same way', async () => {
+      const { engine } = buildWorld({
+        rules: [
+          {
+            id: 'r1',
+            name: 'Gold plan',
+            position: 0,
+            conditions: [
+              { type: 'contact_attribute', key: 'plan_tier', operator: 'equals', value: 'gold' },
+            ],
+            targetTeamId: BILLING_TEAM,
+          },
+        ],
+        contact: { customFields: { plan_tier: 'gold' } },
+        teamsWithActiveMembers: [BILLING_TEAM],
+      });
+
+      expect((await engine.routeTicket(TRIGGER)).outcome).toBe('routed');
     });
   });
 
