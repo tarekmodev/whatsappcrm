@@ -44,8 +44,8 @@ Six rules hold across every model. A change that breaks one needs a reason in re
 
 ## Tenancy classification
 
-44 models. **41 are tenant-scoped**: they carry a non-null `tenant_id`, have
-`ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Three are
+45 models. **41 are tenant-scoped**: they carry a non-null `tenant_id`, have
+`ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Four are
 not, each deliberately:
 
 | Table            | Why it has no policy                                                                                             | Reachable by                                                                |
@@ -53,9 +53,13 @@ not, each deliberately:
 | `tenants`        | It _is_ the tenant. Provisioning and host→tenant resolution both read it before any tenant is in scope           | `SystemPrisma` for writes; `TenantPrisma` reads are narrowed to the own row |
 | `plans`          | Platform-wide product catalogue, shared by every tenant                                                          | `TenantPrisma` read-only; `SystemPrisma` for writes                         |
 | `webhook_events` | Written _before_ the tenant is known — storing first and routing later is the point — so `tenant_id` is nullable | `SystemPrisma` only. The app role is granted nothing on it                  |
+| `tenant_signups` | A signup exists _before_ its tenant does, so there is nothing for a policy to compare against                    | `SystemPrisma` only. The app role is granted nothing on it                  |
 
-`TenantPrisma` applies its own rule to all three, because there is no policy to do it —
-see [`tenancy.md`](tenancy.md#the-three-tables-with-no-rls-policy).
+`TenantPrisma` applies its own rule to all four, because there is no policy to do it —
+see [`tenancy.md`](tenancy.md#the-four-tables-with-no-rls-policy).
+
+On the last two the **grant, not RLS, is the enforcement**, and `pnpm db:verify:rls`
+asserts both by name rather than inferring them from the catalog.
 
 Counting these yourself: `pnpm db:verify:rls` reads the catalog rather than a list, so a
 table added without a policy is reported by name rather than assumed to be fine.
@@ -219,6 +223,43 @@ Per tenant rather than per plan because `plans.entitlements` belongs to TAR-37 �
 needs runs on the tenant connection. Not columns on `tenant_settings`, despite that
 table's standing invitation, because settings are edited by the tenant's own admins and a
 seat cap the capped party can raise is not a cap.
+
+#### `tenant_signups`
+
+A self-signup between the form and the tenant existing.
+
+- **Tenant-scoped:** no. See the table above.
+- **Model:** `TenantSignup`
+- **Unique:** `token_hash`; a partial
+  `(desired_slug) WHERE consumed_at IS NULL` — the slug reservation
+- **Indexes:** a partial `(expires_at) WHERE consumed_at IS NULL`, the expiry sweep's own
+  predicate. Both partial indexes are raw SQL, not `schema.prisma`: Prisma cannot express an
+  index predicate
+- **Owned by:** TAR-440; consumed by TAR-405
+
+`POST /api/v1/signup` writes one row and sends one email — no tenant, no user, no domain, no
+subscription. `POST /api/v1/signup/verify` consumes it with one conditional statement,
+`UPDATE … WHERE consumed_at IS NULL AND expires_at > now() RETURNING`, and only then calls
+`TenantProvisioningService.provision()`. The update _is_ the concurrency control, so two
+simultaneous uses of one link cannot both provision.
+
+`desired_slug` is a **soft reservation**: `hostname` on `tenant_domains` is globally unique, so
+provisioning before verification would let any script burn platform subdomains permanently —
+and not reserving at all would fail the person at the last step with the one error they cannot
+fix without starting over. ⚠️ The partial unique index cannot carry `AND expires_at > now()`,
+because an index predicate must be `IMMUTABLE`, so **the insert path must delete expired
+unconsumed rows for that slug before inserting** or a lapsed signup makes the name unclaimable.
+Same trap and same answer as `invites_one_live_per_email`.
+
+`password_hash` is argon2id, taken at signup rather than on the verify page: a page that asks
+for a password is one an attacker who intercepted the link can complete, where one that only
+confirms is not. `token_hash` is SHA-256 hex like every other token digest in the schema.
+
+`provisioned_tenant_id` is a forensic backreference with **no foreign key** and deliberately
+not called `tenant_id` — it must outlive the tenant's purge, and a `tenant_id` column would put
+this table inside `pnpm db:verify:rls`'s "must be RLS-protected" sweep, which it cannot satisfy
+and should not be exempted from. `tenant_signups_provisioned_implies_consumed` makes a row that
+names a tenant also be consumed, one way only.
 
 ### Identity and access — TAR-22 / TAR-35
 
