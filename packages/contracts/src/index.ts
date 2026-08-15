@@ -28,6 +28,9 @@ export * from './admin';
 // --- Routing and assignment -------------------------------------------------
 export * from './assignment';
 
+// --- AI chatbot -------------------------------------------------------------
+export * from './ai';
+
 // --- Automation -------------------------------------------------------------
 export * from './workflows';
 

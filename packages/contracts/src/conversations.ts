@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ConversationBotStateSchema } from './ai';
 import { IdSchema, TimestampSchema } from './common';
 import { ContactResponseSchema } from './contacts';
 import { CursorPageQuerySchema } from './pagination';
@@ -31,6 +32,18 @@ export const ConversationResponseSchema = z.object({
   serviceWindowExpiresAt: TimestampSchema.nullable(),
   /** True while the AI chatbot (TAR-28) is answering and no human has taken over. */
   botHandling: z.boolean(),
+  /**
+   * Where this thread sits between the bot and a human (TAR-28, ADR 0010
+   * decision 5).
+   *
+   * Additive, and `botHandling` above keeps its published meaning — it is now
+   * exactly `botState === 'bot_active'`, so a console running yesterday's bundle
+   * keeps working. What the boolean cannot say is the difference between a
+   * conversation the bot never touched and one it gave up on, and an inbox that
+   * renders those two the same makes a tenant with an empty knowledge base look
+   * like a tenant whose bot is broken.
+   */
+  botState: ConversationBotStateSchema,
   lastMessagePreview: z.string().nullable(),
   /**
    * Never null: the column is `NOT NULL` (TAR-92) because it leads the inbox's

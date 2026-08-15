@@ -83,6 +83,17 @@ export const routes = {
    * invite and reset link, `branding:write` controls a colour.
    */
   settingsDomains: () => '/settings/domains',
+  /**
+   * The AI chatbot: its knowledge base and the settings that decide when it
+   * answers (TAR-28).
+   *
+   * `chatbot`, not `ai`. The path is read by a customer, and `docs/STYLE.md`
+   * reserves *agent* for a person — so the on-screen word for the machine is
+   * "chatbot", and the URL takes the on-screen word. Nothing here is a query
+   * parameter: the surface is two cards on one page, and neither is a filter
+   * anybody would share.
+   */
+  settingsChatbot: () => '/settings/chatbot',
   settingsSecurity: () => '/settings/security',
   /**
    * Sign in. `redirectTo` is where the user was heading when the guard turned

@@ -37,6 +37,7 @@ function row(overrides: Partial<ConversationRow> = {}): ConversationRow {
     assignedUserId: null,
     assignedTeamId: null,
     unreadCount: 0,
+    botState: 'off',
     serviceWindowExpiresAt: null,
     lastMessageAt: new Date('2026-08-11T09:00:00.000Z'),
     createdAt: new Date('2026-08-11T08:00:00.000Z'),

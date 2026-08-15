@@ -1,0 +1,42 @@
+.term {
+  margin: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.detail {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+/*
+ * The customer's own words, quoted. A real `blockquote` rather than an italic
+ * paragraph: it is somebody else's text, and the rule down its inline start says
+ * so in a way that survives forced-colors mode and a theme swap.
+ */
+.trigger {
+  margin: 0;
+  padding-inline-start: var(--space-3);
+  border-inline-start: var(--size-marker) solid var(--color-border-strong);
+  overflow-wrap: anywhere;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+/*
+ * The two halves the composite score is the lower of, under it. Its own line
+ * because it is a qualification rather than a second value — and one that
+ * matters: "0.3 sure" says nothing about whether the knowledge base was thin or
+ * the model hedged, and the fix differs.
+ */
+.breakdown {
+  display: block;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-variant-numeric: tabular-nums;
+}

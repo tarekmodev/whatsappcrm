@@ -31,11 +31,13 @@ import type { TicketStatus } from '../generated/prisma/enums';
  *
  * ## And one that has no column *yet*
  *
- * `botHandling` is published as `false` unconditionally. The AI chatbot is
- * TAR-28's, nothing writes such a state, and adding a column no code sets would
- * publish the same constant at the cost of a migration and a field on every
- * insert. It becomes a column when there is something to put in it — and the
- * contract already carries the field, so that day is a one-line change here.
+ * `botHandling` is not a column, and must never become one. ADR 0010 defines it
+ * as exactly `botState === 'bot_active'`, so it is derived here from the column
+ * TAR-402 added rather than stored beside it — two copies of one fact is how an
+ * inbox ends up rendering a thread as bot-handled and unengaged at once.
+ *
+ * Nothing writes `bot_state` yet; that is TAR-406's `BotTurnService`, and the
+ * column's `off` default is what makes reading it correct in the meantime.
  */
 
 /** Longest preview the inbox row renders. Beyond this the list is scrolling text, not a list. */
@@ -70,6 +72,7 @@ export const CONVERSATION_PROJECTION = {
   assignedUserId: true,
   assignedTeamId: true,
   unreadCount: true,
+  botState: true,
   serviceWindowExpiresAt: true,
   lastMessageAt: true,
   createdAt: true,
@@ -103,7 +106,8 @@ export function toConversationResponse(conversation: ConversationRow): Conversat
     ticketId: conversation.tickets[0]?.id ?? null,
     unreadCount: conversation.unreadCount,
     serviceWindowExpiresAt: conversation.serviceWindowExpiresAt?.toISOString() ?? null,
-    botHandling: false,
+    botHandling: conversation.botState === 'bot_active',
+    botState: conversation.botState,
     lastMessagePreview: toPreview(conversation.messages[0]?.body ?? null),
     // Never null: `last_message_at` is `NOT NULL` (TAR-92) because it leads the
     // inbox's keyset indexes, and a thread with no message yet carries its own

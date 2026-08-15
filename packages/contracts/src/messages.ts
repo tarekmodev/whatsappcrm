@@ -32,6 +32,24 @@ export const MessageTypeSchema = z.enum(MESSAGE_TYPES);
  * Outbound lifecycle: `queued → sent → delivered → read`, or `failed`.
  * Inbound messages are born `delivered` — there is nothing to track.
  */
+/**
+ * Who authored a message (TAR-28, ADR 0010 decision 14).
+ *
+ * `sentByAutomation` below is derived from "outbound with no sender", and
+ * TAR-27's workflows are about to send messages with no sender too — so that
+ * flag is about to stop distinguishing a bot reply from a workflow reply, and
+ * the console has to badge exactly one of them. This is the field both stories
+ * write; `bot` is TAR-28's value and `workflow` is TAR-27's to add, which is why
+ * the list is written to be extended rather than replaced.
+ *
+ * The backfill for rows that predate it is deterministic: inbound is `contact`,
+ * a non-null sender is `agent`, and everything else is `system` — not `bot`,
+ * because nothing before TAR-28 was one.
+ */
+export const MESSAGE_ORIGINS = ['contact', 'agent', 'bot', 'system'] as const;
+export const MessageOriginSchema = z.enum(MESSAGE_ORIGINS);
+export type MessageOrigin = (typeof MESSAGE_ORIGINS)[number];
+
 export const MESSAGE_STATUSES = ['queued', 'sent', 'delivered', 'read', 'failed'] as const;
 export const MessageStatusSchema = z.enum(MESSAGE_STATUSES);
 export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
@@ -95,6 +113,12 @@ export const MessageResponseSchema = z.object({
   sentByUserId: IdSchema.nullable(),
   /** True when the AI chatbot (TAR-28) or a workflow (TAR-27) produced the message. */
   sentByAutomation: z.boolean(),
+  /**
+   * Who authored it. Published alongside `sentByAutomation`, which keeps its
+   * current meaning — `origin !== 'contact' && origin !== 'agent'` — so no
+   * existing client breaks.
+   */
+  origin: MessageOriginSchema,
   /** Meta's id. Unique per tenant, and the idempotency key for webhook replays. */
   providerMessageId: z.string().nullable(),
   /** Meta's error code and title, when `status` is `failed`. */

@@ -63,6 +63,7 @@ export const MESSAGE_PROJECTION = {
   status: true,
   body: true,
   senderUserId: true,
+  origin: true,
   providerMessageId: true,
   errorCode: true,
   errorMessage: true,
@@ -104,6 +105,7 @@ export function toMessageResponse(message: MessageRow, origin: string): MessageR
     sentByUserId: message.senderUserId,
     sentByAutomation:
       message.direction === MessageDirection.outbound && message.senderUserId === null,
+    origin: message.origin,
     providerMessageId: message.providerMessageId,
     failureReason: toFailureReason(message.errorCode, message.errorMessage),
     sentAt: message.sentAt.toISOString(),

@@ -1,0 +1,75 @@
+.form {
+  /*
+   * Caps the controls at a readable measure on a wide screen, exactly as the
+   * workspace profile form does. A threshold slider that stretches to 1600px is
+   * harder to aim at, not easier — and the cap is on the form rather than on
+   * each control so they all stay the same width.
+   */
+  max-inline-size: var(--size-container-sm);
+}
+
+/*
+ * A native checkbox at touch-target size. Not a custom switch: the native
+ * control is keyboard-operable and announced correctly by construction, and it
+ * survives forced-colors mode, which a div painted with backgrounds does not.
+ */
+.switch {
+  inline-size: var(--size-icon-md);
+  block-size: var(--size-icon-md);
+  accent-color: var(--color-accent);
+}
+
+.switchState {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-on-surface);
+}
+
+/* A turn count is two digits; a full-width field for it invites a wrong answer. */
+.number {
+  max-inline-size: var(--space-8);
+}
+
+.slider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.range {
+  flex: 1 1 auto;
+  min-block-size: var(--size-touch-target);
+  accent-color: var(--color-accent);
+}
+
+.sliderValue {
+  /*
+   * Reserved width, so dragging the slider from 5% to 100% does not shuffle the
+   * control beside it. `ch` on the numeric font keeps that true whatever the
+   * locale's percent form is.
+   */
+  min-inline-size: 8ch;
+  font-size: var(--font-size-body-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-on-surface-muted);
+  text-align: end;
+}
+
+.price {
+  font-size: var(--font-size-caption);
+  color: var(--color-on-surface-muted);
+}
+
+/*
+ * The skeleton's stand-in for the submit button. Sized from the button's own box
+ * — touch target, inline padding, radius — rather than from its label alone, so
+ * the action row is exactly as tall before the form arrives as after.
+ */
+.actionPlaceholder {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-4);
+  border-radius: var(--radius-md);
+  background-color: var(--color-skeleton-base);
+}

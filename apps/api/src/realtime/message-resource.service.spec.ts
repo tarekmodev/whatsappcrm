@@ -42,6 +42,7 @@ function row(overrides: Partial<RelayRow> = {}): RelayRow {
     contentType: 'text',
     body: 'is my order on its way?',
     senderUserId: null,
+    origin: 'contact',
     providerMessageId: 'wamid.abc',
     errorCode: null,
     errorMessage: null,

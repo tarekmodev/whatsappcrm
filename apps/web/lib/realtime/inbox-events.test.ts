@@ -17,6 +17,7 @@ const MESSAGE = {
   attachments: [],
   sentByUserId: null,
   sentByAutomation: false,
+  origin: 'contact',
   providerMessageId: null,
   failureReason: null,
   sentAt: '2026-08-10T08:05:00.000Z',

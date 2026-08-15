@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import type { ConversationResponse } from '@whatsappcrm/contracts';
+import { canRequestHandoff, type ConversationResponse } from '@whatsappcrm/contracts';
 import { Notice } from '@/components/ui/Notice';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { SkeletonLine } from '@/components/ui/Skeleton';
@@ -16,6 +16,7 @@ import {
 } from '@/features/inbox/conversation-hold';
 import { ClaimButton } from './ClaimButton';
 import { ConversationBadges } from './ConversationBadges';
+import { TakeFromBotButton } from './TakeFromBotButton';
 import { ThreadActions } from './ThreadActions';
 import styles from './ThreadHeader.module.css';
 
@@ -80,6 +81,15 @@ export function ThreadHeader({
         </div>
 
         <Cluster gap="2" align="start" className={styles.controls}>
+          {/* Offered only while the chatbot actually holds the reply. A thread
+              already handed over needs no button — the bot has stopped — and
+              the endpoint would answer `200` and write nothing anyway. */}
+          {canRequestHandoff(conversation.botState) && holdPermissions.canClaim ? (
+            <TakeFromBotButton
+              conversationId={conversation.id}
+              contactName={conversation.contact.displayName}
+            />
+          ) : null}
           {canChangeHold(hold, holdPermissions) ? (
             <ClaimButton
               conversationId={conversation.id}
@@ -102,6 +112,12 @@ export function ThreadHeader({
         teamName={teamName}
         showUnreadCount={false}
       />
+
+      {/* Why nobody on the team has replied. Without it, a thread the chatbot
+          is answering reads as one everybody is ignoring. */}
+      {canRequestHandoff(conversation.botState) ? (
+        <Notice tone="info">{content.inbox.botActiveNotice}</Notice>
+      ) : null}
 
       {hold.state === 'unclaimed' && !holdPermissions.canClaim ? (
         // Said rather than left as a missing button: a console that simply

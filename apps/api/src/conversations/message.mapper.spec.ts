@@ -21,6 +21,7 @@ function row(overrides: Partial<MessageRow> = {}): MessageRow {
     status: 'received',
     body: 'Where is my order?',
     senderUserId: null,
+    origin: 'contact',
     providerMessageId: 'wamid.1',
     errorCode: null,
     errorMessage: null,

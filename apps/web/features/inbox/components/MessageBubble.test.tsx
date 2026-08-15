@@ -23,6 +23,7 @@ const BASE: MessageResponse = {
   attachments: [],
   sentByUserId: null,
   sentByAutomation: false,
+  origin: 'contact',
   providerMessageId: null,
   failureReason: null,
   sentAt: '2026-08-10T08:05:00.000Z',
@@ -92,6 +93,7 @@ describe('MessageBubble', () => {
           body: 'Looking into it now.',
           sentByUserId: '0192f001-0000-7000-8000-000000000199',
           sentByAutomation: false,
+          origin: 'agent',
         }}
         senderName={null}
       />,
