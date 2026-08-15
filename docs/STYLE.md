@@ -21,8 +21,12 @@ State the reader in the opening paragraph when it is not obvious from the path. 
 subject serves two readers, split it into two documents or two clearly labelled sections
 — never one blended paragraph.
 
-Nothing under `docs/reference/` targets a tenant user. There is no tenant-user
-documentation in this repository yet; the product has no UI to describe.
+Nothing under `docs/reference/` targets a tenant user. Tenant-user documentation lives in
+`docs/guides/` and started with
+[Change a ticket's status and priority](guides/manage-ticket-status-and-priority.md)
+(TAR-295), once TAR-286 shipped a console surface worth describing. A guide for a tenant
+user names its reader in the first line and refers to every control by its **visible
+label**, taken from `apps/web/content/en.ts` rather than from a component name.
 
 ## Information architecture
 
@@ -37,8 +41,8 @@ documentation in this repository yet; the product has no UI to describe.
 | `docs/concepts/`     | Explanation of the model and the why, where a reader cannot succeed without it   | Engineer |
 | `CHANGELOG.md`       | What changed, per release                                                        | Both     |
 
-Do not create a directory you have nothing to put in. `docs/guides/` and
-`docs/concepts/` do not exist yet, and should not until something needs them.
+Do not create a directory you have nothing to put in. `docs/concepts/` does not exist yet,
+and should not until something needs it.
 
 **The README is a doorway, not a manual.** Anything longer than a screen belongs in
 `docs/` with a link from the README. When you move a section, move it whole and leave a
@@ -72,6 +76,9 @@ Fixed vocabulary. Use the left column; never rotate synonyms.
 | `TenantPrisma` / `SystemPrisma`  | the tenant client / the system client    | Exact casing; they are type and token names              |
 | row-level security (RLS)         | row security, database policies          | Spell out at first use per document                      |
 | tenant-scoped                    | multi-tenant, isolated                   | Carries a non-null `tenant_id` and an RLS policy         |
+| ticket                           | case, issue, request                     | One unit of work on a conversation                       |
+| active queue                     | open queue, active list, the backlog     | `GET /tickets` with no `status`: `open` and `pending`    |
+| auto-reopen                      | reopen, un-resolve                       | `pending → open` written by the customer's reply         |
 
 Product entity names take their schema spelling in prose: `conversations`, `tickets`,
 `message_templates`. TypeScript identifiers take theirs: `MessageTemplate`,
