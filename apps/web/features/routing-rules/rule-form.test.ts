@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AssignmentRuleResponse } from '@whatsappcrm/contracts';
+import { ROUTING_RULE_LIMITS, type AssignmentRuleResponse } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { draftFromRule, validateRuleDraft, type RuleDraft } from './rule-form';
 
@@ -103,6 +103,29 @@ describe('validateRuleDraft', () => {
 
     if (result.status === 'invalid') {
       expect(result.errors.byCondition[0]).toBe(content.routingRules.tagsRequiredError);
+    }
+  });
+
+  it('reports a tag condition holding more tags than the contract allows', () => {
+    // A workspace with more than 25 tags can check them all: without this the
+    // schema refuses the input and the form falls back to its generic error.
+    const tagIds = Array.from(
+      { length: ROUTING_RULE_LIMITS.valuesPerCondition + 1 },
+      (_, index) => `0192f00c-0000-7000-8000-${String(index).padStart(12, '0')}`,
+    );
+
+    const result = validateRuleDraft(
+      draft({ conditions: [{ type: 'tag', match: 'any', tagIds }] }),
+      content,
+    );
+
+    expect(result.status).toBe('invalid');
+
+    if (result.status === 'invalid') {
+      expect(result.errors.byCondition[0]).toBe(
+        content.routingRules.tagsTooManyError(ROUTING_RULE_LIMITS.valuesPerCondition),
+      );
+      expect(result.errors.form).toBeUndefined();
     }
   });
 
