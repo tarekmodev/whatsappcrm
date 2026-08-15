@@ -169,6 +169,25 @@ change.
 
 ### Added
 
+- **A new tenant admin now lands in a guided setup checklist they can skip and come back to**
+  (TAR-36, TAR-407) — `/onboarding` walks an admin through connecting a WhatsApp number,
+  inviting agents and setting branding, gated on `tenant:settings`. The rule that shapes the
+  whole surface is that **completion is server-derived**: a step is done because the tenant
+  actually connected a number or sent an invitation, so the write endpoint takes an intent
+  (`skip` / `reopen`) and not a status. A client that could assert `completed` would let an
+  admin mark a workspace set up that has no number attached to it, and the list would stop
+  describing the workspace. `skipped` is its own state rather than the absence of `completed`,
+  which is what makes a step returnable — the completion notice renders above the list, never
+  instead of it. Which step is open lives in `?step=`, so the walkthrough is a link somebody
+  can share and the back button can undo, and the only client island on the page is the skip
+  button.
+  `packages/contracts/src/onboarding.ts` is the checklist's contract and nothing more, which is
+  the split [ADR 0009](docs/architecture/0009-tenant-lifecycle-and-self-signup.md) asks for: it
+  owns the lifecycle, signup, provisioning, retention and notifications, and lists the
+  checklist's own state among its non-goals. The two routes sit alongside 0009's tenant surface
+  and share its `tenant:settings` gate. `set_branding` links nowhere until TAR-29 builds the
+  editor — the step says so and offers the skip rather than pointing at a route that would 404.
+
 - **A new ticket nobody's rule claimed now goes to whoever has least, and agents take turns**
   (TAR-23, TAR-273, TAR-274) — ADR 0007 published a `FallbackAssignmentResolver` seam and
   bound nothing behind it, so every ticket no rule matched was deferred with "nobody

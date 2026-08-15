@@ -53,6 +53,12 @@ const ICON_PATHS = {
   ],
   info: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18', 'M12 11.5v5', 'M12 8h.01'],
   /**
+   * The onboarding checklist (TAR-407). Ticks beside rules rather than the
+   * `note` page, which is this set's shape for an internal note — a checklist is
+   * a sequence of things to do, not a thing somebody wrote.
+   */
+  checklist: ['m4 7 2 2 3-3', 'M13 8h7', 'm4 15 2 2 3-3', 'M13 16h7'],
+  /**
    * The SLA alert bell (TAR-26). A bell rather than a warning triangle: the
    * triangle is this set's shape for "something is wrong with the page you are
    * on", and a breached ticket is somebody else's work needing attention.

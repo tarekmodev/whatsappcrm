@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseRedirectPath, routes } from './routes';
+import { parseOnboardingStep, parseRedirectPath, routes } from './routes';
 
 describe('routes', () => {
   /**
@@ -99,5 +99,28 @@ describe('parseRedirectPath', () => {
 
   it('returns what the router will resolve, not the raw input', () => {
     expect(parseRedirectPath('/settings/../inbox', FALLBACK)).toBe('/inbox');
+  });
+});
+
+describe('routes.onboarding', () => {
+  it('is a bare path when no step is named', () => {
+    expect(routes.onboarding()).toBe('/onboarding');
+  });
+
+  it('carries the open step, so a shared link resumes the walkthrough', () => {
+    expect(routes.onboarding({ stepId: 'invite_agents' })).toBe('/onboarding?step=invite_agents');
+  });
+});
+
+describe('parseOnboardingStep', () => {
+  it('accepts a step the contract names', () => {
+    expect(parseOnboardingStep('set_branding')).toBe('set_branding');
+  });
+
+  it('drops anything else, because the URL is untrusted', () => {
+    // `undefined` rather than a default: only the checklist knows which step is
+    // the one still pending.
+    expect(parseOnboardingStep('../../etc/passwd')).toBeUndefined();
+    expect(parseOnboardingStep(undefined)).toBeUndefined();
   });
 });

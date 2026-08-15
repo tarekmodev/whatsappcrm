@@ -199,11 +199,23 @@ BEGIN
                 -- TAR-49; writing to either table stays SystemPrisma's job.
                 EXECUTE format('GRANT SELECT ON TABLE "public".%I TO "whatsappcrm_app"', t.relname);
 
-            WHEN 'webhook_events' THEN
-                -- The deliberate exception in TAR-39's data model: written
-                -- before the tenant is known, so it carries no policy. With no
-                -- policy to constrain it, the only safe grant is none — this is
-                -- the one table where the grant, not RLS, is the enforcement.
+            WHEN 'webhook_events', 'tenant_signups' THEN
+                -- Both are written before the tenant is known, so neither can
+                -- carry a policy: there is nothing for one to compare against.
+                -- With no policy to constrain them, the only safe grant is none
+                -- — these are the tables where the grant, rather than RLS, is
+                -- the enforcement.
+                --
+                --   webhook_events   TAR-39's deliberate exception in the data
+                --                    model: store first, route later.
+                --   tenant_signups   TAR-440. A signup exists before its tenant
+                --                    does, and it holds an argon2id password
+                --                    hash and a verification digest for an
+                --                    account nobody owns yet. Signup runs on
+                --                    SystemPrisma (ADR 0009); the model is
+                --                    `system-only` in tenant-scope.extension.ts
+                --                    so a tenant-side call names the cause
+                --                    instead of failing with SQLSTATE 42501.
                 NULL;
 
             ELSE
