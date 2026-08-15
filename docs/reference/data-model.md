@@ -583,8 +583,19 @@ row insert rather than a migration. A non-null `opted_out_at` blocks outbound se
 
 #### `custom_field_defs`
 
-- **Unique:** `(tenant_id, key)`
+- **Unique:** `(tenant_id, key)` — also what answers `conflict` on a duplicate key
 - **Owned by:** TAR-33
+
+`key` and `type` are immutable once a row exists (0002 amendment 10): `key` is the JSONB key
+inside `contacts.custom_fields` and the key a `contact_attribute` routing condition names, and
+`type` is what every already-stored value was validated against. `position` orders the fields
+on the contact profile, is assigned server-side as `max(position) + 1` and is changed only by
+`POST /api/v1/custom-fields/reorder`. Deleting a row strips its key from
+`contacts.custom_fields` for the tenant in the same transaction, so re-creating a field with
+the same key cannot resurrect the old values.
+
+`custom_field_type` carries `multi_select`, and the API deliberately never writes it — the
+published `CUSTOM_FIELD_TYPES` is the other five. Reasoning in 0002 amendment 10.
 
 ### Inbox — TAR-20
 

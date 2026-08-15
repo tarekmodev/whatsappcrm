@@ -1210,7 +1210,10 @@ export const MOCK_TAGS: readonly MockTag[] = [
   },
 ];
 
-/** What a `contact_attribute` condition's `key` may name. */
+/**
+ * What a `contact_attribute` condition's `key` may name, and — since 0002
+ * amendment 10 — what the contact profile renders, in `position` order.
+ */
 export const MOCK_CUSTOM_FIELD_DEFINITIONS: readonly MockCustomFieldDefinition[] = [
   {
     tenantId: MOCK_TENANT_ID,
@@ -1219,6 +1222,9 @@ export const MOCK_CUSTOM_FIELD_DEFINITIONS: readonly MockCustomFieldDefinition[]
     label: 'Plan tier',
     type: 'select',
     options: ['bronze', 'silver', 'gold'],
+    position: 0,
+    createdAt: '2026-06-01T09:00:00.000Z',
+    updatedAt: '2026-06-01T09:00:00.000Z',
   },
   {
     tenantId: MOCK_TENANT_ID,
@@ -1227,6 +1233,9 @@ export const MOCK_CUSTOM_FIELD_DEFINITIONS: readonly MockCustomFieldDefinition[]
     label: 'Account manager',
     type: 'text',
     options: [],
+    position: 1,
+    createdAt: '2026-06-01T09:05:00.000Z',
+    updatedAt: '2026-06-01T09:05:00.000Z',
   },
   {
     // Present only so tenant scoping can be asserted, never rendered.
@@ -1236,6 +1245,9 @@ export const MOCK_CUSTOM_FIELD_DEFINITIONS: readonly MockCustomFieldDefinition[]
     label: 'Rival tenant field',
     type: 'text',
     options: [],
+    position: 0,
+    createdAt: '2026-06-01T09:00:00.000Z',
+    updatedAt: '2026-06-01T09:00:00.000Z',
   },
 ];
 

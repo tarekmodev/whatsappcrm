@@ -169,6 +169,37 @@ change.
 
 ### Added
 
+- **An admin can now define the tenant's custom contact fields, and the contract says what a
+  value means** (TAR-33, TAR-476) — `custom_field_defs` has existed since the initial
+  migration and `CustomFieldDefinitionSchema` has been published since TAR-39, but nothing
+  wrote either, so TAR-33's first acceptance criterion had no route. The console was already
+  living in the gap: `contact-schema.ts` read `/v1/custom-fields` for the routing-rule
+  condition builder and treated `not_found` as "this tenant has no vocabulary yet".
+  [0002 amendment 10](docs/architecture/0002-architecture-and-api-contract.md) rules the five
+  endpoints and, more importantly, the four things a client would otherwise discover by
+  trying. **`key` and `type` are immutable**: `key` is the JSONB key inside
+  `contacts.custom_fields` and the key a `contact_attribute` routing condition names, so
+  renaming it orphans every value and silently stops every rule naming it from ever matching;
+  `type` is what every stored value was validated against, and changing it leaves an agent
+  holding a profile the API refuses to save back. `label` and a `select`'s `options` are the
+  renameable half, and removing an option rewrites no contact — a stale value survives
+  untouched until that field is next written. **Delete strips the values in the same
+  transaction**, because keys are unique per tenant and leaving them orphaned means an admin
+  who deletes a field and later re-creates the same key gets every old value back on a screen
+  that gives no hint they were ever there. **`ContactResponse.customFields` is keyed by `key`,
+  and a write is a merge** — keys present are set, `null` clears one, absent keys are left
+  alone — because replacement makes an agent editing a phone number silently erase every
+  custom value their form did not load. Ordering is `position`, set only by
+  `POST /custom-fields/reorder` on amendment 7's shape, so "move this field up" is atomic
+  rather than a client-computed renumbering raced by the next admin.
+  Mutation is gated on `tenant:settings`, which is admin-only today and grows `rbac.ts` by
+  nothing; the list is `contact:read`, because every agent has to render the fields to fill
+  them in. No migration and no new error code. `customFieldValueIssue` in
+  `packages/contracts/src/contacts.ts` is the single copy of per-type validation, so the
+  console disables a save the API would refuse. `multi_select` stays in the Postgres enum and
+  out of `CUSTOM_FIELD_TYPES`: a value is a single string, and TAR-33's own assumption is
+  "simple key-value, not relational".
+
 - **A new tenant admin now lands in a guided setup checklist they can skip and come back to**
   (TAR-36, TAR-407) — `/onboarding` walks an admin through connecting a WhatsApp number,
   inviting agents and setting branding, gated on `tenant:settings`. The rule that shapes the
