@@ -57,6 +57,18 @@ const CONTACT_IDS = {
   fatima: '0192f003-0000-7000-8000-000000000301',
   jonas: '0192f003-0000-7000-8000-000000000302',
   mei: '0192f003-0000-7000-8000-000000000303',
+  /**
+   * Three contacts with no conversation of their own, carried by the deferred
+   * tickets below.
+   *
+   * They exist because `tickets_one_active_per_contact` is a real partial unique
+   * index: Fatima, Jonas and Mei each already hold one *active* ticket, so hanging
+   * a second one off them would make this fixture set something the database
+   * would refuse to hold — and a mock that cannot exist is worse than no mock.
+   */
+  sofia: '0192f003-0000-7000-8000-000000000304',
+  karim: '0192f003-0000-7000-8000-000000000305',
+  yuki: '0192f003-0000-7000-8000-000000000306',
   otherTenant: '0192f003-0000-7000-8000-000000000399',
 } as const;
 
@@ -79,7 +91,22 @@ const TICKET_IDS = {
   fatimaResolved: '0192f00a-0000-7000-8000-000000000a04',
   /** Closed without a resolution: `closedAt` set, `resolvedAt` deliberately null. */
   meiClosed: '0192f00a-0000-7000-8000-000000000a05',
+  // The supervisor's deferred queue (TAR-23): one per reason in ADR 0008's
+  // vocabulary, because a set holding only `all_at_capacity` would leave two
+  // thirds of the copy that tells a supervisor *who* must act unreachable.
+  /** Routed to Billing by rule, and then nobody in Billing had room. */
+  deferredAtCapacity: '0192f00a-0000-7000-8000-000000000a06',
+  /** Onboarding exists and is asleep: a staffing gap, not a configuration one. */
+  deferredNoneAvailable: '0192f00a-0000-7000-8000-000000000a07',
+  /** Nobody could ever have taken it — the reason that never resolves itself. */
+  deferredNoCandidatePool: '0192f00a-0000-7000-8000-000000000a08',
   otherTenant: '0192f00a-0000-7000-8000-000000000a99',
+  /**
+   * A *deferred* ticket in the other tenant. The `otherTenant` ticket above is
+   * `open`, so it falls out of `?routingState=deferred` on its own and cannot
+   * prove the flagged query is tenant-scoped. This one can.
+   */
+  otherTenantDeferred: '0192f00a-0000-7000-8000-000000000a98',
 } as const;
 
 /**
@@ -708,7 +735,7 @@ export const MOCK_MESSAGE_TEMPLATES: readonly MockMessageTemplate[] = [
   }),
 ];
 
-// --- Tickets (TAR-25) ------------------------------------------------------
+// --- Tickets (TAR-25), and the supervisor's deferred queue (TAR-23) --------
 //
 // Five in the main tenant, chosen so every branch of the queue and the ticket
 // view is reachable without editing a fixture: the sort (urgent above high above
@@ -719,6 +746,13 @@ export const MOCK_MESSAGE_TEMPLATES: readonly MockMessageTemplate[] = [
 // They also respect `tickets_one_active_per_contact`: Fatima and Mei each hold
 // exactly one *active* ticket, and their second one is terminal. A fixture set
 // that broke the invariant would let a bug through that the database refuses.
+//
+// Three more carry the deferred queue — one per reason in ADR 0008's vocabulary,
+// because a set holding only `all_at_capacity` would leave two thirds of the copy
+// that tells a supervisor *who* must act unreachable in mock mode. They hang off
+// contacts of their own, for the same invariant, and their `deferredSince` values
+// are literals spread across a morning so oldest-stuck-first is something the view
+// can be checked against rather than array order in disguise.
 
 /**
  * `not_applicable` — the honest answer for a tenant with no active SLA policy,
@@ -902,6 +936,75 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     // Breached, so `?overdue=true` has something to leak if the scoping is wrong.
     sla: firstResponseSla('breached', SLA_DEADLINE_MISSED),
     createdAt: '2026-06-02T09:05:00.000Z',
+  }),
+
+  // The deferred queue. Each hangs off a contact of its own so the five tickets
+  // above keep their one-active-per-contact invariant, and each names a `routing`
+  // explicitly — `defaultRouting` above only knows about tickets nothing deferred.
+  ticket({
+    id: TICKET_IDS.deferredAtCapacity,
+    number: 1041,
+    contactId: CONTACT_IDS.sofia,
+    subject: 'Refund still not showing on the card',
+    status: 'open',
+    priority: 'high',
+    // Routed to Billing by rule, and then nobody in Billing had room.
+    assignedTeamId: TEAM_IDS.billing,
+    routing: {
+      state: 'deferred',
+      deferredReason: 'all_at_capacity',
+      deferredSince: '2026-08-10T07:12:00.000Z',
+    },
+    createdAt: '2026-08-10T07:10:00.000Z',
+    updatedAt: '2026-08-10T07:12:00.000Z',
+  }),
+  ticket({
+    id: TICKET_IDS.deferredNoneAvailable,
+    number: 1043,
+    contactId: CONTACT_IDS.karim,
+    subject: 'Cannot complete activation',
+    status: 'open',
+    priority: 'normal',
+    assignedTeamId: TEAM_IDS.onboarding,
+    routing: {
+      state: 'deferred',
+      deferredReason: 'none_available',
+      deferredSince: '2026-08-10T08:05:00.000Z',
+    },
+    createdAt: '2026-08-10T08:03:00.000Z',
+    updatedAt: '2026-08-10T08:05:00.000Z',
+  }),
+  ticket({
+    id: TICKET_IDS.deferredNoCandidatePool,
+    number: 1044,
+    contactId: CONTACT_IDS.yuki,
+    // Deliberately no subject: an auto-created ticket has nothing honest to
+    // derive one from, so the view has to fall back to the ticket number.
+    status: 'open',
+    priority: 'normal',
+    routing: {
+      state: 'deferred',
+      deferredReason: 'no_candidate_pool',
+      deferredSince: '2026-08-10T09:20:00.000Z',
+    },
+    createdAt: '2026-08-10T09:18:00.000Z',
+    updatedAt: '2026-08-10T09:20:00.000Z',
+  }),
+  ticket({
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: TICKET_IDS.otherTenantDeferred,
+    number: 8,
+    contactId: CONTACT_IDS.otherTenant,
+    subject: 'This must never appear in another tenant’s flagged queue',
+    status: 'open',
+    priority: 'normal',
+    routing: {
+      state: 'deferred',
+      deferredReason: 'all_at_capacity',
+      deferredSince: '2026-08-10T06:00:00.000Z',
+    },
+    createdAt: '2026-06-02T09:10:00.000Z',
   }),
 ];
 

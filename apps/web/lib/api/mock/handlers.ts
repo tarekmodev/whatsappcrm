@@ -24,6 +24,7 @@ import {
   TICKET_STATUS_REQUIRES_CLOSE,
   TeamCreateInputSchema,
   TeamUpdateInputSchema,
+  TicketAssignInputSchema,
   TicketListQuerySchema,
   TicketUpdateInputSchema,
   UserListQuerySchema,
@@ -360,6 +361,12 @@ const ROUTES: readonly Route[] = [
     // `ticket:close`, which is per-body and so is checked in the handler.
     permission: 'ticket:update',
     handle: updateTicket,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}/assign$`),
+    permission: 'ticket:assign',
+    handle: assignTicket,
   },
   {
     method: 'GET',
@@ -1267,7 +1274,7 @@ function assignConversation({ principal, params, body }: RouteContext): Conversa
   return toConversationResponse(updated);
 }
 
-// --- Tickets (TAR-25, ADR 0006) --------------------------------------------
+// --- Tickets (TAR-25, ADR 0006), and the flagged queue (TAR-23, ADR 0008) --
 
 /**
  * `GET /v1/tickets` — the queue.
@@ -1290,6 +1297,12 @@ function assignConversation({ principal, params, body }: RouteContext): Conversa
  *   4. **`breachedOnly` narrows to a breached timer** (TAR-26), *after* scope
  *      and status — so a supervisor's "everything overdue" link is still their
  *      tenant's, and still the active queue unless they asked otherwise.
+ *   5. **`routingState` / `deferredReason` are the supervisor's flagged queue**
+ *      (TAR-23). ADR 0008's landing view is this list with
+ *      `?routingState=deferred`, not a resource of its own, and both are plain
+ *      equality filters here because they are equalities in the database too —
+ *      `tickets_routing_deferred_idx` exists so that finding stuck tickets is a
+ *      predicate rather than a subquery over the event log.
  */
 function listTickets({ principal, query }: RouteContext): CursorPage<TicketResponse> {
   const parsed = TicketListQuerySchema.safeParse(Object.fromEntries(query));
@@ -1298,10 +1311,19 @@ function listTickets({ principal, query }: RouteContext): CursorPage<TicketRespo
     throw validationFailed();
   }
 
-  const { status, priority, scope, assignedUserId, assignedTeamId, breachedOnly, limit } =
-    parsed.data;
+  const {
+    status,
+    priority,
+    scope,
+    assignedUserId,
+    assignedTeamId,
+    breachedOnly,
+    routingState,
+    deferredReason,
+    limit,
+  } = parsed.data;
 
-  const items = tenantTickets(principal)
+  const matched = tenantTickets(principal)
     .filter((item) =>
       status === undefined ? TICKET_ACTIVE_STATUSES.includes(item.status) : item.status === status,
     )
@@ -1313,12 +1335,34 @@ function listTickets({ principal, query }: RouteContext): CursorPage<TicketRespo
     .filter((item) => !breachedOnly || isSlaBreached(item.sla))
     .filter((item) => assignedUserId === undefined || item.assignedUserId === assignedUserId)
     .filter((item) => assignedTeamId === undefined || item.assignedTeamId === assignedTeamId)
+    .filter((item) => routingState === undefined || item.routing.state === routingState)
+    .filter(
+      (item) => deferredReason === undefined || item.routing.deferredReason === deferredReason,
+    )
     .filter((item) => matchesTicketScope(item, scope, principal))
-    .sort(byQueueOrder)
-    .slice(0, limit)
-    .map(toTicketResponse);
+    // One order for every shape, including the flagged queue — because that is
+    // what the real API does. ADR 0008 wanted the deferred list oldest-stuck
+    // first and built `tickets_routing_deferred_idx` on
+    // `(tenant_id, routing_deferred_since)` for it, but TAR-273 shipped
+    // `TicketQueryService.list` filtering through that index and sorting by the
+    // queue's own `(priority, created_at, id)`, with the reasoning written down
+    // beside the predicate.
+    //
+    // A mock that sorted differently would teach mock mode an ordering the
+    // product does not have, and the console would render a "longest-waiting"
+    // claim that only holds against fixtures. Whether to revisit the ADR here is
+    // TAR-273's call; the transport follows the API.
+    .sort(byQueueOrder);
 
-  return { items, nextCursor: null };
+  // A real cursor, not `null`: the supervisor's queue has to be able to tell
+  // "that is all of them" from "that is the first page", and a transport that
+  // always said the former would let the console report a filtered set as empty
+  // when the query never looked past the page. Opaque to the client, so the last
+  // id serves — nothing here pages on it yet.
+  const items = matched.slice(0, limit);
+  const nextCursor = matched.length > limit ? (items[items.length - 1]?.id ?? null) : null;
+
+  return { items: items.map(toTicketResponse), nextCursor };
 }
 
 function getTicket({ principal, params }: RouteContext): TicketResponse {
@@ -1396,6 +1440,49 @@ function updateTicket({ principal, params, body }: RouteContext): TicketResponse
   syncConversationTicketLink(updated);
 
   return toTicketResponse(updated);
+}
+
+/**
+ * `POST /v1/tickets/{id}/assign` — the manual placement TAR-274 offers.
+ *
+ * Two writes, not one, and the second is the point: naming an assignee also moves
+ * `routing.state` to `manual` and clears the deferred columns, which is what stops
+ * a later routing pass overruling the supervisor. Modelled here rather than
+ * assumed, because the row vanishing from the flagged queue afterwards is exactly
+ * the behaviour that view is claiming.
+ */
+function assignTicket({ principal, params, body }: RouteContext): TicketResponse {
+  const ticket = findTicketInTenant(principal, params[0]);
+  const parsed = TicketAssignInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { userId, teamId } = parsed.data;
+
+  if (typeof userId === 'string') {
+    const user = findUserInTenant(principal, userId);
+
+    if (user.status !== 'active') {
+      throw refused('validation_failed', 'That user cannot take tickets.', HTTP_UNPROCESSABLE);
+    }
+  }
+
+  if (typeof teamId === 'string') {
+    findTeamInTenant(principal, teamId);
+  }
+
+  const assigned: MockTicket = {
+    ...ticket,
+    ...(userId === undefined ? {} : { assignedUserId: userId }),
+    ...(teamId === undefined ? {} : { assignedTeamId: teamId }),
+    routing: { state: 'manual', deferredReason: null, deferredSince: null },
+  };
+
+  mockState().tickets.set(assigned.id, assigned);
+
+  return toTicketResponse(assigned);
 }
 
 /**

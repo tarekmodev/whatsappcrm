@@ -454,6 +454,46 @@ describe('message status ordering', () => {
   });
 });
 
+/**
+ * The supervisor's flagged queue (TAR-274) reads this schema from a URL, so every
+ * value reaches it as a string.
+ */
+describe('the ticket list query', () => {
+  it('narrows the deferred queue to one reason', () => {
+    const parsed = TicketListQuerySchema.parse({
+      scope: 'unassigned',
+      routingState: 'deferred',
+      deferredReason: 'no_candidate_pool',
+    });
+
+    expect(parsed.deferredReason).toBe('no_candidate_pool');
+  });
+
+  it('refuses a reason outside the published vocabulary', () => {
+    expect(TicketListQuerySchema.safeParse({ deferredReason: 'everything_is_fine' }).success).toBe(
+      false,
+    );
+  });
+
+  it('leaves the reason absent rather than defaulting it', () => {
+    expect(TicketListQuerySchema.parse({}).deferredReason).toBeUndefined();
+  });
+
+  /**
+   * `breachedOnly` is the only boolean the contract puts on a query schema. It was
+   * `z.boolean()`, which no query string can ever satisfy — and `z.coerce.boolean()`
+   * would read `'false'` as `true`, silently widening the filter.
+   */
+  it('reads breachedOnly from the string a query carries', () => {
+    expect(TicketListQuerySchema.parse({ breachedOnly: 'true' }).breachedOnly).toBe(true);
+    expect(TicketListQuerySchema.parse({ breachedOnly: 'false' }).breachedOnly).toBe(false);
+  });
+
+  it('defaults breachedOnly to false when the parameter is absent', () => {
+    expect(TicketListQuerySchema.parse({}).breachedOnly).toBe(false);
+  });
+});
+
 describe('send message input', () => {
   it('accepts a text send', () => {
     expect(SendMessageInputSchema.parse({ type: 'text', body: 'hello' }).type).toBe('text');

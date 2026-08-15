@@ -1,0 +1,53 @@
+.subject {
+  font-weight: var(--font-weight-medium);
+  /*
+   * Inherits `overflow-wrap: anywhere` from `DataTable`'s cell, and keeps it.
+   *
+   * `break-word` reads better — it splits between words instead of mid-word at
+   * tablet width — but it was measured and rejected: it also stops the column
+   * shrinking below its longest word, which left 3px of slack at 768 and would
+   * overflow outright on a subject carrying a long URL or reference. A subject
+   * is user data up to 200 characters, so the rule that always fits wins over
+   * the one that usually looks nicer.
+   */
+}
+
+/* The ticket number and where routing tried to send it, on one caption line. */
+.ticketMeta {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+/*
+ * Without this the badge is a flex child of a column stack and stretches to the
+ * full column width, reading as a coloured bar rather than a label.
+ */
+.reasonCell {
+  align-items: start;
+}
+
+/*
+ * The sentence under the reason badge. Muted and small because it is the second
+ * thing read, but never hidden behind a tooltip: it names who can end the
+ * deferral, which is the only actionable part of the row on touch.
+ */
+.reasonHint {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  /* Long enough to be a sentence, short enough not to swallow the row — and
+     `min()` so the cap never becomes a floor that widens the table past its
+     container at tablet width. */
+  max-inline-size: min(44ch, 100%);
+}
+
+.actions {
+  /* Full-width, stacked buttons in the mobile card layout; inline in the table. */
+  inline-size: 100%;
+}
+
+@media (min-width: 48rem) {
+  .actions {
+    inline-size: auto;
+    flex-wrap: nowrap;
+  }
+}

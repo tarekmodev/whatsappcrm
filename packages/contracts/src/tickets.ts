@@ -226,6 +226,31 @@ export const TicketListQuerySchema = CursorPageQuerySchema.extend({
    */
   routingState: TicketRoutingStateSchema.optional(),
   /**
+   * Narrows the deferred queue to one reason, for the supervisor filter TAR-274
+   * ships. Not in ADR 0008's Interfaces section and added deliberately: the ADR
+   * gives the view a reason to render but no way to *ask* for one, and narrowing
+   * a fetched page instead reports "no tickets for that reason" whenever the
+   * matching ones sort past it — precisely the unstaffed night `none_available`
+   * and `no_candidate_pool` exist to describe.
+   *
+   * Costs no index: an equality on `routing_deferred_reason` over the set
+   * `tickets_routing_deferred_idx` already narrows to, which is small by
+   * construction.
+   *
+   * ⚠️ **`TicketQueryService.list` does not implement this yet.** TAR-273 landed
+   * the `routingState` predicate beside it but could not have known about this
+   * one — it arrives with this story. Until the predicate exists the API accepts
+   * the parameter and drops it, so the console checks the answer against the
+   * question rather than trusting it; see `assertRoutingFilterHonoured` in
+   * `apps/web/features/assignment/flagged-tickets.data.ts`.
+   *
+   * The console also sends `?scope=all`, not `unassigned`: TAR-286 settled
+   * `unassigned` as "no user **and** no team", but a ticket a rule routed to a
+   * team and rotation then deferred still carries `assignedTeamId` — precisely
+   * the `all_at_capacity` case the flagged queue exists to show.
+   */
+  deferredReason: FallbackAssignmentReasonSchema.optional(),
+  /**
    * Filters to tickets whose SLA has breached — the supervisor's landing view.
    *
    * `stringbool`, not `boolean`, because this schema parses a **query string**:
