@@ -15,6 +15,7 @@ import {
 import { AUDIT_ACTIONS } from '../audit/audit.actions';
 import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
+import { PlanLimitsService } from '../entitlements/plan-limits.service';
 import { Prisma } from '../generated/prisma/client';
 import { EmailAlreadyRegisteredError } from '../people/people.errors';
 import { assertRoleAssignable } from '../people/role-assignment';
@@ -92,6 +93,7 @@ export class InviteService {
     private readonly passwords: PasswordService,
     private readonly sessions: SessionService,
     private readonly loginThrottle: LoginThrottleService,
+    private readonly planLimits: PlanLimitsService,
   ) {}
 
   /**
@@ -127,6 +129,19 @@ export class InviteService {
 
     const created = await this.prisma.$tenantTransaction(async (tx) => {
       await assertTeamsExist(tx, tenantId, input.teamIds);
+      // The seat cap, checked before the account is reserved so a refused
+      // invitation leaves no `invited` user row behind for an admin to clean up
+      // (0009, decision 6 — creation is where the admin finds out).
+      //
+      // Skipped when this address already has a live invitation, because the
+      // upsert below refreshes that row rather than adding one: the seat was
+      // taken when it was first sent, and it is still counted. Refusing here
+      // would mean an admin at 3 of 3 could not re-send a link that is about to
+      // expire, which is a lockout dressed as a limit.
+      if (!(await hasLiveInvite(tx, input.email))) {
+        await this.planLimits.assertSeatAvailable(tx, tenantId);
+      }
+
       await this.reserveAccount(tx, tenantId, input.email, input.role);
 
       // Raw SQL because Prisma cannot express `ON CONFLICT` against a *partial*
@@ -371,6 +386,19 @@ export class InviteService {
         assertUsable(await this.findByToken(tx, tokenHash));
         throw new InviteTokenInvalidError('consumed');
       }
+
+      // The guarantee half of the cap (0009, decision 6). Deliberately **after**
+      // the redeeming UPDATE: this invitation has already stopped counting as
+      // pending and its user row is still `invited`, so the count here is every
+      // other seat — exactly the number activation is about to add one to.
+      // Checking before the UPDATE would count this invitation twice and refuse
+      // an acceptance that is net-zero.
+      //
+      // Net-zero is the normal case, because creation already reserved the seat.
+      // What this catches is the cap moving underneath a link that was already
+      // sent — a downgrade between invitation and acceptance — which creation
+      // cannot see and which would otherwise land the tenant over its plan.
+      await this.planLimits.assertSeatAvailable(tx, tenantId);
 
       const user = await this.activateAccount(
         tx,
@@ -795,6 +823,24 @@ function statusFilter(status: InviteListQuery['status']): Prisma.InviteWhereInpu
     case 'expired':
       return { acceptedAt: null, revokedAt: null, expiresAt: { lte: new Date() } };
   }
+}
+
+/**
+ * Does this address already hold an outstanding invitation?
+ *
+ * Asked before the seat check in `create`, because a second invitation to the
+ * same address refreshes the row that is already there and takes no new seat.
+ * `statusFilter('pending')` rather than a restated predicate, so "live
+ * invitation" means one thing in this file — what the list endpoint labels
+ * pending is exactly what the cap counts.
+ */
+async function hasLiveInvite(tx: Prisma.TransactionClient, email: string): Promise<boolean> {
+  const existing = await tx.invite.findFirst({
+    where: { email, ...statusFilter('pending') },
+    select: { id: true },
+  });
+
+  return existing !== null;
 }
 
 function toInviteResponse(invite: InviteRecord, teamIds: readonly string[]): InviteResponse {

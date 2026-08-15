@@ -1,5 +1,6 @@
 import {
   permissionsForRole,
+  type InviteCreateInput,
   type OutboundEmail,
   type SessionPrincipal,
   type TenantRole,
@@ -16,6 +17,8 @@ import { InviteNotPendingError, InviteTokenInvalidError } from './identity.error
 import { InviteService } from './invite.service';
 import { LoginThrottleService } from './login-throttle.service';
 import { PasswordService } from './password.service';
+import { PlanLimitExceededError } from '../entitlements/entitlements.errors';
+import { PlanLimitsService } from '../entitlements/plan-limits.service';
 import { createSessionToken, hashSessionToken } from './session-token';
 import type { SessionService } from './session.service';
 
@@ -74,6 +77,15 @@ interface FakeState {
   teams: readonly string[];
   /** What `invite.findUnique` answers for the admin-facing routes. */
   invite: { id: string; email: string; acceptedAt: Date | null; revokedAt: Date | null } | null;
+  /**
+   * The tenant's seat ceiling. `null` is unlimited, which is what every test
+   * that is not about the cap wants (TAR-405).
+   */
+  seatCap: number | null;
+  /** Members already occupying a seat — `active` or `suspended`. */
+  seatsTaken: number;
+  /** Invitations already outstanding, each of which holds a seat. */
+  invitesOutstanding: number;
 }
 
 interface Recorded {
@@ -176,6 +188,7 @@ function buildService(state: FakeState): {
 
   const tx = {
     user: {
+      count: () => Promise.resolve(state.seatsTaken),
       findFirst: () => Promise.resolve(state.user),
       create: ({ data }: { data: Record<string, unknown> }) => {
         recorded.userWrites.push(data);
@@ -194,7 +207,18 @@ function buildService(state: FakeState): {
       findMany: ({ where }: { where: { id: { in: string[] } } }) =>
         Promise.resolve(where.id.in.filter((id) => state.teams.includes(id)).map((id) => ({ id }))),
     },
+    tenantPlanLimits: {
+      findFirst: () => Promise.resolve({ seatCap: state.seatCap }),
+    },
+    $executeRaw: () => Promise.resolve(1),
     invite: {
+      count: () => Promise.resolve(state.invitesOutstanding),
+      // `hasLiveInvite`: whether re-inviting this address refreshes a row that
+      // already holds a seat, or takes a new one.
+      findFirst: () =>
+        Promise.resolve(
+          state.invitesOutstanding > 0 && state.user?.status === 'invited' ? { id: INVITE } : null,
+        ),
       findUnique: () => Promise.resolve(state.invite),
       update: () =>
         Promise.resolve({
@@ -288,6 +312,10 @@ function buildService(state: FakeState): {
     new PasswordService(),
     sessions,
     loginThrottle,
+    // The real one. It is a pure reader over the transaction client, so the fake
+    // above is all it needs — and stubbing it would make the seat-cap tests
+    // below assert against a mock instead of against the counting rule.
+    new PlanLimitsService(),
   );
 
   return { invites, recorded, tenantContext };
@@ -322,9 +350,134 @@ function baseState(overrides: Partial<FakeState> = {}): FakeState {
     pendingTeamIds: [],
     teams: [TEAM],
     invite: null,
+    seatCap: null,
+    seatsTaken: 0,
+    invitesOutstanding: 0,
     ...overrides,
   };
 }
+
+/**
+ * The trial plan's seat cap, enforced at the two points 0009 decision 6 names
+ * (TAR-405). The counting rule itself is pinned in
+ * `entitlements/plan-limits.service.spec.ts`; what these assert is that the
+ * invite flow consults it at all, and at the right moments.
+ */
+describe('the seat cap', () => {
+  const invitee = (): InviteCreateInput => ({
+    email: 'fourth@example.invalid',
+    role: 'agent',
+    teamIds: [],
+  });
+
+  it('refuses the fourth invitation on a three-seat trial', async () => {
+    // Three seats, three taken: one admin plus two invitations already sent.
+    const { invites, tenantContext } = buildService(
+      baseState({ seatCap: 3, seatsTaken: 1, invitesOutstanding: 2 }),
+    );
+
+    await expect(
+      asPrincipal(tenantContext, 'admin', () => invites.create(invitee())),
+    ).rejects.toThrow(PlanLimitExceededError);
+  });
+
+  it('allows the third invitation on a three-seat trial', async () => {
+    const { invites, recorded, tenantContext } = buildService(
+      baseState({ seatCap: 3, seatsTaken: 1, invitesOutstanding: 1 }),
+    );
+
+    await asPrincipal(tenantContext, 'admin', () => invites.create(invitee()));
+
+    expect(recorded.mail).toHaveLength(1);
+  });
+
+  /**
+   * The refusal has to land before the account is reserved, or an admin at the
+   * cap collects an `invited` user row per rejected attempt and has to clean
+   * them up by hand.
+   */
+  it('writes no user row for an invitation it refuses', async () => {
+    const { invites, recorded, tenantContext } = buildService(
+      baseState({ seatCap: 1, seatsTaken: 1, invitesOutstanding: 0 }),
+    );
+
+    await asPrincipal(tenantContext, 'admin', () => invites.create(invitee())).catch(
+      () => undefined,
+    );
+
+    expect(recorded.userWrites).toHaveLength(0);
+    expect(recorded.mail).toHaveLength(0);
+  });
+
+  /**
+   * Re-sending refreshes the row that is already there, so it consumes nothing.
+   * Refusing it would mean an admin at 3 of 3 could not renew a link that is
+   * about to expire — a lockout dressed as a limit.
+   */
+  it('lets an admin at the cap re-send an invitation that is already outstanding', async () => {
+    const { invites, recorded, tenantContext } = buildService(
+      baseState({
+        seatCap: 3,
+        seatsTaken: 1,
+        invitesOutstanding: 2,
+        user: { id: INVITEE, email: 'invitee@example.invalid', status: 'invited' },
+      }),
+    );
+
+    await asPrincipal(tenantContext, 'admin', () =>
+      invites.create({ email: 'invitee@example.invalid', role: 'agent', teamIds: [] }),
+    );
+
+    expect(recorded.mail).toHaveLength(1);
+  });
+
+  it('does not count seats at all when the tenant is unlimited', async () => {
+    const { invites, recorded, tenantContext } = buildService(
+      baseState({ seatCap: null, seatsTaken: 99, invitesOutstanding: 99 }),
+    );
+
+    await asPrincipal(tenantContext, 'admin', () => invites.create(invitee()));
+
+    expect(recorded.mail).toHaveLength(1);
+  });
+
+  /**
+   * Acceptance is normally net-zero — the invitation stopped counting the moment
+   * the redeeming `UPDATE` landed, and activation puts the seat back. What it
+   * catches is the cap moving underneath a link that was already sent.
+   */
+  it('accepts an outstanding invitation that is still within the cap', async () => {
+    const { invites, recorded, tenantContext } = buildService(
+      baseState({ seatCap: 3, seatsTaken: 2, invitesOutstanding: 0 }),
+    );
+
+    await asPrincipal(tenantContext, 'admin', () =>
+      invites.accept(
+        { token: 'a'.repeat(43), password: 'correct horse battery staple', displayName: 'Iris' },
+        { ipAddress: null, userAgent: null },
+      ),
+    );
+
+    expect(recorded.published).toHaveLength(1);
+  });
+
+  it('refuses an acceptance whose seat disappeared after the link was sent', async () => {
+    // The plan was downgraded to two seats while the invitation was in flight,
+    // and both are already occupied by members.
+    const { invites, tenantContext } = buildService(
+      baseState({ seatCap: 2, seatsTaken: 2, invitesOutstanding: 0 }),
+    );
+
+    await expect(
+      asPrincipal(tenantContext, 'admin', () =>
+        invites.accept(
+          { token: 'a'.repeat(43), password: 'correct horse battery staple', displayName: 'Iris' },
+          { ipAddress: null, userAgent: null },
+        ),
+      ),
+    ).rejects.toThrow(PlanLimitExceededError);
+  });
+});
 
 describe('creating an invitation', () => {
   it('stores only the digest of the token, and mails the token itself', async () => {
