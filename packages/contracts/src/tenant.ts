@@ -206,21 +206,15 @@ export const TenantLifecycleEventSchema = z.object({
   occurredAt: TimestampSchema,
 });
 
-/**
- * `GET /api/v1/tenant/lifecycle` — what TAR-409's plan-status panel renders.
- *
- * Deliberately not `BillingSummaryResponse`: that one is TAR-37's and describes a
- * subscription. This describes a lifecycle, and the two coexist — a tenant with
- * no subscription still has one of these.
+/*
+ * `TenantLifecycleResponseSchema` — the shape of `GET /api/v1/tenant/lifecycle` —
+ * is **not** declared here. TAR-409 publishes it, because TAR-409 is what renders
+ * it, and its version carries the `plan` and `usage` fields 0009 specifies that
+ * this story has no reader for. An earlier revision of this file declared a
+ * narrower second copy; two declarations of one identifier in one module is a
+ * build failure, and two shapes for one endpoint is worse than that. The engine
+ * imports the published one.
  */
-export const TenantLifecycleResponseSchema = z.object({
-  status: TenantStatusSchema,
-  trialEndsAt: TimestampSchema.nullable(),
-  /** When this tenant becomes `suspended`, if a grace period is running. */
-  gracePeriodEndsAt: TimestampSchema.nullable(),
-  /** When this tenant's data is destroyed, if the retention window is running. */
-  purgeAt: TimestampSchema.nullable(),
-});
 
 /** Per-tenant white-label appearance. TAR-29 owns the editor; the shape is fixed here. */
 export const TenantBrandingSchema = z.object({
@@ -517,6 +511,5 @@ export type TenantResponse = z.infer<typeof TenantResponseSchema>;
 export type TenantPublicResponse = z.infer<typeof TenantPublicResponseSchema>;
 export type TenantUpdateInput = z.infer<typeof TenantUpdateInputSchema>;
 export type TenantLifecycleEvent = z.infer<typeof TenantLifecycleEventSchema>;
-export type TenantLifecycleResponse = z.infer<typeof TenantLifecycleResponseSchema>;
 export type TenantCancelInput = z.infer<typeof TenantCancelInputSchema>;
 export type TenantDeleteInput = z.infer<typeof TenantDeleteInputSchema>;
