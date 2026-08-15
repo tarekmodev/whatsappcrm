@@ -8,6 +8,7 @@ import type {
   OnboardingStepStatus,
   SlaTargetKind,
   TenantRole,
+  TenantStatus,
   TicketPriority,
   TicketStatus,
   UserStatus,
@@ -51,6 +52,7 @@ export const content = {
     inbox: 'Inbox',
     tickets: 'Tickets',
     settings: 'Settings',
+    workspace: 'Workspace',
     people: 'People',
     assignment: 'Assignment',
     whatsapp: 'WhatsApp',
@@ -1284,6 +1286,144 @@ export const content = {
     unavailableHeading: 'We could not load your checklist',
     unavailableBody:
       'Your workspace is fine — only this list failed to load. Try again, and everything you have already set up is still set up.',
+  },
+
+  /**
+   * The workspace settings surface (TAR-409): profile, plan state and seat
+   * usage.
+   *
+   * *Workspace*, never *organisation* or *tenant*. `docs/STYLE.md` fixes
+   * *tenant* as the internal word and *workspace* as the only one the console
+   * says on screen, and every other string in this file already honours it.
+   */
+  workspace: {
+    title: 'Workspace',
+    subtitle: 'Your workspace profile, plan and seat usage.',
+    loading: 'Loading workspace settings',
+
+    // --- Profile -----------------------------------------------------------
+    profileHeading: 'Workspace profile',
+    profileDescription: 'The name and support address your team and your customers see.',
+    nameLabel: 'Workspace name',
+    nameRequiredError: 'Enter a workspace name',
+    nameTooLongError: (max: number) => `Use ${max} characters or fewer`,
+    supportEmailLabel: 'Support email address',
+    supportEmailHint:
+      'Where customers are told to write when they need a human. Leave it blank if you do not have one yet.',
+    supportEmailEmpty: 'Not set',
+    addressLabel: 'Workspace address',
+    /**
+     * The slug is immutable by contract — it is baked into the platform
+     * subdomain and into every session cookie scoped to that host — so the
+     * field is shown as text rather than as a disabled input, and says why.
+     */
+    addressHint: 'Fixed when the workspace was created. Changing it would break every saved link.',
+    addressEmpty: 'Not assigned yet',
+    saveProfile: 'Save changes',
+    profileSavedToast: 'Workspace profile saved',
+    profileReadOnlyNotice:
+      'Your role can read these details but not change them. Ask a workspace admin.',
+
+    // --- Branding ----------------------------------------------------------
+    brandingHeading: 'Branding',
+    brandingDescription: 'How this workspace is presented to your customers.',
+    brandingProductName: 'Product name',
+    brandingPrimaryColour: 'Primary colour',
+    brandingAccentColour: 'Accent colour',
+    brandingLogo: 'Logo',
+    brandingLogoEmpty: 'Not uploaded',
+    /**
+     * Said plainly rather than left as a control that does nothing. TAR-29 owns
+     * the editor; these values are set at provisioning until it lands, and a
+     * page that showed a colour picker writing to no endpoint would be worse
+     * than one that admits the gap.
+     */
+    brandingPendingNotice:
+      'The branding editor — logo, favicon and colours — arrives with the white-labelling work. Until then these are set when the workspace is provisioned.',
+
+    // --- Plan and usage ----------------------------------------------------
+    planHeading: 'Plan and usage',
+    planDescription: 'What this workspace is entitled to, and how much of it is in use.',
+    planLabel: 'Plan',
+    statusLabel: 'Status',
+    trialEndsLabel: 'Trial ends',
+    /** When a `past_due` or `cancelled` workspace becomes suspended. */
+    suspendsLabel: 'Suspends',
+    purgeLabel: 'Data deleted',
+
+    seatsHeading: 'Agent seats',
+    seatsUsage: (used: string, cap: string) => `${used} of ${cap} seats in use`,
+    seatsUsageUnlimited: (used: string) => `${used} seats in use — this plan sets no limit`,
+    seatsPendingNote: (pending: number) =>
+      pending === 1
+        ? '1 invitation is outstanding and counts against the cap.'
+        : `${pending} invitations are outstanding and count against the cap.`,
+    seatsAtCapNote: 'Every seat is taken. Remove an agent before inviting anyone else.',
+    /**
+     * The at-cap line when some of those seats are invitations nobody has
+     * accepted. It has to name them: withdrawing one is the cheapest way to free
+     * a seat, and "5 of 5 seats in use" on its own hides that there is anything
+     * to withdraw.
+     */
+    seatsAtCapPendingNote: (pending: number) =>
+      pending === 1
+        ? 'Every seat is taken, and one of them is an invitation nobody has accepted yet. Withdraw it, or remove an agent, before inviting anyone else.'
+        : `Every seat is taken, and ${pending} of them are invitations nobody has accepted yet. Withdraw one, or remove an agent, before inviting anyone else.`,
+
+    conversationsHeading: 'Conversations this period',
+    conversationsUsage: (used: string, cap: string) => `${used} of ${cap} conversations`,
+    conversationsUsageUnlimited: (used: string) =>
+      `${used} conversations — this plan sets no limit`,
+
+    /**
+     * ADR 0009 risk 4: the trial's caps are enforced before anything can be
+     * bought, so a workspace that reaches one has no route to a larger plan
+     * until billing ships. The honest answer is a support contact, not a
+     * checkout link that does not exist.
+     */
+    upgradeUnavailableNotice:
+      'There is no self-service upgrade yet. Contact support to raise a limit.',
+
+    /** One line per lifecycle state, so a badge never carries meaning alone. */
+    statuses: {
+      trialing: 'Trial',
+      active: 'Active',
+      past_due: 'Payment overdue',
+      suspended: 'Suspended',
+      cancelled: 'Closing',
+      deleted: 'Deleted',
+    } satisfies Record<TenantStatus, string>,
+
+    statusDescriptions: {
+      trialing: 'Everything is available while the trial runs.',
+      active: 'Everything is available.',
+      past_due: 'Everything still works. A payment has not gone through.',
+      suspended: 'Agents cannot sign in. Nothing has been deleted.',
+      cancelled: 'This workspace is closing. Everything still works until it does.',
+      deleted: 'This workspace and its data have been deleted.',
+    } satisfies Record<TenantStatus, string>,
+
+    // --- Lifecycle banners --------------------------------------------------
+    /**
+     * `cancelled` gets a banner alongside the two TAR-409 names. A cancelled
+     * workspace is counting down to suspension and then to deletion, and
+     * leaving that silent would be exactly the failure the other two banners
+     * exist to prevent.
+     */
+    banners: {
+      past_due: {
+        heading: 'A payment has not gone through',
+        body: 'Nothing has changed yet — your team can still work as normal. If the payment does not succeed, this workspace is suspended and agents lose access.',
+      },
+      suspended: {
+        heading: 'This workspace is suspended',
+        body: 'Agents cannot sign in. Messages your customers send are still received and stored, and nothing has been deleted. Settle the outstanding payment to restore access.',
+      },
+      cancelled: {
+        heading: 'This workspace is closing',
+        body: 'Your team can still work as normal until it closes. Contact support if you want to keep it.',
+      },
+    },
   },
 
   auth: {

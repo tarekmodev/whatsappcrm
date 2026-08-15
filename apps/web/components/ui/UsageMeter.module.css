@@ -1,0 +1,66 @@
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.heading {
+  font-weight: var(--font-weight-medium);
+}
+
+.summary {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.track {
+  display: block;
+  block-size: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  /* Keeps the fill's rounded end inside the track at every ratio. */
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  block-size: 100%;
+  border-radius: var(--radius-pill);
+  /*
+   * Clamped here rather than at the call site: a count that has overshot its cap
+   * is a real state — a plan downgraded below its current usage — and it draws a
+   * full bar instead of one that runs off the end of the track.
+   */
+  inline-size: clamp(0%, calc(var(--usage-ratio) * 100%), 100%);
+  background: var(--color-accent);
+  transition: inline-size var(--duration-medium) var(--easing-standard);
+}
+
+.track[data-tone='warning'] .fill {
+  background: var(--color-warning);
+}
+
+.track[data-tone='danger'] .fill {
+  background: var(--color-danger);
+}
+
+.note {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+/*
+ * A background colour is dropped in forced-colors mode, which would leave the
+ * track and the fill indistinguishable. The border keeps the decoration visible;
+ * the summary above it carries the meaning either way.
+ */
+@media (forced-colors: active) {
+  .track {
+    border: var(--border-hairline) solid CanvasText;
+  }
+
+  .fill {
+    background: CanvasText;
+  }
+}

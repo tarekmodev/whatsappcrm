@@ -1,12 +1,18 @@
 # Tenant lifecycle, self-signup and the retention contract (TAR-397)
 
-Status: proposed · Builds on [0002 — architecture and API contract](./0002-architecture-and-api-contract.md), [0004 — RBAC permission matrix](./0004-rbac-permission-matrix.md), [0005 — authentication, sessions, invites and password reset](./0005-auth-session-and-invite-contract.md) · **Amends** 0002 (request pipeline stage 4, endpoint surface, the `SystemPrisma` call-site list) and 0005 (`MailerPort`, the login status gate) · Consumed by TAR-403 (schema), TAR-404 (lifecycle engine), TAR-405 (signup and provisioning), TAR-407 (onboarding UI), TAR-409 (org settings UI), TAR-412 (QA), TAR-414 (documentation)
+Status: accepted, amended 2026-08-15 by [Amendment 1](#amendment-1--four-rulings-from-the-tar-413-review) · Builds on [0002 — architecture and API contract](./0002-architecture-and-api-contract.md), [0004 — RBAC permission matrix](./0004-rbac-permission-matrix.md), [0005 — authentication, sessions, invites and password reset](./0005-auth-session-and-invite-contract.md) · **Amends** 0002 (request pipeline stage 4, endpoint surface, the `SystemPrisma` call-site list) and 0005 (`MailerPort`, the login status gate) · Consumed by TAR-403 (schema), TAR-404 (lifecycle engine), TAR-405 (signup and provisioning), TAR-407 (onboarding UI), TAR-409 (org settings UI), TAR-412 (QA), TAR-414 (documentation)
 
 > **This document reconciles three status vocabularies that have been drifting since TAR-47.**
 > `packages/contracts/src/admin.ts` names TAR-36 as the owner of that reconciliation in as many
 > words, and `contract.test.ts` pins the gap so it cannot widen. Decision 1 closes it. Nothing
 > downstream should start until that decision is read, because every other sub-task writes
 > against the vocabulary it fixes.
+
+> **Amendment 1 (2026-08-15) changes four things in this document.** The database gate's
+> allow-list (decision 2), the lifecycle trail's scoping (decision 5), where a tenant's
+> entitlements live (decision 6), and what counts as a seat (decision 6). Each is marked inline
+> where it applies; the reasoning and the rejected alternatives are in
+> [Amendment 1](#amendment-1--four-rulings-from-the-tar-413-review) at the end.
 
 ## Context and Problem
 
@@ -207,11 +213,21 @@ same `TN001`, same refusal of a null, a non-UUID and an unknown id, same deliber
 tell the caller which — with one line changed:
 
 ```sql
-IF current_status NOT IN ('trialing', 'active', 'past_due', 'suspended') THEN
+-- Amended by Amendment 1: `cancelled` is admitted too.
+IF current_status NOT IN ('trialing', 'active', 'past_due', 'suspended', 'cancelled') THEN
     RAISE EXCEPTION 'TENANT_NOT_SERVICEABLE: tenant % is %', tenant_id, current_status
         USING ERRCODE = 'TN001';
 END IF;
 ```
+
+**The rule, after Amendment 1: the database gate refuses `created` and `deleted`, and nothing
+else.** It answers one question — does this tenant's data exist and is it intact — and `created`
+(provisioning has not finished) and `deleted` (a tombstone; the data is gone) are the only two
+states where the answer is no. Every question about who may do what in a given state is
+`TenantStatusGuard`'s, below. `cancelled` was refused in this document as first written, which
+made the recovery allowlist unreachable: `identity/auth.service.ts` and `session.service.ts` both
+read through `TenantPrisma`, so a cancelled tenant's admin could not log in to undo the
+cancellation the seven-day grace exists for.
 
 `suspended` is admitted, and that is the decision. **Inbound WhatsApp messages must still be
 received and stored while a tenant is suspended** — TAR-36's fourth acceptance criterion, and Meta's
@@ -431,6 +447,18 @@ rows in the table that already exists:
 3. **Its actor is a label, not a foreign key**, so deleting every user does not orphan it and does
    not require relaxing the `audit_logs_actor_attribution` check constraint.
 
+> **Amendment 1 confirms this against what shipped.** TAR-403 built the table tenant-scoped
+> instead — RLS, a `tenant_isolation` policy, and foreign keys to `tenants` and `users`. Point 3
+> is the one that is not a matter of taste: a composite FK to `users(tenant_id, id)` with
+> `ON DELETE NO ACTION` makes the purge impossible to finish. The purge deletes every `users` row
+> and keeps the `tenants` row, so a retained lifecycle row carrying `actor_user_id` is a
+> referencing row that `DELETE FROM users` cannot pass — SQLSTATE 23503 — and it cannot be
+> repaired first, because the append-only trigger raises `TN002` on any UPDATE and neither
+> application role holds DELETE. The path that hits it is the self-service one: a tenant admin
+> deleting their own tenant writes `actor_type = 'user'`. Both foreign keys and the RLS policy are
+> removed in the follow-up migration; the append-only trigger and the `SELECT, INSERT`-only grants
+> stay. The table takes this document's name, `lifecycle_events`.
+
 Row shape, matching `AuditActorType`'s existing vocabulary:
 
 ```
@@ -457,6 +485,15 @@ entitlements       { features: ['assignment_rules', 'sla_policies'],
                                whatsappNumbers: 1, teams: 2, knowledgeDocuments: 10 } }
 ```
 
+**Where a tenant's own copy lives, after Amendment 1.** `plans` is the catalogue and stays TAR-37's.
+A tenant's **effective** entitlements are one row in `tenant_entitlements` — `tenant_id`,
+`plan_key`, `plan_name`, and `entitlements jsonb` in exactly `PlanEntitlementsSchema`'s shape —
+RLS-scoped, so write-time enforcement reads it on the tenant connection with no `subscriptions`
+row required. It is a snapshot of the catalogue, not a pointer to it: a tenant keeps what it was
+sold when the catalogue changes under it, and TAR-37's plan sync becomes the row's writer. This
+supersedes TAR-403's `tenant_plan_limits`, which held two of the five limits and no `features` and
+so could not populate `TenantLifecycleResponse.plan`.
+
 Signup writes a `subscriptions` row against it with `status: 'trialing'`, `seats: 1`,
 `current_period_start = now()`, `current_period_end = trial_ends_at`. TAR-37 replaces the row's
 contents, adds real plans, and points the subscription somewhere else. **No API shape changes**,
@@ -482,9 +519,18 @@ so each limit has a named write path that refuses:
 | `knowledgeDocuments`     | document create                                 | `plan_limit_exceeded` |                                                                                                                                                                                                                                                                            |
 | features                 | `@RequireFeature`, stage 6                      | `feature_not_in_plan` | TAR-37's guard. Not built here; the entitlements it reads are                                                                                                                                                                                                              |
 
-The seat count is `users` where `status = 'active'`, plus `invites` still pending. Counting only
-active users lets an admin mint unlimited pending invites and blow past the cap the moment a
-mailout lands.
+**The seat count, as amended.** A seat is held by a member whose `status` is `active` **or
+`suspended`**, plus every live pending invite — `accepted_at IS NULL AND revoked_at IS NULL AND
+expires_at > now()`. Counting only accepted members lets an admin mint unlimited pending invites
+and blow past the cap the moment a mailout lands; releasing a suspended member's seat lets a
+tenant park staff to dodge the cap, which is why `UserResponse.occupiesSeat` has counted them
+since TAR-166. This line originally said `status = 'active'`; Amendment 1 corrects it to match the
+contract that shipped first.
+
+`TenantLifecycleResponse.usage` is defined by the same count and not re-derived: `seatsUsed` is
+the member half, `seatsPending` is the invite half, and the cap is compared against their sum. One
+function answers all three, so the console's "3 of 3" and the refusal the admin just got cannot
+disagree.
 
 ### Decision 7 — Notifications fire after the commit, from the audit row
 
@@ -922,6 +968,170 @@ renders `TenantLifecycleResponse`; its `past_due` and `suspended` banners read `
 already say.
 
 Phases 2a–2c are serial. 2d and 2e run alongside all of them.
+
+**Phase 2a′ — the follow-up migration (Amendment 1).** 2a merged before this document was read in
+full, and four of its decisions did not land. One migration closes all of them, and it is a hard
+gate on 2b: `lifecycle_trigger` enum and the `trigger` column, `notified_at` with the append-only
+trigger narrowed to the one-way stamp and a column-level `GRANT UPDATE (notified_at)`,
+`tenants.purge_started_at`, `assert_tenant_serviceable` replacing `assert_tenant_active` with the
+amended allow-list, `lifecycle_audit_log` → `lifecycle_events` unscoped and un-keyed, and
+`tenant_plan_limits` → `tenant_entitlements` widened to the full `PlanEntitlements` shape. The
+sweeper indexes pick up their `status` predicates in the same file.
+
+## Amendment 1 — four rulings from the TAR-413 review
+
+**2026-08-15.** TAR-413's review of the stage-2 PRs found four places where what shipped and what
+this document says disagree, and correctly declined to settle them. These are the rulings. Each
+records what was rejected, so none of them gets re-litigated in three months.
+
+### Ruling 1 — the database gate refuses `created` and `deleted`, and nothing else
+
+`assert_tenant_serviceable` replaces `assert_tenant_active` as decision 2 specifies, and admits one
+value more than decision 2 published: `trialing, active, past_due, suspended, cancelled`.
+
+The invariant, stated once so the two gates stop being collapsed into one: **the database gate
+answers "does this tenant's data exist and is it intact"; `TenantStatusGuard` at stage 4 answers
+"may this principal reach this route right now".** Neither one carries a copy of the other's
+policy.
+
+Why `suspended`: decision 2's own argument, unchanged. Inbound WhatsApp messages must be stored
+while a tenant is suspended, the ingest path writes `conversations` and `messages` through
+`TenantPrisma`, and refusing there forces that write onto `SystemPrisma` — a writing unscoped call
+site in the highest-volume path in the product. Meta's retry-then-drop behaviour makes the
+alternative a lost customer message, not a deferred one.
+
+Why `cancelled`, which decision 2 refused: the recovery allowlist gives a cancelled tenant's admin
+`POST /auth/login`, `GET /auth/session`, `GET /tenant`, `GET /tenant/lifecycle` and
+`GET /billing/*`. `identity/auth.service.ts` and `identity/session.service.ts` both inject
+`TENANT_PRISMA`, so every one of those routes reads through the tenant connection and every one of
+them would have raised `TN001` before reaching the guard. The document as written could not
+deliver the seven-day undo window it specifies. This is an inconsistency in decision 2, not a
+change of mind about it.
+
+Rejected:
+
+- **Keep `assert_tenant_active` as TAR-403 shipped it** (refuse `suspended`). It makes TAR-404's
+  second acceptance criterion unreachable at the data layer and makes
+  `TENANT_STATUS_EFFECTS.suspended.inboundAccepted: true` unimplementable.
+- **Admit `suspended`, keep `cancelled` refused**, and route the four recovery routes through
+  `SystemPrisma`. Rejected for the same reason decision 2 rejects it for ingest: it adds unscoped
+  call sites in the authentication path, which is a worse place for them than the webhook writer.
+- **Defence in depth — keep the database gate narrow so a guard bug cannot leak.** Acknowledged,
+  and rejected. A gate that has to admit `suspended` anyway is not the layer where per-state access
+  control can live, and a second, half-correct copy of the policy is how the two drift apart. The
+  cost is real and is named below.
+
+Consequence to carry into TAR-404 and TAR-412: `TenantStatusGuard` is now the only thing between a
+suspended tenant's agent and the API. It must be default-deny with the `@AvailableWhileSuspended()`
+allowlist as the sole exemption, and TAR-412 must test it directly — status × role × route — rather
+than observing that the database refuses. `TN001`, `TenantNotActiveError` and
+`TENANT_NOT_ACTIVE_ERROR` keep their names, as decision 2 already says.
+
+### Ruling 2 — the lifecycle trail is platform-level, and the shipped table conforms to decision 5
+
+Decision 5 stands unamended. `lifecycle_audit_log` becomes `lifecycle_events`: no foreign keys, no
+`tenant_isolation` policy, `system-only` in `tenant-scope.extension.ts`, and the fourth deliberate
+exception `pnpm db:verify:rls` is taught about. The append-only trigger and the `SELECT, INSERT`
+grants TAR-403 built are correct and stay exactly as they are.
+
+The deciding evidence is not the naming or the RLS posture — it is that the shipped shape cannot
+execute the purge. `lifecycle_audit_log(tenant_id, actor_user_id) → users(tenant_id, id)` is
+`ON DELETE NO ACTION`; the purge deletes every `users` row while keeping the `tenants` row as the
+slug tombstone; a retained lifecycle row with `actor_user_id` set therefore blocks the delete with
+SQLSTATE 23503. It cannot be repaired on the way past, because `lifecycle_audit_log_append_only`
+raises `TN002` on any UPDATE and neither application role holds DELETE. The tenant-initiated
+delete — `actor_type = 'user'`, the flow TAR-36 is mostly about — is precisely the one that hits
+it. That is decision 5 point 3 failing in a form you can reproduce, and no amount of naming
+agreement fixes it.
+
+The RLS half is separately inert: under ruling 1 the gate still refuses `deleted`, so a purged
+tenant's trail is unreadable through `TenantPrisma` whatever policy sits on the table. The policy
+buys nothing and arrived bundled with the foreign key that does the damage.
+
+Rejected:
+
+- **Keep the table tenant-scoped and drop only the `actor_user_id` foreign key.** Fixes the purge,
+  leaves `ON DELETE CASCADE` from `tenants` — so any real `DELETE FROM tenants` (a fixture, a
+  future erasure request) silently destroys the trail TAR-36's sixth criterion asks us to keep —
+  and leaves a policy that the one reader it was built for cannot use.
+- **Amend decision 5 to bless what shipped.** Rejected on the purge evidence above.
+
+Kept from what shipped, because the divergence is cosmetic and renaming costs more than the line:
+`from_state` / `to_state` stay as the column names; the contract keeps `fromStatus` / `toStatus`
+over a Prisma `@map`. Decision 5's row shape is the amended one.
+
+What it costs: the tenant-facing event list becomes an unscoped read. It is confined to one
+repository method that takes `tenantId`, that method is the only caller, and an integration test
+asserts a cross-tenant read returns nothing — the posture `webhook_events` and `tenant_signups`
+already carry.
+
+Ratified without change from the review: the `lifecycle_trigger` enum and `trigger` column
+(decision 5, and what makes the "no `active → past_due` from a button" rule assertable),
+`notified_at` with the trigger narrowed to the null-to-value stamp plus a column-level
+`GRANT UPDATE (notified_at)`, and `tenants.purge_started_at`.
+
+### Ruling 3 — one row holds the tenant's effective entitlements, in the published shape
+
+`plans` stays the catalogue and stays TAR-37's. TAR-403's `tenant_plan_limits` is widened and
+renamed `tenant_entitlements`: `tenant_id`, `plan_key`, `plan_name`, `entitlements jsonb NOT NULL`
+in `PlanEntitlementsSchema`'s shape — five limits and the features array. RLS-scoped, one row per
+tenant, unchanged in every other respect.
+
+TAR-403's reasoning for a per-tenant table is accepted in full: `plans` is platform-wide and
+carries no policy, reaching for it needs a `subscriptions` row per tenant, and both belong to the
+story that owns billing. What changes is only the width. `TenantLifecycleResponse.plan` maps
+totally from one row with no join and no special case, which is what makes the response servable at
+all — today nothing on `main` can populate it.
+
+The principle it protects: **enforcement and display read the same row.** "Enforced, not merely
+displayed" is TAR-36's second acceptance criterion, and the failure it exists to prevent is a
+console reading "3 of 3" from one store while the refusal the admin just received came from
+another.
+
+The row is a snapshot of the catalogue rather than a pointer to it. That is deliberate — a tenant
+keeps the entitlements it was sold when the catalogue moves under it — and TAR-37's plan sync
+becomes the writer. The cost is that a catalogue-wide correction is a sweep across tenant rows
+rather than one `UPDATE`, which is acceptable at the tenant counts TAR-18 describes and is TAR-37's
+to own either way.
+
+Rejected:
+
+- **Join `plan_key` to `plans.entitlements`** — legal on the tenant connection, since `Plan` is
+  already `shared-read-only` in `tenant-scope.extension.ts`. Rejected because it needs a catalogue
+  row for `unlimited`, which is not a sellable plan, and because it re-splits enforcement from
+  display, which is the disagreement this ruling exists to prevent. `plans.entitlements` is also
+  not yet trustworthy: decision 6 records that the demo seed's flat entitlements do not validate
+  against `PlanEntitlementsSchema`.
+- **Narrow `TenantLifecycleResponse.plan` to the two caps the shipped table holds.** Rejected: it
+  forces an API shape change when TAR-37 lands, which is the one outcome decision 6 exists to
+  avoid, and both open UI PRs already build against the published shape.
+
+Constraint that must not be lost in the move: TAR-403's `tenant_plan_limits_caps_positive` check
+does not survive into a jsonb column. Replace it with a `CHECK` asserting the five limit keys are
+present and each is null or a positive integer and `features` is an array, and validate with
+`PlanEntitlementsSchema` at every write site. The check is the backstop; the schema is the
+contract.
+
+### Ruling 4 — a seat is `active | suspended`, plus every live pending invite
+
+The implementation is right and this document's line was wrong. `people.mapper.ts` has published
+`occupiesSeat: status === 'active' || status === 'suspended'` since TAR-166, `contract.test.ts` and
+the demo dataset both build on it, and releasing a seat on suspension lets a tenant park staff to
+dodge the cap. Decision 6 is corrected rather than the code.
+
+The half that was missing entirely, and is the reason this needed ruling on: `usage.seatsUsed` had
+no stated definition anywhere, so TAR-409 renders a number nothing defines. It is defined here.
+`seatsUsed` is `users` with status `active` or `suspended`; `seatsPending` is `invites` with
+`accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()`; the cap is compared against
+their sum. One function computes all three — the one `PlanLimitsService.assertSeatAvailable`
+already calls — and `GET /tenant/lifecycle` calls it rather than re-deriving.
+
+Rejected: **narrow the count to `active` and amend `occupiesSeat`.** It reopens the parking
+loophole and changes a contract that shipped first to match a line written later.
+
+Consequence: the pending-invite predicate now has three readers, which settles the review's minor
+finding about it. Lift it into a module both `entitlements` and `identity` import, rather than
+pinning a restatement from one side.
 
 ## Open Questions and Risks
 

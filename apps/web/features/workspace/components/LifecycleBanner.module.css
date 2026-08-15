@@ -1,0 +1,54 @@
+.banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: var(--border-hairline) solid var(--banner-border);
+  /*
+   * A thicker leading edge, on the inline axis so it mirrors under RTL without
+   * a second rule.
+   */
+  border-inline-start-width: var(--space-1);
+  border-radius: var(--radius-lg);
+  background: var(--banner-surface);
+  color: var(--banner-on-surface);
+}
+
+/*
+ * Tone per state, declared as local custom properties rather than as three sets
+ * of rules: the shape is identical and only the palette moves, so a state added
+ * later is one block, not four selectors.
+ */
+.banner[data-status='past_due'],
+.banner[data-status='cancelled'] {
+  --banner-surface: var(--color-warning-subtle);
+  --banner-border: var(--color-warning);
+  --banner-on-surface: var(--color-on-warning-subtle);
+}
+
+.banner[data-status='suspended'] {
+  --banner-surface: var(--color-danger-subtle);
+  --banner-border: var(--color-danger);
+  --banner-on-surface: var(--color-on-danger-subtle);
+}
+
+.heading {
+  font-size: var(--font-size-heading-sm);
+  line-height: var(--line-height-heading);
+  overflow-wrap: anywhere;
+}
+
+.body {
+  /* Caps the line length so a long explanation stays readable on a wide screen. */
+  max-inline-size: var(--measure-body);
+}
+
+/*
+ * The border is the only thing separating the banner from the page when colours
+ * are dropped, so it is kept and thickened rather than left to the default.
+ */
+@media (forced-colors: active) {
+  .banner {
+    border-color: CanvasText;
+  }
+}
