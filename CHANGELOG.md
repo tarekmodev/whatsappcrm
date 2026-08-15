@@ -169,6 +169,63 @@ change.
 
 ### Added
 
+- **A supervisor can say where new tickets go, and the first matching rule decides**
+  (TAR-24) — `assignment_rules` has existed since TAR-47 under a comment reading "TAR-24
+  owns the condition and action grammar", and nothing read or wrote it. It is filled in now,
+  to ADR 0007. A supervisor writes "if the message mentions billing, send it to the Billing
+  team" in **Settings → Assignment**, orders the rules, and the next matching ticket lands
+  there instead of in the rotation. Six routes under `/api/v1/assignment-rules` — list,
+  create, read, update, delete and `reorder` — on the `assignment_rule:read` /
+  `assignment_rule:write` that `rbac.ts` has shipped since TAR-39. **No new error code and
+  no new permission**, and deliberately not `channel:manage`, which is admin-only and would
+  take routing out of a supervisor's hands.
+  **Four condition types, combining with AND inside a rule and with OR by being a list**:
+  words in the message, a contact tag, business hours, and a contact custom field. There is
+  no rule-level any/all toggle and no nested tree — an ordered first-match list already
+  expresses OR, and a grammar the form cannot build is one the API has to keep validating
+  for ever. Empty `conditions` is refused: a rule matching everything, placed anywhere but
+  last, silently swallows all routing, and the thing it would express is already the
+  fallback.
+  **Evaluation is `ORDER BY position, id`, first match wins, once per ticket at creation.**
+  The `id` tie-break is load-bearing rather than cosmetic — `position` defaults to `0` with
+  no unique constraint, so without it two rules created normally have no defined order and
+  "which rule wins" would depend on the query plan. Routing runs off a BullMQ job enqueued
+  after the ticket transaction commits, so a bug in rule evaluation cannot roll back a
+  ticket; the cost, stated, is that assignment is eventually consistent with the ticket and
+  any UI assuming a ticket is born assigned is wrong. The write is a compare-and-set bounded
+  to `assigned_user_id IS NULL AND assigned_team_id IS NULL`, which is both what makes
+  at-least-once delivery safe and what stops a rule silently undoing a supervisor's manual
+  assignment made a second earlier.
+  **A matched rule is terminal**, and **a rule whose target cannot take work is treated as
+  not matching** — a suspended agent or a team with no active members is skipped with a
+  warning naming the rule, and evaluation continues, because putting the ticket in front of
+  rotation immediately beats assigning it somewhere invisible. **No match calls TAR-23's
+  rotation**; when rotation has nobody the ticket stays unassigned, records an
+  `assignment_deferred` event with the reason, and surfaces under **Flagged for you**.
+  Bad tenant data never throws: a rule whose stored conditions do not parse, an unparseable
+  business-hours column, a contact with no tags — each makes a condition false and the rule
+  falls through. The failure mode of a routing engine has to be "this ticket went to
+  rotation", never "this ticket went to the wrong team" and never "the queue stopped".
+  Schema delta from TAR-285: `name` becomes `citext` with `UNIQUE (tenant_id, name)` because
+  the rule name is what the ticket event names; a conditional CHECK gives every **active**
+  rule exactly one target while still permitting the target-less inactive rule that user
+  removal deliberately leaves behind; the index gains `id`; and `action Json` is dropped, as
+  two representations of one fact with no owner. Writes are audited as
+  `assignment_rule.created`, `.updated`, `.deleted` and `.reordered`, with the name and
+  target in metadata and **never the conditions** — a contact-field value is tenant data and
+  can carry personal information.
+  Documented in [the assignment rules API reference](docs/reference/assignment-rules-api.md)
+  and, for supervisors, [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md).
+  ⚠️ Three things are stated rather than fixed. A contact who has never had a custom field
+  written is treated as unanswerable rather than empty, so an "is empty" rule does not match
+  a brand-new customer (TAR-370). `tag` condition ids are not validated against the tenant on
+  write, so a rule naming a deleted tag is accepted and then never fires (TAR-370). And
+  selecting more than 25 tags on one condition is refused with a generic message rather than
+  a field-level one (TAR-371). Business hours themselves still have no console surface: the
+  column is written by provisioning and the seed only, so a `business_hours` condition never
+  matches until somebody sets them — which is why an unconfigured tenant evaluates the
+  condition false either way rather than being guessed as always open or always closed.
+
 - **A ticket nobody answers in time now goes overdue on its own, and a supervisor is told**
   (TAR-280) — TAR-47 landed `sla_policies` and `sla_timers` and TAR-73 published
   `TicketSlaSchema`; nothing read or wrote any of it, no timer was ever created, and
@@ -313,6 +370,29 @@ sla_timer_id, recipient_user_id)` is the second layer and the BullMQ job id the 
   `fri` and no weekend. Rule writes are audited as `assignment_rule.created/.updated/
 .deleted/.reordered`, carrying the name and target and never the conditions, which can
   hold tenant PII.
+
+- **Routing rules are documented, for both the people who call them and the people who
+  write them** (TAR-292) — `docs/reference/assignment-rules-api.md` covers the six
+  `/api/v1/assignment-rules` routes end to end: authentication, the permission pair, the
+  condition grammar with the semantics a reader cannot derive from the schema, every status
+  and error code, the audit rows, and the whole evaluation path from the `assignment` queue
+  job to the `ticket_events` row that records why a ticket went where it did.
+  `docs/guides/route-new-tickets-with-rules.md` is the same subject for a supervisor in the
+  console — the rule list, the order, the on/off switch, and what happens when nothing
+  matches — written against the labels on screen and naming no type, module or endpoint.
+  Two documents rather than one, because a page written for both readers serves neither.
+  The `assignment_rules` entry in the data-model reference was stale from TAR-285 and is
+  corrected: the dropped `action` column, the `(tenant_id, name)` citext uniqueness, the
+  index that now carries the `id` tie-break, and the conditional CHECK that Prisma cannot
+  express. Two places where the shipped behaviour differs from ADR 0007 are stated rather
+  than papered over — a duplicated id in `reorder` answers `conflict` rather than
+  `validation_failed`, and no `NullFallbackAssignmentResolver` is bound because rotation
+  landed first — as are the open defects a reader would otherwise mistake for their own
+  mistake: `is_not_set` not matching a contact that has never had a custom field written,
+  and `tag` ids going unvalidated on write (both TAR-370).
+  ⚠️ One gap is marked in the guide rather than answered: there is no console surface and no
+  tenant-facing endpoint for setting business hours, so the guide cannot tell a supervisor
+  where to configure the thing a `business_hours` condition reads.
 
 - **A template an agent cannot find is now explained rather than absent** (TAR-91) —
   `GET /api/v1/message-templates` deliberately hides two kinds of template from the
