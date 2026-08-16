@@ -317,6 +317,15 @@ export class TenantSignupService {
    * and leaving both live would widen the window for a link that leaked in
    * transit.
    *
+   * **`expires_at` does not move.** The deadline belongs to the signup, not to
+   * the last email about it. Extending it on every resend would make the window
+   * renewable at one request a day, and the slug reservation rides on exactly
+   * that column — so an address could hold a name indefinitely without ever
+   * verifying, which is the bound ADR 0009 decision 3 puts on a reservation. A
+   * resend near the deadline therefore sends a link with little life left, and
+   * that is the intended answer: the way to get another full window is to sign
+   * up again, which the expiry sweep has by then made possible.
+   *
    * Answers the same shape whether or not there was anything to resend. An
    * address with no signup in flight gets no mail and the same `202`, because the
    * alternative is an oracle for which addresses have signed up.
@@ -326,21 +335,31 @@ export class TenantSignupService {
     await this.throttle.assertMayRequest(email, ipAddress);
 
     const token = generateAuthToken();
-    const expiresAt = new Date(Date.now() + LIFECYCLE_POLICY.signupTokenTtlMs);
 
-    // `updateMany` rather than a read followed by an update: the predicate and
-    // the write are one statement, so a signup consumed between the two cannot
-    // be handed a fresh token.
-    const { count } = await this.prisma.tenantSignup.updateMany({
-      where: { email, consumedAt: null, expiresAt: { gt: new Date() } },
-      data: { tokenHash: hashAuthToken(token), expiresAt },
-    });
+    // One statement, so a signup consumed between a read and a write cannot be
+    // handed a fresh token — and `RETURNING` rather than a row count, because the
+    // response has to carry the row's **own** expiry rather than one this method
+    // computed. Reporting a recomputed deadline would tell the caller the window
+    // had moved when it had not.
+    const [refreshed] = await this.prisma.$queryRaw<{ expires_at: Date }[]>`
+      UPDATE tenant_signups
+      SET token_hash = ${hashAuthToken(token)}
+      WHERE email       = ${email}::citext
+        AND consumed_at IS NULL
+        AND expires_at  > now()
+      RETURNING expires_at
+    `;
 
-    if (count > 0) {
+    if (refreshed !== undefined) {
       await this.deliver(email, token);
+
+      return { email, expiresAt: refreshed.expires_at };
     }
 
-    return { email, expiresAt };
+    // Nothing outstanding. The caller is told the same thing either way, and the
+    // instant quoted is what a signup started now would expire at — a plausible
+    // value that reveals nothing, rather than a null the shape has no room for.
+    return { email, expiresAt: new Date(Date.now() + LIFECYCLE_POLICY.signupTokenTtlMs) };
   }
 
   /**

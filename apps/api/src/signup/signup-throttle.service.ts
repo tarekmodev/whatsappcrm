@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { SIGNUP_POLICY } from '@whatsappcrm/contracts';
 import { AuthRedisClient } from '../identity/auth-redis.client';
+import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 import { SignupRateLimitedError } from './signup.errors';
 
 const MINUTE_MS = 60 * 1000;
@@ -40,27 +41,52 @@ const DAY_MS = 24 * HOUR_MS;
  * is a personal detail nobody has confirmed and no user agreed to have stored
  * there.
  *
- * ## Fail open, deliberately
+ * ## What happens when Redis is unavailable
  *
- * A Redis outage lets signups through rather than stopping them, the same call
- * `LoginThrottleService` makes. The counters bound abuse; they are not the thing
- * that keeps a signup from becoming a tenant — verification is. Failing closed
- * would turn a cache outage into "nobody can sign up", which is a worse day than
- * an hour without a rate limit.
+ * The Redis windows fail **open**, the same call `LoginThrottleService` makes:
+ * failing closed would turn a cache outage into "nobody can sign up", which is a
+ * worse day than an hour of looser limits.
+ *
+ * What makes that safe here — and what login gets from its `users` columns — is
+ * that the two signup-creating limits are **also** enforced against
+ * `tenant_signups` itself, on every request, in the same Postgres the endpoint
+ * already needs. An outage loosens the limits to whatever the durable layer
+ * says; it does not remove them. `/signup` is never unbounded.
+ *
+ * `assertMayCheckSlug` is the one that is Redis-only, and deliberately: an
+ * availability check creates no row, so there is nothing durable to count. It is
+ * a debounce backstop on an answer already public in DNS — losing it during an
+ * outage costs nothing worth a second layer.
  */
 @Injectable()
 export class SignupThrottleService {
   private readonly logger = new Logger(SignupThrottleService.name);
 
-  constructor(private readonly redis: AuthRedisClient) {}
+  constructor(
+    private readonly redis: AuthRedisClient,
+    @Inject(SYSTEM_PRISMA) private readonly prisma: SystemPrisma,
+  ) {}
 
   /**
    * Refuses a signup or resend that has spent either allowance.
    *
-   * Called **before** the slug lookup and before the password is hashed, so a
-   * blocked caller costs one Redis round trip rather than a database read and an
-   * argon2id verify — which is what stops a flood from turning into a CPU denial
-   * of service on the hash.
+   * **Two layers, and the second is why a Redis outage does not open the door.**
+   * The Redis windows above are the cheap first line and they fail open, as
+   * login's do. Behind them, `tenant_signups` is counted directly: those rows are
+   * the thing a signup actually produces, they are in the same Postgres the rest
+   * of the request needs anyway, and no cache outage can make them disappear.
+   * This is the durable layer `LoginThrottleService` has in its `users` columns,
+   * in the shape this table already supports.
+   *
+   * The two count different things, deliberately. Redis counts **attempts**,
+   * including the ones that never became a row — a refused slug, a rejected
+   * body — so it catches a caller hammering the endpoint without ever
+   * succeeding. Postgres counts **rows created**, so it catches the same caller
+   * after a cache restart wiped the window. Either can refuse on its own.
+   *
+   * Redis first, because a blocked caller should cost one round trip rather than
+   * two database counts and an argon2id hash — which is what stops a flood from
+   * becoming a CPU denial of service on the hasher.
    */
   async assertMayRequest(email: string, ipAddress: string | null): Promise<void> {
     await this.assertWithin(
@@ -76,6 +102,52 @@ export class SignupThrottleService {
         SIGNUP_POLICY.signupsPerIpPerHour,
         HOUR_MS,
         'signups from one client address',
+      );
+    }
+
+    await this.assertRowsWithin(email, ipAddress);
+  }
+
+  /**
+   * The durable half: what `tenant_signups` says was actually created.
+   *
+   * Runs on every request, not only when Redis is unavailable — a fallback that
+   * only engages during an outage is a fallback nobody exercises, and this one
+   * costs two indexed counts on an endpoint that runs at human speed.
+   *
+   * **Counts by `created_at`, never by `expires_at`.** A row's creation time is
+   * immutable; its expiry is not, and keying the window off a column a later
+   * request can move would let a resend push its own record of itself out of the
+   * window it is being measured against.
+   *
+   * A consumed row still counts. It is evidence that this address produced a
+   * signup today, and exempting it would mean the fastest way to reset the
+   * allowance is to complete a signup — which is precisely the loop this bounds.
+   */
+  private async assertRowsWithin(email: string, ipAddress: string | null): Promise<void> {
+    const now = Date.now();
+
+    const byEmail = await this.prisma.tenantSignup.count({
+      where: { email, createdAt: { gt: new Date(now - DAY_MS) } },
+    });
+
+    if (byEmail >= SIGNUP_POLICY.signupsPerEmailPerDay) {
+      this.refuse('signups recorded for one address', byEmail, SIGNUP_POLICY.signupsPerEmailPerDay);
+    }
+
+    if (ipAddress === null) {
+      return;
+    }
+
+    const byAddress = await this.prisma.tenantSignup.count({
+      where: { ipAddress, createdAt: { gt: new Date(now - HOUR_MS) } },
+    });
+
+    if (byAddress >= SIGNUP_POLICY.signupsPerIpPerHour) {
+      this.refuse(
+        'signups recorded from one client address',
+        byAddress,
+        SIGNUP_POLICY.signupsPerIpPerHour,
       );
     }
   }
@@ -133,6 +205,11 @@ export class SignupThrottleService {
       return;
     }
 
+    this.refuse(what, count, limit);
+  }
+
+  /** One place the refusal is logged and raised, so both layers read alike. */
+  private refuse(what: string, count: number, limit: number): never {
     this.logger.warn(`Refusing ${what}: ${count} within the window, limit ${limit}.`);
 
     throw new SignupRateLimitedError();

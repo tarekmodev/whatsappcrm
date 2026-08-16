@@ -1,6 +1,6 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { ConfigService } from '@nestjs/config';
-import { LIFECYCLE_POLICY, type OutboundEmail } from '@whatsappcrm/contracts';
+import { LIFECYCLE_POLICY, SIGNUP_POLICY, type OutboundEmail } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { PrismaClient } from '../generated/prisma/client';
 import { AuthRedisClient } from '../identity/auth-redis.client';
@@ -12,7 +12,11 @@ import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import { TenantProvisioningService } from '../tenancy/tenant-provisioning.service';
 import { SignupThrottleService } from './signup-throttle.service';
-import { SignupTokenInvalidError, SlugUnavailableError } from './signup.errors';
+import {
+  SignupRateLimitedError,
+  SignupTokenInvalidError,
+  SlugUnavailableError,
+} from './signup.errors';
 import { TenantSignupService } from './tenant-signup.service';
 
 /**
@@ -43,6 +47,7 @@ import { TenantSignupService } from './tenant-signup.service';
  *   pnpm db:up && pnpm db:migrate:deploy && pnpm db:roles && pnpm db:roles:login
  */
 
+const FIXTURE_PREFIX = 'tar405-signup';
 const SLUG = 'tar405-signup-fixture';
 const OTHER_SLUG = 'tar405-signup-other';
 const EMAIL = 'founder@tar405-signup.invalid';
@@ -79,12 +84,17 @@ describe('public self-signup', () => {
     };
   }
 
+  /**
+   * By prefix rather than by an exact list: the Redis-outage block below claims a
+   * slug per request to reach the per-address allowance, so the set of names this
+   * file touches is not fixed.
+   */
   async function removeFixture(): Promise<void> {
     await systemPrisma.tenantSignup.deleteMany({
-      where: { desiredSlug: { in: [SLUG, OTHER_SLUG] } },
+      where: { desiredSlug: { startsWith: FIXTURE_PREFIX } },
     });
     // Users, sessions, domains and the limits row all cascade from the tenant.
-    await systemPrisma.tenant.deleteMany({ where: { slug: { in: [SLUG, OTHER_SLUG] } } });
+    await systemPrisma.tenant.deleteMany({ where: { slug: { startsWith: FIXTURE_PREFIX } } });
   }
 
   beforeAll(() => {
@@ -119,7 +129,7 @@ describe('public self-signup', () => {
       new TenantProvisioningService(systemPrisma, config),
       new PasswordService(),
       new SessionService(tenantPrisma, new SessionCacheService(redis), new EventEmitter2()),
-      new SignupThrottleService(redis),
+      new SignupThrottleService(redis, systemPrisma),
       config,
     );
   });
@@ -372,6 +382,59 @@ describe('public self-signup', () => {
     });
 
     /**
+     * The deadline belongs to the signup, not to the last email about it.
+     * Extending it per resend would make the window renewable at one request a
+     * day — and because the slug reservation rides on `expires_at`, an address
+     * could hold a name indefinitely without ever verifying. That is the bound
+     * 0009 decision 3 puts on a reservation, so the column must not move.
+     */
+    it('rotates the token without moving the deadline', async () => {
+      await signup.request(signupInput(), null);
+
+      const before = await systemPrisma.tenantSignup.findFirstOrThrow({
+        where: { desiredSlug: SLUG },
+        select: { expiresAt: true, tokenHash: true },
+      });
+
+      const accepted = await signup.resend(EMAIL, null);
+
+      const after = await systemPrisma.tenantSignup.findFirstOrThrow({
+        where: { desiredSlug: SLUG },
+        select: { expiresAt: true, tokenHash: true },
+      });
+
+      expect(after.tokenHash).not.toBe(before.tokenHash);
+      expect(after.expiresAt.toISOString()).toBe(before.expiresAt.toISOString());
+      // And the caller is told the real deadline rather than a recomputed one.
+      expect(accepted.expiresAt.toISOString()).toBe(before.expiresAt.toISOString());
+    });
+
+    /**
+     * The consequence of the rule above, stated as a test so nobody "fixes" it:
+     * a signup near its deadline cannot resend its way past it. The route out is
+     * a fresh signup, which the expiry sweep has by then made possible.
+     */
+    it('cannot extend a reservation that is about to lapse', async () => {
+      await signup.request(signupInput(), null);
+
+      const nearlyDone = new Date(Date.now() + 2_000);
+
+      await systemPrisma.tenantSignup.updateMany({
+        where: { desiredSlug: SLUG },
+        data: { expiresAt: nearlyDone },
+      });
+
+      await signup.resend(EMAIL, null);
+
+      const after = await systemPrisma.tenantSignup.findFirstOrThrow({
+        where: { desiredSlug: SLUG },
+        select: { expiresAt: true },
+      });
+
+      expect(after.expiresAt.toISOString()).toBe(nearlyDone.toISOString());
+    });
+
+    /**
      * An address with nothing outstanding gets no mail and the same answer as one
      * that had. Anything else is an oracle for which addresses have signed up.
      */
@@ -381,6 +444,95 @@ describe('public self-signup', () => {
       });
 
       expect(mailbox).toHaveLength(0);
+    });
+  });
+
+  /**
+   * The layer that has to hold when the cache does not.
+   *
+   * `SignupThrottleService`'s Redis windows fail open, as login's do — so on
+   * their own a Redis outage would leave `/signup` completely unbounded. These
+   * cases run the throttle with **no Redis at all** and assert the limits are
+   * still enforced, because the second layer counts `tenant_signups` rows in the
+   * same Postgres the endpoint already needs.
+   */
+  describe('with Redis unavailable', () => {
+    let offline: TenantSignupService;
+
+    beforeAll(() => {
+      // A client pointed at nothing: `AuthRedisClient.run` answers null, which is
+      // exactly what it answers during a real outage.
+      const deadRedis = new AuthRedisClient({
+        get: () => undefined,
+      } as unknown as ConfigService);
+
+      const config = {
+        get: (key: string) => configValue(key),
+        getOrThrow: (key: string) => configValue(key),
+      } as unknown as ConfigService;
+
+      offline = new TenantSignupService(
+        systemPrisma,
+        {
+          send: (message: OutboundEmail) => {
+            mailbox.push(message);
+            return Promise.resolve();
+          },
+        },
+        new TenantProvisioningService(systemPrisma, config),
+        new PasswordService(),
+        new SessionService(tenantPrisma, new SessionCacheService(deadRedis), new EventEmitter2()),
+        new SignupThrottleService(deadRedis, systemPrisma),
+        config,
+      );
+    });
+
+    it('still bounds signups for one address', async () => {
+      // Each takes a different slug, so what refuses the last one is the
+      // per-email allowance rather than the reservation.
+      for (let n = 0; n < SIGNUP_POLICY.signupsPerEmailPerDay; n += 1) {
+        await offline.request(signupInput({ slug: `${OTHER_SLUG}-${n}` }), null);
+      }
+
+      await expect(
+        offline.request(signupInput({ slug: `${OTHER_SLUG}-over` }), null),
+      ).rejects.toThrow(SignupRateLimitedError);
+    });
+
+    it('still bounds signups from one client address', async () => {
+      const address = '203.0.113.7';
+
+      for (let n = 0; n < SIGNUP_POLICY.signupsPerIpPerHour; n += 1) {
+        await offline.request(
+          signupInput({ email: `ip-${n}@tar405-signup.invalid`, slug: `${OTHER_SLUG}-ip-${n}` }),
+          address,
+        );
+      }
+
+      await expect(
+        offline.request(
+          signupInput({ email: 'ip-over@tar405-signup.invalid', slug: `${OTHER_SLUG}-ip-over` }),
+          address,
+        ),
+      ).rejects.toThrow(SignupRateLimitedError);
+    });
+
+    /**
+     * A consumed signup still counts. Exempting it would make completing a
+     * signup the fastest way to reset the allowance, which is the loop this
+     * bounds in the first place.
+     */
+    it('counts a signup that has already been verified', async () => {
+      await offline.request(signupInput(), null);
+      await offline.verify(mailedToken(), ORIGIN);
+
+      for (let n = 1; n < SIGNUP_POLICY.signupsPerEmailPerDay; n += 1) {
+        await offline.request(signupInput({ slug: `${OTHER_SLUG}-${n}` }), null);
+      }
+
+      await expect(
+        offline.request(signupInput({ slug: `${OTHER_SLUG}-after` }), null),
+      ).rejects.toThrow(SignupRateLimitedError);
     });
   });
 
