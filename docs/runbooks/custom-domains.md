@@ -219,6 +219,15 @@ Detaching at the edge is tidying, and it is worth doing:
 2. `POST /api/v1/admin/tenants/{slug}/domains/{hostname}/deactivate` to clear the
    activation record.
 
+> **Deactivating the tenant's primary domain moves primary back to their platform
+> subdomain** (TAR-534), in the same transaction, and the audit row records where it
+> landed. That is deliberate: `is_primary` is the host invite and password-reset links are
+> mailed to, so leaving it on a hostname you have just detached would send live tokens to
+> an address with no route and no certificate — and nothing would fail visibly until a
+> customer could not get back into their account. The tenant can promote the domain again
+> once you re-attach it and call `/activate`. Tell them, if the detach was not their idea:
+> their links change host, which is visible in the console.
+
 Left attached, the domain costs a per-domain fee and generates renewal failures once the
 customer repoints their DNS. It does not serve anything and it does not block another
 tenant from claiming the hostname later.
