@@ -3,6 +3,7 @@ import { Stack } from '@/components/layout/Stack';
 import { content } from '@/content/en';
 import { verifySession } from '@/lib/session/session';
 import { loadConversationThread } from '@/features/inbox/thread.data';
+import { loadCannedResponses } from '@/features/inbox/canned-responses.data';
 import { nameFor } from '@/features/inbox/directory.data';
 import { isConversationUnclaimed } from '@/features/inbox/conversation-hold';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -38,9 +39,15 @@ export interface ThreadSectionProps {
 }
 
 export async function ThreadSection({ conversationId, query }: ThreadSectionProps) {
-  const [session, result] = await Promise.all([
+  // Concurrent, and the canned-response read is deliberately not gated on the
+  // permission behind it: `verifySession` resolves alongside rather than before,
+  // and a role without `canned_response:read` gets a `forbidden` the loader
+  // already turns into an empty library. Waiting for the checker to ask a
+  // question every current role answers yes to would serialise the two reads.
+  const [session, result, cannedResponses] = await Promise.all([
     verifySession(),
     loadConversationThread(conversationId),
+    loadCannedResponses(),
   ]);
 
   if (result.outcome === 'unavailable') {
@@ -90,6 +97,7 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
                 initialWindow={serviceWindowAt(conversation.serviceWindowExpiresAt, new Date())}
                 canSend={session.checker.can('conversation:send')}
                 isUnclaimed={isUnclaimed}
+                cannedResponses={cannedResponses}
               />
             }
             note={

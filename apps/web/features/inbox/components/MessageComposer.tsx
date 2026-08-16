@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import type { CannedResponseResponse } from '@whatsappcrm/contracts';
 import { Button } from '@/components/ui/Button';
 import { Notice } from '@/components/ui/Notice';
 import { Cluster } from '@/components/layout/Cluster';
@@ -63,6 +64,14 @@ export interface MessageComposerProps {
    * that can only end in a 409 is worse than no composer at all.
    */
   isUnclaimed: boolean;
+  /**
+   * The tenant's canned-response library, read on the server and handed down
+   * whole (ADR 0011, decision 1): the picker matches a typed shortcut against
+   * this in the browser, so no keystroke costs a request. Empty is ordinary —
+   * a tenant with none, or a library that could not be read — and means the
+   * reply box behaves exactly as it did before TAR-484.
+   */
+  cannedResponses?: readonly CannedResponseResponse[];
 }
 
 export function MessageComposer({
@@ -71,6 +80,7 @@ export function MessageComposer({
   initialWindow,
   canSend,
   isUnclaimed,
+  cannedResponses = NO_CANNED_RESPONSES,
 }: MessageComposerProps) {
   const content = useContent();
   const window = useServiceWindow(serviceWindowExpiresAt, initialWindow);
@@ -95,7 +105,11 @@ export function MessageComposer({
     <Stack gap="3" className={styles.composer}>
       <ServiceWindowBanner window={window} />
 
-      <FreeFormComposer conversationId={conversationId} isWindowOpen={window.state === 'open'} />
+      <FreeFormComposer
+        conversationId={conversationId}
+        isWindowOpen={window.state === 'open'}
+        cannedResponses={cannedResponses}
+      />
 
       <Cluster justify="start" gap="2">
         <Button
@@ -119,6 +133,9 @@ export function MessageComposer({
     </Stack>
   );
 }
+
+/** Hoisted so the default is one object rather than a new one every render. */
+const NO_CANNED_RESPONSES: readonly CannedResponseResponse[] = [];
 
 /**
  * Mirrors `MessageComposer`: the same seam above it, and each of its three parts

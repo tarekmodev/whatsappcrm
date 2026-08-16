@@ -1,6 +1,7 @@
 import {
   ONBOARDING_STEP_IDS,
   type AssignmentRuleResponse,
+  type CannedResponseResponse,
   type ContactResponse,
   type ConversationResponse,
   type CustomFieldDefinition,
@@ -171,6 +172,15 @@ const ASSIGNMENT_RULE_IDS = {
   otherTenant: '0192f00d-0000-7000-8000-000000000d99',
 } as const;
 
+const CANNED_RESPONSE_IDS = {
+  hours: '0192f014-0000-7000-8000-000000001401',
+  shipping: '0192f014-0000-7000-8000-000000001402',
+  handover: '0192f014-0000-7000-8000-000000001403',
+  /** Shares a prefix with `hours`, so the picker has ranking to demonstrate. */
+  holiday: '0192f014-0000-7000-8000-000000001404',
+  otherTenant: '0192f014-0000-7000-8000-000000001499',
+} as const;
+
 const TENANT_DOMAIN_IDS = {
   northwindPlatform: '0192f00e-0000-7000-8000-000000000e01',
   /** A custom domain mid-verification (TAR-418). */
@@ -224,6 +234,7 @@ export type MockTag = Tag & TenantScoped;
 export type MockContact = ContactResponse & TenantScoped;
 export type MockCustomFieldDefinition = CustomFieldDefinition & TenantScoped;
 export type MockAssignmentRule = AssignmentRuleResponse & TenantScoped;
+export type MockCannedResponse = CannedResponseResponse & TenantScoped;
 export type MockConversation = ConversationResponse & TenantScoped;
 export type MockMessage = MessageResponse & TenantScoped;
 export type MockInternalNote = InternalNoteResponse & TenantScoped;
@@ -1642,6 +1653,77 @@ export const MOCK_ASSIGNMENT_RULES: readonly MockAssignmentRule[] = [
   },
 ];
 
+/**
+ * The tenant's shared canned-response library (TAR-31), seeded so the composer's
+ * `/` picker has something to match and something to *rank*.
+ *
+ * `/hours` and `/holiday` share a prefix on purpose: typing `/ho` has to leave
+ * both on screen so an agent picks rather than guesses. "Handover to a colleague"
+ * carries no `ho` in its shortcut and does in its title, which is the second
+ * ranking group the picker exists to show.
+ *
+ * Bodies are what an agent would actually send — long enough to prove the
+ * inserted text is reviewed rather than fired off, and comfortably inside
+ * `CANNED_RESPONSE_LIMITS.bodyLength`.
+ */
+export const MOCK_CANNED_RESPONSES: readonly MockCannedResponse[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CANNED_RESPONSE_IDS.hours,
+    shortcut: '/hours',
+    title: 'Opening hours',
+    body: "We're open Sunday to Thursday, 9am to 6pm (GMT+3). Messages outside those hours are answered first thing the next working day.",
+    createdByUserId: USER_IDS.omar,
+    createdAt: '2026-08-11T08:00:00.000Z',
+    updatedAt: '2026-08-11T08:00:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CANNED_RESPONSE_IDS.holiday,
+    shortcut: '/holiday',
+    title: 'Public holiday closure',
+    body: "We're closed for the public holiday and back on the next working day. We'll pick this up as soon as we're in.",
+    createdByUserId: USER_IDS.omar,
+    createdAt: '2026-08-11T08:05:00.000Z',
+    updatedAt: '2026-08-11T08:05:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CANNED_RESPONSE_IDS.shipping,
+    shortcut: '/shipping',
+    title: 'Delivery times',
+    body: 'Standard delivery takes 3 to 5 working days once the order leaves our warehouse. You get a tracking link by SMS the moment it ships.',
+    createdByUserId: USER_IDS.priya,
+    createdAt: '2026-08-11T08:10:00.000Z',
+    updatedAt: '2026-08-12T10:30:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CANNED_RESPONSE_IDS.handover,
+    shortcut: '/wait',
+    title: 'Handover to a colleague',
+    body: "Thanks for your patience — I'm passing this to a colleague who can help, and they'll be with you shortly.",
+    // Null is the shape a removed creator leaves behind, seeded so the surface
+    // has met it before a real tenant does.
+    createdByUserId: null,
+    createdAt: '2026-08-11T08:15:00.000Z',
+    updatedAt: '2026-08-11T08:15:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered. It holds
+    // the same `/hours` shortcut as the row above deliberately: a leak shows up
+    // as the wrong text inserted, not as a row that is obviously foreign.
+    tenantId: OTHER_TENANT_ID,
+    id: CANNED_RESPONSE_IDS.otherTenant,
+    shortcut: '/hours',
+    title: 'Rival tenant hours',
+    body: 'Southwind is open 24/7.',
+    createdByUserId: USER_IDS.otherTenant,
+    createdAt: '2026-08-11T08:00:00.000Z',
+    updatedAt: '2026-08-11T08:00:00.000Z',
+  },
+];
+
 // --- Ticket events (TAR-32, ADR 0011 decision 4) -----------------------------
 //
 // The append-only per-ticket trail the history view reads. Seeded on Fatima's
@@ -2053,6 +2135,7 @@ export const MOCK_IDS = {
   tags: TAG_IDS,
   customFields: CUSTOM_FIELD_IDS,
   assignmentRules: ASSIGNMENT_RULE_IDS,
+  cannedResponses: CANNED_RESPONSE_IDS,
   slaAlerts: SLA_ALERT_IDS,
   tenantDomains: TENANT_DOMAIN_IDS,
   workflows: WORKFLOW_IDS,

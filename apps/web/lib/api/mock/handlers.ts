@@ -65,6 +65,8 @@ import {
   type ApiError,
   type AssignmentRuleListResponse,
   type AssignmentRuleResponse,
+  type CannedResponseListResponse,
+  type CannedResponseResponse,
   type ConnectedWhatsAppBusinessAccountResponse,
   type ContactResponse,
   type ConversationResponse,
@@ -113,6 +115,7 @@ import { mockState, nextMockId } from '@/lib/api/mock/store';
 import { MOCK_IDS } from '@/lib/api/mock/fixtures';
 import type {
   MockAssignmentRule,
+  MockCannedResponse,
   MockContact,
   MockConversation,
   MockCustomFieldDefinition,
@@ -301,6 +304,16 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/v1/assignment-rules/${UUID_SEGMENT}$`),
     permission: 'assignment_rule:write',
     handle: deleteAssignmentRule,
+  },
+  {
+    // Read only. 0011 decision 1 has the console hold the whole set and match a
+    // typed shortcut locally, so this is the one route the composer needs; the
+    // writes belong to a settings screen that does not exist yet, and a mock
+    // route with no caller is a route nobody would notice going wrong.
+    method: 'GET',
+    pattern: /^\/v1\/canned-responses$/,
+    permission: 'canned_response:read',
+    handle: listCannedResponses,
   },
   {
     method: 'GET',
@@ -937,6 +950,22 @@ function updateTeam({ principal, params, body }: RouteContext): TeamResponse {
   syncUserTeamIds(updated);
 
   return toTeamResponse(updated);
+}
+
+// --- Canned responses (TAR-31, contract 0011) ------------------------------
+//
+// Read only, and deliberately so: the composer expands a shortcut, and nothing
+// in the console writes one yet.
+
+function listCannedResponses({ principal }: RouteContext): CannedResponseListResponse {
+  // Ascending `shortcut`, as the API orders it — the picker ranks what it is
+  // given, so a transport that returned them unordered would flatter it.
+  const items = [...mockState().cannedResponses.values()]
+    .filter((response) => response.tenantId === principal.tenantId)
+    .sort((left, right) => left.shortcut.localeCompare(right.shortcut))
+    .map(toCannedResponseResponse);
+
+  return { items, nextCursor: null };
 }
 
 // --- Assignment rules (TAR-24, contract 0007) ------------------------------
@@ -4421,6 +4450,10 @@ function toCustomFieldDefinitionResponse(
   definition: MockCustomFieldDefinition,
 ): CustomFieldDefinition {
   return stripTenant(definition);
+}
+
+function toCannedResponseResponse(response: MockCannedResponse): CannedResponseResponse {
+  return stripTenant(response);
 }
 
 function toAssignmentRuleResponse(rule: MockAssignmentRule): AssignmentRuleResponse {
