@@ -11,6 +11,7 @@ import type { Prisma, PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import type { QueueService } from '../queue/queue.service';
+import { EscalationAlertService } from './escalation-alert.service';
 import { TicketCommandService } from './ticket-command.service';
 import { TicketLinkerService } from './ticket-linker.service';
 import { TicketQueryService } from './ticket-query.service';
@@ -313,6 +314,7 @@ describe('ticket status, priority and the active queue, end to end', () => {
       // and the command still answers, which is `QueueService`'s own contract.
       // What a status change does to a timer is proved in `sla-breach.int-spec.ts`.
       stubQueue(),
+      new EscalationAlertService(tenantPrisma, tenantContext),
     );
     linker = new TicketLinkerService(tenantPrisma, tenantContext, new EventEmitter2());
 
@@ -549,6 +551,7 @@ describe('ticket status, priority and the active queue, end to end', () => {
         tenantContext,
         new EventEmitter2(),
         stubQueue(),
+        new EscalationAlertService(tenantPrisma, tenantContext),
       );
 
       await expect(

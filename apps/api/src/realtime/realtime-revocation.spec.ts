@@ -4,6 +4,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import type { SessionService } from '../identity/session.service';
 import type { CannedResponseResourceService } from './canned-response-resource.service';
 import type { ConversationResourceService } from './conversation-resource.service';
+import type { EscalationResourceService } from './escalation-resource.service';
 import type { MessageResourceService } from './message-resource.service';
 import { RealtimeRelayService } from './realtime-relay.service';
 import type { RealtimeSocketData } from './realtime-socket';
@@ -101,6 +102,7 @@ function harnessFor(sockets: FakeSocket[], live: string[] = [LIVE_SESSION]): Har
     {} as unknown as ConversationResourceService,
     {} as unknown as SlaBreachResourceService,
     {} as unknown as CannedResponseResourceService,
+    {} as unknown as EscalationResourceService,
     {} as unknown as TenantHostnameService,
     sessions,
     tenantContext,
@@ -188,6 +190,7 @@ describe('a revocation reaching an open socket', () => {
       {} as unknown as ConversationResourceService,
       {} as unknown as SlaBreachResourceService,
       {} as unknown as CannedResponseResourceService,
+      {} as unknown as EscalationResourceService,
       {} as unknown as TenantHostnameService,
       {} as unknown as SessionService,
       new TenantContextService(),

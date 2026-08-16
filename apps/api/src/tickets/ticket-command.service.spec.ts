@@ -7,16 +7,19 @@ import {
 } from '@whatsappcrm/contracts';
 import { SLA_EVALUATE_TICKET_JOB, SLA_QUEUE } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
-import { TICKET_UPDATED_EVENT } from '../events/domain-events';
+import { TICKET_ESCALATED_EVENT, TICKET_UPDATED_EVENT } from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
 import type { UserStatus } from '../generated/prisma/enums';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import type { QueueService } from '../queue/queue.service';
+import type { EscalationAlertService } from './escalation-alert.service';
 import type { TicketRow } from './ticket.mapper';
 import { TicketCommandService } from './ticket-command.service';
 import type { TicketQueryService } from './ticket-query.service';
 import {
   TicketCloseNotPermittedError,
+  TicketHandoffNotPermittedError,
+  TicketReasonRequiredError,
   TicketStatusChangedConcurrentlyError,
   TicketTransitionNotAllowedError,
   UnknownTicketAssigneeError,
@@ -43,8 +46,16 @@ const TEAMMATE = '25444444-4444-7444-8444-4444444444d2';
 const SUSPENDED = '25444444-4444-7444-8444-4444444444d3';
 /** In another tenant, so RLS makes the tenant-scoped lookup answer nothing. */
 const STRANGER = '25444444-4444-7444-8444-4444444444d9';
+/** Holds `ticket:read_all`, so an escalation may be addressed to them. */
+const SUPERVISOR = '25444444-4444-7444-8444-4444444444d4';
 const TEAM = '25444444-4444-7444-8444-4444444444b1';
 const OTHER_TENANT_TEAM = '25444444-4444-7444-8444-4444444444b9';
+
+/** What the stubbed `ticket_events` insert hands back, standing in for the database. */
+const EVENT_ID = '25444444-4444-7444-8444-4444444444a1';
+const EVENT_CREATED_AT = new Date('2026-08-16T10:00:00.000Z');
+/** One inserted alert row per recipient, ids the stub mints in order. */
+const ALERT_ID_PREFIX = 'alert-';
 
 /** Every status, so a loop over the ❌ cells cannot silently skip one. */
 const STATUSES: TicketStatus[] = ['open', 'pending', 'resolved', 'closed'];
@@ -69,6 +80,10 @@ interface Harness {
   readonly appended: AppendedEvent[];
   /** The `data` of every `updateMany` the writer issued — empty when it wrote nothing. */
   readonly written: Prisma.TicketUncheckedUpdateInput[];
+  /** The `toUserId` each recipient resolution was asked about, `null` for a derived one. */
+  readonly resolveCalls: (string | null)[];
+  /** Every alert insert the escalation asked for, in order. */
+  readonly inserted: { ticketEventId: string; recipientUserIds: readonly string[] }[];
   readonly asAgent: <T>(work: (commands: TicketCommandService) => Promise<T>) => Promise<T>;
 }
 
@@ -115,15 +130,21 @@ function deferredTicket(overrides: Partial<TicketRow> = {}): TicketRow {
   });
 }
 
-function principalWith(permissions: readonly Permission[]): SessionPrincipal {
+function principalWith(
+  permissions: readonly Permission[],
+  teamIds: readonly string[] = [],
+): SessionPrincipal {
   return {
     userId: AGENT,
     tenantId: TENANT,
     email: 'agent@example.invalid',
     displayName: 'Fixture agent',
-    role: 'agent',
+    // Derived rather than fixed: `ticket:assign` is supervisor-and-above, so a
+    // principal holding it and calling itself an agent would be a fixture no
+    // `ROLE_PERMISSIONS` row can produce.
+    role: permissions.includes('ticket:assign') ? 'supervisor' : 'agent',
     permissions: [...permissions],
-    teamIds: [],
+    teamIds: [...teamIds],
     sessionId: AGENT,
     expiresAt: '2036-12-31T23:59:59.000Z',
   };
@@ -138,9 +159,30 @@ const TENANT_USERS: readonly { id: string; status: UserStatus }[] = [
 
 const TENANT_TEAMS: readonly string[] = [TEAM];
 
+/**
+ * Who is in which team, as `team_members` holds it — the rows the handoff
+ * bound's "is the target a teammate" question reads. `TEAMMATE` is in `TEAM`
+ * with the caller; `SUSPENDED` is in none, so it stands for the colleague an
+ * agent may not hand work to.
+ */
+const TEAM_MEMBERSHIPS: readonly { userId: string; teamId: string }[] = [
+  { userId: AGENT, teamId: TEAM },
+  { userId: TEAMMATE, teamId: TEAM },
+];
+
 /** An agent holds `ticket:update` and `ticket:close` today; 0006 §7 relies on that. */
 const FULL_PERMISSIONS = permissionsForRole('agent');
 const WITHOUT_CLOSE = FULL_PERMISSIONS.filter((permission) => permission !== 'ticket:close');
+
+/**
+ * A supervisor's permissions, which is what `POST /tickets/{id}/assign` was
+ * built for and what every placement case below runs as.
+ *
+ * `ticket:assign` is precisely what skips the handoff bound (ADR 0011 decision
+ * 2), so these cases stay about the write they were written for. The bound
+ * itself is exercised under its own describe, as an agent.
+ */
+const ASSIGN_PERMISSIONS = permissionsForRole('supervisor');
 
 /**
  * The writer with its transaction stubbed.
@@ -155,12 +197,26 @@ const WITHOUT_CLOSE = FULL_PERMISSIONS.filter((permission) => permission !== 'ti
  */
 function harnessFor(
   before: TicketRow,
-  options: { matched?: number; permissions?: readonly Permission[] } = {},
+  options: {
+    matched?: number;
+    permissions?: readonly Permission[];
+    /** The caller's own teams — what the handoff bound compares a target against. */
+    teamIds?: readonly string[];
+    /** Who recipient resolution answers with. `[]` is the tenant with no supervisor. */
+    recipients?: readonly string[];
+  } = {},
 ): Harness {
-  const { matched = 1, permissions = FULL_PERMISSIONS } = options;
+  const {
+    matched = 1,
+    permissions = FULL_PERMISSIONS,
+    teamIds = [],
+    recipients = [SUPERVISOR],
+  } = options;
   const emitted: Emission[] = [];
   const appended: AppendedEvent[] = [];
   const written: Prisma.TicketUncheckedUpdateInput[] = [];
+  const resolveCalls: (string | null)[] = [];
+  const inserted: { ticketEventId: string; recipientUserIds: readonly string[] }[] = [];
   const tenantContext = new TenantContextService();
 
   const tx = {
@@ -175,7 +231,16 @@ function harnessFor(
     ticketEvent: {
       create: ({ data }: { data: AppendedEvent }) => {
         appended.push({ type: data.type, actorUserId: data.actorUserId, data: data.data });
-        return Promise.resolve(data);
+
+        // The id and the timestamp the database would supply. `escalate` reads
+        // its event back through `TICKET_EVENT_PROJECTION` and publishes it, so
+        // a stub returning only what was written would answer with no id.
+        return Promise.resolve({
+          ...data,
+          id: EVENT_ID,
+          ticketId: TICKET,
+          createdAt: EVENT_CREATED_AT,
+        });
       },
     },
   };
@@ -198,6 +263,18 @@ function harnessFor(
     team: {
       findUnique: ({ where }: { where: { id: string } }) =>
         Promise.resolve(TENANT_TEAMS.includes(where.id) ? { id: where.id } : null),
+    },
+    // The handoff bound's one read: does the target share a team with the
+    // caller. Tenant-scoped like the two above — a target in another tenant is
+    // simply not in this table.
+    teamMember: {
+      findFirst: ({ where }: { where: { userId: string; teamId: { in: string[] } } }) =>
+        Promise.resolve(
+          TEAM_MEMBERSHIPS.find(
+            (membership) =>
+              membership.userId === where.userId && where.teamId.in.includes(membership.teamId),
+          ) ?? null,
+        ),
     },
   } as unknown as TenantPrisma;
 
@@ -222,24 +299,73 @@ function harnessFor(
   const enqueue = jest.fn(() => Promise.resolve('added'));
   const queue = { enqueue } as unknown as QueueService;
 
-  const commands = new TicketCommandService(prisma, tickets, tenantContext, events, queue);
+  // Recipient resolution and the alert insert are `escalation-alert.service.ts`'s
+  // own concern, and both are exercised against a real database in
+  // `ticket-handoff.int-spec.ts`. Here the stub records what it was asked for
+  // and answers with the recipients the case configured, so these tests stay
+  // about the order, the transaction and the response shape.
+  const resolved = [...recipients];
+  const escalations = {
+    resolveRecipients: (
+      _ticket: unknown,
+      toUserId: string | undefined,
+    ): Promise<readonly string[]> => {
+      resolveCalls.push(toUserId ?? null);
+      return Promise.resolve(resolved);
+    },
+    insertForEscalation: (
+      _tx: unknown,
+      insert: { ticketEventId: string; recipientUserIds: readonly string[] },
+    ): Promise<{ id: string; recipientUserId: string }[]> => {
+      inserted.push(insert);
+      return Promise.resolve(
+        insert.recipientUserIds.map((recipientUserId, index) => ({
+          id: `${ALERT_ID_PREFIX}${index}`,
+          recipientUserId,
+        })),
+      );
+    },
+  } as unknown as EscalationAlertService;
+
+  const commands = new TicketCommandService(
+    prisma,
+    tickets,
+    tenantContext,
+    events,
+    queue,
+    escalations,
+  );
 
   return {
     emitted,
     enqueue,
     appended,
     written,
+    resolveCalls,
+    inserted,
     asAgent: async (work) =>
       await tenantContext.run(
         {
           requestId: 'spec',
           tenantId: TENANT,
           userId: AGENT,
-          principal: principalWith(permissions),
+          principal: principalWith(permissions, teamIds),
         },
         async () => await work(commands),
       ),
   };
+}
+
+/**
+ * A supervisor's placement — every case TAR-23 wrote, run as the role that route
+ * was built for.
+ *
+ * `ticket:assign` is what skips the handoff bound, so these stay about the
+ * single-statement write rather than about who may make it. The bound is under
+ * its own describe, as an agent.
+ */
+function placementHarness(before: TicketRow, options: { matched?: number } = {}): Harness {
+  return harnessFor(before, { ...options, permissions: ASSIGN_PERMISSIONS });
 }
 
 describe('the ticket transition table', () => {
@@ -610,7 +736,7 @@ describe('the SLA evaluation a status change triggers', () => {
  */
 describe('assigning a ticket by hand', () => {
   it('puts a user on the ticket and marks routing manual in one statement', async () => {
-    const { asAgent, written } = harnessFor(ticket({ assignedUserId: null }));
+    const { asAgent, written } = placementHarness(ticket({ assignedUserId: null }));
 
     const response = await asAgent(async (commands) =>
       commands.assign(TICKET, { userId: TEAMMATE }),
@@ -630,7 +756,7 @@ describe('assigning a ticket by hand', () => {
   });
 
   it('routes to a team the same way', async () => {
-    const { asAgent, written } = harnessFor(ticket({ assignedUserId: null }));
+    const { asAgent, written } = placementHarness(ticket({ assignedUserId: null }));
 
     const response = await asAgent(async (commands) => commands.assign(TICKET, { teamId: TEAM }));
 
@@ -642,7 +768,7 @@ describe('assigning a ticket by hand', () => {
     // The CHECK constraint refuses `routing_state <> 'deferred'` while either
     // column is still set, so this is the write that would fail at the database
     // if the four columns were not moved together.
-    const { asAgent, written } = harnessFor(deferredTicket());
+    const { asAgent, written } = placementHarness(deferredTicket());
 
     const response = await asAgent(async (commands) =>
       commands.assign(TICKET, { userId: TEAMMATE }),
@@ -663,10 +789,13 @@ describe('assigning a ticket by hand', () => {
   it('applies one column without clearing the other', async () => {
     // The partial semantics the schema's `.refine` allows and the mock models:
     // absent leaves the column alone.
-    const { asAgent, written } = harnessFor(ticket({ assignedUserId: null, assignedTeamId: TEAM }));
+    const { asAgent, written } = placementHarness(
+      ticket({ assignedUserId: null, assignedTeamId: TEAM }),
+    );
 
+    // A team hold counts as held, so this one carries a reason (0011 decision 1).
     const response = await asAgent(async (commands) =>
-      commands.assign(TICKET, { userId: TEAMMATE }),
+      commands.assign(TICKET, { userId: TEAMMATE, reason: 'Naming an owner inside Billing' }),
     );
 
     expect(written[0]).toMatchObject({ assignedUserId: TEAMMATE, assignedTeamId: TEAM });
@@ -677,7 +806,7 @@ describe('assigning a ticket by hand', () => {
     // 0008 amendment 2. Nobody holds it and no supervisor has judged it stuck,
     // which is the state a fresh ticket has — and `pending` is therefore
     // reachable after the insert.
-    const { asAgent, written } = harnessFor(deferredTicket());
+    const { asAgent, written } = placementHarness(deferredTicket());
 
     const response = await asAgent(async (commands) =>
       commands.assign(TICKET, { userId: null, teamId: null }),
@@ -695,11 +824,13 @@ describe('assigning a ticket by hand', () => {
 
   it('keeps manual when clearing the user leaves the team on the ticket', async () => {
     // `{ userId: null }` is not by itself a release: somebody still holds it.
-    const { asAgent, written } = harnessFor(
+    const { asAgent, written } = placementHarness(
       ticket({ assignedUserId: AGENT, assignedTeamId: TEAM }),
     );
 
-    await asAgent(async (commands) => commands.assign(TICKET, { userId: null }));
+    await asAgent(async (commands) =>
+      commands.assign(TICKET, { userId: null, reason: 'Back to the team' }),
+    );
 
     expect(written[0]).toMatchObject({
       assignedUserId: null,
@@ -712,12 +843,12 @@ describe('assigning a ticket by hand', () => {
     // A double-clicked Assign button, and a retry after a dropped response. The
     // rule `update` states, and here it also keeps the escalation history from
     // growing a second identical `assigned` row.
-    const { asAgent, written, appended } = harnessFor(
+    const { asAgent, written, appended } = placementHarness(
       ticket({ assignedUserId: TEAMMATE, assignedTeamId: null, routingState: 'manual' }),
     );
 
     const response = await asAgent(async (commands) =>
-      commands.assign(TICKET, { userId: TEAMMATE }),
+      commands.assign(TICKET, { userId: TEAMMATE, reason: 'Ada is at capacity' }),
     );
 
     expect(written).toEqual([]);
@@ -728,9 +859,11 @@ describe('assigning a ticket by hand', () => {
   it('still writes when only the routing state would move', async () => {
     // Assigning a deferred ticket to the team it already carries changes no
     // assignment column and still has to leave the flagged queue.
-    const { asAgent, written } = harnessFor(deferredTicket({ assignedTeamId: TEAM }));
+    const { asAgent, written } = placementHarness(deferredTicket({ assignedTeamId: TEAM }));
 
-    await asAgent(async (commands) => commands.assign(TICKET, { teamId: TEAM }));
+    await asAgent(async (commands) =>
+      commands.assign(TICKET, { teamId: TEAM, reason: 'Confirming Billing owns it' }),
+    );
 
     expect(written[0]).toMatchObject({ routingState: 'manual', routingDeferredReason: null });
   });
@@ -738,7 +871,7 @@ describe('assigning a ticket by hand', () => {
 
 describe('the event an assignment appends', () => {
   it('records the actor, the new pair, the previous pair and the reason', async () => {
-    const { asAgent, appended } = harnessFor(ticket({ assignedUserId: AGENT }));
+    const { asAgent, appended } = placementHarness(ticket({ assignedUserId: AGENT }));
 
     await asAgent(async (commands) =>
       commands.assign(TICKET, { userId: TEAMMATE, reason: 'Ada is at capacity' }),
@@ -762,7 +895,7 @@ describe('the event an assignment appends', () => {
   });
 
   it('omits reason entirely when the body carried none', async () => {
-    const { asAgent, appended } = harnessFor(ticket({ assignedUserId: null }));
+    const { asAgent, appended } = placementHarness(ticket({ assignedUserId: null }));
 
     await asAgent(async (commands) => commands.assign(TICKET, { userId: TEAMMATE }));
 
@@ -770,9 +903,11 @@ describe('the event an assignment appends', () => {
   });
 
   it('writes unassigned rather than assigned when nobody is left on it', async () => {
-    const { asAgent, appended } = harnessFor(ticket({ assignedUserId: AGENT }));
+    const { asAgent, appended } = placementHarness(ticket({ assignedUserId: AGENT }));
 
-    await asAgent(async (commands) => commands.assign(TICKET, { userId: null }));
+    await asAgent(async (commands) =>
+      commands.assign(TICKET, { userId: null, reason: 'Ada has left' }),
+    );
 
     expect(appended.map((event) => event.type)).toEqual(['unassigned']);
   });
@@ -780,7 +915,7 @@ describe('the event an assignment appends', () => {
   it('announces nothing and enqueues nothing', async () => {
     // `ticket.updated` carries status and priority, neither of which moved, and
     // 0006's fourth SLA trigger is a status change.
-    const { asAgent, emitted, enqueue } = harnessFor(ticket({ assignedUserId: null }));
+    const { asAgent, emitted, enqueue } = placementHarness(ticket({ assignedUserId: null }));
 
     await asAgent(async (commands) => commands.assign(TICKET, { userId: TEAMMATE }));
 
@@ -793,7 +928,7 @@ describe('the assignee an assign body names', () => {
   it('refuses a userId from another tenant, and writes nothing', async () => {
     // Invisible to the tenant-scoped lookup, exactly as RLS leaves it — the id
     // in the body is never trusted as a key.
-    const { asAgent, written } = harnessFor(deferredTicket());
+    const { asAgent, written } = placementHarness(deferredTicket());
 
     await expect(
       asAgent(async (commands) => commands.assign(TICKET, { userId: STRANGER })),
@@ -804,7 +939,7 @@ describe('the assignee an assign body names', () => {
   it('refuses a user who is not active', async () => {
     // A suspended account has had its access cut: handing it a stuck ticket
     // would look like a fix and be a second deferral.
-    const { asAgent, written } = harnessFor(deferredTicket());
+    const { asAgent, written } = placementHarness(deferredTicket());
 
     await expect(
       asAgent(async (commands) => commands.assign(TICKET, { userId: SUSPENDED })),
@@ -813,7 +948,7 @@ describe('the assignee an assign body names', () => {
   });
 
   it('points the failure at the offending field', async () => {
-    const { asAgent } = harnessFor(deferredTicket());
+    const { asAgent } = placementHarness(deferredTicket());
 
     await expect(
       asAgent(async (commands) => commands.assign(TICKET, { teamId: OTHER_TENANT_TEAM })),
@@ -821,11 +956,314 @@ describe('the assignee an assign body names', () => {
   });
 
   it('refuses a teamId from another tenant', async () => {
-    const { asAgent, written } = harnessFor(deferredTicket());
+    const { asAgent, written } = placementHarness(deferredTicket());
 
     await expect(
       asAgent(async (commands) => commands.assign(TICKET, { teamId: OTHER_TENANT_TEAM })),
     ).rejects.toBeInstanceOf(UnknownTicketAssigneeError);
     expect(written).toEqual([]);
+  });
+});
+
+/**
+ * TAR-32's first acceptance criterion, as ADR 0011 decision 1 rules it: a reason
+ * is required exactly when the ticket already has a holder.
+ *
+ * The asymmetry *is* the design, and the two halves are asserted together so
+ * that one cannot be widened without the other failing. The trim and the
+ * three-character floor live on `TicketAssignInputSchema` and are asserted in
+ * the contract package; what only this file can prove is the conditional half,
+ * which Zod cannot see because it is about the row.
+ */
+describe('the reason a reassignment requires', () => {
+  it('refuses a handoff of a held ticket with no reason, and writes nothing', async () => {
+    const { asAgent, written, appended } = placementHarness(ticket({ assignedUserId: AGENT }));
+
+    await expect(
+      asAgent(async (commands) => commands.assign(TICKET, { userId: TEAMMATE })),
+    ).rejects.toBeInstanceOf(TicketReasonRequiredError);
+    expect(written).toEqual([]);
+    expect(appended).toEqual([]);
+  });
+
+  it('refuses it for a team-held ticket too', async () => {
+    // `ticketAssignRequiresReason` counts a team hold as held: work routed to
+    // Billing and moved elsewhere is still taken away from somebody.
+    const { asAgent } = placementHarness(ticket({ assignedUserId: null, assignedTeamId: TEAM }));
+
+    await expect(
+      asAgent(async (commands) => commands.assign(TICKET, { userId: TEAMMATE })),
+    ).rejects.toBeInstanceOf(TicketReasonRequiredError);
+  });
+
+  it('accepts a placement of an unheld ticket with no reason', async () => {
+    // The supervisor emptying the flagged queue is placing work nobody held —
+    // not a handoff, and with no handoff to explain.
+    const { asAgent, written } = placementHarness(deferredTicket());
+
+    await expect(
+      asAgent(async (commands) => commands.assign(TICKET, { userId: TEAMMATE })),
+    ).resolves.toMatchObject({ assignedUserId: TEAMMATE });
+    expect(written).toHaveLength(1);
+  });
+
+  it('refuses a reasonless request that would move nothing', async () => {
+    // The no-op branch answers 200 and writes nothing — but accepting a missing
+    // reason here would train a console to omit the field, so the rule runs
+    // first.
+    const { asAgent, written } = placementHarness(
+      ticket({ assignedUserId: TEAMMATE, routingState: 'manual' }),
+    );
+
+    await expect(
+      asAgent(async (commands) => commands.assign(TICKET, { userId: TEAMMATE })),
+    ).rejects.toBeInstanceOf(TicketReasonRequiredError);
+    expect(written).toEqual([]);
+  });
+
+  it('is checked before the assignee lookup', async () => {
+    // A caller missing a reason is told that, rather than being sent to check a
+    // user id that was fine.
+    const { asAgent } = placementHarness(ticket({ assignedUserId: AGENT }));
+
+    await expect(
+      asAgent(async (commands) => commands.assign(TICKET, { userId: STRANGER })),
+    ).rejects.toBeInstanceOf(TicketReasonRequiredError);
+  });
+});
+
+/**
+ * ⚠️ The review item ADR 0011 decision 2 names: `POST /tickets/{id}/assign`
+ * declares `ticket:handoff`, which every role holds, and the service is what
+ * keeps that from becoming `ticket:assign`.
+ *
+ * Every case here runs as an **agent** — the principal the bound applies to.
+ * A caller holding `ticket:assign` skips all three refusals, which is what every
+ * placement case above asserts by construction.
+ */
+describe('the handoff bound an agent writes under', () => {
+  const HANDOFF = { permissions: FULL_PERMISSIONS, teamIds: [TEAM] } as const;
+
+  it('lets an agent hand their own ticket to a teammate', async () => {
+    const { asAgent, written } = harnessFor(ticket({ assignedUserId: AGENT }), HANDOFF);
+
+    const response = await asAgent(async (commands) =>
+      commands.assign(TICKET, { userId: TEAMMATE, reason: 'Going off shift' }),
+    );
+
+    expect(written[0]).toMatchObject({ assignedUserId: TEAMMATE, routingState: 'manual' });
+    expect(response.assignedUserId).toBe(TEAMMATE);
+  });
+
+  it('refuses a ticket a colleague holds', async () => {
+    // Not "their team holds it" either: a ticket routed to a team is nobody's
+    // to give away, and every member could otherwise take it off whoever is
+    // working it.
+    const { asAgent, written } = harnessFor(ticket({ assignedUserId: TEAMMATE }), HANDOFF);
+
+    await expect(
+      asAgent(async (commands) =>
+        commands.assign(TICKET, { userId: AGENT, reason: 'I will take this' }),
+      ),
+    ).rejects.toBeInstanceOf(TicketHandoffNotPermittedError);
+    expect(written).toEqual([]);
+  });
+
+  it('refuses a target who shares no team with the caller', async () => {
+    const { asAgent, written } = harnessFor(ticket({ assignedUserId: AGENT }), HANDOFF);
+
+    await expect(
+      asAgent(async (commands) =>
+        commands.assign(TICKET, { userId: SUSPENDED, reason: 'Passing this on' }),
+      ),
+    ).rejects.toBeInstanceOf(TicketHandoffNotPermittedError);
+    expect(written).toEqual([]);
+  });
+
+  it('refuses a team the caller is not in', async () => {
+    const { asAgent } = harnessFor(ticket({ assignedUserId: AGENT }), {
+      permissions: FULL_PERMISSIONS,
+      teamIds: [],
+    });
+
+    await expect(
+      asAgent(async (commands) =>
+        commands.assign(TICKET, { teamId: TEAM, reason: 'Billing should own this' }),
+      ),
+    ).rejects.toBeInstanceOf(TicketHandoffNotPermittedError);
+  });
+
+  it('refuses a release, which is abandonment rather than a handoff', async () => {
+    const { asAgent, written } = harnessFor(ticket({ assignedUserId: AGENT }), HANDOFF);
+
+    await expect(
+      asAgent(async (commands) =>
+        commands.assign(TICKET, { userId: null, reason: 'Not mine to work' }),
+      ),
+    ).rejects.toBeInstanceOf(TicketHandoffNotPermittedError);
+    expect(written).toEqual([]);
+  });
+
+  it('lets a supervisor make the same release', async () => {
+    // The permission is the whole difference, which is the point of the bound.
+    const { asAgent, written } = placementHarness(ticket({ assignedUserId: AGENT }));
+
+    await asAgent(async (commands) =>
+      commands.assign(TICKET, { userId: null, reason: 'Back to the pool' }),
+    );
+
+    expect(written[0]).toMatchObject({ assignedUserId: null, routingState: 'pending' });
+  });
+
+  it('is checked before the reason rule and the assignee lookup', async () => {
+    // A caller who may not make this write at all must not learn from the
+    // response whether the id they named exists in the tenant.
+    const { asAgent } = harnessFor(ticket({ assignedUserId: TEAMMATE }), HANDOFF);
+
+    await expect(
+      asAgent(async (commands) => commands.assign(TICKET, { userId: STRANGER })),
+    ).rejects.toBeInstanceOf(TicketHandoffNotPermittedError);
+  });
+});
+
+/**
+ * TAR-32's second acceptance criterion: the escalation is recorded and the
+ * supervisor is notified (ADR 0011 decisions 3 and 5).
+ *
+ * What only this file can prove is the *ordering and the shape* — that the
+ * ticket is not touched, that the alerts reference the event the same
+ * transaction wrote, and that nobody to tell is a success rather than an error.
+ * That the rows and the transaction are real is
+ * `ticket-handoff.int-spec.ts`'s job.
+ */
+describe('escalating a ticket', () => {
+  it('writes one escalated event carrying the actor, the reason and the cause', async () => {
+    const { asAgent, appended } = harnessFor(ticket({ assignedUserId: AGENT }));
+
+    await asAgent(async (commands) =>
+      commands.escalate(TICKET, { reason: 'Customer is threatening chargeback' }),
+    );
+
+    expect(appended).toEqual([
+      {
+        type: 'escalated',
+        // Always attributed: neither escalate nor assign is reachable without a
+        // principal, and an event claiming a system actor on a human decision
+        // would be a lie the trail cannot recover from.
+        actorUserId: AGENT,
+        data: { reason: 'Customer is threatening chargeback', cause: 'agent' },
+      },
+    ]);
+  });
+
+  it('does not touch the ticket', async () => {
+    // The agent keeps it. An escalation that un-assigned them would leave the
+    // customer with nobody while the supervisor sleeps.
+    const { asAgent, written } = harnessFor(ticket({ assignedUserId: AGENT }));
+
+    await asAgent(async (commands) => commands.escalate(TICKET, { reason: 'Needs a decision' }));
+
+    expect(written).toEqual([]);
+  });
+
+  it('names the supervisor on the event when the body carried one', async () => {
+    const { asAgent, appended, resolveCalls } = harnessFor(ticket());
+
+    await asAgent(async (commands) =>
+      commands.escalate(TICKET, { reason: 'Refund over my limit', toUserId: SUPERVISOR }),
+    );
+
+    expect(appended[0]?.data).toMatchObject({ escalatedToUserId: SUPERVISOR });
+    expect(resolveCalls).toEqual([SUPERVISOR]);
+  });
+
+  it('omits the key entirely when the escalation was not addressed to a person', async () => {
+    // Null `toValue` is meaningful rather than missing: it says "whoever
+    // supervises this ticket", and a console renders the two differently.
+    const { asAgent, appended, resolveCalls } = harnessFor(ticket());
+
+    const response = await asAgent(async (commands) =>
+      commands.escalate(TICKET, { reason: 'Nobody has answered this' }),
+    );
+
+    expect(appended[0]?.data).not.toHaveProperty('escalatedToUserId');
+    expect(resolveCalls).toEqual([null]);
+    expect(response.event.toValue).toBeNull();
+  });
+
+  it('inserts one alert per resolved recipient, against the event it just wrote', async () => {
+    const { asAgent, inserted } = harnessFor(ticket(), { recipients: [SUPERVISOR, TEAMMATE] });
+
+    const response = await asAgent(async (commands) =>
+      commands.escalate(TICKET, { reason: 'Two supervisors share this team' }),
+    );
+
+    expect(inserted).toEqual([
+      {
+        ticketEventId: EVENT_ID,
+        ticketId: TICKET,
+        tenantId: TENANT,
+        recipientUserIds: [SUPERVISOR, TEAMMATE],
+      },
+    ]);
+    expect(response.notifiedUserIds).toEqual([SUPERVISOR, TEAMMATE]);
+  });
+
+  it('publishes the committed event, not the writer’s view of it', async () => {
+    const { asAgent } = harnessFor(ticket());
+
+    const response = await asAgent(async (commands) =>
+      commands.escalate(TICKET, { reason: 'Read back from the row' }),
+    );
+
+    expect(response.event).toMatchObject({
+      id: EVENT_ID,
+      ticketId: TICKET,
+      type: 'escalated',
+      actorUserId: AGENT,
+      reason: 'Read back from the row',
+      cause: 'agent',
+      assignment: null,
+      createdAt: EVENT_CREATED_AT.toISOString(),
+    });
+  });
+
+  it('emits one relay event carrying the inserted alert ids', async () => {
+    const { asAgent, emitted } = harnessFor(ticket(), { recipients: [SUPERVISOR, TEAMMATE] });
+
+    await asAgent(async (commands) => commands.escalate(TICKET, { reason: 'Please look' }));
+
+    expect(emitted).toEqual([
+      {
+        event: TICKET_ESCALATED_EVENT,
+        payload: {
+          tenantId: TENANT,
+          ticketId: TICKET,
+          alertIds: [`${ALERT_ID_PREFIX}0`, `${ALERT_ID_PREFIX}1`],
+        },
+      },
+    ]);
+  });
+
+  it('records the escalation and emits nothing when there is nobody to tell', async () => {
+    // A tenant with no active supervisor or admin. Not an error: the agent did
+    // nothing wrong and has no way to fix it.
+    const { asAgent, appended, emitted } = harnessFor(ticket(), { recipients: [] });
+
+    const response = await asAgent(async (commands) =>
+      commands.escalate(TICKET, { reason: 'Nobody is on call' }),
+    );
+
+    expect(appended.map((event) => event.type)).toEqual(['escalated']);
+    expect(response.notifiedUserIds).toEqual([]);
+    expect(emitted).toEqual([]);
+  });
+
+  it('enqueues no SLA job: escalation is not a status change', async () => {
+    const { asAgent, enqueue } = harnessFor(ticket());
+
+    await asAgent(async (commands) => commands.escalate(TICKET, { reason: 'Still no timer move' }));
+
+    expect(enqueue).not.toHaveBeenCalled();
   });
 });

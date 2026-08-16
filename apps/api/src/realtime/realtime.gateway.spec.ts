@@ -30,6 +30,7 @@ import { REALTIME_PATH } from './realtime.constants';
 import { RealtimeGateway } from './realtime.gateway';
 import { RealtimeHandshakeService } from './realtime-handshake.service';
 import { RealtimeRelayService } from './realtime-relay.service';
+import { EscalationResourceService } from './escalation-resource.service';
 import { SlaBreachResourceService } from './sla-breach-resource.service';
 import type { RealtimeSocketData } from './realtime-socket';
 import { TenantHostnameService } from './tenant-hostname.service';
@@ -330,8 +331,10 @@ describe('the realtime gateway', () => {
         { provide: MessageResourceService, useValue: messages },
         { provide: ConversationResourceService, useValue: conversationResources },
         { provide: CannedResponseResourceService, useValue: cannedResponses },
-        // Nothing in this file emits an SLA breach; that relay has its own spec.
+        // Nothing in this file emits an SLA breach or an escalation; both
+        // relays have their own specs.
         { provide: SlaBreachResourceService, useValue: {} },
+        { provide: EscalationResourceService, useValue: {} },
         { provide: TenantHostnameService, useValue: hostnames },
         { provide: SessionService, useValue: sessions },
       ],

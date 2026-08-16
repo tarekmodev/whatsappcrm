@@ -36,6 +36,7 @@ export * from './workflows';
 export * from './canned-responses';
 export * from './contacts';
 export * from './conversations';
+export * from './escalations';
 export * from './media';
 export * from './messages';
 export * from './sla';

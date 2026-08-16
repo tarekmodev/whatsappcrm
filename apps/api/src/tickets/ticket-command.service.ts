@@ -5,8 +5,12 @@ import {
   SLA_QUEUE,
   TICKET_STATUS_REQUIRES_CLOSE,
   canAgentTransition,
+  ticketAssignRequiresReason,
+  type SessionPrincipal,
   type SlaEvaluateTicketTrigger,
   type TicketAssignInput,
+  type TicketEscalateInput,
+  type TicketEscalationResponse,
   type TicketPriority,
   type TicketResponse,
   type TicketRoutingState,
@@ -14,16 +18,30 @@ import {
   type TicketUpdateInput,
 } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
-import { TICKET_UPDATED_EVENT, type TicketUpdatedEvent } from '../events/domain-events';
+import {
+  TICKET_ESCALATED_EVENT,
+  TICKET_UPDATED_EVENT,
+  type TicketEscalatedEvent,
+  type TicketUpdatedEvent,
+} from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
 import { UserStatus } from '../generated/prisma/enums';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { QueueService } from '../queue/queue.service';
+import { EscalationAlertService, type InsertedEscalationAlert } from './escalation-alert.service';
+import {
+  ESCALATED_TO_USER_ID,
+  TICKET_EVENT_PROJECTION,
+  toTicketEventResponse,
+  type TicketEventRow,
+} from './ticket-event.mapper';
 import { TICKET_PROJECTION, toTicketResponse, type TicketRow } from './ticket.mapper';
 import { TicketQueryService } from './ticket-query.service';
 import {
   TicketCloseNotPermittedError,
+  TicketHandoffNotPermittedError,
   TicketNotFoundError,
+  TicketReasonRequiredError,
   TicketStatusChangedConcurrentlyError,
   TicketTransitionNotAllowedError,
   UnknownTicketAssigneeError,
@@ -46,11 +64,12 @@ interface TicketAssignment {
 }
 
 /**
- * The two writes into a ticket: the agent's `PATCH /api/v1/tickets/{id}`
- * (TAR-25, ruled by 0006) and the supervisor's
- * `POST /api/v1/tickets/{id}/assign` (TAR-23, ruled by 0008 decision 3).
+ * The three writes into a ticket: the agent's `PATCH /api/v1/tickets/{id}`
+ * (TAR-25, ruled by 0006), `POST /api/v1/tickets/{id}/assign` (TAR-23, ruled by
+ * 0008 decision 3 and widened to a handoff by 0011 decision 2), and
+ * `POST /api/v1/tickets/{id}/escalate` (TAR-32, ruled by 0011 decision 3).
  *
- * The event log read (TAR-32) is not here and is additive when it lands.
+ * The event log *read* is `TicketEventQueryService`, beside this file.
  *
  * ## Every path goes through `TicketQueryService.require` first
  *
@@ -107,6 +126,7 @@ export class TicketCommandService {
     private readonly tenantContext: TenantContextService,
     private readonly events: EventEmitter2,
     private readonly queue: QueueService,
+    private readonly escalations: EscalationAlertService,
   ) {}
 
   /**
@@ -199,19 +219,103 @@ export class TicketCommandService {
    * is not in this story — TAR-274's view refetches. No SLA job either: 0006's
    * fourth trigger is a **status** change, and a timer does not move because the
    * ticket changed hands.
+   *
+   * ## TAR-32 adds two rules in front of the write, in a fixed order
+   *
+   * `require` (visibility) → the handoff bound → the reason rule → assignee
+   * existence → the no-op check → the write. The order is the reviewable part
+   * and each step earns its place:
+   *
+   *   * **the handoff bound before everything else**, because a caller who may
+   *     not make this write at all should not learn from the response whether a
+   *     user id they named exists in the tenant;
+   *   * **the reason rule before `assertAssigneesExist`**, so a caller missing a
+   *     reason is told that rather than being sent to check a user id that was
+   *     fine;
+   *   * **both before the no-op check**, deliberately. A request that moves
+   *     nothing still answers 200 with the current ticket, but a missing reason
+   *     on such a request is still refused — silently accepting it would train a
+   *     console to omit the field.
    */
   async assign(ticketId: string, input: TicketAssignInput): Promise<TicketResponse> {
     const before = await this.tickets.require(ticketId);
-
-    await this.assertAssigneesExist(input);
-
     const assignment = assignmentAfter(before, input);
+
+    await this.assertHandoffAllowed(before, input, assignment);
+    assertReasonGiven(before, input);
+    await this.assertAssigneesExist(input);
 
     if (!movesAnything(before, assignment)) {
       return toTicketResponse(before);
     }
 
     return toTicketResponse(await this.writeAssignment(before, assignment, input.reason));
+  }
+
+  /**
+   * `POST /api/v1/tickets/{id}/escalate` — an agent asking for supervisor
+   * attention (TAR-32, ADR 0011 decision 3).
+   *
+   * ## The ticket does not change hands
+   *
+   * Nothing in this method touches the assignment or routing columns, and that
+   * is the decision rather than an omission: an escalation that un-assigned the
+   * agent would leave the customer with nobody at 02:14 while the supervisor
+   * sleeps, and would make "escalate" the one button that loses your work. A
+   * supervisor who wants to take the ticket uses `assign`, which is the route
+   * for changing hands.
+   *
+   * So the response is **not** a `TicketResponse`: nothing on the ticket moved,
+   * and returning one would hide the only fact the caller needs — the audit
+   * entry, and who was told.
+   *
+   * ## The order, which is the reviewable part (0011 decision 5)
+   *
+   *   1. `require` — visibility. A ticket the caller may not see is `not_found`,
+   *      here as everywhere else in this service. That is the *only* bound on
+   *      this route: `ticket:escalate` is held by every role, deliberately, so a
+   *      colleague spotting a problem on a team ticket can raise it.
+   *   2. Resolve recipients, **outside** the transaction — see
+   *      `EscalationAlertService.resolveRecipients` for the trade.
+   *   3. One transaction: the `escalated` event, then the alerts referencing it.
+   *      Both or neither.
+   *   4. After commit: one socket per row actually inserted.
+   *
+   * ## Re-escalation is allowed
+   *
+   * A second ask an hour after the first is a legitimate act, and swallowing it
+   * would make the button lie in exactly the situation it exists for. The
+   * console disables the control while a request is in flight, and the route
+   * honours an optional `Idempotency-Key` — applied by the controller, so a
+   * retry after a dropped response replays the first result instead of notifying
+   * everybody twice.
+   *
+   * ## Nobody to tell is a real outcome, not an error
+   *
+   * A tenant with no active supervisor or admin gets the event written and an
+   * empty `notifiedUserIds`. The agent did nothing wrong and has no way to fix
+   * it, so it is logged for the operator — the count of escalations reaching
+   * nobody is a misconfigured-tenant signal — and reported honestly to the
+   * console, which says "recorded, but nobody was notified".
+   */
+  async escalate(ticketId: string, input: TicketEscalateInput): Promise<TicketEscalationResponse> {
+    const ticket = await this.tickets.require(ticketId);
+    const recipientUserIds = await this.escalations.resolveRecipients(ticket, input.toUserId);
+    const { event, alerts } = await this.writeEscalation(ticket, input, recipientUserIds);
+
+    if (alerts.length === 0) {
+      this.logger.warn(
+        `Ticket ${ticket.id} was escalated and no alert was written: this tenant has no active ` +
+          'supervisor or admin to notify. The escalation is on the ticket history.',
+      );
+    } else {
+      this.announceEscalation(ticket.id, alerts);
+    }
+
+    return {
+      event: toTicketEventResponse(event),
+      notifiedUserIds: alerts.map((alert) => alert.recipientUserId),
+    };
   }
 
   /**
@@ -412,6 +516,162 @@ export class TicketCommandService {
   }
 
   /**
+   * The `escalated` event and its alerts, in one transaction (0011 decision 5,
+   * step 3).
+   *
+   * Both or neither, and the ordering is what makes it so: an alert without an
+   * audit entry is a notification nobody can explain, and an audit entry without
+   * alerts claims a supervisor was told when none was. The composite foreign key
+   * `(tenant_id, ticket_event_id)` makes the first half structural — the alert
+   * rows cannot reference an escalation the transaction did not commit.
+   *
+   * `tenantId` is supplied explicitly, as everywhere else in this service that
+   * writes: `$tenantTransaction` hands back the **un-extended** client, so the
+   * per-statement policy is not in play. RLS still applies — the GUC is set for
+   * the whole transaction — and `ticket_events.tenant_id` is `NOT NULL`
+   * regardless.
+   *
+   * The row is read back through `TICKET_EVENT_PROJECTION` rather than assembled
+   * from the input, so the response carries the committed event — its id and its
+   * database-clock `created_at` — and is byte-identical to the same event read
+   * a moment later through `GET /tickets/{id}/events`.
+   */
+  private async writeEscalation(
+    ticket: TicketRow,
+    input: TicketEscalateInput,
+    recipientUserIds: readonly string[],
+  ): Promise<{ event: TicketEventRow; alerts: InsertedEscalationAlert[] }> {
+    const tenantId = this.tenantContext.requireTenantId();
+    // Never the system's null: this route is unreachable without a principal,
+    // and an event claiming a system actor on a human decision would be a lie
+    // the trail cannot recover from.
+    const actorUserId = this.tenantContext.requirePrincipal().userId;
+
+    return this.prisma.$tenantTransaction(async (tx) => {
+      const event = await tx.ticketEvent.create({
+        data: {
+          tenantId,
+          ticketId: ticket.id,
+          type: 'escalated',
+          actorUserId,
+          data: {
+            reason: input.reason,
+            cause: AGENT_CAUSE,
+            // Absent rather than null when the escalation was addressed to
+            // whoever supervises this ticket. The published `toValue` is null
+            // either way; the key is written only when there is a person to name.
+            ...(input.toUserId === undefined ? {} : { [ESCALATED_TO_USER_ID]: input.toUserId }),
+          } satisfies Prisma.InputJsonObject,
+        },
+        select: TICKET_EVENT_PROJECTION,
+      });
+
+      const alerts = await this.escalations.insertForEscalation(tx, {
+        tenantId,
+        ticketId: ticket.id,
+        ticketEventId: event.id,
+        recipientUserIds,
+      });
+
+      return { event, alerts };
+    });
+  }
+
+  /**
+   * The handoff bound: what a caller holding `ticket:handoff` but **not**
+   * `ticket:assign` may do (ADR 0011 decision 2).
+   *
+   * The route declares the weaker permission so that every role can hand on
+   * their own work, and this is the bound that keeps it from becoming the wider
+   * right. A caller who does not hold `ticket:assign` may write only when all
+   * three hold:
+   *
+   *   1. **they hold the ticket** — `assignedUserId === principal.userId`, not
+   *      "their team holds it". A ticket routed to a team is nobody's to give
+   *      away, and every member could otherwise reassign it out from under
+   *      whoever is working it;
+   *   2. **the target is a teammate** — a user sharing at least one team with
+   *      the caller, or one of the caller's own teams. Read off the *body*, per
+   *      the ADR: a ticket's existing team assignment is not re-checked, because
+   *      handing your team-routed ticket to a teammate would otherwise be
+   *      refused for a column the caller never touched, and leaving it on the
+   *      team it already carries exposes it to nobody new;
+   *   3. **they are not releasing it** — the result must leave somebody holding
+   *      the ticket. Dropping it back to unassigned is abandonment, not a
+   *      handoff, and puts the ticket in a state only `ticket:assign` can
+   *      create.
+   *
+   * A caller holding `ticket:assign` skips all three; their write is unchanged
+   * from what TAR-374 shipped.
+   *
+   * ⚠️ **A route whose declared permission is weaker than one of its behaviours
+   * is where authorization bugs live.** This is the review item 0011 decision 2
+   * names, and `ticket-handoff.int-spec.ts` asserts each of the three refusals
+   * against a real database rather than leaving them to be read here.
+   *
+   * One indexed read at most, and only on the branch that needs it: the target's
+   * shared teams, served by `team_members (tenant_id, user_id, team_id)` and
+   * skipped entirely for a caller holding `ticket:assign`, a teamless caller, or
+   * a body naming no user.
+   */
+  private async assertHandoffAllowed(
+    before: TicketRow,
+    input: TicketAssignInput,
+    after: TicketAssignment,
+  ): Promise<void> {
+    const principal = this.tenantContext.requirePrincipal();
+
+    if (principal.permissions.includes('ticket:assign')) {
+      return;
+    }
+
+    if (before.assignedUserId !== principal.userId) {
+      throw TicketHandoffNotPermittedError.notHeld();
+    }
+
+    if (typeof input.teamId === 'string' && !principal.teamIds.includes(input.teamId)) {
+      throw TicketHandoffNotPermittedError.notATeammate();
+    }
+
+    if (typeof input.userId === 'string' && !(await this.isTeammate(principal, input.userId))) {
+      throw TicketHandoffNotPermittedError.notATeammate();
+    }
+
+    if (!hasAssignee(after)) {
+      throw TicketHandoffNotPermittedError.releasing();
+    }
+  }
+
+  /**
+   * Whether the target shares a team with the caller — "teammate" in TAR-32's
+   * own word.
+   *
+   * Handing a ticket back to yourself is trivially allowed and costs no query:
+   * you already hold it, so the write is the no-op `assign` answers 200 for.
+   *
+   * A teamless caller has no teammates and is refused without a query. Otherwise
+   * one `findFirst` over the caller's own team ids — a existence check rather
+   * than a list, because the answer is a boolean. `TenantPrisma` supplies the
+   * tenant equality, so a target in another tenant is simply not there.
+   */
+  private async isTeammate(principal: SessionPrincipal, targetUserId: string): Promise<boolean> {
+    if (targetUserId === principal.userId) {
+      return true;
+    }
+
+    if (principal.teamIds.length === 0) {
+      return false;
+    }
+
+    const shared = await this.prisma.teamMember.findFirst({
+      where: { userId: targetUserId, teamId: { in: [...principal.teamIds] } },
+      select: { teamId: true },
+    });
+
+    return shared !== null;
+  }
+
+  /**
    * Refuses an assignee this tenant does not have, or one that cannot take work.
    *
    * Both lookups go through `TenantPrisma`, so RLS supplies the tenant equality
@@ -484,6 +744,51 @@ export class TicketCommandService {
     };
 
     this.events.emit(TICKET_UPDATED_EVENT, event);
+  }
+
+  /**
+   * Tells the in-process bus that an escalation is committed, **after** the
+   * transaction has landed — the rule every producer of these events follows,
+   * and the reason a rollback can never push a notification nobody can explain.
+   *
+   * It carries the ids of the rows that were **actually inserted**, never the
+   * recipients that were resolved. That is what bounds the relay to one socket
+   * per row, which is what keeps the socket audience equal to the read rule.
+   *
+   * Unlike `ticket.updated` this one has a subscriber from day one: escalation
+   * is addressed to `user:{recipientUserId}`, a room the realtime contract
+   * already publishes to for `sla.breached`, so there is no rooms amendment
+   * here — which is precisely what TAR-25 said it was waiting for.
+   */
+  private announceEscalation(ticketId: string, alerts: readonly InsertedEscalationAlert[]): void {
+    const event: TicketEscalatedEvent = {
+      tenantId: this.tenantContext.requireTenantId(),
+      ticketId,
+      alertIds: alerts.map((alert) => alert.id),
+    };
+
+    this.events.emit(TICKET_ESCALATED_EVENT, event);
+  }
+}
+
+/**
+ * The conditional half of the reason rule, which Zod cannot see (ADR 0011
+ * decision 1).
+ *
+ * The schema owns the shape — trimmed, three characters, five hundred at most,
+ * so the empty string cannot satisfy "present" and log nothing. This owns the
+ * part that is about the **row**: a reason is required exactly when the ticket
+ * already has a holder, because that is what makes the write a *reassignment*
+ * rather than a placement.
+ *
+ * `ticketAssignRequiresReason` is the published predicate, imported rather than
+ * re-expressed: the console asks it before it submits, and a second copy that
+ * drifts is a form that refuses a submit the API would have accepted — or,
+ * worse, offers one it will not.
+ */
+function assertReasonGiven(before: TicketRow, input: TicketAssignInput): void {
+  if (input.reason === undefined && ticketAssignRequiresReason(before)) {
+    throw new TicketReasonRequiredError();
   }
 }
 
