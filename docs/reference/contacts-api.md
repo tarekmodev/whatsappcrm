@@ -147,7 +147,11 @@ safe as a wire key.
 **Merge, not replace, is the decision worth naming.** Replacement would make an agent who
 edits a phone number silently erase every custom value their form did not happen to load.
 The cost is that "clear this field" has to be an explicit `null` rather than an omission —
-one line in a client, and it cannot lose anything.
+one line in a client.
+
+**The merge is per request, and it is not a concurrency guarantee.** It is what stops one
+write from dropping keys that write never carried; it does nothing about two writes landing
+together, which can still lose one — see [Known gaps](#known-gaps).
 
 **Only the keys a write carries are validated.** That is what makes removing a `select`
 option safe: a contact holding the removed value keeps it until that field is next written,
