@@ -1,6 +1,12 @@
 import type { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { PlatformRoute, Public, isPlatformRoute, isPublicRoute } from './route-access';
+import {
+  PlatformRoute,
+  Public,
+  PublicPlatformRoute,
+  isPlatformRoute,
+  isPublicRoute,
+} from './route-access';
 
 const reflector = new Reflector();
 
@@ -60,5 +66,34 @@ describe('route access', () => {
 
     expect(isPlatformRoute(reflector, publicRoute)).toBe(false);
     expect(isPublicRoute(reflector, platformRoute)).toBe(false);
+  });
+
+  /**
+   * The third posture (TAR-405). It has to take a route out of tenant
+   * resolution, because signup runs before the tenant exists — and
+   * `PrincipalGuard` and `PermissionGuard` already stand down on a platform
+   * route, so that one answer is what leaves the handler reachable by an
+   * anonymous caller.
+   */
+  describe('@PublicPlatformRoute()', () => {
+    it('takes the route out of tenant resolution, from the controller or one route', () => {
+      expect(isPlatformRoute(reflector, contextFor({ onClass: [PublicPlatformRoute] }))).toBe(true);
+      expect(isPlatformRoute(reflector, contextFor({ onHandler: [PublicPlatformRoute] }))).toBe(
+        true,
+      );
+    });
+
+    /**
+     * Deliberately **not** `@Public()`. Nothing reads `isPublicRoute` for a route
+     * that is already outside tenancy, and answering true here would make a
+     * future reader believe the two flags are a hierarchy. `route-posture.spec.ts`
+     * counts the posture through its own metadata key, so this route still
+     * declares exactly one.
+     */
+    it('is its own posture rather than a public route', () => {
+      const signupRoute = contextFor({ onClass: [PublicPlatformRoute] });
+
+      expect(isPublicRoute(reflector, signupRoute)).toBe(false);
+    });
   });
 });

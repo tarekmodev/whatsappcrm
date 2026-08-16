@@ -1038,10 +1038,21 @@ model TenantSignup {
   /// race before `provision()` can return an id.
   provisionedTenantId String? @map("provisioned_tenant_id") @db.Uuid
 
-  /// Abuse review only — never a filter, never shown to a user. Rate limiting is
-  /// Redis-backed, in the shape `LoginThrottleService` already uses.
+  /// Abuse review, **and** the durable half of the per-address rate limit
+  /// (TAR-405). The Redis window fails open on an outage, so the same allowance
+  /// is also counted here, over `tenant_signups_ip_address_created_at_idx`.
   ipAddress String?  @map("ip_address") @db.Inet
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// How many times this signup's verification link has been re-sent.
+  ///
+  /// A resend writes no new row, so a limit that counts rows created cannot see
+  /// one — which left `POST /signup/resend` unbounded whenever Redis was down.
+  /// The bound therefore lives on the row the resend actually rotates.
+  /// `SIGNUP_POLICY.resendsPerSignup` is the ceiling and the `UPDATE` carries it
+  /// in its own predicate, so the check and the increment are one statement;
+  /// `tenant_signups_resend_count_non_negative` is the database's floor.
+  resendCount Int @default(0) @map("resend_count")
 
   /// A third index is missing from this block for the same reason as the
   /// reservation above: `tenant_signups_expires_at_idx` is **partial** over
@@ -1049,6 +1060,11 @@ model TenantSignup {
   /// sweep's predicate. Consumed rows are kept and their `expires_at` is in the
   /// past too, so an unpartial index would hand the sweep every signup ever
   /// completed. Raw SQL in `20260815140000_tenant_signups`.
+  ///
+  /// The two rate-limit indexes are missing from this block for the same reason
+  /// — `(ip_address, created_at DESC)` is partial on a non-null address — and
+  /// live in `20260816150000_tenant_signup_resend_bound` beside the column above.
+  @@index([email, createdAt(sort: Desc)])
   @@map("tenant_signups")
 }
 

@@ -134,6 +134,10 @@ const mailerProvider: Provider = {
     ApiExceptionFilter,
   ],
   exports: [
+    // One Redis connection for every throttle in the product. `SignupModule`'s
+    // is the second reader (TAR-405) and opening its own client would double the
+    // connection count for a counter that shares this one's key space anyway.
+    AuthRedisClient,
     LoginThrottleService,
     PasswordService,
     RealtimeTicketService,

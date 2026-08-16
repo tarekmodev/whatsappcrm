@@ -24,7 +24,7 @@ export class ConsoleMailer implements MailerPort {
     const link = await this.renderLink(message);
 
     this.logger.log(
-      `[email:${message.template}] to=${message.to} tenant=${message.tenantId}` +
+      `[email:${message.template}] to=${message.to} tenant=${message.tenantId ?? 'none'}` +
         (link === null ? '' : ` link=${link}`),
     );
   }
@@ -38,6 +38,12 @@ export class ConsoleMailer implements MailerPort {
 
     if (linkPath === undefined || token === undefined) {
       return null;
+    }
+
+    if (message.tenantId === null) {
+      // No tenant to resolve a hostname for, and none to warn about: the message
+      // is self-signup's, and its link is what creates the tenant (TAR-405).
+      return this.links.platformLink(linkPath, token);
     }
 
     const link = await this.links.absoluteLink(linkPath, token);

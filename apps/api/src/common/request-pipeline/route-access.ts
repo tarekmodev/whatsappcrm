@@ -5,17 +5,18 @@ import type { Reflector } from '@nestjs/core';
  * How a route opts out of the globally installed pipeline (TAR-58).
  *
  * The pipeline is on for every route, so a controller does not choose to be
- * protected — it chooses to be *less* protected, out loud, in one of exactly two
- * ways. That inversion is the whole point of the story: a new endpoint that says
- * nothing is closed, and a route that is open is a decision a reviewer can see
- * in the diff.
+ * protected — it chooses to be *less* protected, out loud, in one of exactly
+ * three ways. That inversion is the whole point of the story: a new endpoint
+ * that says nothing is closed, and a route that is open is a decision a reviewer
+ * can see in the diff.
  *
- * Both are read with `getAllAndOverride([handler, class])`, so a controller can
- * state the posture its routes share and a single route can restate it.
+ * All three are read with `getAllAndOverride([handler, class])`, so a controller
+ * can state the posture its routes share and a single route can restate it.
  */
 
 export const PUBLIC_ROUTE = 'pipeline:public-route';
 export const PLATFORM_ROUTE = 'pipeline:platform-route';
+export const PUBLIC_PLATFORM_ROUTE = 'pipeline:public-platform-route';
 
 /**
  * No session required — but still inside a tenant.
@@ -46,12 +47,49 @@ export const Public = (): CustomDecorator<string> => SetMetadata(PUBLIC_ROUTE, t
  */
 export const PlatformRoute = (): CustomDecorator<string> => SetMetadata(PLATFORM_ROUTE, true);
 
+/**
+ * Both at once: no tenant, and no session either.
+ *
+ * The third posture, and it exists because self-signup is genuinely both and
+ * neither of the other two says so (TAR-405, ADR 0009). There is no tenant host
+ * to resolve — the tenant does not exist yet, which is the entire point of the
+ * endpoint — and no session to resolve a principal from.
+ *
+ * ⚠️ **The most exposed thing in the codebase**: open to the internet, outside
+ * tenancy, with no credential of any kind. `@PlatformRoute()` at least promises
+ * the route carries its own authentication — the admin surface has a bearer
+ * token, the webhook an HMAC. This one promises nothing, so what stands in for a
+ * credential has to be stated at the route: a rate limit, a feature flag, and a
+ * body that grants no authority beyond creating a row nobody can reach.
+ *
+ * A separate name rather than composing `@Public()` with `@PlatformRoute()`,
+ * because `route-posture.spec.ts` asserts every route declares **exactly one**
+ * posture, and composing two would break that invariant for every route that
+ * used it — turning a deliberate assertion into one with an exception. It also
+ * puts "open to the internet with no session and no tenant" in the diff as a
+ * single word a reviewer can grep for.
+ */
+export const PublicPlatformRoute = (): CustomDecorator<string> =>
+  SetMetadata(PUBLIC_PLATFORM_ROUTE, true);
+
 export function isPublicRoute(reflector: Reflector, context: ExecutionContext): boolean {
   return readFlag(reflector, context, PUBLIC_ROUTE);
 }
 
+/**
+ * True for `@PlatformRoute()` and for `@PublicPlatformRoute()` alike.
+ *
+ * Both mean "no tenant to resolve", which is the only question `HostTenantGuard`
+ * asks. `PrincipalGuard` and `PermissionGuard` already stand down on a platform
+ * route, so admitting the combined posture here is all it takes for signup to
+ * reach its handler — the difference between the two is what authenticates the
+ * caller afterwards, and that is the route's business rather than the pipeline's.
+ */
 export function isPlatformRoute(reflector: Reflector, context: ExecutionContext): boolean {
-  return readFlag(reflector, context, PLATFORM_ROUTE);
+  return (
+    readFlag(reflector, context, PLATFORM_ROUTE) ||
+    readFlag(reflector, context, PUBLIC_PLATFORM_ROUTE)
+  );
 }
 
 /**

@@ -4,7 +4,7 @@ import type { Type } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Permission } from '@whatsappcrm/contracts';
 import { REQUIRED_PERMISSIONS } from '../../rbac/require-permission.decorator';
-import { PLATFORM_ROUTE, PUBLIC_ROUTE } from './route-access';
+import { PLATFORM_ROUTE, PUBLIC_PLATFORM_ROUTE, PUBLIC_ROUTE } from './route-access';
 
 /**
  * Every route in the application states its posture — once, and only once.
@@ -19,13 +19,15 @@ import { PLATFORM_ROUTE, PUBLIC_ROUTE } from './route-access';
  * is exactly the thing a new controller gets left off, which is the failure mode
  * the whole story exists to remove.
  *
- * Adding a route means picking one of three:
+ * Adding a route means picking one of four:
  *
  *   * `@RequirePermission(...)` or `@AnyPrincipal()` — signed in, inside a
  *     tenant. The default, and the right answer for almost everything.
  *   * `@Public()` — no session, tenant still resolved from the host.
  *   * `@PlatformRoute()` — outside tenancy entirely, authenticated by something
  *     else or deliberately open.
+ *   * `@PublicPlatformRoute()` — outside tenancy *and* unauthenticated. Self-
+ *     signup, and nothing else so far.
  */
 
 /**
@@ -112,6 +114,12 @@ function posturesOf(route: Route): string[] {
 
   if (reflector.getAllAndOverride<boolean | undefined>(PLATFORM_ROUTE, route.targets) === true) {
     declared.push('@PlatformRoute');
+  }
+
+  if (
+    reflector.getAllAndOverride<boolean | undefined>(PUBLIC_PLATFORM_ROUTE, route.targets) === true
+  ) {
+    declared.push('@PublicPlatformRoute');
   }
 
   return declared;
