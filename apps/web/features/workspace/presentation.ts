@@ -11,6 +11,11 @@ import type { BadgeTone } from '@/components/ui/Badge';
  * underneath.
  */
 export const TENANT_STATUS_TONES: Record<TenantStatus, BadgeTone> = {
+  // `info`, not `neutral`: a workspace is only `created` while provisioning is
+  // still running, so the honest signal is "in progress" rather than "nothing to
+  // see here". Reaching this branch at all means a provision stopped halfway,
+  // and a grey badge would hide that under a state that looks settled.
+  created: 'info',
   trialing: 'info',
   active: 'success',
   past_due: 'warning',
@@ -26,9 +31,11 @@ export const TENANT_STATUS_TONES: Record<TenantStatus, BadgeTone> = {
  * The states that get a banner above the page, and nothing else does. Absent
  * here means the state is unremarkable enough for the badge alone.
  *
- * `deleted` is deliberately absent: a deleted workspace has no console to show
- * a banner in — its principals cannot authenticate — so a branch for it would be
- * dead code pretending to handle a case it cannot reach.
+ * `deleted` and `created` are deliberately absent, for the same reason in both
+ * directions: neither has a console to show a banner in. A deleted workspace's
+ * principals cannot authenticate, and a `created` one has no users yet — so a
+ * branch for either would be dead code pretending to handle a case it cannot
+ * reach.
  */
 export const BANNER_STATUSES = ['past_due', 'suspended', 'cancelled'] as const;
 

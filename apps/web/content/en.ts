@@ -1385,8 +1385,19 @@ export const content = {
     upgradeUnavailableNotice:
       'There is no self-service upgrade yet. Contact support to raise a limit.',
 
-    /** One line per lifecycle state, so a badge never carries meaning alone. */
+    /**
+     * One line per lifecycle state, so a badge never carries meaning alone.
+     *
+     * `created` is written for a reader who should never see it. A workspace is
+     * only in that state between its row appearing and provisioning finishing,
+     * both inside one transaction, and the host guard answers `tenant_not_found`
+     * for it — so rendering this string means provisioning stopped halfway. The
+     * copy says the true thing for that case rather than naming the internal
+     * state, because "Created" would read as finished to the one person unlucky
+     * enough to be looking at it.
+     */
     statuses: {
+      created: 'Setting up',
       trialing: 'Trial',
       active: 'Active',
       past_due: 'Payment overdue',
@@ -1396,6 +1407,7 @@ export const content = {
     } satisfies Record<TenantStatus, string>,
 
     statusDescriptions: {
+      created: 'This workspace is still being set up and is not ready yet.',
       trialing: 'Everything is available while the trial runs.',
       active: 'Everything is available.',
       past_due: 'Everything still works. A payment has not gone through.',
