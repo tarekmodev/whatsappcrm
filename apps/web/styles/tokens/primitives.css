@@ -169,6 +169,17 @@
   /* `dvh`, never `vh`: mobile browser chrome makes the two differ by a toolbar. */
   --scale-size-viewport-tall: 62dvh;
 
+  /*
+   * The plotting area of a bar chart, and the narrowest a single day's column
+   * may get before the chart scrolls rather than squeezing (TAR-30).
+   *
+   * The track is tall enough that a difference of a ticket or two is visible and
+   * short enough to sit under the numbers it illustrates rather than above them:
+   * the figures are the report, and the chart is the shape of it.
+   */
+  --scale-size-chart-track: 9rem;
+  --scale-size-chart-column: 0.75rem;
+
   /* --- Measure and aspect ratios ------------------------------------------ */
   /* Comfortable line length for running text; longer is measurably harder to read. */
   --scale-measure-body: 60ch;

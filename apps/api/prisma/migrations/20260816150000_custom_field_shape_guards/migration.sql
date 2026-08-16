@@ -1,0 +1,157 @@
+-- Shape guards for the two JSONB columns amendment 10 builds on (TAR-478).
+--
+-- Three CHECK constraints, no column, no index, no data. TAR-478 is a schema
+-- check of `contacts`, `tags`, `contact_tags` and `custom_field_defs` against
+-- 0002 amendment 10, and the answer is that the schema already carries every
+-- column, type, key and index that contract needs. This migration closes the
+-- one thing the check did find: **two JSONB columns whose shape the contract
+-- assumes and nothing enforces.**
+--
+-- ---------------------------------------------------------------------------
+-- `contacts.custom_fields` must be a JSON object
+-- ---------------------------------------------------------------------------
+--
+-- Amendment 10's delete path strips the key from every contact in the same
+-- transaction as the definition row:
+--
+--   UPDATE contacts SET custom_fields = custom_fields - $key
+--   WHERE tenant_id = $1 AND custom_fields ? $key
+--
+-- `jsonb - text` is only defined for objects. Measured on Postgres 16:
+--
+--   '{"a":1}'::jsonb   - 'a'  →  {}                                   correct
+--   '["a","b"]'::jsonb - 'a'  →  ["b"]         removes an *element*, silently
+--   '"scalar"'::jsonb  - 'a'  →  ERROR: cannot delete from scalar
+--
+-- The column is `JSONB` and nullable with no shape constraint, so all three are
+-- storable today. The second is the dangerous one: an array-valued
+-- `custom_fields` does not fail the delete, it quietly rewrites the row. The
+-- third aborts the whole transaction — an admin deleting a custom field gets a
+-- 500 whose cause is one unrelated contact row written months earlier by a
+-- backfill, an import, or a `SystemPrisma` call site.
+--
+-- The merge semantics amendment 10 rules ("keys present are set, `null` clears
+-- one, absent keys are left alone") are an object operation for the same
+-- reason, as is `contacts.custom_fields ? $key` in a `contact_attribute`
+-- routing condition (0007). One constraint makes all three total.
+--
+-- ---------------------------------------------------------------------------
+-- `custom_field_defs.options` must be a JSON array
+-- ---------------------------------------------------------------------------
+--
+-- `CustomFieldOptionsSchema` is `z.array(z.string())` and the field editor
+-- renders it as a list, so every reader already assumes an array. The column
+-- takes any JSONB. This constraint is the storage-level half of the same rule
+-- and matches `workflow_runs_results_is_array` on the same reasoning.
+--
+-- It stops at "is an array" deliberately. *Which* strings are legal — non-empty,
+-- ≤ 80 characters, distinct, at most 50, present exactly when `type = 'select'`
+-- — stays in `packages/contracts/src/contacts.ts`, where amendment 10 put it so
+-- the console can disable a save the API would refuse. A constraint duplicating
+-- those bounds would be a second copy to keep in step, and it would turn a
+-- `validation_failed` with a field path into a constraint violation with none.
+--
+-- ---------------------------------------------------------------------------
+-- `custom_field_defs.position` must be non-negative
+-- ---------------------------------------------------------------------------
+--
+-- `CustomFieldDefinitionSchema.position` is `z.int().min(0)`. Server-assigned as
+-- `max(position) + 1` on create and rewritten only by `POST
+-- /custom-fields/reorder`, so nothing should ever write a negative — which is
+-- exactly what makes it free to assert.
+--
+-- **No `UNIQUE (tenant_id, position)`, deliberately.** Every existing row sits
+-- at the column default of `0`, so the constraint could not be added without a
+-- backfill; amendment 10's ordering is `position ASC, id ASC` precisely so ties
+-- are well-defined; and a reorder rewriting a whole set through a unique index
+-- needs the constraint deferred or a two-pass shuffle through spare values.
+-- Ties are part of the contract, not a defect to constrain away.
+--
+-- ---------------------------------------------------------------------------
+-- What this migration deliberately does not add
+-- ---------------------------------------------------------------------------
+--
+--   `custom_field_defs (tenant_id, position, id)`
+--     Amendment 10 calls this out as "worth adding when the table is first
+--     served … optional at 50 rows per tenant", and asks for it to be a choice
+--     rather than an oversight. It was built and measured against 50
+--     definitions per tenant across 20 tenants — the contract's own ceiling:
+--
+--       without   Bitmap Index Scan on custom_field_defs_tenant_id_key_key
+--                 → quicksort 50 rows, 19 buffers, 0.17 ms
+--       with      Bitmap Index Scan on the new index
+--                 → **still a quicksort**, 16 buffers, no plan improvement
+--
+--     A bitmap scan discards index order, so the sort survives; it is 50 rows
+--     and the sort is noise. The index costs a write on every create and up to
+--     50 index-tuple updates on every reorder. **Declined**, on measurement.
+--     Revisit if `definitionsPerTenant` is ever raised past a few hundred.
+--
+--   A GIN index on `contacts.custom_fields`
+--     The only query shaped for one is amendment 10's delete-strip, whose
+--     `custom_fields ? $key` predicate a default-opclass GIN can serve.
+--     Measured on 500 000 contacts, 300 000 under one tenant, 180 000 of them
+--     holding the key: **the planner chose a Seq Scan in every run, with the
+--     index and without it.** At 60% selectivity that is the correct choice,
+--     and the scan is not where the time goes — the 180 000-row UPDATE is
+--     (~3.5 million buffer accesses, ~19 per row, against ~12 000 for the scan
+--     that finds them). The index adds 1.9 MB and write amplification on the
+--     hottest write in the product for a plan that never changes. **Declined.**
+--
+--   Indexes for "filter the contact list by tag"
+--     Already present and already sufficient — see `down.sql`'s note and the
+--     measurements on TAR-478. Both plan shapes exist today and the planner
+--     picks between them by tag selectivity, so this migration adds nothing.
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+--   Additive    Three CHECK constraints. No column, index, type, policy or row
+--               is changed, so code running against the previous schema is
+--               unaffected — every value it writes today already satisfies all
+--               three.
+--   Duration    Milliseconds. Every environment this can reach holds seed data
+--               only (`demo-dataset.ts`), so the validating scans read tens of
+--               rows.
+--   Locks       ACCESS EXCLUSIVE on `contacts` and `custom_field_defs` for the
+--               duration of the validating scan — it blocks reads as well as
+--               writes, which is why `lock_timeout` is set below.
+--   Blocking    `lock_timeout` caps the wait at three seconds, so a conflicting
+--               long-running transaction aborts this migration cleanly rather
+--               than queueing ahead of every new query. Re-run once it clears.
+--   Write cost  A predicate evaluated per row on insert and on any update
+--               touching the column. `jsonb_typeof` reads the type byte and
+--               allocates nothing.
+--   Data loss   None. `down.sql` drops three constraints and nothing else.
+--
+-- ⚠️ **Added plain, not `NOT VALID` + `VALIDATE`.** In one transaction the two
+-- forms are the same thing: `ADD CONSTRAINT … NOT VALID` takes ACCESS EXCLUSIVE
+-- and holds it to commit, so `VALIDATE`'s gentler SHARE UPDATE EXCLUSIVE never
+-- gets to matter — and Prisma runs a migration inside one transaction. The
+-- split only buys anything as **two migrations**. If this ever has to reach a
+-- `contacts` with a real backlog, split it that way: `ADD CONSTRAINT … NOT
+-- VALID` (a catalog change, instant) in one, `VALIDATE CONSTRAINT` (a scan
+-- under a lock that blocks neither reads nor writes) in the next. The same
+-- constraint and the same resolution as 20260813140000_routing_rule_schema.
+--
+-- **Prisma cannot express a CHECK constraint** and its describer does not read
+-- them, so none of these appears in `schema.prisma` and none is reported as
+-- drift. `migrate dev` will not propose to drop them either.
+--
+-- No `pnpm db:roles` re-run: this adds no table, so no grant and no policy
+-- changes. Tenant isolation is untouched.
+
+SET LOCAL lock_timeout = '3s';
+
+ALTER TABLE "public"."contacts"
+    ADD CONSTRAINT "contacts_custom_fields_is_object"
+    CHECK ("custom_fields" IS NULL OR jsonb_typeof("custom_fields") = 'object');
+
+ALTER TABLE "public"."custom_field_defs"
+    ADD CONSTRAINT "custom_field_defs_options_is_array"
+    CHECK ("options" IS NULL OR jsonb_typeof("options") = 'array');
+
+ALTER TABLE "public"."custom_field_defs"
+    ADD CONSTRAINT "custom_field_defs_position_non_negative"
+    CHECK ("position" >= 0);

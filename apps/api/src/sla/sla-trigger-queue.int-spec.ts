@@ -183,7 +183,7 @@ describe('the SLA triggers, through the real queue', () => {
   });
 
   beforeEach(async () => {
-    await systemPrisma.slaAlert.deleteMany({ where: { tenantId: TENANT } });
+    await systemPrisma.notification.deleteMany({ where: { tenantId: TENANT } });
     await systemPrisma.slaTimer.deleteMany({ where: { tenantId: TENANT } });
     await systemPrisma.ticketEvent.deleteMany({ where: { tenantId: TENANT } });
     await systemPrisma.ticket.deleteMany({ where: { tenantId: TENANT } });

@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SLA_DEFAULTS } from '@whatsappcrm/contracts';
+import { PLAN_FEATURES, SLA_DEFAULTS } from '@whatsappcrm/contracts';
 import { type $Enums, type Prisma } from '../generated/prisma/client';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 import { isUniqueViolationOn } from '../prisma/unique-violation';
@@ -228,7 +228,7 @@ function findProvisionedTenant(tx: Prisma.TransactionClient, slug: string) {
       slaPolicies: { select: { id: true }, take: 1 },
       // Present or absent is the whole question — the caps themselves are not
       // reasserted over whatever a tenant was given.
-      planLimits: { select: { id: true } },
+      entitlements: { select: { id: true } },
     },
   });
 }
@@ -256,7 +256,7 @@ async function createTenant(
       //
       // Operator-provisioned tenants go straight to `active` and skip the trial:
       // self-signup is TAR-405's path, and it is what starts a tenant in
-      // `trialing` against the `tenant_plan_limits` row (TAR-403).
+      // `trialing` against the `tenant_entitlements` row (TAR-403).
       status: 'active',
       settings: { create: { timezone, locale } },
       domains: {
@@ -270,7 +270,7 @@ async function createTenant(
         },
       },
       slaPolicies: { create: defaultSlaPolicy() },
-      planLimits: { create: operatorPlanLimits() },
+      entitlements: { create: operatorEntitlements() },
     },
     select: { id: true, slug: true, name: true, status: true, createdAt: true },
   });
@@ -331,9 +331,9 @@ async function completeTenant(
   // The same repair for the caps, and guarded the same way. TAR-403's migration
   // gave every tenant that existed when it ran an `unlimited` row; this is what
   // gives one to a tenant provisioned between that migration and this change.
-  if (existing.planLimits === null) {
-    await tx.tenantPlanLimits.create({
-      data: { tenantId: existing.id, ...operatorPlanLimits() },
+  if (existing.entitlements === null) {
+    await tx.tenantEntitlements.create({
+      data: { tenantId: existing.id, ...operatorEntitlements() },
       select: { id: true },
     });
   }
@@ -371,15 +371,16 @@ function defaultSlaPolicy() {
 }
 
 /**
- * The caps an **operator-provisioned** tenant gets: none.
+ * The entitlements an **operator-provisioned** tenant gets: every limit
+ * unlimited, every feature on.
  *
- * Every column is stated rather than left to the database, and both defaults are
- * deliberately overridden. `tenant_plan_limits` defaults to the trial figures
- * (`trial`, three seats, a thousand conversations) because self-signup is the
- * common path; a tenant an operator provisioned by hand was never sold a cap, so
- * inheriting the trial's would silently apply one nobody agreed to. That is the
- * same judgement TAR-403's migration made when it grandfathered every existing
- * tenant as `unlimited` rather than onto the trial.
+ * Every field is stated rather than left to the database, and the defaults are
+ * deliberately overridden. `tenant_entitlements` defaults to the published trial
+ * shape because self-signup is the common path; a tenant an operator provisioned
+ * by hand was never sold a plan, so inheriting the trial's ceilings would
+ * silently apply ones nobody agreed to. That is the same judgement TAR-403's
+ * migration made when it grandfathered every existing tenant as `unlimited`, and
+ * the same one the ruling-3 migration made when it widened those rows.
  *
  * Writing the row at all — rather than relying on `PlanLimitsService` reading a
  * missing row as unlimited — is what keeps that fallback unreachable in practice.
@@ -387,10 +388,25 @@ function defaultSlaPolicy() {
  * open silently, so every tenant carries an explicit answer and the fallback
  * stays a backstop for rows written before this change.
  *
- * `null` is unlimited, deliberately not `0`: the `tenant_plan_limits_caps_positive`
- * constraint refuses zero precisely because a cap of zero is a lockout reached by
- * accident rather than a limit anyone decided.
+ * `null` is unlimited, deliberately not `0`: `tenant_entitlements_shape` refuses
+ * zero precisely because a cap of zero is a lockout reached by accident rather
+ * than a limit anyone decided. The whole `PlanEntitlements` shape is written
+ * because `TenantLifecycleResponse.plan` is served from this row (ADR 0009
+ * Amendment 1 ruling 3), so a partial one would not render.
  */
-function operatorPlanLimits() {
-  return { planKey: 'unlimited', seatCap: null, conversationCap: null };
+function operatorEntitlements() {
+  return {
+    planKey: 'unlimited',
+    planName: 'Unlimited',
+    entitlements: {
+      features: [...PLAN_FEATURES],
+      limits: {
+        seats: null,
+        conversationsPerPeriod: null,
+        whatsappNumbers: null,
+        teams: null,
+        knowledgeDocuments: null,
+      },
+    },
+  };
 }

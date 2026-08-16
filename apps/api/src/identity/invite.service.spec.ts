@@ -207,8 +207,22 @@ function buildService(state: FakeState): {
       findMany: ({ where }: { where: { id: { in: string[] } } }) =>
         Promise.resolve(where.id.in.filter((id) => state.teams.includes(id)).map((id) => ({ id }))),
     },
-    tenantPlanLimits: {
-      findFirst: () => Promise.resolve({ seatCap: state.seatCap }),
+    tenantEntitlements: {
+      // The column holds the whole `PlanEntitlements` shape since ADR 0009
+      // Amendment 1 ruling 3; `state.seatCap` is still the knob this suite turns.
+      findFirst: () =>
+        Promise.resolve({
+          entitlements: {
+            features: [],
+            limits: {
+              seats: state.seatCap,
+              conversationsPerPeriod: null,
+              whatsappNumbers: null,
+              teams: null,
+              knowledgeDocuments: null,
+            },
+          },
+        }),
     },
     $executeRaw: () => Promise.resolve(1),
     invite: {

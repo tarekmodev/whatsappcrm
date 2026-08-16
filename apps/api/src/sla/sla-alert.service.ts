@@ -15,7 +15,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import type { Prisma } from '../generated/prisma/client';
 import { UserRole, UserStatus } from '../generated/prisma/enums';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
-import { SLA_ALERT_PROJECTION, toSlaAlertResponse } from './sla-alert.mapper';
+import { SLA_ALERT_PROJECTION, SLA_BREACH_ONLY, toSlaAlertResponse } from './sla-alert.mapper';
 import {
   resolveAlertRecipients,
   type AlertCandidate,
@@ -47,7 +47,7 @@ import { InvalidSlaCursorError, SlaAlertNotFoundError } from './sla.errors';
  */
 const ALERT_ROLES: readonly UserRole[] = [UserRole.supervisor, UserRole.admin];
 
-/** One `sla_alerts` row this breach actually wrote. */
+/** One `notifications` row this breach actually wrote. */
 export interface InsertedSlaAlert {
   readonly id: string;
   readonly recipientUserId: string;
@@ -142,9 +142,13 @@ export class SlaAlertService {
       return [];
     }
 
-    return await tx.slaAlert.createManyAndReturn({
+    return await tx.notification.createManyAndReturn({
       data: breach.recipientUserIds.map((recipientUserId) => ({
         tenantId: breach.tenantId,
+        // Explicit rather than left to the column default. The default exists so
+        // that a writer which forgets the column fails the CHECK loudly (0009,
+        // decision 7); relying on it here would make this the writer that forgot.
+        type: 'sla_breach' as const,
         slaTimerId: breach.slaTimerId,
         ticketId: breach.ticketId,
         recipientUserId,
@@ -159,8 +163,13 @@ export class SlaAlertService {
   /**
    * The caller's alerts, newest first, keyset paginated on
    * `(created_at DESC, id DESC)` — served by
-   * `sla_alerts (tenant_id, recipient_user_id, created_at DESC, id DESC)`, which
-   * carries the recipient filter and the sort in one index.
+   * `notifications (tenant_id, recipient_user_id, created_at DESC, id DESC)`,
+   * which carries the recipient filter and the sort in one index.
+   *
+   * `type = 'sla_breach'` is a filter on top of that index rather than a column in
+   * it, deliberately: the set is already bounded by one recipient and one page, and
+   * putting `type` in the middle of the index would cost the wider notification
+   * list its sort order (TAR-394, 0009 decision 7).
    */
   async list(query: SlaAlertListQuery): Promise<CursorPage<SlaAlertResponse>> {
     const principal = this.tenantContext.requirePrincipal();
@@ -170,8 +179,9 @@ export class SlaAlertService {
       throw new InvalidSlaCursorError('cursor');
     }
 
-    const rows = await this.prisma.slaAlert.findMany({
+    const rows = await this.prisma.notification.findMany({
       where: {
+        ...SLA_BREACH_ONLY,
         recipientUserId: principal.userId,
         ...(query.unacknowledgedOnly ? { acknowledgedAt: null } : {}),
         ...(cursor.outcome === 'cursor' ? resumeFrom(cursor.cursor) : {}),
@@ -207,13 +217,18 @@ export class SlaAlertService {
   async acknowledge(alertId: string): Promise<SlaAlertResponse> {
     const principal = this.tenantContext.requirePrincipal();
 
-    await this.prisma.slaAlert.updateMany({
-      where: { id: alertId, recipientUserId: principal.userId, acknowledgedAt: null },
+    await this.prisma.notification.updateMany({
+      where: {
+        ...SLA_BREACH_ONLY,
+        id: alertId,
+        recipientUserId: principal.userId,
+        acknowledgedAt: null,
+      },
       data: { acknowledgedAt: new Date() },
     });
 
-    const alert = await this.prisma.slaAlert.findFirst({
-      where: { id: alertId, recipientUserId: principal.userId },
+    const alert = await this.prisma.notification.findFirst({
+      where: { ...SLA_BREACH_ONLY, id: alertId, recipientUserId: principal.userId },
       select: SLA_ALERT_PROJECTION,
     });
 
@@ -242,7 +257,7 @@ export class SlaAlertService {
 }
 
 /** The resume predicate 0002 rules, on `created_at` descending. */
-function resumeFrom(cursor: TimestampCursor): Prisma.SlaAlertWhereInput {
+function resumeFrom(cursor: TimestampCursor): Prisma.NotificationWhereInput {
   const { bound, exclude } = resumeAfter(cursor, 'desc');
 
   return { createdAt: bound, NOT: { createdAt: cursor.at, ...exclude } };

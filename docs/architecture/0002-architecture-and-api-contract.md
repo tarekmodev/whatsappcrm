@@ -590,6 +590,20 @@ POST   /api/v1/contacts                      → ContactResponse              co
 GET    /api/v1/contacts/{id}                 → ContactResponse              contact:read
 PATCH  /api/v1/contacts/{id}                 → ContactResponse              contact:write
 
+# Custom field definitions — the tenant's contact schema                   TAR-33
+# Immutability of `key` and `type`, delete semantics, value validation:
+# amendment 10 below.
+GET    /api/v1/custom-fields                 → CustomFieldDefinitionListResponse
+                                                                      contact:read
+POST   /api/v1/custom-fields                 → CustomFieldDefinition
+                                                                      tenant:settings
+PATCH  /api/v1/custom-fields/{id}            → CustomFieldDefinition
+                                                                      tenant:settings
+DELETE /api/v1/custom-fields/{id}            → 204                    tenant:settings
+POST   /api/v1/custom-fields/reorder         → CustomFieldDefinitionListResponse
+                                                                      tenant:settings
+                                                                      added by amendment 10
+
 # Inbox                                                                   TAR-20
 GET    /api/v1/conversations                 → CursorPage<ConversationResponse>  conversation:read
 GET    /api/v1/conversations/{id}            → ConversationResponse
@@ -1799,3 +1813,173 @@ reply reopened the ticket underneath the request. One additive contract change l
 (`agent`, `inbound_message`, `automation`, `sla`) — which is how a client tells an agent
 reopening a ticket by hand from the customer reopening it by replying. `ticket_events.data`
 is JSON for exactly this reason, so it is not a migration.
+
+### Amendment 10 — custom field definitions (TAR-33, TAR-476)
+
+TAR-33's first acceptance criterion — "an admin defines a custom field, and agents see it as
+editable on that contact's profile" — has no route to define one. `custom_field_defs` has
+existed since `20260810130000_initial_data_model` and `CustomFieldDefinitionSchema` has been
+published since TAR-39, but nothing writes either. The frontend is already living in that
+gap: `apps/web/lib/api/contact-schema.ts` reads `/v1/custom-fields` for the routing-rule
+condition builder (TAR-289) and treats `not_found` as "this tenant has no vocabulary yet",
+with a comment asking for exactly this ruling. This amendment closes it, and rules the four
+things a client would otherwise have to discover by trying: what is immutable, what a delete
+does, how a value is validated, and whether a write replaces or merges.
+
+```
+GET    /api/v1/custom-fields          → CustomFieldDefinitionListResponse  contact:read
+POST   /api/v1/custom-fields          → CustomFieldDefinition   201        tenant:settings
+PATCH  /api/v1/custom-fields/{id}     → CustomFieldDefinition   200        tenant:settings
+DELETE /api/v1/custom-fields/{id}     → 204                                tenant:settings
+POST   /api/v1/custom-fields/reorder  → CustomFieldDefinitionListResponse  tenant:settings
+```
+
+**`/custom-fields`, not `/custom-field-defs`.** TAR-476 proposes the latter. The console and
+its mock transport have shipped against the former since TAR-289, the conventions table asks
+for a plural kebab-case noun, and `-defs` is an abbreviation of a table name leaking into a
+public path. There is no competing resource to disambiguate from: a _value_ is never
+addressable on its own — it lives inside `ContactResponse.customFields` — so `/custom-fields`
+can only mean the definitions. _Rejected:_ the issue's spelling, which would rename working
+frontend code to match a table.
+
+**`tenant:settings` to mutate, `contact:read` to list, and no new permission.**
+TAR-33 wants admin-only definition and all-roles visibility. `contact:write` cannot carry the
+write half — every agent holds it, and that is the criterion inverted. `tenant:settings` is
+already in `PERMISSIONS` and in no role list but `admin`'s, so it is admin-only today with
+`rbac.ts` unchanged, and defining the shape of the tenant's contact record is tenant
+configuration by any reading. Amendments 7 and 8 both declined to grow the vocabulary for one
+surface, and this follows them. _Rejected:_ a new `custom_field:write`. The cost of the
+choice, stated so it is not rediscovered: if supervisors should later manage the schema, they
+cannot be granted this without also being granted branding and the rest of tenant settings —
+**that** is the moment the split earns its place, not now.
+
+Reads use `contact:read` rather than the mutation permission because every agent has to
+render the fields to fill them in. A definition list is not sensitive: it is labels and
+option lists, never a contact's data.
+
+#### `key` and `type` are immutable; `label` and `options` are not
+
+`PATCH` accepts `label` and `options`, and nothing else. This is the load-bearing decision of
+the amendment, and it follows from where values live rather than from taste:
+
+- **`key`** is the JSONB key inside `contacts.custom_fields`, and it is what a
+  `contact_attribute` routing condition names (0007). Renaming it orphans every contact's
+  value and silently stops every rule that references it from ever matching — the worst
+  failure shape available, because routing that quietly matches nothing looks like routing
+  that is working. `label` exists precisely so the user-visible name can change freely.
+- **`type`** is what every already-stored value was validated against, and nothing
+  re-validates them. Flipping `text` → `number` on a field holding `"Gold tier"` leaves an
+  agent with a profile the API refuses to save back, and the field they need to fix is not
+  the one they opened the contact for.
+
+Both are delete-and-recreate. _Rejected:_ a type change that re-validates the tenant's
+contacts first — it is a full scan of the contacts table to produce an error the admin cannot
+act on ("41 contacts hold a value that is not a number"), and the alternative, coercing what
+it can and dropping the rest, destroys data on a settings screen.
+
+Removing an option from a `select` **is** allowed and rewrites no contact row. A stored value
+outside the current option list survives untouched until that field is next written, because
+contact writes validate only the keys they carry (below). The profile renders such a value
+as-is; it is stale, not corrupt. _Rejected:_ refusing the removal while any contact holds the
+value — it needs a scan of the tenant's contacts on every option edit, to protect data the
+admin has just said they no longer want.
+
+#### Delete strips the values in the same transaction
+
+`DELETE /api/v1/custom-fields/{id}` removes the definition row **and** strips that key from
+`contacts.custom_fields` for the tenant, in one transaction. It refuses with `conflict` when
+a routing rule names the key, listing the offending rules in `details` — a rule whose
+condition can never match again is the silent-failure mode above, arriving by a different
+door, and the admin can disable the rule and retry.
+
+_Rejected:_ deleting the definition row alone and leaving the values orphaned, which is
+cheaper and was the obvious first answer. It has a trap with teeth: keys are unique per
+tenant, so an admin who deletes `national_id` and later creates a field with the same key
+gets every old value back, on a screen that gives no hint they were ever there. That is a
+data-retention incident produced by two ordinary settings actions.
+
+The cost is a write proportional to the tenant's contact count — `UPDATE contacts SET
+custom_fields = custom_fields - $key WHERE tenant_id = $1 AND custom_fields ? $key`, with no
+index to help it. Deleting a custom field is a rare, admin-triggered, interactive action, so
+this is the right trade at the scale this product is built for. **The breaking point is
+stated rather than left to be found:** when a tenant's contact count makes that statement
+exceed the request timeout, the delete fails as a whole — the transaction rolls back and
+nothing is half-done — and the fix at that point is to move the strip to a job, marking the
+definition deleted first. Nothing in this contract changes when that happens.
+
+#### `ContactResponse.customFields` — keyed by `key`, and a merge on write
+
+TAR-476 asks whether values are keyed by `custom_field_defs.id`. They are keyed by **`key`**,
+which is what `contacts.custom_fields`, `CustomFieldValuesSchema` and 0007's
+`contact_attribute` condition already assume. Keying the wire format by `id` would mean
+translating on every read and write of the hottest object in the product, and would leave the
+routing engine speaking a different language from the API for the same field. `key` being
+immutable is what makes it safe as a wire key.
+
+The map is `Record<string, string | null>`. Rules a client can rely on:
+
+| Concern           | Rule                                                                           |
+| ----------------- | ------------------------------------------------------------------------------ |
+| Response contents | Every defined field the contact has a value for. Never-set keys are **absent** |
+| Write semantics   | **Merge.** Keys present are set, `null` clears one, absent keys are left alone |
+| Unknown key       | `validation_failed` — never silently dropped                                   |
+| Ordering          | The definition list's `position`, ascending, `id` ascending as tie-break       |
+
+Merge, not replace, is the decision worth naming. Replacement makes an agent who edits a
+phone number silently erase every custom value their form did not happen to load, and makes
+two agents editing different fields on the same contact a last-writer-wins data loss. The
+cost is that "clear this field" has to be an explicit `null` rather than an omission, which
+is one line in the client and cannot lose anything.
+
+Values are validated per type by `customFieldValueIssue` in `packages/contracts/src/contacts.ts`
+— one function, so the console disables a save the API would refuse instead of keeping a
+second copy of the rules: `number` must parse finite (a blank or padded string does not),
+`boolean` is exactly `true`/`false`, `date` is a calendar date `YYYY-MM-DD` with no time and
+no zone (a renewal date is not an instant, and `TimestampSchema` would make it one),
+`select` must be a current option, `text` is capped at 500 characters. Failures land as
+`validation_failed` with `details[].path` of `customFields.<key>`.
+
+#### Ordering, and why `reorder` is a fifth route
+
+`custom_field_defs.position` has existed since the initial migration, defaults to `0`, and
+nothing sets it — so every definition sorts equal today and the profile form's field order is
+whatever Postgres returns. `POST /custom-fields/reorder` takes the tenant's complete ordered
+id set, exactly as amendment 7's rule reorder does, and answers `conflict` when the submitted
+set is not the current set. `POST` assigns `max(position) + 1` server-side and `PATCH` does
+not accept `position` at all, so there is one way to change order and it is atomic.
+_Rejected:_ a `position` on `PATCH`, which makes "move this field up" a client-computed
+renumbering of its neighbours, raced by the next admin.
+
+#### The list is a vocabulary, not a page
+
+`CustomFieldDefinitionListResponse` keeps `CursorPage`'s `{ items, nextCursor }` shape with
+`nextCursor` fixed at `null`, and takes no query parameters —
+`CUSTOM_FIELD_LIMITS.definitionsPerTenant` (50) is enforced on create, so a bounded response
+is a promise the server can keep, and the routing-rule dropdown that reads this needs the
+whole set anyway. 50 sits under `CursorPageQuerySchema`'s ceiling of 100, so the `?limit=100`
+the shipped console already sends can never truncate the vocabulary; that parameter is
+stripped by the global pipe rather than rejected, per the conventions table. Exceeding the
+cap on create is `conflict`. There is deliberately no `GET /custom-fields/{id}` — the list
+_is_ the resource, and a client that has it has the row.
+
+#### Schema and contract deltas
+
+No migration. `custom_field_defs` is used exactly as scaffolded — `(tenant_id, key)` unique
+gives `conflict` on a duplicate key, `position` gets a writer, and no column is renamed or
+redesigned. One index is worth adding when the table is first served,
+`custom_field_defs (tenant_id, position, id)`, so the list read is ordered by the index; it is
+optional at 50 rows per tenant and is called out here so it is a choice rather than an
+oversight.
+
+**One published drift is closed by refusal rather than by migration.** The Postgres enum
+`custom_field_type` carries six labels; `CUSTOM_FIELD_TYPES` publishes five. `multi_select` is
+not offered: a value is a single string, so it would need an encoding decision, and the
+routing engine's `equals` / `contains` operators would need "any of" semantics — neither is
+asked for by TAR-33, whose own assumption is "simple key-value (text/number/select), not
+relational". The label stays in the database because dropping it is a migration that buys
+nothing, and `CustomFieldTypeSchema` is what refuses it at the edge.
+
+**No new error code.** `validation_failed`, `not_found`, `conflict` and `forbidden` cover
+every refusal here. Contract changes land in `contacts.ts` only, and are additive except for
+`CustomFieldDefinitionSchema`, which gains `position`, `createdAt` and `updatedAt` — a
+response-only widening no existing caller reads.

@@ -16,6 +16,19 @@ import type {
   WhatsAppAccountStatus,
   WhatsAppBusinessVerificationStatus,
   WhatsAppQualityRating,
+  WorkflowActionOutcome,
+  WorkflowActionType,
+  WorkflowAssignmentState,
+  WorkflowBrokenReason,
+  WorkflowConditionType,
+  WorkflowFailureReason,
+  WorkflowMatchOperator,
+  WorkflowNotifyAudience,
+  WorkflowNumberOperator,
+  WorkflowRunStatus,
+  WorkflowSetOperator,
+  WorkflowTaxonomyKind,
+  WorkflowTriggerType,
 } from '@whatsappcrm/contracts';
 import type { FileSizeUnit } from '@/lib/format/file-size';
 
@@ -52,10 +65,12 @@ export const content = {
     expandNav: 'Expand navigation',
     inbox: 'Inbox',
     tickets: 'Tickets',
+    reports: 'Reports',
     settings: 'Settings',
     workspace: 'Workspace',
     people: 'People',
     assignment: 'Assignment',
+    workflows: 'Workflows',
     whatsapp: 'WhatsApp',
     security: 'Security',
     onboarding: 'Getting started',
@@ -1212,6 +1227,326 @@ export const content = {
     reorderSuccess: 'Rule order saved',
   },
 
+  /**
+   * The automation builder (TAR-27). Its vocabulary is deliberately *not* the
+   * routing rules' vocabulary: a routing rule decides where a conversation goes
+   * and the first match wins, while every matching workflow runs and each one
+   * writes to a ticket. Sharing the copy would flatten a difference a supervisor
+   * has to understand.
+   */
+  workflows: {
+    title: 'Workflows',
+    subtitle: 'Automate what happens to a ticket, without anybody watching.',
+    heading: 'Workflows',
+    sectionDescription:
+      'Every workflow that matches runs, in the order below. A new workflow starts switched off — test it against a real ticket, then turn it on.',
+    loading: 'Loading workflows',
+    emptyHeading: 'No workflows yet',
+    emptyBody:
+      'Add a workflow to escalate, tag or reassign tickets automatically instead of watching the queue for them.',
+    limitReachedHint: (maxCount: number) =>
+      `This workspace has reached its limit of ${String(maxCount)} workflows. Delete one to add another.`,
+
+    listLabel: 'Workflows, in the order they run',
+    orderPosition: (index: number) => `Workflow ${String(index)}`,
+    active: 'On',
+    inactive: 'Off',
+    triggerHeading: 'Runs when',
+    conditionsHeading: 'And only when',
+    actionsHeading: 'Then',
+    alwaysMatches: 'every time — this workflow has no conditions',
+
+    addWorkflow: 'Add workflow',
+    addWorkflowTitle: 'Add a workflow',
+    addWorkflowSubmit: 'Add workflow',
+    editWorkflow: 'Edit',
+    editWorkflowAria: (name: string) => `Edit ${name}`,
+    editWorkflowTitle: (name: string) => `Edit ${name}`,
+    editWorkflowSubmit: 'Save changes',
+    moveUp: 'Move up',
+    moveUpAria: (name: string) => `Move ${name} earlier`,
+    moveDown: 'Move down',
+    moveDownAria: (name: string) => `Move ${name} later`,
+    enable: 'Turn on',
+    enableAria: (name: string) => `Turn on ${name}`,
+    disable: 'Turn off',
+    disableAria: (name: string) => `Turn off ${name}`,
+    testWorkflow: 'Test',
+    testWorkflowAria: (name: string) => `Test ${name} against a ticket`,
+    viewRuns: 'History',
+    viewRunsAria: (name: string) => `Recent runs of ${name}`,
+    deleteWorkflow: 'Delete',
+    deleteWorkflowAria: (name: string) => `Delete ${name}`,
+    deleteWorkflowTitle: 'Delete workflow',
+    deleteWorkflowBody: (name: string) =>
+      `${name} stops running immediately. Tickets it already changed keep those changes, and this cannot be undone.`,
+    deleteWorkflowConfirm: 'Delete workflow',
+
+    nameLabel: 'Workflow name',
+    namePlaceholder: 'Escalate stale tickets',
+    nameHint: 'Shown in the run history as the reason a ticket changed.',
+    nameRequiredError: 'Give the workflow a name',
+    nameTooLongError: (maxLength: number) => `Use at most ${String(maxLength)} characters`,
+
+    triggerLegend: 'Trigger',
+    triggerHint: 'What has to happen to a ticket for this workflow to consider it.',
+    triggerTypeLabel: 'Run when',
+    minutesLabel: 'After',
+    minutesUnit: 'minutes',
+    minutesHint: (minMinutes: number, maxMinutes: number) =>
+      `Between ${String(minMinutes)} minutes and ${String(maxMinutes)} minutes (30 days). Detection can lag by up to a minute.`,
+    minutesRangeError: (minMinutes: number, maxMinutes: number) =>
+      `Enter a whole number of minutes between ${String(minMinutes)} and ${String(maxMinutes)}`,
+
+    conditionsLegend: 'Conditions',
+    conditionsHint:
+      'A ticket has to match every condition. Leave this empty to run every time the trigger fires.',
+    conditionsFullHint: (maxCount: number) =>
+      `A workflow can hold up to ${String(maxCount)} conditions.`,
+    addCondition: 'Add condition',
+    removeCondition: 'Remove',
+    removeConditionAria: (index: number) => `Remove condition ${String(index)}`,
+    conditionNumber: (index: number) => `Condition ${String(index)}`,
+    conditionTypeLabel: 'Check',
+
+    actionsLegend: 'Actions',
+    actionsHint:
+      'Run in the order below. If one fails, the ones after it are skipped and the run says which.',
+    actionsFullHint: (maxCount: number) => `A workflow can hold up to ${String(maxCount)} actions.`,
+    addAction: 'Add action',
+    removeAction: 'Remove',
+    removeActionAria: (index: number) => `Remove action ${String(index)}`,
+    actionNumber: (index: number) => `Action ${String(index)}`,
+    actionTypeLabel: 'Do',
+    actionsRequiredError: 'Add at least one action',
+
+    operatorLabel: 'Comparison',
+    matchLabel: 'Match',
+    statusValuesLabel: 'Statuses',
+    statusValuesRequiredError: 'Choose at least one status',
+    priorityValuesLabel: 'Priorities',
+    priorityValuesRequiredError: 'Choose at least one priority',
+    assignmentStateLabel: 'Assignment',
+    assignmentTeamLabel: 'Team',
+    assignmentUserLabel: 'Agent',
+    anyTeam: 'Any team',
+    anyUser: 'Anyone',
+    tagsLabel: 'Tags',
+    tagsRequiredError: 'Choose at least one tag',
+    tagsTooManyError: (maxCount: number) => `Choose at most ${String(maxCount)} tags`,
+    tagsUnavailable: 'This workspace has no tags yet, so a tag condition has nothing to match on.',
+    ageMinutesLabel: 'Age in minutes',
+    businessHoursLabel: 'The ticket is',
+    businessHoursWithin: 'Inside business hours',
+    businessHoursOutside: 'Outside business hours',
+    businessHoursNotice:
+      'This uses the business hours set for the workspace. Until those are set, the condition never matches and the workflow is skipped.',
+
+    tagLabel: 'Tag',
+    tagRequiredError: 'Choose a tag to apply',
+    assigneeKindLabel: 'Reassign to a',
+    assigneeKindTeam: 'Team',
+    assigneeKindUser: 'Agent',
+    assigneeTeamLabel: 'Team',
+    assigneeUserLabel: 'Agent',
+    assigneeRequiredError: 'Choose who the ticket should go to',
+    noTeamsHint: 'Create a team on the People page first.',
+    notifyAudienceLabel: 'Notify',
+    notifyUserLabel: 'Agent',
+    notifyTeamLabel: 'Team',
+    notifyUserRequiredError: 'Choose who to notify',
+    notifyTeamRequiredError: 'Choose which team to notify',
+    messageLabel: 'Note',
+    messageHint: (maxLength: number) =>
+      `Optional. Shown with the notification, at most ${String(maxLength)} characters. The ticket number is included automatically.`,
+    messageTooLongError: (maxLength: number) => `Use at most ${String(maxLength)} characters`,
+    statusLabel: 'Status',
+    priorityLabel: 'Priority',
+
+    triggerTypes: {
+      ticket_created: 'A ticket is created',
+      ticket_status_changed: 'A ticket’s status changes',
+      ticket_assigned: 'A ticket is assigned or unassigned',
+      ticket_sla_breached: 'A ticket misses its SLA',
+      ticket_unresolved_for: 'A ticket stays unresolved',
+    } satisfies Record<WorkflowTriggerType, string>,
+
+    conditionTypes: {
+      ticket_status: 'Ticket status',
+      ticket_priority: 'Ticket priority',
+      ticket_assignment: 'Who it is assigned to',
+      ticket_tag: 'Ticket tag',
+      contact_tag: 'Contact tag',
+      ticket_age: 'Ticket age',
+      business_hours: 'Business hours',
+    } satisfies Record<WorkflowConditionType, string>,
+
+    actionTypes: {
+      add_ticket_tag: 'Tag the ticket',
+      reassign: 'Reassign the ticket',
+      notify: 'Notify someone',
+      set_status: 'Change the status',
+      set_priority: 'Change the priority',
+    } satisfies Record<WorkflowActionType, string>,
+
+    setOperators: {
+      in: 'Is one of',
+      not_in: 'Is not one of',
+    } satisfies Record<WorkflowSetOperator, string>,
+
+    matchOperators: {
+      any: 'Any of them',
+      all: 'All of them',
+      none: 'None of them',
+    } satisfies Record<WorkflowMatchOperator, string>,
+
+    numberOperators: {
+      gte: 'At least',
+      lte: 'At most',
+    } satisfies Record<WorkflowNumberOperator, string>,
+
+    assignmentStates: {
+      unassigned: 'Nobody is assigned',
+      assigned_to_user: 'Assigned to an agent',
+      assigned_to_team: 'Assigned to a team',
+    } satisfies Record<WorkflowAssignmentState, string>,
+
+    /**
+     * Two tables for one enum, because they answer different questions. The
+     * picker asks "who should this notify?" and the summary finishes the
+     * sentence "notify …", so one set of strings could only ever read wrong in
+     * one of the two places.
+     */
+    notifyAudienceOptions: {
+      supervisors: 'The supervisors',
+      user: 'One agent',
+      team: 'A team',
+    } satisfies Record<WorkflowNotifyAudience, string>,
+
+    notifyAudiences: {
+      supervisors: 'the supervisors',
+      user: 'one agent',
+      team: 'a team',
+    } satisfies Record<WorkflowNotifyAudience, string>,
+
+    referenceKinds: {
+      tag: 'a tag',
+      team: 'a team',
+      user: 'an agent',
+    } satisfies Record<WorkflowTaxonomyKind, string>,
+
+    brokenReasons: {
+      reference_removed: 'Something this workflow points at was removed, so it was switched off.',
+      reference_missing:
+        'Something this workflow points at went missing while it was running, so it was switched off.',
+    } satisfies Record<WorkflowBrokenReason, string>,
+
+    runStatuses: {
+      pending: 'Queued',
+      running: 'Running',
+      succeeded: 'Ran',
+      skipped: 'Conditions did not match',
+      failed: 'Failed',
+    } satisfies Record<WorkflowRunStatus, string>,
+
+    failureReasons: {
+      reference_missing: 'Something it points at no longer exists',
+      transition_refused: 'That status change is not allowed on this ticket',
+      ticket_gone: 'The ticket was gone by the time it ran',
+      run_budget_exceeded: 'This ticket hit the hourly limit on automated changes',
+      internal_error: 'Something went wrong on our side',
+    } satisfies Record<WorkflowFailureReason, string>,
+
+    actionOutcomes: {
+      applied: 'Applied',
+      no_op: 'Nothing to change',
+      failed: 'Failed',
+      skipped: 'Skipped',
+    } satisfies Record<WorkflowActionOutcome, string>,
+
+    /** Plain-language summaries, one per shape a trigger, condition or action takes. */
+    summaryTriggerCreated: 'a ticket is created',
+    summaryTriggerStatusChanged: 'a ticket’s status changes',
+    summaryTriggerAssigned: 'a ticket is assigned or unassigned',
+    summaryTriggerSlaBreached: 'a ticket misses its SLA',
+    summaryTriggerUnresolvedFor: (duration: string) =>
+      `a ticket has been unresolved for ${duration}`,
+    summaryStatusIn: (statuses: string) => `its status is ${statuses}`,
+    summaryStatusNotIn: (statuses: string) => `its status is not ${statuses}`,
+    summaryPriorityIn: (priorities: string) => `its priority is ${priorities}`,
+    summaryPriorityNotIn: (priorities: string) => `its priority is not ${priorities}`,
+    summaryUnassigned: 'nobody is assigned to it',
+    summaryAssignedToAnyone: 'it is assigned to an agent',
+    summaryAssignedToUser: (name: string) => `it is assigned to ${name}`,
+    summaryAssignedToAnyTeam: 'it is assigned to a team',
+    /** Takes the whole team phrase, so a deleted team reads as one too. */
+    summaryAssignedToTeam: (team: string) => `it is assigned to ${team}`,
+    summaryTicketTagged: (tags: string) => `the ticket is tagged ${tags}`,
+    summaryTicketNotTagged: (tags: string) => `the ticket is not tagged ${tags}`,
+    summaryContactTagged: (tags: string) => `the contact is tagged ${tags}`,
+    summaryContactNotTagged: (tags: string) => `the contact is not tagged ${tags}`,
+    summaryAgeAtLeast: (duration: string) => `it is at least ${duration} old`,
+    summaryAgeAtMost: (duration: string) => `it is at most ${duration} old`,
+    summaryWithinHours: 'it is inside business hours',
+    summaryOutsideHours: 'it is outside business hours',
+    summaryAddTag: (tag: string) => `tag the ticket ${tag}`,
+    summaryReassign: (assignee: string) => `reassign it to ${assignee}`,
+    summaryNotify: (audience: string) => `notify ${audience}`,
+    summaryNotifyWithMessage: (audience: string, message: string) =>
+      `notify ${audience}: “${message}”`,
+    summarySetStatus: (status: string) => `set its status to ${status}`,
+    summarySetPriority: (priority: string) => `set its priority to ${priority}`,
+    targetTeamName: (name: string) => `the ${name} team`,
+    /**
+     * What a reference the workflow still names but that no longer resolves
+     * reads as. One per kind, because they sit in different sentences: "notify a
+     * deleted item" is not English, and a supervisor reading "a removed agent"
+     * knows which picker to go and fix.
+     */
+    unknownReference: 'a deleted item',
+    unknownTeam: 'a deleted team',
+    unknownUser: 'a removed agent',
+
+    brokenHeading: 'This workflow needs attention',
+    brokenBody: (references: string) =>
+      `It points at ${references} that no longer exists. Choose a replacement, then turn it back on.`,
+    brokenCannotEnable: 'Fix the missing reference before turning this workflow on.',
+
+    testTitle: (name: string) => `Test ${name}`,
+    testIntro:
+      'Checks this workflow against one real ticket and reports what would happen. Nothing is changed.',
+    testTicketLabel: 'Ticket ID',
+    testTicketHint: 'Paste the ID of a ticket to check this workflow against.',
+    testTicketRequiredError: 'Enter a ticket ID',
+    testSubmit: 'Run test',
+    testLoading: 'Checking the ticket',
+    testMatched: 'This workflow would run on that ticket.',
+    testNotMatched: 'This workflow would not run on that ticket.',
+    testConditionsHeading: 'Conditions',
+    testActionsHeading: 'What would happen',
+    testNoConditions: 'This workflow has no conditions, so the trigger alone decides.',
+    testHeld: 'Held',
+    testNotHeld: 'Did not hold',
+    testNoActions: 'Nothing, because the conditions did not match.',
+
+    runsTitle: (name: string) => `Recent runs of ${name}`,
+    runsIntro:
+      'The most recent runs, newest first. Start here when a workflow is not doing what you expect.',
+    runsLoading: 'Loading recent runs',
+    runsEmptyHeading: 'No runs yet',
+    runsEmptyBody:
+      'This workflow has not run since it was created. A workflow that is switched off never runs.',
+    runTicket: (ticketNumber: number) => `Ticket #${String(ticketNumber)}`,
+    runNothingAttempted: 'Its conditions did not match, so no action was attempted.',
+
+    createSuccess: (name: string) => `Workflow ${name} added`,
+    updateSuccess: (name: string) => `Workflow ${name} saved`,
+    deleteSuccess: (name: string) => `Workflow ${name} deleted`,
+    enableSuccess: (name: string) => `Workflow ${name} is on`,
+    disableSuccess: (name: string) => `Workflow ${name} is off`,
+    reorderSuccess: 'Workflow order saved',
+  },
+
   whatsapp: {
     title: 'WhatsApp',
     subtitle: 'Connect this workspace to your WhatsApp Business Account.',
@@ -1527,8 +1862,19 @@ export const content = {
     upgradeUnavailableNotice:
       'There is no self-service upgrade yet. Contact support to raise a limit.',
 
-    /** One line per lifecycle state, so a badge never carries meaning alone. */
+    /**
+     * One line per lifecycle state, so a badge never carries meaning alone.
+     *
+     * `created` is written for a reader who should never see it. A workspace is
+     * only in that state between its row appearing and provisioning finishing,
+     * both inside one transaction, and the host guard answers `tenant_not_found`
+     * for it — so rendering this string means provisioning stopped halfway. The
+     * copy says the true thing for that case rather than naming the internal
+     * state, because "Created" would read as finished to the one person unlucky
+     * enough to be looking at it.
+     */
     statuses: {
+      created: 'Setting up',
       trialing: 'Trial',
       active: 'Active',
       past_due: 'Payment overdue',
@@ -1538,6 +1884,7 @@ export const content = {
     } satisfies Record<TenantStatus, string>,
 
     statusDescriptions: {
+      created: 'This workspace is still being set up and is not ready yet.',
       trialing: 'Everything is available while the trial runs.',
       active: 'Everything is available.',
       past_due: 'Everything still works. A payment has not gone through.',
@@ -1689,6 +2036,127 @@ export const content = {
     passwordTooShortError: (minLength: number) => `Use at least ${minLength} characters`,
     passwordTooLongError: (maxLength: number) => `Use at most ${maxLength} characters`,
     passwordMismatchError: 'The two passwords do not match',
+  },
+
+  /**
+   * The supervisor's performance dashboard (TAR-30,
+   * `docs/architecture/0009-reporting-dashboard-and-export.md`).
+   *
+   * Two things this copy has to carry, because the numbers are otherwise
+   * ambiguous and end up in a client-facing report: **what each metric is
+   * anchored on** (0009 decision 2 — "resolved this week" is over tickets
+   * resolved this week, whenever they arrived), and **that the durations are
+   * wall-clock** rather than business hours (0009 risk 2).
+   */
+  reports: {
+    title: 'Performance',
+    subtitle: 'Response and resolution times, ticket volume and per-agent workload.',
+
+    // --- The range ----------------------------------------------------------
+    rangeHeading: 'Date range',
+    rangeFromLabel: 'From',
+    rangeToLabel: 'To',
+    rangeApply: 'Apply range',
+    rangePresetLabel: 'Quick ranges',
+    presetLast7: 'Last 7 days',
+    presetLast30: 'Last 30 days',
+    presetLast90: 'Last 90 days',
+    /** Said once, above the numbers, because every duration below inherits it. */
+    rangeSummary: (from: string, to: string) => `${from} to ${to}, in your workspace’s time zone`,
+    rangeOrderError: 'The start date must be on or before the end date',
+    rangeTooLongError: (maxDays: number) => `Pick a range of ${String(maxDays)} days or fewer`,
+    rangeInvalidError: 'Enter both dates as YYYY-MM-DD',
+
+    // --- Scope --------------------------------------------------------------
+    scopeFilterLabel: 'Scope',
+    scopeAll: 'All tickets',
+    scopeAssigned: 'Assigned to me',
+    /**
+     * 0009 decision 6: without `report:read_all` the totals still cover
+     * everything the caller can see, and the breakdown is narrowed to their own
+     * row rather than the request being refused. Saying so is what stops an
+     * agent reading a supervisor's shared link as a broken table.
+     */
+    scopeNarrowedNotice:
+      'You are seeing your own and your teams’ tickets, and the breakdown shows your row only.',
+
+    // --- The four metrics ---------------------------------------------------
+    summaryHeading: 'Overview',
+    summaryLoading: 'Loading dashboard metrics',
+    volumeCreatedLabel: 'Tickets opened',
+    volumeCreatedHint: 'Opened in this range, whatever happened to them since.',
+    volumeResolvedLabel: 'Tickets resolved',
+    volumeResolvedHint: 'Resolved in this range, whenever they were opened.',
+    volumeClosedUnresolvedLabel: 'Closed unresolved',
+    volumeClosedUnresolvedHint:
+      'Closed in this range without ever being resolved — spam, wrong numbers, duplicates.',
+    firstResponseLabel: 'First response time',
+    /**
+     * Says "median" in the hint rather than in the label: the headline figure is
+     * the median on both duration cards, and a supervisor quoting a number from
+     * this screen has to know which statistic they are quoting.
+     */
+    firstResponseHint:
+      'Median, from the ticket opening to the first reply, for replies sent in this range.',
+    resolutionLabel: 'Resolution time',
+    resolutionHint:
+      'Median, from the ticket opening to its resolution, for tickets resolved in this range.',
+    /** Wall-clock, not business hours — 0009 risk 2, stated rather than assumed. */
+    durationBasisNote: 'Durations are wall-clock, including nights and weekends.',
+
+    statAverage: 'Average',
+    statP90: '90th percentile',
+    /**
+     * How many tickets the median above was computed over, carried beside it as a
+     * figure rather than as a sentence: a p90 over two tickets *is* one of those
+     * two tickets, and a supervisor cannot tell that from the duration alone.
+     */
+    statSampleLabel: 'Tickets measured',
+    /**
+     * A duration is null exactly when nothing was measured, and the contract is
+     * explicit that this is not zero: "no ticket was answered" and "every ticket
+     * was answered instantly" are different facts.
+     */
+    noMeasurement: 'No data',
+
+    // --- Per-agent breakdown ------------------------------------------------
+    agentsHeading: 'By agent',
+    agentsDescription:
+      'Attributed to whoever answered and whoever resolved each ticket, not to whoever holds it now.',
+    agentsLoading: 'Loading the per-agent breakdown',
+    agentsEmptyHeading: 'Nobody has work in this range',
+    agentsEmptyBody: 'Pick a wider range, or a scope that covers more of the workspace.',
+    columnAgent: 'Agent',
+    columnResolved: 'Resolved',
+    columnFirstResponse: 'First response (median)',
+    columnResolution: 'Resolution (median)',
+    /**
+     * The row for work whose responder or resolver was never recorded — a ticket
+     * that predates the attribution columns, or a resolution with no actor. It is
+     * rendered rather than hidden, so the table adds up to the totals above it.
+     */
+    unattributed: 'Not recorded',
+    unattributedHint: 'Work whose agent was never recorded.',
+    inactiveAgent: 'No longer active',
+    /**
+     * Said once, under the table, because the arithmetic is not the arithmetic a
+     * reader expects: the overview's medians are computed over every ticket, and
+     * a median column does not sum — averaging the rows above would give a
+     * different, wrong number.
+     */
+    mediansDoNotSumNote:
+      'The overview figures are computed over every ticket. Medians do not add up across rows.',
+
+    // --- Daily volume -------------------------------------------------------
+    seriesHeading: 'Daily volume',
+    seriesDescription: 'Opened against resolved, one bar per day in your workspace’s time zone.',
+    seriesLoading: 'Loading daily volume',
+    seriesCreatedLegend: 'Opened',
+    seriesResolvedLegend: 'Resolved',
+    seriesDayLabel: (date: string, created: number, resolved: number) =>
+      `${date}: ${String(created)} opened, ${String(resolved)} resolved`,
+    seriesEmptyHeading: 'No tickets in this range',
+    seriesEmptyBody: 'Nothing was opened or resolved between these dates.',
   },
 
   form: {

@@ -54,6 +54,9 @@ const FIELD: CustomFieldDefinition = {
   label: 'Plan tier',
   type: 'select',
   options: ['gold'],
+  position: 0,
+  createdAt: '2026-06-01T09:00:00.000Z',
+  updatedAt: '2026-06-01T09:00:00.000Z',
 };
 
 const VOCABULARY: RoutingRuleVocabulary = {

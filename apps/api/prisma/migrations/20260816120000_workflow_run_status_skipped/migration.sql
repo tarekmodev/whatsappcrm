@@ -1,0 +1,48 @@
+-- Let a workflow run say it matched nothing (TAR-394, against 0009).
+--
+-- `workflow_run_status` has carried `pending / running / succeeded / failed`
+-- since TAR-47. `WORKFLOW_RUN_STATUSES` in 0009 publishes a fifth label,
+-- `skipped`: a run whose conditions did not match **ran** and attempted nothing,
+-- which is not a failure and is the answer to "why didn't my rule fire" — the
+-- most common question a supervisor brings to the run list.
+--
+-- Without the label TAR-395 has two bad options: write `succeeded` for a rule
+-- that did nothing, which makes the run list unreadable, or write `failed`, which
+-- puts tenant-authored conditions into the same bucket as infrastructure faults.
+-- Exactly the shape of TAR-270's `sla_timer_state.paused` gap, and fixed the same
+-- way.
+--
+-- ---------------------------------------------------------------------------
+-- Why this label is alone in its own migration
+-- ---------------------------------------------------------------------------
+--
+-- PostgreSQL refuses to *use* an enum label in the same transaction that added
+-- it, and Prisma runs each migration inside one transaction. Nothing in
+-- 20260816140000_workflow_rule_schema writes `skipped` today — but
+-- `workflow_runs_failure_reason_only_when_failed` in that file names a *sibling*
+-- label, and a later migration that constrains or backfills on this one would
+-- fail on a fresh database while passing on an incrementally migrated one.
+-- Splitting it costs one directory and removes that class of failure entirely.
+-- 0009 asks for the split by name for the same reason.
+--
+-- Appended at the end of the label list rather than inserted before `failed`.
+-- Enum ordering is the sort order for `ORDER BY status` and no query sorts by it,
+-- so position carries no meaning — while `BEFORE`/`AFTER` placement would make
+-- the statement non-idempotent in a way `IF NOT EXISTS` cannot cover. Same
+-- reasoning, and the same wording, as 20260813120000_sla_timer_state_paused.
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+--   Duration     Milliseconds, at any table size. Adding a label to an enum is a
+--                catalogue insert into `pg_enum`; no table is rewritten and no
+--                row is read. `workflow_runs` is empty in every environment
+--                today regardless — no module writes it until TAR-395.
+--   Locks        A brief lock on the type itself. No table lock, so nothing
+--                queueing on `workflow_runs` is blocked.
+--   Blocking     None worth naming.
+--   Data loss    None. Nothing is dropped and no existing value changes meaning.
+--   Rollback     `down.sql` beside this file, and it is deliberately a no-op.
+
+ALTER TYPE "workflow_run_status" ADD VALUE IF NOT EXISTS 'skipped';

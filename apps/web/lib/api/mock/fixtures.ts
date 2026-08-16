@@ -19,6 +19,8 @@ import {
   type TicketRouting,
   type TicketSla,
   type UserResponse,
+  type WorkflowResponse,
+  type WorkflowRunResponse,
 } from '@whatsappcrm/contracts';
 import { MOCK_AUDIO_URL, MOCK_DOCUMENT_URL, MOCK_IMAGE_URL } from '@/lib/api/mock/media-fixtures';
 
@@ -96,6 +98,17 @@ const TICKET_IDS = {
   fatimaResolved: '0192f00a-0000-7000-8000-000000000a04',
   /** Closed without a resolution: `closedAt` set, `resolvedAt` deliberately null. */
   meiClosed: '0192f00a-0000-7000-8000-000000000a05',
+  /**
+   * Resolved in July and closed days later, by an agent on the other team.
+   *
+   * It exists for the dashboard (TAR-30): a single resolved ticket gives a
+   * median that is also the mean and the p90, so nothing about how the durations
+   * are computed would be visible, and one agent's row would be the whole table.
+   * It is `closed` rather than `resolved` on purpose — volume is anchored on
+   * `resolvedAt`, not on status (ADR 0009 decision 2), so this ticket counts as
+   * resolved work while being absent from every queue.
+   */
+  jonasResolvedThenClosed: '0192f00a-0000-7000-8000-000000000a09',
   // The supervisor's deferred queue (TAR-23): one per reason in ADR 0008's
   // vocabulary, because a set holding only `all_at_capacity` would leave two
   // thirds of the copy that tells a supervisor *who* must act unreachable.
@@ -122,6 +135,8 @@ const TICKET_IDS = {
 const TAG_IDS = {
   vip: '0192f00b-0000-7000-8000-000000000b01',
   refundRequested: '0192f00b-0000-7000-8000-000000000b02',
+  /** TAR-27's own worked example: "escalate it and tag it `escalated`". */
+  escalated: '0192f00b-0000-7000-8000-000000000b03',
   otherTenant: '0192f00b-0000-7000-8000-000000000b99',
 } as const;
 
@@ -193,7 +208,22 @@ export type MockAssignmentRule = AssignmentRuleResponse & TenantScoped;
 export type MockConversation = ConversationResponse & TenantScoped;
 export type MockMessage = MessageResponse & TenantScoped;
 export type MockInternalNote = InternalNoteResponse & TenantScoped;
-export type MockTicket = TicketResponse & TenantScoped;
+/**
+ * `TicketResponse` names no responder or resolver — ADR 0009 decision 4 records
+ * both as columns on `tickets`, and neither is published: the dashboard groups by
+ * them, and no client has any use for them on a ticket. The fixture keeps them
+ * for the reason `MockSlaAlert` keeps its recipient — a transport that could not
+ * tell whose work a resolution was could not exercise the per-agent breakdown at
+ * all — and `toTicketResponse` strips them on the way out.
+ *
+ * `null` is "not recorded", which the report renders as its unattributed row
+ * rather than redistributing.
+ */
+export type MockTicket = TicketResponse &
+  TenantScoped & {
+    readonly firstResponseUserId: string | null;
+    readonly resolvedByUserId: string | null;
+  };
 
 /**
  * `SlaAlertResponse` names no recipient — the API narrows to the caller, so the
@@ -1014,8 +1044,12 @@ function ticket(
     assignedTeamId: null,
     routing: NOT_ROUTED,
     sla: NO_SLA,
-    // Nothing writes this column yet; TAR-26 owns the first-response timer.
     firstRespondedAt: null,
+    // Both null by default: a ticket nobody has answered has nobody to credit,
+    // and a fixture that guessed would teach the dashboard an attribution the
+    // product does not have.
+    firstResponseUserId: null,
+    resolvedByUserId: null,
     resolvedAt: null,
     closedAt: null,
     updatedAt: overrides.createdAt,
@@ -1039,6 +1073,11 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     // is drawn beside, and what the supervisor's alert below points at.
     sla: firstResponseSla('breached', SLA_DEADLINE_MISSED),
     createdAt: '2026-08-09T14:05:00.000Z',
+    // Answered, but an hour and a half past the deadline — which is what a
+    // breached timer with a response against it looks like, and gives the
+    // dashboard its slowest first response.
+    firstRespondedAt: '2026-08-09T16:40:00.000Z',
+    firstResponseUserId: USER_IDS.amina,
     updatedAt: '2026-08-10T08:45:00.000Z',
   }),
   ticket({
@@ -1085,7 +1124,13 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     // `?status=resolved` so the success case is not only inferable from absence.
     sla: firstResponseSla('met', SLA_DEADLINE_MET),
     createdAt: '2026-08-01T09:00:00.000Z',
+    firstRespondedAt: '2026-08-01T09:35:00.000Z',
+    firstResponseUserId: USER_IDS.amina,
     resolvedAt: '2026-08-05T15:20:00.000Z',
+    // Answered by Amina and finished by the supervisor: attribution follows the
+    // work rather than the assignment, which is the property ADR 0009 decision 4
+    // exists for and the one a per-agent table gets wrong by default.
+    resolvedByUserId: USER_IDS.priya,
     updatedAt: '2026-08-05T15:20:00.000Z',
   }),
   ticket({
@@ -1099,11 +1144,38 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     assignedUserId: USER_IDS.liang,
     assignedTeamId: TEAM_IDS.onboarding,
     createdAt: '2026-07-20T08:00:00.000Z',
+    // Somebody replied, and who is not recorded — a ticket that predates the
+    // attribution column, which is what the backfill leaves behind when the
+    // evidence is missing. It lands in the report's unattributed row rather than
+    // being redistributed, and it is the fixture that makes that row reachable.
+    firstRespondedAt: '2026-07-20T08:45:00.000Z',
+    firstResponseUserId: null,
     // `resolvedAt` stays null on purpose: closing a wrong number is not a
     // resolution, and back-filling one would manufacture a cycle time that never
     // happened (ADR 0006 §3).
     closedAt: '2026-07-25T10:30:00.000Z',
     updatedAt: '2026-07-25T10:30:00.000Z',
+  }),
+  ticket({
+    id: TICKET_IDS.jonasResolvedThenClosed,
+    number: 1021,
+    conversationId: CONVERSATION_IDS.billingTeam,
+    contactId: CONTACT_IDS.jonas,
+    subject: 'Duplicate subscription charge',
+    // Terminal, and terminal twice over: resolved on the 30th, closed on the
+    // 2nd. Absent from every queue, present in the dashboard's resolved volume.
+    status: 'closed',
+    priority: 'normal',
+    assignedUserId: USER_IDS.liang,
+    assignedTeamId: TEAM_IDS.onboarding,
+    sla: firstResponseSla('met', '2026-07-28T10:00:00.000Z'),
+    createdAt: '2026-07-28T09:00:00.000Z',
+    firstRespondedAt: '2026-07-28T09:12:00.000Z',
+    firstResponseUserId: USER_IDS.liang,
+    resolvedAt: '2026-07-30T11:00:00.000Z',
+    resolvedByUserId: USER_IDS.liang,
+    closedAt: '2026-08-02T09:00:00.000Z',
+    updatedAt: '2026-08-02T09:00:00.000Z',
   }),
   ticket({
     // Present only so tenant scoping can be asserted, never rendered.
@@ -1119,6 +1191,11 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     // Breached, so `?overdue=true` has something to leak if the scoping is wrong.
     sla: firstResponseSla('breached', SLA_DEADLINE_MISSED),
     createdAt: '2026-06-02T09:05:00.000Z',
+    // Answered a fortnight late, so the dashboard has something to leak too: a
+    // reporting query that lost its tenant scope would move this tenant's
+    // first-response numbers by days rather than by minutes.
+    firstRespondedAt: '2026-06-16T09:05:00.000Z',
+    firstResponseUserId: USER_IDS.otherTenant,
   }),
 
   // The deferred queue. Each hangs off a contact of its own so the five tickets
@@ -1204,6 +1281,7 @@ export const MOCK_TAGS: readonly MockTag[] = [
     name: 'Refund requested',
     color: '#dc2626',
   },
+  { tenantId: MOCK_TENANT_ID, id: TAG_IDS.escalated, name: 'Escalated', color: '#ea580c' },
   {
     // Present only so tenant scoping can be asserted, never rendered.
     tenantId: OTHER_TENANT_ID,
@@ -1213,7 +1291,10 @@ export const MOCK_TAGS: readonly MockTag[] = [
   },
 ];
 
-/** What a `contact_attribute` condition's `key` may name. */
+/**
+ * What a `contact_attribute` condition's `key` may name, and — since 0002
+ * amendment 10 — what the contact profile renders, in `position` order.
+ */
 export const MOCK_CUSTOM_FIELD_DEFINITIONS: readonly MockCustomFieldDefinition[] = [
   {
     tenantId: MOCK_TENANT_ID,
@@ -1222,6 +1303,9 @@ export const MOCK_CUSTOM_FIELD_DEFINITIONS: readonly MockCustomFieldDefinition[]
     label: 'Plan tier',
     type: 'select',
     options: ['bronze', 'silver', 'gold'],
+    position: 0,
+    createdAt: '2026-06-01T09:00:00.000Z',
+    updatedAt: '2026-06-01T09:00:00.000Z',
   },
   {
     tenantId: MOCK_TENANT_ID,
@@ -1230,6 +1314,9 @@ export const MOCK_CUSTOM_FIELD_DEFINITIONS: readonly MockCustomFieldDefinition[]
     label: 'Account manager',
     type: 'text',
     options: [],
+    position: 1,
+    createdAt: '2026-06-01T09:05:00.000Z',
+    updatedAt: '2026-06-01T09:05:00.000Z',
   },
   {
     // Present only so tenant scoping can be asserted, never rendered.
@@ -1239,6 +1326,9 @@ export const MOCK_CUSTOM_FIELD_DEFINITIONS: readonly MockCustomFieldDefinition[]
     label: 'Rival tenant field',
     type: 'text',
     options: [],
+    position: 0,
+    createdAt: '2026-06-01T09:00:00.000Z',
+    updatedAt: '2026-06-01T09:00:00.000Z',
   },
 ];
 
@@ -1511,6 +1601,206 @@ export const MOCK_SLA_ALERTS: readonly MockSlaAlert[] = [
   },
 ];
 
+// --- Workflows (TAR-27, ADR 0009) -------------------------------------------
+//
+// The prefixes continue the file's one-per-entity-type rule. They were `…010`
+// and `…011` on the branch that wrote them, and moved to `…012` and `…013` on
+// the rebase: TAR-407 landed `SLA_POLICY_ID` on `…010` in the meantime, and two
+// fixtures sharing an id is precisely the collision git merges without a word —
+// which is what the convention exists to make visible.
+//
+// Three in this tenant, chosen so every state the console has to render is
+// reachable without editing a fixture:
+//
+//   1. an armed elapsed-trigger workflow — TAR-27's own worked example;
+//   2. an armed event-trigger workflow with a team target, so the two trigger
+//      shapes and the reassign action are both visible;
+//   3. one deactivated by the removal of a user it notified, which is the
+//      broken-reference state ADR 0009 decision 6 makes visible rather than
+//      silent. Its `userId` deliberately resolves to nobody.
+
+const WORKFLOW_IDS = {
+  escalateStale: '0192f012-0000-7000-8000-000000001201',
+  urgentToBilling: '0192f012-0000-7000-8000-000000001202',
+  /** Deactivated by the removal of the agent it notified, so it has a dead id. */
+  brokenNotify: '0192f012-0000-7000-8000-000000001203',
+  otherTenant: '0192f012-0000-7000-8000-000000001299',
+} as const;
+
+const WORKFLOW_RUN_IDS = {
+  escalatedFatima: '0192f013-0000-7000-8000-000000001301',
+  skippedJonas: '0192f013-0000-7000-8000-000000001302',
+  failedMei: '0192f013-0000-7000-8000-000000001303',
+  otherTenant: '0192f013-0000-7000-8000-000000001399',
+} as const;
+
+/** An agent who was removed after a workflow named them. Resolves to nobody. */
+const REMOVED_USER_ID = '0192f001-0000-7000-8000-0000000001fe';
+
+/**
+ * `references` is **not** stored: ADR 0009 decision 6 resolves it live at read
+ * time from the ids in the definition, so a rename needs no migration and a
+ * delete shows as `exists: false`. Omitting it here is what keeps the mock
+ * honest about that — `toWorkflowResponse` recomputes it on every read.
+ */
+export type MockWorkflow = Omit<WorkflowResponse, 'references'> & TenantScoped;
+export type MockWorkflowRun = WorkflowRunResponse & TenantScoped;
+
+export const MOCK_WORKFLOWS: readonly MockWorkflow[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_IDS.escalateStale,
+    name: 'Escalate stale tickets',
+    position: 0,
+    isActive: true,
+    brokenReason: null,
+    version: 2,
+    trigger: { type: 'ticket_unresolved_for', minutes: 240 },
+    conditions: [{ type: 'ticket_status', operator: 'in', values: ['open', 'pending'] }],
+    actions: [
+      {
+        type: 'notify',
+        audience: 'supervisors',
+        userId: null,
+        teamId: null,
+        message: 'Unresolved for 4 hours',
+      },
+      { type: 'add_ticket_tag', tagId: TAG_IDS.escalated },
+    ],
+    createdAt: '2026-08-12T09:00:00.000Z',
+    updatedAt: '2026-08-13T11:30:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_IDS.urgentToBilling,
+    name: 'Urgent tickets go to Billing',
+    position: 1,
+    isActive: true,
+    brokenReason: null,
+    version: 1,
+    trigger: { type: 'ticket_created' },
+    conditions: [{ type: 'ticket_priority', operator: 'in', values: ['urgent'] }],
+    actions: [{ type: 'reassign', target: { kind: 'team', teamId: TEAM_IDS.billing } }],
+    createdAt: '2026-08-12T09:05:00.000Z',
+    updatedAt: '2026-08-12T09:05:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_IDS.brokenNotify,
+    name: 'Tell Noor about breaches',
+    position: 2,
+    isActive: false,
+    brokenReason: 'reference_removed',
+    version: 1,
+    trigger: { type: 'ticket_sla_breached' },
+    conditions: [],
+    actions: [
+      {
+        type: 'notify',
+        audience: 'user',
+        userId: REMOVED_USER_ID,
+        teamId: null,
+        message: null,
+      },
+    ],
+    createdAt: '2026-08-12T09:10:00.000Z',
+    updatedAt: '2026-08-14T16:45:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: WORKFLOW_IDS.otherTenant,
+    name: 'Rival tenant automation',
+    position: 0,
+    isActive: true,
+    brokenReason: null,
+    version: 1,
+    trigger: { type: 'ticket_created' },
+    conditions: [],
+    actions: [{ type: 'set_priority', priority: 'high' }],
+    createdAt: '2026-08-12T09:00:00.000Z',
+    updatedAt: '2026-08-12T09:00:00.000Z',
+  },
+];
+
+/**
+ * Three runs of the escalation workflow, one per outcome the run panel has to
+ * render: it ran and changed something, it ran and its conditions did not match,
+ * and it failed. A fixture set holding only successes would leave two thirds of
+ * that panel — and the copy that explains a failure — unreachable.
+ */
+export const MOCK_WORKFLOW_RUNS: readonly MockWorkflowRun[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_RUN_IDS.escalatedFatima,
+    workflowId: WORKFLOW_IDS.escalateStale,
+    workflowVersion: 2,
+    ticketId: TICKET_IDS.fatimaUrgent,
+    ticketNumber: 1042,
+    status: 'succeeded',
+    triggerType: 'ticket_unresolved_for',
+    results: [
+      { index: 0, type: 'notify', outcome: 'applied', reason: null },
+      { index: 1, type: 'add_ticket_tag', outcome: 'applied', reason: null },
+    ],
+    failureReason: null,
+    startedAt: '2026-08-14T13:00:01.000Z',
+    finishedAt: '2026-08-14T13:00:02.000Z',
+    createdAt: '2026-08-14T13:00:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_RUN_IDS.skippedJonas,
+    workflowId: WORKFLOW_IDS.escalateStale,
+    workflowVersion: 2,
+    ticketId: TICKET_IDS.jonasPending,
+    ticketNumber: 1043,
+    status: 'skipped',
+    triggerType: 'ticket_unresolved_for',
+    // Empty on `skipped`: nothing was attempted, which is the point.
+    results: [],
+    failureReason: null,
+    startedAt: '2026-08-14T12:00:01.000Z',
+    finishedAt: '2026-08-14T12:00:01.000Z',
+    createdAt: '2026-08-14T12:00:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: WORKFLOW_RUN_IDS.failedMei,
+    workflowId: WORKFLOW_IDS.escalateStale,
+    workflowVersion: 1,
+    ticketId: TICKET_IDS.meiClosed,
+    ticketNumber: 1044,
+    status: 'failed',
+    triggerType: 'ticket_unresolved_for',
+    // The first action succeeded and stayed done; the second stopped the run.
+    results: [
+      { index: 0, type: 'notify', outcome: 'applied', reason: null },
+      { index: 1, type: 'add_ticket_tag', outcome: 'failed', reason: 'reference_missing' },
+    ],
+    failureReason: 'reference_missing',
+    startedAt: '2026-08-13T18:00:01.000Z',
+    finishedAt: '2026-08-13T18:00:02.000Z',
+    createdAt: '2026-08-13T18:00:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: WORKFLOW_RUN_IDS.otherTenant,
+    workflowId: WORKFLOW_IDS.otherTenant,
+    workflowVersion: 1,
+    ticketId: TICKET_IDS.otherTenant,
+    ticketNumber: 7,
+    status: 'succeeded',
+    triggerType: 'ticket_created',
+    results: [{ index: 0, type: 'set_priority', outcome: 'applied', reason: null }],
+    failureReason: null,
+    startedAt: '2026-08-12T10:00:01.000Z',
+    finishedAt: '2026-08-12T10:00:02.000Z',
+    createdAt: '2026-08-12T10:00:00.000Z',
+  },
+];
+
 export const MOCK_IDS = {
   teams: TEAM_IDS,
   users: USER_IDS,
@@ -1526,5 +1816,9 @@ export const MOCK_IDS = {
   assignmentRules: ASSIGNMENT_RULE_IDS,
   slaAlerts: SLA_ALERT_IDS,
   tenantDomains: TENANT_DOMAIN_IDS,
+  workflows: WORKFLOW_IDS,
+  workflowRuns: WORKFLOW_RUN_IDS,
+  /** The agent a workflow still names and who no longer exists. */
+  removedUser: REMOVED_USER_ID,
   whatsappAccount: WHATSAPP_ACCOUNT_ID,
 } as const;

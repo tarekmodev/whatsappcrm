@@ -51,16 +51,25 @@
 -- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74), one in
 -- each of the five auth tables — `teams`, `invites`, `invite_teams`, `sessions`,
 -- `password_reset_tokens` (TAR-54) — one in each of the three SLA tables
--- (TAR-270), and the conversation tables. Phase 3a is a loop over whatever the
--- catalog says is protected, so an empty table passes it trivially; a real row
--- in the tables those stories added is what makes the assertion mean something
--- for them. TAR-54's tables earn their rows twice over: they hold the
--- credentials of the product, so "a query outside its own tenant returns
--- nothing" is the acceptance criterion itself rather than a general property
--- they inherit. `sla_alerts` earns its own for a narrower reason: 0006 requires
--- an isolation test to ship with the migration that adds it, because the sweep
--- that writes it is the one code path in the product that reads across tenants
--- at all.
+-- (TAR-270, with `sla_alerts` now `notifications`), one in each of TAR-27's four
+-- — `workflows`, `workflow_runs`, `workflow_references`, `ticket_tags`, plus the
+-- `tags` row they reference (TAR-394) — and the conversation tables. Phase 3a is a
+-- loop over whatever the catalog says is protected, so an empty table passes it
+-- trivially; a real row in the tables those stories added is what makes the
+-- assertion mean something for them. TAR-54's tables earn their rows twice over:
+-- they hold the credentials of the product, so "a query outside its own tenant
+-- returns nothing" is the acceptance criterion itself rather than a general
+-- property they inherit. `notifications` earns its own for a narrower reason: 0006
+-- requires an isolation test to ship with the migration that adds it, because the
+-- sweeps that write it are the code paths in the product that read across tenants
+-- at all. TAR-27's four earn theirs because a workflow is tenant-authored
+-- automation that *writes to tickets* — one tenant reaching another's rules is not
+-- a data leak, it is a robot acting on somebody else's helpdesk.
+--
+-- Both tenants deliberately hold a tag named `escalated` and a workflow named
+-- `Escalate stale tickets`: the unique keys are `(tenant_id, name)`, so this must
+-- be legal, and identically named rows on both sides are what stop a
+-- "saw 1 row of my own" assertion passing on a query that ignored the tenant.
 --
 -- The *constraints* those tables exist for are separate properties, proven
 -- elsewhere: `src/prisma/ticket-active-uniqueness.int-spec.ts` for TAR-74's
@@ -110,6 +119,13 @@ BEGIN
         WHERE n.nspname = 'public'
           AND c.relkind = 'r'
           AND c.relname <> 'webhook_events'   -- TAR-39's deliberate exception
+          -- ADR 0009 Amendment 1 ruling 2. `lifecycle_events` keeps `tenant_id`
+          -- as a recorded identifier rather than a reference, and carries no
+          -- policy on purpose: the trail outlives the tenant, and the composite
+          -- FK to `users` made the purge impossible to finish. The app role
+          -- holds no grant on it — 3g below asserts that by name, which is the
+          -- half that actually protects it.
+          AND c.relname <> 'lifecycle_events'
           AND EXISTS (
               SELECT 1 FROM pg_attribute a
               WHERE a.attrelid = c.oid AND a.attname = 'tenant_id' AND a.attnum > 0 AND NOT a.attisdropped
@@ -321,10 +337,19 @@ SET LOCAL lock_timeout = '3s';
 -- leave to chance.
 SET LOCAL app.tenant_id = :'tenant_a';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_a';
+-- TAR-27's four tables, before the tags, teams, tickets and workflows they point
+-- at. `workflow_references` goes first and explicitly: its tag and team foreign
+-- keys are `NO ACTION`, so a row here outliving its tag would refuse that tag's
+-- delete at the end of the statement rather than cascading with it.
+DELETE FROM "public"."workflow_references" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."workflow_runs" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."workflows" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."ticket_tags" WHERE "tenant_id" = :'tenant_a';
 -- TAR-270's three tables, before the ticket they hang off. They cascade from
--- `tickets`, so this is belt and braces — but alerts before timers before
--- policies is the order their own foreign keys require.
-DELETE FROM "public"."sla_alerts" WHERE "tenant_id" = :'tenant_a';
+-- `tickets`, so this is belt and braces — but notifications before timers before
+-- policies is the order their own foreign keys require. The table was
+-- `sla_alerts` until TAR-394 renamed it (0009, decision 7).
+DELETE FROM "public"."notifications" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_a';
 -- Before the conversation and contact they reference: those foreign keys are
@@ -333,6 +358,9 @@ DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_a';
+-- After `contact_tags` (which the contact above cascades), `ticket_tags` and
+-- `workflow_references` — the first two cascade from the tag, the third refuses it.
+DELETE FROM "public"."tags" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_a';
 -- TAR-54's tables, before the users, invites and teams they hang off. Their
@@ -348,13 +376,18 @@ DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_b';
-DELETE FROM "public"."sla_alerts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."workflow_references" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."workflow_runs" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."workflows" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."ticket_tags" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."notifications" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."tags" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."password_reset_tokens" WHERE "tenant_id" = :'tenant_b';
@@ -429,10 +462,33 @@ INSERT INTO "public"."sla_timers" ("id", "tenant_id", "ticket_id", "policy_id", 
     VALUES ('11111111-1111-7111-8111-1111111111ac', :'tenant_a', '11111111-1111-7111-8111-1111111111a6',
             '11111111-1111-7111-8111-1111111111ab', 'first_response', 'breached',
             now() - interval '30 minutes', now() - interval '29 minutes');
-INSERT INTO "public"."sla_alerts" ("id", "tenant_id", "sla_timer_id", "ticket_id", "recipient_user_id", "kind", "due_at")
-    VALUES ('11111111-1111-7111-8111-1111111111ad', :'tenant_a', '11111111-1111-7111-8111-1111111111ac',
+INSERT INTO "public"."notifications" ("id", "tenant_id", "type", "sla_timer_id", "ticket_id", "recipient_user_id", "kind", "due_at")
+    VALUES ('11111111-1111-7111-8111-1111111111ad', :'tenant_a', 'sla_breach', '11111111-1111-7111-8111-1111111111ac',
             '11111111-1111-7111-8111-1111111111a6', '11111111-1111-7111-8111-1111111111a1',
             'first_response', now() - interval '30 minutes');
+-- TAR-27's five: a tag, an active workflow that references it, the tag applied to
+-- the ticket, the reference row that would refuse the tag's delete, and one run.
+-- The workflow is the story's own example — "unresolved for 4 hours → tag
+-- `escalated`" — because the rows this script has to keep inside the tenant
+-- boundary are the ones a real tenant will have.
+INSERT INTO "public"."tags" ("id", "tenant_id", "name")
+    VALUES ('11111111-1111-7111-8111-1111111111c0', :'tenant_a', 'escalated');
+INSERT INTO "public"."workflows" ("id", "tenant_id", "name", "is_active", "position", "trigger_type", "definition", "version", "updated_at")
+    VALUES ('11111111-1111-7111-8111-1111111111c1', :'tenant_a', 'Escalate stale tickets', true, 0,
+            'ticket_unresolved_for',
+            '{"trigger":{"type":"ticket_unresolved_for","minutes":240},"conditions":[],"actions":[{"type":"add_ticket_tag","tagId":"11111111-1111-7111-8111-1111111111c0"}]}'::jsonb,
+            1, now());
+INSERT INTO "public"."workflow_references" ("id", "tenant_id", "workflow_id", "tag_id")
+    VALUES ('11111111-1111-7111-8111-1111111111c2', :'tenant_a', '11111111-1111-7111-8111-1111111111c1',
+            '11111111-1111-7111-8111-1111111111c0');
+INSERT INTO "public"."ticket_tags" ("id", "tenant_id", "ticket_id", "tag_id")
+    VALUES ('11111111-1111-7111-8111-1111111111c3', :'tenant_a', '11111111-1111-7111-8111-1111111111a6',
+            '11111111-1111-7111-8111-1111111111c0');
+INSERT INTO "public"."workflow_runs" ("id", "tenant_id", "workflow_id", "ticket_id", "workflow_version", "dedupe_key", "status", "results")
+    VALUES ('11111111-1111-7111-8111-1111111111c4', :'tenant_a', '11111111-1111-7111-8111-1111111111c1',
+            '11111111-1111-7111-8111-1111111111a6', 1,
+            'ticket:11111111-1111-7111-8111-1111111111a6', 'succeeded',
+            '[{"index":0,"type":"add_ticket_tag","outcome":"applied","reason":null}]'::jsonb);
 
 SET LOCAL app.tenant_id = :'tenant_b';
 
@@ -489,14 +545,36 @@ INSERT INTO "public"."sla_timers" ("id", "tenant_id", "ticket_id", "policy_id", 
     VALUES ('22222222-2222-7222-8222-2222222222bc', :'tenant_b', '22222222-2222-7222-8222-2222222222b6',
             '22222222-2222-7222-8222-2222222222bb', 'first_response', 'breached',
             now() - interval '30 minutes', now() - interval '29 minutes');
-INSERT INTO "public"."sla_alerts" ("id", "tenant_id", "sla_timer_id", "ticket_id", "recipient_user_id", "kind", "due_at")
-    VALUES ('22222222-2222-7222-8222-2222222222bd', :'tenant_b', '22222222-2222-7222-8222-2222222222bc',
+INSERT INTO "public"."notifications" ("id", "tenant_id", "type", "sla_timer_id", "ticket_id", "recipient_user_id", "kind", "due_at")
+    VALUES ('22222222-2222-7222-8222-2222222222bd', :'tenant_b', 'sla_breach', '22222222-2222-7222-8222-2222222222bc',
             '22222222-2222-7222-8222-2222222222b6', '22222222-2222-7222-8222-2222222222b1',
             'first_response', now() - interval '30 minutes');
+-- Tenant B's workflow rows, mirroring tenant A's — including a tag with the *same
+-- name*, which is correct (the key is `(tenant_id, name)`) and is what makes the
+-- cross-tenant reads below mean something. Both tenants also hold a workflow
+-- called `Escalate stale tickets`, for the same reason.
+INSERT INTO "public"."tags" ("id", "tenant_id", "name")
+    VALUES ('22222222-2222-7222-8222-2222222222c0', :'tenant_b', 'escalated');
+INSERT INTO "public"."workflows" ("id", "tenant_id", "name", "is_active", "position", "trigger_type", "definition", "version", "updated_at")
+    VALUES ('22222222-2222-7222-8222-2222222222c1', :'tenant_b', 'Escalate stale tickets', true, 0,
+            'ticket_unresolved_for',
+            '{"trigger":{"type":"ticket_unresolved_for","minutes":240},"conditions":[],"actions":[{"type":"add_ticket_tag","tagId":"22222222-2222-7222-8222-2222222222c0"}]}'::jsonb,
+            1, now());
+INSERT INTO "public"."workflow_references" ("id", "tenant_id", "workflow_id", "tag_id")
+    VALUES ('22222222-2222-7222-8222-2222222222c2', :'tenant_b', '22222222-2222-7222-8222-2222222222c1',
+            '22222222-2222-7222-8222-2222222222c0');
+INSERT INTO "public"."ticket_tags" ("id", "tenant_id", "ticket_id", "tag_id")
+    VALUES ('22222222-2222-7222-8222-2222222222c3', :'tenant_b', '22222222-2222-7222-8222-2222222222b6',
+            '22222222-2222-7222-8222-2222222222c0');
+INSERT INTO "public"."workflow_runs" ("id", "tenant_id", "workflow_id", "ticket_id", "workflow_version", "dedupe_key", "status", "results")
+    VALUES ('22222222-2222-7222-8222-2222222222c4', :'tenant_b', '22222222-2222-7222-8222-2222222222c1',
+            '22222222-2222-7222-8222-2222222222b6', 1,
+            'ticket:22222222-2222-7222-8222-2222222222b6', 'succeeded',
+            '[{"index":0,"type":"add_ticket_tag","outcome":"applied","reason":null}]'::jsonb);
 
 COMMIT;
 
-\echo 'fixture committed: 2 tenants, 16 rows each'
+\echo 'fixture committed: 2 tenants, 21 rows each'
 
 -- ---------------------------------------------------------------------------
 -- Phase 3 — behaviour, on a connection that has never set the GUC.
@@ -649,12 +727,13 @@ BEGIN
         WHERE "token_hash" = 'tar54-fixture-b-invite-token-hash-not-a-real-token';
     IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s invite was reachable by token hash'; END IF;
 
-    -- TAR-270's three tables. `sla_alerts` is named twice over, the way TAR-54's
-    -- tables are: it is the only table in the schema whose rows are written by a
-    -- job that has *just finished* reading across every tenant (0006, decision
-    -- 2), so "the phase-2 write landed in the tenant it was grouped under" is
-    -- the acceptance criterion rather than a property it inherits. A row also
-    -- names a supervisor, a ticket number and a missed deadline.
+    -- TAR-270's three tables. `notifications` is named twice over, the way
+    -- TAR-54's tables are: its rows are written by jobs that have *just finished*
+    -- reading across every tenant — the SLA breach sweep (0006, decision 2) and
+    -- now the workflow sweep (0009, decision 3) — so "the phase-2 write landed in
+    -- the tenant it was grouped under" is the acceptance criterion rather than a
+    -- property it inherits. A row also names a supervisor, a ticket number and a
+    -- missed deadline.
     SELECT count(*) INTO n FROM "public"."sla_policies";
     IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 SLA policy, saw %', n; END IF;
 
@@ -676,20 +755,77 @@ BEGIN
         WHERE "state" = 'breached' AND "due_at" <= now();
     IF n <> 1 THEN RAISE EXCEPTION 'the unscoped sweep predicate returned % rows to a scoped role', n; END IF;
 
-    SELECT count(*) INTO n FROM "public"."sla_alerts";
-    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 SLA alert, saw %', n; END IF;
+    SELECT count(*) INTO n FROM "public"."notifications";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 notification, saw %', n; END IF;
 
-    SELECT count(*) INTO n FROM "public"."sla_alerts" WHERE "tenant_id" = tenant_b;
-    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of sla_alerts returned % rows', n; END IF;
+    SELECT count(*) INTO n FROM "public"."notifications" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of notifications returned % rows', n; END IF;
 
     -- By id, which is the read `GET /api/v1/sla-alerts/{id}` and the acknowledge
     -- endpoint make. It must find nothing, so the endpoint answers 404 on the
     -- policy rather than on an application check that could be forgotten.
-    SELECT count(*) INTO n FROM "public"."sla_alerts"
+    SELECT count(*) INTO n FROM "public"."notifications"
         WHERE "id" = '22222222-2222-7222-8222-2222222222bd';
-    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s SLA alert was reachable by id'; END IF;
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s notification was reachable by id'; END IF;
 
-    RAISE NOTICE 'ok: tenant A sees its own 16 rows and none of tenant B''s';
+    -- TAR-27's four tables. Each is named rather than left to the phase-3a loop
+    -- for a reason the loop cannot cover: a workflow is tenant-authored automation
+    -- that *writes to tickets*, so one tenant reading — let alone running —
+    -- another's rules is the whole of TAR-27's isolation criterion. The two
+    -- tenants hold identically named tags and workflows, so a query that ignored
+    -- the tenant would return two rows here rather than nothing, which is what
+    -- makes each `<> 1` assertion mean something.
+    SELECT count(*) INTO n FROM "public"."tags";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 tag, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."workflows";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 workflow, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."workflows" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of workflows returned % rows', n; END IF;
+
+    -- The evaluation read the sweep and every event trigger make, verbatim: the
+    -- active workflows for one trigger type. It carries no tenant term of its own
+    -- inside a worker, so RLS is the only thing standing between it and another
+    -- tenant's rules.
+    SELECT count(*) INTO n FROM "public"."workflows"
+        WHERE "is_active" AND "trigger_type" = 'ticket_unresolved_for';
+    IF n <> 1 THEN RAISE EXCEPTION 'the evaluation predicate returned % rows to a scoped role', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."workflow_runs";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 workflow run, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."workflow_runs" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of workflow_runs returned % rows', n; END IF;
+
+    -- By dedupe key, which is the claim `INSERT ... ON CONFLICT` reads. Tenant B's
+    -- key names tenant B's ticket, so this finding a row would mean the unique
+    -- index is shared across tenants — and a claim that collides across the
+    -- boundary is one tenant's automation silently not firing.
+    SELECT count(*) INTO n FROM "public"."workflow_runs"
+        WHERE "dedupe_key" = 'ticket:22222222-2222-7222-8222-2222222222b6';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s workflow run was reachable by dedupe key'; END IF;
+
+    SELECT count(*) INTO n FROM "public"."workflow_references";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 workflow reference, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."workflow_references" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of workflow_references returned % rows', n; END IF;
+
+    -- "Which workflows use this tag?" — the lookup the tag-delete path makes. Run
+    -- with tenant B's tag id, it must find nothing: a tenant learning that another
+    -- tenant's workflow uses a tag would be told about a rule they cannot see.
+    SELECT count(*) INTO n FROM "public"."workflow_references"
+        WHERE "tag_id" = '22222222-2222-7222-8222-2222222222c0';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s workflow reference was reachable by tag id'; END IF;
+
+    SELECT count(*) INTO n FROM "public"."ticket_tags";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 ticket tag, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."ticket_tags" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of ticket_tags returned % rows', n; END IF;
+
+    RAISE NOTICE 'ok: tenant A sees its own 21 rows and none of tenant B''s';
 
     -- 3c. Tenant B, symmetrically. Same connection, same role — only the GUC
     -- changed, which is exactly what the client extension will do per request.
@@ -756,10 +892,24 @@ BEGIN
     -- Acknowledging another tenant's alert. The endpoint is a plain UPDATE by
     -- id, so if the policy did not filter it, one tenant's supervisor could
     -- silence another's — quietly, with no error and nothing in the audit log.
-    UPDATE "public"."sla_alerts" SET "acknowledged_at" = now()
+    UPDATE "public"."notifications" SET "acknowledged_at" = now()
         WHERE "id" = '22222222-2222-7222-8222-2222222222bd';
     GET DIAGNOSTICS n = ROW_COUNT;
-    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant acknowledge of an SLA alert modified % rows', n; END IF;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant acknowledge of a notification modified % rows', n; END IF;
+
+    -- Disabling another tenant's workflow, or moving it in their rule list. Worse
+    -- in kind than a read: automation a supervisor is relying on stops, and
+    -- nothing anywhere says why.
+    UPDATE "public"."workflows" SET "is_active" = false, "position" = 99
+        WHERE "id" = '22222222-2222-7222-8222-2222222222c1';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant UPDATE of workflows modified % rows', n; END IF;
+
+    -- Deleting another tenant's reference row, which is what would let *their*
+    -- tag be deleted out from under a workflow that needs it.
+    DELETE FROM "public"."workflow_references" WHERE "tenant_id" = tenant_b;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant DELETE of workflow_references removed % rows', n; END IF;
 
     RAISE NOTICE 'ok: cross-tenant UPDATE and DELETE match 0 rows';
 
@@ -773,13 +923,13 @@ BEGIN
 
     RAISE NOTICE 'ok: GUC cleared to the empty string -> 0 rows';
 
-    -- 3g. `webhook_events` and `tenant_signups` carry no policy by design, so on
-    -- both the grant is the enforcement. The app role must not be able to read
-    -- either at all.
+    -- 3g. `webhook_events`, `tenant_signups` and `lifecycle_events` carry no
+    -- policy by design, so on all three the grant is the enforcement. The app
+    -- role must not be able to read any of them at all.
     --
     -- Asserted here rather than left to phase 1b, which only proves the negative
     -- — "no privilege on an unprotected table" also passes for a table that was
-    -- never created. These two are named, so a grant added by hand or an
+    -- never created. These three are named, so a grant added by hand or an
     -- `app-roles.sql` branch dropped in a refactor fails by name.
     BEGIN
         EXECUTE 'SELECT count(*) FROM "public"."webhook_events"';
@@ -798,6 +948,20 @@ BEGIN
     EXCEPTION
         WHEN insufficient_privilege THEN
             RAISE NOTICE 'ok: tenant_signups unreachable by the app role (no grant)';
+    END;
+
+    -- ADR 0009 Amendment 1 ruling 2. This one is the newest and the easiest to
+    -- get wrong, because unlike the two above it *does* carry `tenant_id`: it
+    -- looks scoped and is not. Dropping the policy without dropping the grant
+    -- would have left every tenant's lifecycle history readable on the tenant
+    -- connection, and nothing else in this file would have caught it — 1a skips
+    -- the table by name and 1b only sees a table with no privilege.
+    BEGIN
+        EXECUTE 'SELECT count(*) FROM "public"."lifecycle_events"';
+        RAISE EXCEPTION 'app role can read lifecycle_events — it holds no policy and must hold no grant';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: lifecycle_events unreachable by the app role (no grant)';
     END;
 
     -- 3h. The system role, with no GUC at all, sees both tenants. Proves the
@@ -829,10 +993,19 @@ SET LOCAL lock_timeout = '3s';
 
 SET LOCAL app.tenant_id = :'tenant_a';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_a';
+-- TAR-27's four tables, before the tags, teams, tickets and workflows they point
+-- at. `workflow_references` goes first and explicitly: its tag and team foreign
+-- keys are `NO ACTION`, so a row here outliving its tag would refuse that tag's
+-- delete at the end of the statement rather than cascading with it.
+DELETE FROM "public"."workflow_references" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."workflow_runs" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."workflows" WHERE "tenant_id" = :'tenant_a';
+DELETE FROM "public"."ticket_tags" WHERE "tenant_id" = :'tenant_a';
 -- TAR-270's three tables, before the ticket they hang off. They cascade from
--- `tickets`, so this is belt and braces — but alerts before timers before
--- policies is the order their own foreign keys require.
-DELETE FROM "public"."sla_alerts" WHERE "tenant_id" = :'tenant_a';
+-- `tickets`, so this is belt and braces — but notifications before timers before
+-- policies is the order their own foreign keys require. The table was
+-- `sla_alerts` until TAR-394 renamed it (0009, decision 7).
+DELETE FROM "public"."notifications" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_a';
 -- Before the conversation and contact they reference: those foreign keys are
@@ -841,6 +1014,9 @@ DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_a';
+-- After `contact_tags` (which the contact above cascades), `ticket_tags` and
+-- `workflow_references` — the first two cascade from the tag, the third refuses it.
+DELETE FROM "public"."tags" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_a';
 -- TAR-54's tables, before the users, invites and teams they hang off. Their
@@ -856,13 +1032,18 @@ DELETE FROM "public"."users" WHERE "tenant_id" = :'tenant_a';
 
 SET LOCAL app.tenant_id = :'tenant_b';
 DELETE FROM "public"."messages" WHERE "tenant_id" = :'tenant_b';
-DELETE FROM "public"."sla_alerts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."workflow_references" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."workflow_runs" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."workflows" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."ticket_tags" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."notifications" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."tags" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."password_reset_tokens" WHERE "tenant_id" = :'tenant_b';
@@ -892,8 +1073,26 @@ BEGIN
     SELECT count(*) INTO n FROM "public"."ticket_counters" WHERE "tenant_id" IN (tenant_a, tenant_b);
     IF n <> 0 THEN RAISE EXCEPTION 'fixture ticket counters survived cleanup: %', n; END IF;
 
-    SELECT count(*) INTO n FROM "public"."sla_alerts" WHERE "tenant_id" IN (tenant_a, tenant_b);
-    IF n <> 0 THEN RAISE EXCEPTION 'fixture SLA alerts survived cleanup: %', n; END IF;
+    SELECT count(*) INTO n FROM "public"."notifications" WHERE "tenant_id" IN (tenant_a, tenant_b);
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture notifications survived cleanup: %', n; END IF;
+
+    -- The four TAR-27 tables, checked together: `workflow_references` is the one
+    -- whose survival would be actively harmful, because its `NO ACTION` foreign
+    -- keys would then refuse a later run's attempt to delete the fixture tag.
+    SELECT count(*) INTO n FROM "public"."workflow_references" WHERE "tenant_id" IN (tenant_a, tenant_b);
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture workflow references survived cleanup: %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."workflow_runs" WHERE "tenant_id" IN (tenant_a, tenant_b);
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture workflow runs survived cleanup: %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."workflows" WHERE "tenant_id" IN (tenant_a, tenant_b);
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture workflows survived cleanup: %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."ticket_tags" WHERE "tenant_id" IN (tenant_a, tenant_b);
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture ticket tags survived cleanup: %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."tags" WHERE "tenant_id" IN (tenant_a, tenant_b);
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture tags survived cleanup: %', n; END IF;
 
     SELECT count(*) INTO n FROM "public"."tenants" WHERE "id" IN (tenant_a, tenant_b);
     IF n <> 0 THEN RAISE EXCEPTION 'fixture tenants survived cleanup: %', n; END IF;
