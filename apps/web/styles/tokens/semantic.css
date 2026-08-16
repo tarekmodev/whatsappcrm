@@ -224,6 +224,10 @@
   --size-menu: var(--scale-size-pane-xs);
   /* How tall a scrolling region may grow before it scrolls rather than the page. */
   --size-scroll-region: var(--scale-size-viewport-tall);
+  /* The reporting dashboard's daily-volume chart: its plotting area, and the
+     narrowest one day may get before the chart scrolls instead of squeezing. */
+  --size-chart-track: var(--scale-size-chart-track);
+  --size-chart-column: var(--scale-size-chart-column);
   --size-media-thumb: var(--scale-size-media-sm);
   --size-media-inline: var(--scale-size-media-md);
   --size-media-player: var(--scale-size-player);

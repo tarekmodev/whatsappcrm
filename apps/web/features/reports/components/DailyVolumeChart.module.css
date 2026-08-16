@@ -1,0 +1,136 @@
+/*
+ * The daily-volume chart, and — deliberately — its skeleton: both render these
+ * classes, so the placeholder cannot drift out of the shape it stands in for.
+ *
+ * There is no charting library behind this. Two bars per day in a grid is
+ * something CSS does natively, and the smallest chart dependency in this
+ * ecosystem is larger than the entire route's JavaScript budget.
+ */
+
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+/* Never the only thing telling the two series apart — the label beside it is. */
+.swatch {
+  inline-size: var(--space-3);
+  block-size: var(--space-3);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.swatch[data-series='created'] {
+  background: var(--color-accent);
+}
+
+.swatch[data-series='resolved'] {
+  background: var(--color-info);
+}
+
+/*
+ * The scroller. A quarter's worth of days cannot fit a phone at a legible column
+ * width, so the chart scrolls rather than squeezing every day into a hairline.
+ * `tabindex` on the element in the markup is what makes that reachable by
+ * keyboard; this is only the visible affordance for it.
+ */
+.scroller {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  padding-block-end: var(--space-1);
+}
+
+.scroller:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.days {
+  display: grid;
+  grid-auto-flow: column;
+  /* Share the width when the days fit; stop shrinking — and start scrolling —
+     at the point a column stops being readable. */
+  grid-auto-columns: minmax(var(--size-chart-column), 1fr);
+  gap: var(--space-1);
+  align-items: end;
+  block-size: var(--size-chart-track);
+}
+
+.day {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: var(--border-hairline);
+  block-size: 100%;
+  min-inline-size: 0;
+}
+
+/*
+ * `--bar-fill` is the one thing a component may set inline: it is a per-instance
+ * measurement of the data, and the rule that consumes it lives here.
+ */
+.bar {
+  flex: 1 1 0;
+  min-inline-size: 0;
+  /* A day with one ticket against a peak of two hundred still gets a mark. */
+  block-size: max(calc(var(--bar-fill) * 100%), var(--focus-ring-width));
+  border-start-start-radius: var(--radius-sm);
+  border-start-end-radius: var(--radius-sm);
+}
+
+.bar[data-series='created'] {
+  background: var(--color-accent);
+}
+
+.bar[data-series='resolved'] {
+  background: var(--color-info);
+}
+
+/* Keeps its slot so the other series stays half the column wide, and draws
+   nothing: a day with no resolutions is not a day with a very short bar. */
+.bar[data-empty='true'] {
+  background: none;
+  block-size: 0;
+}
+
+.axis {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+/*
+ * Forced colours drop every background, which would leave an empty track. The
+ * system's own colours put the bars back, and the two series stay distinct
+ * because one is filled and the other is outlined.
+ */
+@media (forced-colors: active) {
+  .bar[data-series='created'],
+  .swatch[data-series='created'] {
+    background: CanvasText;
+  }
+
+  .bar[data-series='resolved'],
+  .swatch[data-series='resolved'] {
+    background: Canvas;
+    border: var(--border-hairline) solid CanvasText;
+  }
+}

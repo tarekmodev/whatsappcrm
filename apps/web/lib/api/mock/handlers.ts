@@ -8,6 +8,7 @@ import {
   ConversationListQuerySchema,
   ConversationStatusUpdateInputSchema,
   CursorPageQuerySchema,
+  DashboardMetricsQuerySchema,
   IdSchema,
   InternalNoteCreateInputSchema,
   InviteCreateInputSchema,
@@ -46,6 +47,7 @@ import {
   type ConversationResponse,
   type CursorPage,
   type CustomFieldDefinition,
+  type DashboardMetricsResponse,
   type InternalNoteResponse,
   type MessageResponse,
   type MessageTemplateResponse,
@@ -67,6 +69,7 @@ import {
   type UserResponse,
 } from '@whatsappcrm/contracts';
 import { ApiRequestError, type ApiRequest } from '@/lib/api/http';
+import { dashboardMetrics } from '@/lib/api/mock/reporting';
 import { mockState, nextMockId } from '@/lib/api/mock/store';
 import { MOCK_IDS } from '@/lib/api/mock/fixtures';
 import type {
@@ -375,6 +378,16 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}/assign$`),
     permission: 'ticket:assign',
     handle: assignTicket,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/reports\/dashboard$/,
+    // `report:read`, which every role holds. What a supervisor holds on top is
+    // `report:read_all`, and that widens the aggregate rather than deciding
+    // whether the call is allowed — so it is checked inside the aggregation,
+    // never here (ADR 0009 decision 6).
+    permission: 'report:read',
+    handle: reportDashboard,
   },
   {
     method: 'GET',
@@ -1892,6 +1905,35 @@ function findTicketInTenant(principal: SessionPrincipal, id: string | undefined)
   return ticket;
 }
 
+// --- Reporting (TAR-30, ADR 0009) ------------------------------------------
+
+/**
+ * `GET /v1/reports/dashboard` — the four metrics over a date range.
+ *
+ * Validated against the contract's own query schema rather than read key by key,
+ * because two of its rules are refusals the console has to render: `from` after
+ * `to`, and a range over `REPORT_RANGE_MAX_DAYS`. Both answer `validation_failed`
+ * before any aggregation runs, exactly as the real route does.
+ *
+ * The aggregation itself lives in `mock/reporting.ts` — it is the one handler
+ * whose body is arithmetic rather than a filter, and inlining it here would bury
+ * the four rules it mirrors.
+ */
+function reportDashboard({ principal, query }: RouteContext): DashboardMetricsResponse {
+  const parsed = DashboardMetricsQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  return dashboardMetrics({
+    principal,
+    query: parsed.data,
+    tickets: tenantTickets(principal),
+    users: tenantUsers(principal),
+  });
+}
+
 // --- SLA alerts (TAR-26, ADR 0006) -----------------------------------------
 
 /**
@@ -2535,8 +2577,26 @@ function toMessageTemplateResponse(item: MockMessageTemplate): MessageTemplateRe
   return stripTenant(item);
 }
 
+/**
+ * The two attribution columns ADR 0009 adds to `tickets` are internal, exactly
+ * like `tenantId`: the dashboard groups by them and no ticket response carries
+ * them. Stripped here rather than left to the response schema to drop, so the
+ * transport is the boundary rather than the parser at the other end of it.
+ */
 function toTicketResponse(ticket: MockTicket): TicketResponse {
-  return stripTenant(ticket);
+  const { firstResponseUserId, resolvedByUserId, ...scoped } = stripTenant(ticket);
+
+  // The check is not decoration, and it is the same one `stripTenant` makes
+  // about the tenant column: `null` is a recorded fact — "nobody was recorded" —
+  // while `undefined` means a fixture or a write path built a ticket without
+  // ever considering attribution. The first renders as the unattributed row; the
+  // second would silently *become* that row, which is a fixture bug wearing a
+  // valid answer's clothes.
+  if (firstResponseUserId === undefined || resolvedByUserId === undefined) {
+    throw new Error('Mock ticket is missing its reporting attribution.');
+  }
+
+  return scoped;
 }
 
 // --- Helpers ---------------------------------------------------------------

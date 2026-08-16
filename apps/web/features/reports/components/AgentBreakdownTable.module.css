@@ -1,0 +1,31 @@
+/*
+ * Cells for the per-agent breakdown. Layout of the table itself belongs to
+ * `DataTable`; this file only says what a cell's contents look like.
+ */
+
+.agent {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.name {
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.note {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+/*
+ * Tabular figures so the medians line up down the column — a duration column
+ * where the digits wander is one nobody can compare by eye, which is the only
+ * thing this table is for.
+ */
+.figure {
+  font-variant-numeric: tabular-nums;
+}

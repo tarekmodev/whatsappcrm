@@ -1,0 +1,16 @@
+/*
+ * The two supporting lines inside the dashboard's cards. Everything else on this
+ * screen is laid out by `SectionCard`, `Stack` and `AutoGrid`, which is why this
+ * file is two rules long.
+ */
+
+.range {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.note {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  max-inline-size: var(--measure-body);
+}
