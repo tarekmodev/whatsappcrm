@@ -21,6 +21,18 @@ export const PROCESS_WEBHOOK_EVENT_JOB = 'webhook.process-event';
 /** The repeatable sweep that re-enqueues stored events nothing picked up. */
 export const SWEEP_WEBHOOK_EVENTS_JOB = 'webhook.sweep-stuck-events';
 
+/** Tenant-lifecycle background work that belongs to no single tenant. */
+export const TENANCY_QUEUE = 'tenancy';
+
+/**
+ * The repeatable sweep that re-checks pending custom-domain claims and releases
+ * lapsed ones (TAR-29).
+ *
+ * A queue job rather than a `@Cron`, for the reason `SWEEP_WEBHOOK_EVENTS_JOB`
+ * gives: BullMQ's scheduler is what stops it running once per replica.
+ */
+export const SWEEP_TENANT_DOMAINS_JOB = 'tenancy.sweep-domain-verification';
+
 /**
  * Namespace for every BullMQ key. Explicit so a Redis instance shared with
  * anything else — a session store, a rate limiter — cannot collide with a queue

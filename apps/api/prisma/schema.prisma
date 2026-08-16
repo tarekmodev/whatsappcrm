@@ -527,6 +527,15 @@ enum NotificationType {
   sla_breach
   workflow_notify
   workflow_broken
+  /// A human asked for supervisor attention on a ticket (TAR-32/TAR-468).
+  ///
+  /// The third type, and the one 0006 decision 5 named as the trigger to
+  /// generalise `sla_alerts` into this table. TAR-394 reached that point first
+  /// at the second type, so escalation arrives into a table that already exists
+  /// — which is why TAR-468 adds a value here rather than the fourth parallel
+  /// alerts table ADR 0011 decision 5 specified. Two unread counts and two
+  /// acknowledge endpoints is precisely what both ADRs exist to prevent.
+  escalation
 
   @@map("notification_type")
 }
@@ -2279,6 +2288,20 @@ model TicketEvent {
   ticket Ticket @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
   actor  User?  @relation(fields: [tenantId, actorUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
 
+  /// The `escalation` notifications raised by this event (TAR-468). N supervisors
+  /// told about one escalation act, which is what lets the console render one
+  /// escalation rather than three.
+  notifications Notification[]
+
+  /// Carried for the same reason `Ticket` and `SlaTimer` carry it and for no
+  /// other: it is the target a *composite* foreign key needs.
+  /// `notifications.(tenant_id, ticket_event_id)` references it, and without this
+  /// constraint PostgreSQL has nothing to point that key at — an `id`-only key
+  /// would let one tenant's notification name another tenant's event.
+  ///
+  /// `id` is already unique on its own, so this adds no new guarantee about
+  /// events; it adds a reference target.
+  @@unique([tenantId, id])
   @@index([tenantId, ticketId, createdAt(sort: Desc), id(sort: Desc)])
   @@index([tenantId, actorUserId])
   @@map("ticket_events")
@@ -2549,6 +2572,17 @@ model SlaTimer {
 /// `ticket_id` stays `NOT NULL`: every type this story adds is raised while
 /// evaluating one ticket, and `workflow_broken` is raised from the run that
 /// failed, which has one.
+///
+/// **TAR-468 added the third type, `escalation`, and its `ticket_event_id`
+/// column** rather than the parallel `escalation_alerts` table ADR 0011 decision
+/// 5 specified. 0011 accepted two tables only as the price of not folding them
+/// mid-story, and named the third notification type as the trigger to fold; by
+/// the time escalation arrived, TAR-394 had already folded at the second. So the
+/// fourth table would have been the deviation, and its stated cost — two unread
+/// counts, two acknowledge endpoints, and a supervisor who has to look in two
+/// places — is exactly what this table exists to prevent. The API contract is
+/// unaffected: `GET /api/v1/escalation-alerts` is a `type = 'escalation'` view,
+/// the same arrangement `sla-alerts` already keeps.
 model Notification {
   id              String           @id @default(uuid(7)) @db.Uuid
   tenantId        String           @map("tenant_id") @db.Uuid
@@ -2556,6 +2590,22 @@ model Notification {
   /// metadata-only migration: every row that existed was already a breach.
   type            NotificationType @default(sla_breach)
   slaTimerId      String?          @map("sla_timer_id") @db.Uuid
+  /// The `escalated` `ticket_events` row this notification belongs to — the
+  /// `escalation` type's equivalent of `sla_timer_id`, non-null exactly for that
+  /// type and enforced by `notifications_escalation_columns` (TAR-468).
+  ///
+  /// It is the group key and the idempotency key at once, which is the point of
+  /// the design. N recipient rows point at one escalation act, so the console
+  /// shows one escalation and not three. There is no natural uniqueness on
+  /// `(ticket, recipient)` — a second escalation an hour later must notify again
+  /// — but a *retry* of one escalation must not, and the event row is already
+  /// unique.
+  ///
+  /// A real column with a composite foreign key rather than a `dedupe_key`
+  /// string, because only the key makes the invariant structural: a notification
+  /// cannot reference an escalation that is absent from the audit trail, so a
+  /// notification nobody can explain is not a reachable state.
+  ticketEventId   String?          @map("ticket_event_id") @db.Uuid
   ticketId        String           @map("ticket_id") @db.Uuid
   recipientUserId String           @map("recipient_user_id") @db.Uuid
   /// Denormalised from the timer so the supervisor's list needs no join.
@@ -2579,9 +2629,10 @@ model Notification {
   /// conflict.
   acknowledgedAt  DateTime?        @map("acknowledged_at") @db.Timestamptz(3)
 
-  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  slaTimer  SlaTimer? @relation(fields: [tenantId, slaTimerId], references: [tenantId, id], onDelete: Cascade)
-  ticket    Ticket    @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  slaTimer    SlaTimer?    @relation(fields: [tenantId, slaTimerId], references: [tenantId, id], onDelete: Cascade)
+  ticketEvent TicketEvent? @relation(fields: [tenantId, ticketEventId], references: [tenantId, id], onDelete: Cascade)
+  ticket      Ticket       @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
   /// `NoAction`, matching every other user reference in this file: removing a
   /// user is a status change, never a row delete (convention 4).
   recipient User      @relation(fields: [tenantId, recipientUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
@@ -2602,6 +2653,15 @@ model Notification {
   /// occurrence. Null for `sla_breach`, which does not collide, for the same
   /// reason and with the same non-partial shape.
   @@unique([tenantId, recipientUserId, dedupeKey])
+  /// The escalation path's idempotency layer — one notification per recipient
+  /// per `escalated` event (TAR-468). Non-partial for the same reason as the two
+  /// above: `ticket_event_id` is null on every other type and PostgreSQL does
+  /// not collide NULLs, so they can never conflict here.
+  ///
+  /// `dedupe_key` was the alternative and was rejected: it would have keyed on a
+  /// string, where this keys on the foreign key that also guarantees the event
+  /// exists.
+  @@unique([tenantId, ticketEventId, recipientUserId])
   /// The recipient's notification list and its keyset pagination.
   @@index([tenantId, recipientUserId, createdAt(sort: Desc), id(sort: Desc)])
   /// "What did this ticket raise" — TAR-32's escalation log.
@@ -2865,13 +2925,18 @@ model TicketTag {
 //   * `notifications_sla_breach_columns` — CHECK ((type = 'sla_breach') =
 //     (sla_timer_id IS NOT NULL)). The nullability of the three SLA columns made
 //     an invariant instead of a convention.
+//   * `notifications_escalation_columns` — CHECK ((type = 'escalation') =
+//     (ticket_event_id IS NOT NULL)). The same shape as the line above, applied
+//     to TAR-468's column: an `escalation` row that named no event would be a
+//     notification with nothing in the audit trail to explain it, and any other
+//     type carrying one would be claiming an escalation that never happened.
 //
 // Prisma's schema language has no CHECK at all, and its describer neither reports
 // CHECKs nor distinguishes `NULLS NOT DISTINCT`, so `migrate dev` proposes
 // neither to create nor to drop any of them. That is not drift — and it means
 // **nothing in this file will ever regenerate them.** A `migrate reset` replays
 // the migrations and is fine; a database built from this schema alone silently
-// loses all six.
+// loses all seven.
 
 // ---------------------------------------------------------------------------
 // AI — TAR-28

@@ -60,6 +60,19 @@ export const AUDIT_ACTIONS = {
   customFieldUpdated: 'custom_field.updated',
   customFieldDeleted: 'custom_field.deleted',
   customFieldReordered: 'custom_field.reordered',
+  /**
+   * Canned-response writes (TAR-31, 0011). A canned response is standing text an
+   * agent sends to a customer under the tenant's name, which is the same class
+   * of change as a routing rule — and 0007 audits those.
+   *
+   * The metadata carries `shortcut` and `title`, never `body`: the body is
+   * free-form copy that can carry customer-specific detail, and this table is
+   * exported for compliance review rather than being a place to discover it.
+   * Same reasoning as `assignment_rule.*` and its conditions.
+   */
+  cannedResponseCreated: 'canned_response.created',
+  cannedResponseUpdated: 'canned_response.updated',
+  cannedResponseDeleted: 'canned_response.deleted',
   sessionRevoked: 'session.revoked',
   /**
    * An account crossing `AUTH_POLICY.loginFailureThreshold` (TAR-53,
@@ -93,6 +106,27 @@ export const AUDIT_ACTIONS = {
    * what it says.
    */
   whatsappBusinessAccountConnected: 'whatsapp.business_account.connected',
+  /**
+   * The custom-domain lifecycle (TAR-29). Audited because a verified hostname
+   * decides where invite and password-reset links are **mailed** —
+   * `TenantLinkService.primaryHostname()` builds them from the primary domain —
+   * so a claim, a proof and a removal are each a change to where live tokens go,
+   * not a cosmetic setting.
+   *
+   * The metadata carries the hostname and the kind. It never carries the
+   * verification token: that value is published in public DNS and is not a
+   * credential, but this table is exported for compliance review and there is no
+   * reason for a second copy of it to exist there.
+   *
+   * `activated` and `deactivated` are the platform operator attaching and
+   * detaching the hostname at the edge, so their rows are the ones carrying an
+   * `actor_label` rather than a user.
+   */
+  tenantDomainClaimed: 'tenant_domain.claimed',
+  tenantDomainVerified: 'tenant_domain.verified',
+  tenantDomainRemoved: 'tenant_domain.removed',
+  tenantDomainActivated: 'tenant_domain.activated',
+  tenantDomainDeactivated: 'tenant_domain.deactivated',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

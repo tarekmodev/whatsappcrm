@@ -8,7 +8,14 @@ import type { AuditAction } from './audit.actions';
 export interface AuditEntry {
   action: AuditAction;
   targetType:
-    'user' | 'team' | 'invite' | 'whatsapp_business_account' | 'assignment_rule' | 'custom_field';
+    | 'user'
+    | 'team'
+    | 'invite'
+    | 'whatsapp_business_account'
+    | 'assignment_rule'
+    | 'custom_field'
+    | 'canned_response'
+    | 'tenant_domain';
   targetId: string;
   /**
    * A redacted before/after at most. **Never a secret, a password hash, a token

@@ -113,6 +113,63 @@ const envShape = z.object({
   PLATFORM_EDGE_HOSTNAME: z.string().min(1).optional(),
 
   /**
+   * What a tenant that has set no product name of its own is called (TAR-29).
+   *
+   * Configuration rather than a constant, because a white-label deployment of
+   * this platform is not necessarily called what the repository is called, and
+   * the value is rendered in the browser title and on the login screen of every
+   * tenant that has not customised it. Optional: absent falls back to
+   * `BRANDING_DEFAULTS.productName` in `@whatsappcrm/contracts`, which is the
+   * one place the fallback is written so the API and the web app cannot show a
+   * different name for the same tenant.
+   *
+   * Not a secret — it is published to every unauthenticated caller by
+   * `GET /api/v1/tenant/public`.
+   */
+  PLATFORM_PRODUCT_NAME: z.string().min(1).max(60).optional(),
+
+  /**
+   * How long an unverified custom-domain claim survives before the sweeper
+   * deletes it and releases the hostname (TAR-29).
+   *
+   * A claim reserves a **globally unique** hostname, so without an expiry one
+   * tenant typing a competitor's domain holds it forever. Seven days is long
+   * enough for a customer to get a DNS change through a change-control process
+   * and short enough that a squat is a nuisance rather than a hostage situation.
+   *
+   * Reclaim latency is the sweep interval on top of this, which is documented
+   * behaviour: a tenant told `conflict` on a hostname whose claim has just
+   * lapsed succeeds on retry within one sweep.
+   */
+  DOMAIN_VERIFICATION_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+
+  /**
+   * How often pending claims are re-checked and lapsed ones released.
+   *
+   * This is what makes verification *arrive* without the tenant sitting on a
+   * settings screen: DNS propagation is minutes to hours, and a flow that only
+   * verifies on demand is one where the customer's experience is "it did not
+   * work, try again later". Per-claim backoff lives in the sweeper, so a
+   * shorter interval here does not mean more queries per domain.
+   */
+  DOMAIN_VERIFICATION_SWEEP_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .default(15 * 60_000),
+
+  /**
+   * Upper bound on one DNS lookup during ownership verification.
+   *
+   * Every outbound call has one, and this one sits on a request path a tenant is
+   * watching. Deliberately short: the resolver is asked for a record at a name
+   * the tenant nominated, so a slow answer is far more likely to be a nameserver
+   * that is not going to answer than one that needs another second. A timeout is
+   * recorded as `lookup_timeout` on the row and retried by the sweeper.
+   */
+  DOMAIN_VERIFICATION_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(3_000),
+
+  /**
    * The scheme put in front of a tenant's hostname when an email has to carry an
    * absolute link back into the product — the invite and password-reset links
    * (TAR-53, link shapes).

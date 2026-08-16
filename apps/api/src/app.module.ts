@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AssignmentModule } from './assignment/assignment.module';
 import { AuditModule } from './audit/audit.module';
+import { CannedResponsesModule } from './canned-responses/canned-responses.module';
 import { TenantContextMiddleware } from './common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
 import { RequestPipelineModule } from './common/request-pipeline/request-pipeline.module';
@@ -86,6 +87,11 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     // After `WhatsAppModule` and `MediaModule`, which it imports for the send
     // path and for turning a `mediaId` into a handle Meta holds.
     ConversationsModule,
+    // Beside `ConversationsModule` rather than inside it: the library is tenant
+    // configuration a supervisor curates, and its only consumer is the console
+    // — the composer reads it over HTTP and resolves a typed shortcut locally
+    // (0011, decision 1), so nothing in the send path imports it.
+    CannedResponsesModule,
     WebhooksModule,
     // L4, and last: it may import the domain modules below it, and nothing below
     // may import it. Every trigger reaching it is a queue job for exactly that

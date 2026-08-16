@@ -167,9 +167,9 @@ it at the edge is the one step the application deliberately does not do (see
      -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN"
    ```
 
-> The three `/api/v1/admin/domains*` calls above are TAR-420's to build and are not
-> deployed yet. Until they are, steps 1 and 7 are a message from the tenant and a note in
-> the ticket; steps 2–6 are unchanged and are the ones that matter.
+> The three `/api/v1/admin/domains*` calls above shipped with TAR-420. Step 7 is what takes
+> the domain off the queue in step 1 and what flips the tenant's console from `verified` to
+> `live`; skipping it leaves a working domain looking unfinished to the customer.
 
 ### The records a tenant is given
 
