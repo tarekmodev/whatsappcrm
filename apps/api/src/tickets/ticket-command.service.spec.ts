@@ -301,7 +301,7 @@ function harnessFor(
 
   // Recipient resolution and the alert insert are `escalation-alert.service.ts`'s
   // own concern, and both are exercised against a real database in
-  // `ticket-escalation.int-spec.ts`. Here the stub records what it was asked for
+  // `ticket-handoff.int-spec.ts`. Here the stub records what it was asked for
   // and answers with the recipients the case configured, so these tests stay
   // about the order, the transaction and the response shape.
   const resolved = [...recipients];
@@ -1134,7 +1134,7 @@ describe('the handoff bound an agent writes under', () => {
  * ticket is not touched, that the alerts reference the event the same
  * transaction wrote, and that nobody to tell is a success rather than an error.
  * That the rows and the transaction are real is
- * `ticket-escalation.int-spec.ts`'s job.
+ * `ticket-handoff.int-spec.ts`'s job.
  */
 describe('escalating a ticket', () => {
   it('writes one escalated event carrying the actor, the reason and the cause', async () => {
