@@ -6,7 +6,7 @@ import { useContent } from '@/lib/content';
 import { TICKET_REASON_LIMITS } from '@/features/tickets/constants';
 
 /**
- * The required `reason` both handoff dialogs take. Usage:
+ * The `reason` the handoff dialogs take. Usage:
  *
  * ```tsx
  * <TicketReasonField label={…} hint={…} value={reason} error={reasonError}
@@ -20,6 +20,11 @@ import { TICKET_REASON_LIMITS } from '@/features/tickets/constants';
  * `maxLength` is on the control so the ceiling cannot be exceeded at all, while
  * the floor is reported as an error after a submit attempt — a value too short
  * has to be *readable* to be fixable, so it is never silently blocked.
+ *
+ * Required by default, because a handoff takes work away from somebody and the
+ * API says so. `isRequired={false}` is for the one caller placing work nobody
+ * held — see `ticketAssignRequiresReason` — where the asterisk would promise a
+ * gate the backend does not have (ADR 0011 decision 1).
  */
 
 export interface TicketReasonFieldProps {
@@ -30,6 +35,8 @@ export interface TicketReasonFieldProps {
   error: string | undefined;
   isDisabled: boolean;
   onChange: (value: string) => void;
+  /** Defaults to `true`; pass the contract's predicate, not a guess. */
+  isRequired?: boolean;
 }
 
 export function TicketReasonField({
@@ -39,9 +46,10 @@ export function TicketReasonField({
   error,
   isDisabled,
   onChange,
+  isRequired = true,
 }: TicketReasonFieldProps) {
   return (
-    <Field label={label} hint={hint} error={error} isRequired>
+    <Field label={label} hint={hint} error={error} isRequired={isRequired}>
       {({ controlId, describedBy, isInvalid }) => (
         <Textarea
           id={controlId}
@@ -68,12 +76,21 @@ export function TicketReasonField({
  * Returns the message to show, or `undefined` when the value is acceptable. It
  * trims first for the reason the contract does: whitespace is not a reason, and
  * a field that counted spaces would let `'   '` through to a 400.
+ *
+ * `isRequired: false` excuses an *empty* value only — the field is `.optional()`
+ * on the wire, not nullable-to-empty-string, so a caller omits it rather than
+ * sending `''`. Anything actually typed still has to clear the floor and the
+ * ceiling, because the API applies both the moment the field is present.
  */
-export function validateTicketReason(value: string, content: ReturnType<typeof useContent>) {
+export function validateTicketReason(
+  value: string,
+  content: ReturnType<typeof useContent>,
+  { isRequired = true }: { isRequired?: boolean } = {},
+) {
   const trimmed = value.trim();
 
   if (trimmed.length === 0) {
-    return content.tickets.reasonRequiredError;
+    return isRequired ? content.tickets.reasonRequiredError : undefined;
   }
 
   if (trimmed.length < TICKET_REASON_LIMITS.minLength) {

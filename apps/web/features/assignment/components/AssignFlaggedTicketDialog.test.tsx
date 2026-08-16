@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { TeamResponse, TicketResponse, UserResponse } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
+import { TICKET_REASON_LIMITS } from '@/features/tickets/constants';
 import { fieldByLabel } from '@/lib/testing/field-queries';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import type { ActionResult } from '@/lib/actions/result';
@@ -82,26 +83,36 @@ const TICKET: TicketResponse = {
 
 const [ROW] = toFlaggedTicketRows([TICKET], TEAMS);
 
-function renderDialog(users: readonly UserResponse[] = USERS, onClose = vi.fn()) {
-  if (ROW === undefined) {
+/**
+ * The state the reviewer's premise assumed and the API cannot produce — a
+ * `deferred` ticket still holding a team. Built here only so the *other* half of
+ * `ticketAssignRequiresReason` is covered: the day something can hand this dialog
+ * a held ticket, the reason has to come back as required rather than the gate
+ * having quietly become a constant.
+ */
+const [HELD_ROW] = toFlaggedTicketRows(
+  [{ ...TICKET, assignedTeamId: '0192f002-0000-7000-8000-000000000201' }],
+  TEAMS,
+);
+
+function renderDialog(
+  users: readonly UserResponse[] = USERS,
+  onClose = vi.fn(),
+  row = ROW,
+): { onClose: ReturnType<typeof vi.fn> } {
+  if (row === undefined) {
     throw new Error('Fixture ticket is not a flagged row.');
   }
 
   render(
     <ToastProvider>
-      <AssignFlaggedTicketDialog row={ROW} assignableUsers={users} onClose={onClose} />
+      <AssignFlaggedTicketDialog row={row} assignableUsers={users} onClose={onClose} />
     </ToastProvider>,
   );
 
   return { onClose };
 }
 
-/**
- * A reason is required since TAR-32: a flagged ticket routed to a team counts
- * as held by `ticketAssignRequiresReason`, so the API refuses a reasonless
- * placement. Filled by default here so the existing cases keep testing what they
- * were written for; the requirement itself has its own case below.
- */
 function typeReason(value = 'Amina has room and knows the account.'): void {
   fireEvent.change(fieldByLabel(content.assignment.assignTicketReasonLabel), {
     target: { value },
@@ -138,13 +149,70 @@ describe('AssignFlaggedTicketDialog', () => {
     });
   });
 
-  it('will not submit without a reason, because the API requires one here', async () => {
+  /**
+   * TAR-537. A ticket in this queue is held by nobody, so
+   * `ticketAssignRequiresReason` is false for it and the API takes the placement
+   * without one — a supervisor emptying the queue is not explaining a handoff.
+   * The field is omitted rather than sent empty: `''` fails the contract's
+   * `.trim().min(3)`, which would be a 422 dressed as "no reason given".
+   */
+  it('places the ticket without a reason, because the API does not require one here', async () => {
     renderDialog();
 
     submit();
 
     await waitFor(() => {
+      expect(assignFlaggedTicketAction).toHaveBeenCalledWith(TICKET_ID, {
+        userId: AMINA_ID,
+        reason: undefined,
+      });
+    });
+    expect(screen.queryByText(content.tickets.reasonRequiredError)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The marker and the copy, together: `Field` appends ` *` to a required label,
+   * so an exact-string query finding the bare label is the assertion that no
+   * asterisk is drawn — and the hint has to agree with it rather than describing
+   * a gate that is not there.
+   */
+  it('marks the reason optional, in the label and in the hint', () => {
+    renderDialog();
+
+    expect(screen.getByLabelText(content.assignment.assignTicketReasonLabel)).toBeInTheDocument();
+    expect(screen.getByText(content.assignment.assignTicketReasonHint(false))).toBeInTheDocument();
+  });
+
+  /**
+   * The predicate is being read, not assumed: a row that does carry a holder
+   * still gets the gate TAR-32 put there.
+   */
+  it('still requires a reason for a ticket that has a holder', async () => {
+    renderDialog(USERS, vi.fn(), HELD_ROW);
+
+    submit();
+
+    await waitFor(() => {
       expect(screen.getByText(content.tickets.reasonRequiredError)).toBeInTheDocument();
+    });
+    expect(assignFlaggedTicketAction).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Optional is not unvalidated. The contract's floor applies the moment the
+   * field is present, so a two-character reason is refused here rather than
+   * round-tripped for a 422.
+   */
+  it('refuses a reason too short to satisfy the contract, even when optional', async () => {
+    renderDialog();
+
+    typeReason('no');
+    submit();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(content.tickets.reasonTooShortError(TICKET_REASON_LIMITS.minLength)),
+      ).toBeInTheDocument();
     });
     expect(assignFlaggedTicketAction).not.toHaveBeenCalled();
   });
