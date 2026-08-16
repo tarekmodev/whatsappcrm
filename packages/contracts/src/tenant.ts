@@ -130,7 +130,7 @@ export type LifecycleTrigger = (typeof LIFECYCLE_TRIGGERS)[number];
 
 /**
  * Who is recorded against a lifecycle transition. Mirrors the `audit_actor_type`
- * database enum so `lifecycle_audit_log` and `audit_logs` describe an actor the
+ * database enum so `lifecycle_events` and `audit_logs` describe an actor the
  * same way, and so a reader does not have to learn two vocabularies.
  *
  * `unattributed` is here because the backfill migration writes it for the state
