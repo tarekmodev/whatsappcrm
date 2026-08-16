@@ -37,7 +37,8 @@ rather than a supervisor.
 the eighth, and the first written for an **agent** rather than a supervisor or an admin.
 [Answer common questions with saved replies](guides/use-saved-replies.md) (TAR-489) is the
 ninth, and the second for an agent — this one for the reader who never opens a settings page
-at all. A guide for a tenant user names its reader in the first line and refers to every
+at all. [Set up your workspace](guides/set-up-your-workspace.md) (TAR-414) is the tenth, and the
+third for an admin. A guide for a tenant user names its reader in the first line and refers to every
 control by its **visible label**, taken from `apps/web/content/en.ts` rather than from a
 component name.
 
@@ -52,6 +53,11 @@ domains sit on one settings area and read as one topic, but `branding:write` and
 `domain:write` are deliberately separate authorities — and the second guide asks its reader
 to edit DNS and then wait, which is a different afternoon from picking a colour. One file
 would have served neither reader.
+
+The inverse also holds: one guide covers several subjects when a reader meets them in one
+sitting. TAR-414's guide runs the setup checklist, plan limits and suspension together because
+that is the arc a new admin actually walks, and three files would have made each of them look
+like somebody else's problem.
 
 **A guide that documents a surface should link the reference for the same subject, and the
 reference should link back.** The two readers meet at that link and nowhere else: it is what
@@ -112,6 +118,11 @@ Fixed vocabulary. Use the left column; never rotate synonyms.
 | auto-reopen                      | reopen, un-resolve                       | `pending → open` written by the customer's reply                                                                                                                                                      |
 | canned response                  | quick reply, snippet, macro, template    | Standing text an agent expands in the composer. **Except in `docs/guides/`**, which says _saved reply_ — the console's own words on screen. Never _template_, which is Meta's approved-message object |
 | shortcut                         | trigger, code, slash command             | The `/hours` token. Both readers use this word; only the engineer's pages call `/` the _trigger_                                                                                                      |
+| lifecycle state                  | lifecycle status, tenant state           | One of the seven `TENANT_STATUSES`. Spell a value in its schema form — `past_due`, not "past due" — outside `docs/guides/`, which uses the console's badge         |
+| self-signup                      | sign-up, registration, self-serve signup | The public path a visitor takes to a tenant. The verb is _sign up_; the noun and the adjective are _self-signup_                                                   |
+| entitlements                     | plan limits, quotas, caps                | The whole `{ features, limits }` object on `tenant_entitlements`. An individual ceiling inside `limits` is a **cap**                                               |
+| seat                             | licence, user slot                       | Held by an `active` or `suspended` member, **and** by every live pending invite                                                                                    |
+| purge                            | hard delete, erase, wipe                 | The batched deletion that runs at `purge_at`. The lifecycle _state_ it lands in is `deleted`                                                                       |
 
 Product entity names take their schema spelling in prose: `conversations`, `tickets`,
 `message_templates`. TypeScript identifiers take theirs: `MessageTemplate`,
