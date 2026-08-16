@@ -1,0 +1,81 @@
+/*
+ * Every rule here reads the seven tenant-owned role names. The values arrive as
+ * custom properties set on `.preview` itself, so this panel can show a *draft*
+ * while the rest of the document still shows the saved brand.
+ */
+.preview {
+  padding: var(--space-4);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-sunken);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Sized like `Button` so the sample is the size of the real control. */
+.primaryAction,
+.secondaryAction {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.primaryAction {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.secondaryAction {
+  border: var(--border-hairline) solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding-block: var(--space-1);
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-subtle);
+  color: var(--color-on-accent-subtle);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.body {
+  margin: 0;
+  max-inline-size: var(--measure-body);
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+.link {
+  color: var(--color-accent);
+  /* Never colour alone: the underline is what carries "this is a link" for
+     anyone who cannot tell this green from that grey. */
+  text-decoration: underline;
+  text-underline-offset: var(--space-1);
+}
+
+/*
+ * The decorative colour. A band with nothing on it, deliberately — `brand-decor`
+ * is the one tenant colour that is never contrast-corrected, so putting text on
+ * it here would demonstrate a use the product does not allow.
+ */
+.decor {
+  display: block;
+  block-size: var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-brand-decor);
+}

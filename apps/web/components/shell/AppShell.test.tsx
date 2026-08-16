@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { content } from '@/content/en';
+import { testBranding } from '@/lib/testing/branding';
 import { AppShell } from './AppShell';
 import { AppSidebar } from './AppSidebar';
 import type { NavItem } from './navigation';
@@ -22,7 +23,11 @@ const ITEMS: readonly NavItem[] = [
 
 function renderShell(): void {
   render(
-    <AppShell initialRailState="expanded" rail={<AppSidebar items={ITEMS} />} bar={null}>
+    <AppShell
+      initialRailState="expanded"
+      rail={<AppSidebar items={ITEMS} branding={testBranding()} />}
+      bar={null}
+    >
       <p>Page</p>
     </AppShell>,
   );

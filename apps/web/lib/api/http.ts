@@ -3,7 +3,7 @@ import { handleMockRequest } from '@/lib/api/mock/handlers';
 import { toApiRequestError } from '@/lib/api/error';
 import { tenantRoutingHeaders } from '@/lib/api/tenant-host';
 import { roleStubHeaders } from '@/lib/session/role-stub-request';
-import type { ApiRequest } from '@/lib/api/request';
+import { isMultipartBody, type ApiRequest } from '@/lib/api/request';
 
 /**
  * The server-side entry point for talking to the API. Every resource module goes
@@ -18,12 +18,14 @@ import type { ApiRequest } from '@/lib/api/request';
  */
 
 export { ApiRequestError } from '@/lib/api/error';
-export { HTTP_METHODS, type ApiRequest, type HttpMethod } from '@/lib/api/request';
+export { HTTP_METHODS, isMultipartBody, type ApiRequest, type HttpMethod } from '@/lib/api/request';
 
 export async function apiRequest(request: ApiRequest): Promise<unknown> {
   if (webEnv.useMockApi) {
     return handleMockRequest(request);
   }
+
+  const isMultipart = isMultipartBody(request.body);
 
   const response = await fetch(`${resolveBaseUrl()}${request.path}`, {
     method: request.method,
@@ -48,12 +50,15 @@ export async function apiRequest(request: ApiRequest): Promise<unknown> {
     // switcher moves the chrome and nothing else (TAR-366). It is `{}` unless
     // the stub is explicitly on, so the real-session path is untouched.
     headers: {
-      'content-type': 'application/json',
+      // Omitted for multipart: `fetch` has to write it itself so the boundary in
+      // the header matches the one in the body. Setting it by hand is how a
+      // multipart upload arrives at the server as an unparseable blob.
+      ...(isMultipart ? {} : { 'content-type': 'application/json' }),
       ...request.headers,
       ...(await roleStubHeaders()),
       ...(await tenantRoutingHeaders()),
     },
-    body: request.body === undefined ? undefined : JSON.stringify(request.body),
+    body: toRequestBody(request.body, isMultipart),
   });
 
   if (!response.ok) {
@@ -68,6 +73,15 @@ export async function apiRequest(request: ApiRequest): Promise<unknown> {
 }
 
 const HTTP_NO_CONTENT = 204;
+
+/** `FormData` goes through untouched; everything else is serialised as JSON. */
+function toRequestBody(body: unknown, isMultipart: boolean): BodyInit | undefined {
+  if (body === undefined) {
+    return undefined;
+  }
+
+  return isMultipart ? (body as FormData) : JSON.stringify(body);
+}
 
 /**
  * The browser talks to a same-origin path that `next.config.mjs` rewrites to the

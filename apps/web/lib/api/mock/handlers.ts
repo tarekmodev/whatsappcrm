@@ -4,6 +4,9 @@ import {
   AssignmentRuleCreateInputSchema,
   AssignmentRuleReorderInputSchema,
   AssignmentRuleUpdateInputSchema,
+  BRANDING_ASSET_LIMITS,
+  BRANDING_UPLOAD_FIELD,
+  BrandingAssetKindSchema,
   ConversationAssignInputSchema,
   ConversationListQuerySchema,
   ConversationStatusUpdateInputSchema,
@@ -13,6 +16,7 @@ import {
   IdSchema,
   InternalNoteCreateInputSchema,
   InviteCreateInputSchema,
+  MAX_CUSTOM_DOMAINS_PER_TENANT,
   MessageListQuerySchema,
   MessageTemplateListQuerySchema,
   ONBOARDING_STEP_IDS,
@@ -28,6 +32,7 @@ import {
   TICKET_STATUS_REQUIRES_CLOSE,
   TeamCreateInputSchema,
   TeamUpdateInputSchema,
+  TenantDomainCreateInputSchema,
   TenantUpdateInputSchema,
   TicketAssignInputSchema,
   TicketListQuerySchema,
@@ -40,6 +45,7 @@ import {
   WorkflowReorderInputSchema,
   WorkflowTestInputSchema,
   WorkflowUpdateInputSchema,
+  brandingAssetPath,
   canAgentTransition,
   isRoleWithin,
   isSlaBreached,
@@ -69,7 +75,11 @@ import {
   type SlaAlertResponse,
   type Tag,
   type TeamResponse,
+  type TenantBranding,
+  type TenantDomain,
+  type TenantDomainListResponse,
   type TenantLifecycleResponse,
+  type TenantPublicResponse,
   type TenantResponse,
   type TicketListQuery,
   type TicketResponse,
@@ -100,6 +110,7 @@ import type {
   MockSlaAlert,
   MockTag,
   MockTeam,
+  MockTenantDomain,
   MockTicket,
   MockUser,
   MockWorkflow,
@@ -505,6 +516,71 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/whatsapp\/business-accounts$/,
     permission: 'channel:manage',
     handle: connectWhatsAppBusinessAccount,
+  },
+  // --- Tenant, branding and domains (TAR-29) -------------------------------
+  {
+    method: 'GET',
+    // Unauthenticated by design: the sign-in screen has to be branded before
+    // anybody has a session. It takes no parameters — the *host* names the
+    // tenant, and an identifier on this route would be an enumeration oracle.
+    pattern: /^\/v1\/tenant\/public$/,
+    permission: null,
+    handle: getPublicTenant,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/tenant$/,
+    // Any signed-in principal: the shell reads its own tenant's name.
+    permission: null,
+    handle: getTenant,
+  },
+  {
+    method: 'PATCH',
+    pattern: /^\/v1\/tenant$/,
+    permission: 'branding:write',
+    handle: updateTenant,
+  },
+  {
+    method: 'PUT',
+    pattern: /^\/v1\/tenant\/branding\/(logo|favicon)$/,
+    permission: 'branding:write',
+    handle: putBrandingAsset,
+  },
+  {
+    method: 'DELETE',
+    pattern: /^\/v1\/tenant\/branding\/(logo|favicon)$/,
+    permission: 'branding:write',
+    handle: deleteBrandingAsset,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/tenant\/domains$/,
+    permission: 'domain:write',
+    handle: listTenantDomains,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/tenant\/domains$/,
+    permission: 'domain:write',
+    handle: createTenantDomain,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/tenant/domains/${UUID_SEGMENT}/verify$`),
+    permission: 'domain:write',
+    handle: verifyTenantDomain,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/tenant/domains/${UUID_SEGMENT}/primary$`),
+    permission: 'domain:write',
+    handle: setPrimaryTenantDomain,
+  },
+  {
+    method: 'DELETE',
+    pattern: new RegExp(`^/v1/tenant/domains/${UUID_SEGMENT}$`),
+    permission: 'domain:write',
+    handle: deleteTenantDomain,
   },
   {
     method: 'GET',
@@ -1699,7 +1775,24 @@ function signupFailed(reason: 'code_expired'): ApiRequestError {
   );
 }
 
-// --- Tenant record and lifecycle (TAR-409, ADR 0009) -----------------------
+// --- Tenant record, branding and domains (TAR-409, TAR-418) ----------------
+
+/** Every domain read starts here, so no handler can iterate the map unscoped. */
+function tenantDomains(principal: SessionPrincipal): MockTenantDomain[] {
+  return [...mockState().tenantDomains.values()].filter(
+    (domain) => domain.tenantId === principal.tenantId,
+  );
+}
+
+/**
+ * `GET /v1/tenant/public` — what an anonymous caller on this host may see, and
+ * nothing else. No slug, no status, no domains, no trial date.
+ */
+function getPublicTenant({ principal }: RouteContext): TenantPublicResponse {
+  const tenant = currentTenant(principal);
+
+  return { id: tenant.id, name: tenant.name, branding: tenant.branding };
+}
 
 function getTenant({ principal }: RouteContext): TenantResponse {
   return currentTenant(principal);
@@ -1764,6 +1857,14 @@ function getTenantLifecycle({ principal }: RouteContext): TenantLifecycleRespons
   };
 }
 
+/**
+ * The tenant row, with `domains` recomposed from the live domain map rather than
+ * read off the stored copy (TAR-418).
+ *
+ * That map is the mutable source of truth — domains are added, verified and
+ * removed one at a time — so returning the seeded array would show a hostname as
+ * still pending immediately after a reviewer verified it.
+ */
 function currentTenant(principal: SessionPrincipal): TenantResponse {
   const tenant = mockState().tenants.get(principal.tenantId);
 
@@ -1771,9 +1872,266 @@ function currentTenant(principal: SessionPrincipal): TenantResponse {
     throw notFound();
   }
 
-  return tenant;
+  return { ...tenant, domains: tenantDomains(principal).map(stripTenant) };
 }
 
+/**
+ * `PUT /v1/tenant/branding/{kind}` — multipart.
+ *
+ * The bytes are dropped: this transport has nowhere to put them and the console
+ * never reads them back through JavaScript, only through an `<img src>` the
+ * browser fetches. What it *does* model is everything the UI depends on — the
+ * cache-busted path, the sniffed type, the size and the timestamp — so the
+ * asset card, the rail and the favicon all render from a real shape.
+ *
+ * ⚠️ The consequence is visible in mock mode and is **not a bug in the upload**:
+ * the image at that path 404s, so the preview shows a broken image. The alt text
+ * and the fallback path are what a reviewer can check here; the bytes need the
+ * real endpoint.
+ */
+function putBrandingAsset({ principal, params, body }: RouteContext): TenantBranding {
+  const tenant = currentTenant(principal);
+  const kind = BrandingAssetKindSchema.parse(params[0]);
+
+  if (!(body instanceof FormData)) {
+    throw validationFailed();
+  }
+
+  const file = body.get(BRANDING_UPLOAD_FIELD);
+
+  if (!(file instanceof File)) {
+    throw validationFailed();
+  }
+
+  const limits = BRANDING_ASSET_LIMITS[kind];
+
+  // The same two refusals the API makes, so the console's inline error path is
+  // exercised against a real rejection rather than only against its own
+  // pre-check.
+  if (!limits.mimeTypes.includes(file.type)) {
+    throw refused('validation_failed', 'That file type is not supported.', HTTP_UNPROCESSABLE);
+  }
+
+  if (file.size > limits.maxBytes) {
+    throw refused('validation_failed', 'That file is too large.', HTTP_UNPROCESSABLE);
+  }
+
+  const updatedAt = new Date(MOCK_UPDATED_AT);
+  const branding: TenantBranding = {
+    ...tenant.branding,
+    [kind]: {
+      path: brandingAssetPath(kind, updatedAt),
+      mimeType: file.type,
+      sizeBytes: file.size,
+      updatedAt: updatedAt.toISOString(),
+    },
+  };
+
+  mockState().tenants.set(tenant.id, { ...tenant, branding });
+
+  return branding;
+}
+
+/** 204 either way: removing an asset that is already absent is not an error. */
+function deleteBrandingAsset({ principal, params }: RouteContext): null {
+  const tenant = currentTenant(principal);
+  const kind = BrandingAssetKindSchema.parse(params[0]);
+
+  mockState().tenants.set(tenant.id, {
+    ...tenant,
+    branding: { ...tenant.branding, [kind]: null },
+  });
+
+  return null;
+}
+
+function listTenantDomains({ principal }: RouteContext): TenantDomainListResponse {
+  return { items: tenantDomains(principal).map(stripTenant) };
+}
+
+function createTenantDomain({ principal, body }: RouteContext): TenantDomain {
+  const parsed = TenantDomainCreateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { hostname } = parsed.data;
+  const state = mockState();
+  const mine = tenantDomains(principal).find((domain) => domain.hostname === hostname);
+
+  // Re-adding a hostname this tenant already holds is idempotent, not an error.
+  if (mine !== undefined) {
+    return stripTenant(mine);
+  }
+
+  // The global unique index, which lives *below* row-level security: the
+  // insert fails without this tenant being able to read — or learn anything
+  // about — the conflicting row. The message must not say who holds it.
+  if ([...state.tenantDomains.values()].some((domain) => domain.hostname === hostname)) {
+    throw refused('conflict', 'That hostname is already in use.', HTTP_CONFLICT);
+  }
+
+  if (
+    tenantDomains(principal).filter((domain) => domain.kind === 'custom').length >=
+    MAX_CUSTOM_DOMAINS_PER_TENANT
+  ) {
+    throw refused(
+      'plan_limit_exceeded',
+      `You can have up to ${MAX_CUSTOM_DOMAINS_PER_TENANT} custom domains.`,
+      HTTP_UNPROCESSABLE,
+    );
+  }
+
+  const created: MockTenantDomain = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    hostname,
+    kind: 'custom',
+    status: 'pending_verification',
+    isPrimary: false,
+    verifiedAt: null,
+    activatedAt: null,
+    verification: {
+      recordType: 'TXT',
+      recordName: `_whatsappcrm-challenge.${hostname}`,
+      recordValue: `whatsappcrm-domain-verification=${MOCK_VERIFICATION_TOKEN}`,
+      lastCheckedAt: null,
+      lastFailureReason: null,
+      expiresAt: MOCK_CLAIM_EXPIRES_AT,
+    },
+    routing: {
+      recordType: 'CNAME',
+      recordName: hostname,
+      recordValue: MOCK_EDGE_HOSTNAME,
+    },
+    createdAt: MOCK_CREATED_AT,
+  };
+
+  state.tenantDomains.set(created.id, created);
+
+  return stripTenant(created);
+}
+
+/**
+ * A hostname this transport never verifies, so the "we still cannot see the
+ * record" branch can be walked repeatedly. Any other hostname verifies on the
+ * next check — the seeded `support.northwind.example` starts pending with a
+ * `record_not_found` reason, so both states are reachable without editing a file.
+ */
+export const MOCK_UNVERIFIABLE_HOSTNAME_PREFIX = 'unverifiable.';
+
+/**
+ * `POST /domains/{id}/verify`.
+ *
+ * A check that finds nothing answers **200 with the domain** and a failure
+ * reason, not an error envelope: nothing went wrong with the request. Modelling
+ * it as a refusal here would let the console ship a red error state for a
+ * perfectly normal "DNS has not propagated yet".
+ */
+function verifyTenantDomain({ principal, params }: RouteContext): TenantDomain {
+  const domain = findDomainInTenant(principal, params[0]);
+
+  if (domain.kind === 'platform') {
+    throw refused('forbidden', 'A platform subdomain needs no verification.');
+  }
+
+  const isVerifiable = !domain.hostname.startsWith(MOCK_UNVERIFIABLE_HOSTNAME_PREFIX);
+  const verified: MockTenantDomain = isVerifiable
+    ? {
+        ...domain,
+        status: 'verified',
+        verifiedAt: MOCK_UPDATED_AT,
+        verification:
+          domain.verification === null
+            ? null
+            : { ...domain.verification, lastCheckedAt: MOCK_UPDATED_AT, lastFailureReason: null },
+      }
+    : {
+        ...domain,
+        verification:
+          domain.verification === null
+            ? null
+            : {
+                ...domain.verification,
+                lastCheckedAt: MOCK_UPDATED_AT,
+                lastFailureReason: 'record_not_found',
+              },
+      };
+
+  mockState().tenantDomains.set(verified.id, verified);
+
+  return stripTenant(verified);
+}
+
+/** One transaction: clear the current primary, set the new one. */
+function setPrimaryTenantDomain({ principal, params }: RouteContext): TenantDomain {
+  const domain = findDomainInTenant(principal, params[0]);
+
+  if (domain.verifiedAt === null) {
+    throw refused('conflict', 'Verify this domain before making it primary.', HTTP_CONFLICT);
+  }
+
+  const state = mockState();
+
+  for (const candidate of tenantDomains(principal)) {
+    if (candidate.isPrimary && candidate.id !== domain.id) {
+      state.tenantDomains.set(candidate.id, { ...candidate, isPrimary: false });
+    }
+  }
+
+  const promoted: MockTenantDomain = { ...domain, isPrimary: true };
+
+  state.tenantDomains.set(promoted.id, promoted);
+
+  return stripTenant(promoted);
+}
+
+/**
+ * `DELETE /v1/tenant/domains/{id}`.
+ *
+ * The platform subdomain is refused outright: it is how a tenant always reaches
+ * the console, and one that deleted its last domain would be unreachable and
+ * unrecoverable without an operator. Deleting the current primary moves primary
+ * back to that subdomain in the same transaction, so the tenant is never left
+ * with none.
+ */
+function deleteTenantDomain({ principal, params }: RouteContext): null {
+  const domain = findDomainInTenant(principal, params[0]);
+
+  if (domain.kind === 'platform') {
+    throw refused('forbidden', 'Your platform subdomain cannot be removed.');
+  }
+
+  const state = mockState();
+
+  state.tenantDomains.delete(domain.id);
+
+  if (domain.isPrimary) {
+    const platform = tenantDomains(principal).find((candidate) => candidate.kind === 'platform');
+
+    if (platform !== undefined) {
+      state.tenantDomains.set(platform.id, { ...platform, isPrimary: true });
+    }
+  }
+
+  return null;
+}
+
+function findDomainInTenant(principal: SessionPrincipal, id: string | undefined): MockTenantDomain {
+  const domain = tenantDomains(principal).find((candidate) => candidate.id === id);
+
+  if (domain === undefined) {
+    throw notFound();
+  }
+
+  return domain;
+}
+
+/** Literals, for the reason every other fixture value is one: hydration. */
+const MOCK_VERIFICATION_TOKEN = '3b91c07de42a4d5b8e1f6c2a0d7e9341';
+const MOCK_CLAIM_EXPIRES_AT = '2026-08-28T09:00:00.000Z';
+const MOCK_EDGE_HOSTNAME = 'whatsappcrm-web.onrender.example';
 // --- Conversations ---------------------------------------------------------
 
 /**

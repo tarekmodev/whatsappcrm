@@ -19,6 +19,7 @@ export * from './auth';
 export * from './onboarding';
 export * from './rbac';
 export * from './tenant';
+export * from './branding-theme';
 export * from './users';
 
 // --- Platform administration ------------------------------------------------

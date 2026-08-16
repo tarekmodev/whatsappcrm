@@ -46,7 +46,7 @@ import {
  */
 
 export const metadata: Metadata = {
-  title: `${content.assignment.title} · ${content.app.name}`,
+  title: content.assignment.title,
   description: content.assignment.subtitle,
 };
 

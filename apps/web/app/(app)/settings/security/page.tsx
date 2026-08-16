@@ -17,7 +17,7 @@ import { SecuritySections } from '@/features/auth/components/SecuritySections';
  */
 
 export const metadata: Metadata = {
-  title: `${content.auth.securityTitle} · ${content.app.name}`,
+  title: content.auth.securityTitle,
   description: content.auth.securitySubtitle,
 };
 

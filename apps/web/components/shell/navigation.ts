@@ -91,6 +91,24 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     requiresAny: ['channel:manage'],
   },
   {
+    id: 'settings-branding',
+    label: content.nav.branding,
+    href: routes.settingsBranding(),
+    icon: 'settings',
+    // The same permission `PATCH /api/v1/tenant` and the two asset routes
+    // require (TAR-29).
+    requiresAny: ['branding:write'],
+  },
+  {
+    id: 'settings-domains',
+    label: content.nav.domains,
+    href: routes.settingsDomains(),
+    icon: 'security',
+    // Deliberately not `branding:write`: DNS control decides where every invite
+    // and password-reset link in the tenant is sent.
+    requiresAny: ['domain:write'],
+  },
+  {
     id: 'settings-security',
     label: content.nav.security,
     href: routes.settingsSecurity(),
