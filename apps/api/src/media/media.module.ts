@@ -11,8 +11,7 @@ import { MediaQueueRunner } from './media-queue.runner';
 import { MediaReaderService } from './media-reader.service';
 import { MediaSendResolver } from './media-send.resolver';
 import { MediaUploadService } from './media-upload.service';
-import { FilesystemMediaStorage } from './storage/filesystem-media.storage';
-import { MEDIA_STORAGE } from './storage/media-storage.port';
+import { MediaStorageModule } from './storage/media-storage.module';
 
 /** Where multer writes a part before it has been validated. Under the media root. */
 const UPLOAD_TEMP_DIRECTORY = '.uploads';
@@ -60,6 +59,10 @@ const UPLOAD_TEMP_DIRECTORY = '.uploads';
 @Module({
   imports: [
     WhatsAppModule,
+    // The blob store, shared with `TenancyModule` since TAR-29 — see
+    // `storage/media-storage.module.ts` for why the port is reusable and the
+    // `media_objects` table is not.
+    MediaStorageModule,
     MulterModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -80,7 +83,6 @@ const UPLOAD_TEMP_DIRECTORY = '.uploads';
   ],
   controllers: [MediaController],
   providers: [
-    { provide: MEDIA_STORAGE, useClass: FilesystemMediaStorage },
     MediaUploadService,
     MediaReaderService,
     MediaSendResolver,

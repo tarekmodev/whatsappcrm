@@ -14,7 +14,8 @@ export interface AuditEntry {
     | 'whatsapp_business_account'
     | 'assignment_rule'
     | 'custom_field'
-    | 'canned_response';
+    | 'canned_response'
+    | 'tenant_domain';
   targetId: string;
   /**
    * A redacted before/after at most. **Never a secret, a password hash, a token
