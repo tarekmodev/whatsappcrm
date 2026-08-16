@@ -48,11 +48,25 @@ screen has shipped, marked with a `TODO(author)` and the instruction to split it
 admin guide once one does. That is the honest form: the alternative is a guide that answers
 half the reader's question and does not admit which half.
 
+**The list stops numbering here.** Ten was the point at which the ordinals became the only
+thing every guide pull request had to edit, so each one conflicted with every other on this
+one sentence. New guides are named and placed by reader instead. Two more (TAR-483) cover
+contacts: [Define the fields your contacts carry](guides/define-custom-contact-fields.md) for
+an admin, and [Find a contact and keep their record up to date](guides/find-and-update-contacts.md)
+for an agent.
+
 One subject splits into two guides when it splits into two permissions. Branding and custom
 domains sit on one settings area and read as one topic, but `branding:write` and
 `domain:write` are deliberately separate authorities — and the second guide asks its reader
 to edit DNS and then wait, which is a different afternoon from picking a colour. One file
-would have served neither reader.
+would have served neither reader. Custom fields split the same way: `tenant:settings`
+defines a field and `contact:write` fills one in, which is two readers on two screens.
+
+**Name what a guide's reader cannot do, under a closing “What this cannot do yet”.** A gap
+the reader discovers by hunting for a button is worse than one the page names — and a guide
+that implies a guarantee the code does not give is worse than both. TAR-483 shipped that
+mistake once: two guides promised concurrent edits were safe while the reference page for
+the same surface carried the open bug.
 
 The inverse also holds: one guide covers several subjects when a reader meets them in one
 sitting. TAR-414's guide runs the setup checklist, plan limits and suspension together because
@@ -123,6 +137,11 @@ Fixed vocabulary. Use the left column; never rotate synonyms.
 | entitlements                     | plan limits, quotas, caps                | The whole `{ features, limits }` object on `tenant_entitlements`. An individual ceiling inside `limits` is a **cap**                                                                                  |
 | seat                             | licence, user slot                       | Held by an `active` or `suspended` member, **and** by every live pending invite                                                                                                                       |
 | purge                            | hard delete, erase, wipe                 | The batched deletion that runs at `purge_at`. The lifecycle _state_ it lands in is `deleted`                                                                                                          |
+| contact                          | customer record, person, lead             | One customer the tenant has talked to. **The customer** is the human; the contact is the row                                                                       |
+| custom field                     | custom attribute, extra field, property   | A tenant-defined field on every contact. The **definition** is the schema; the **value** is one contact's                                                          |
+| tag                              | label, category                           | A shared label on a contact. Never "custom field" — the two are different resources                                                                                |
+| definition                       | field def, schema row, `custom_field_def` | One row of `custom_field_defs`. The **definition list** is `GET /api/v1/custom-fields`                                                                             |
+| vocabulary                       | dictionary, lookup set                    | A tenant's complete tag set or definition set, read whole rather than paged. Use it only for that                                                                  |
 
 Product entity names take their schema spelling in prose: `conversations`, `tickets`,
 `message_templates`. TypeScript identifiers take theirs: `MessageTemplate`,

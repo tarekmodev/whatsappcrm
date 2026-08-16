@@ -465,6 +465,53 @@ RETURNING id`. A ticket that stays open for six hours escalates **once**, not on
   today and the planner picks between them by tag selectivity. Reasoning and numbers are in
   the migration.
 
+- **Contacts have a directory, a profile whose custom fields agents fill in, and a tag filter
+  that answers "who are all our VIP customers"** (TAR-33, TAR-479, TAR-480) — the contract
+  half of this story shipped as amendment 10 above; this is the surface behind it. There was
+  no `ContactsModule` and no `TagsModule` in `apps/api`, and contacts were readable only
+  through the inbox's `ConversationResponse`. Eleven routes now exist:
+  `GET/POST /api/v1/contacts` and `GET/PATCH /api/v1/contacts/{id}` on `contact:read` /
+  `contact:write`, `GET/POST /api/v1/tags` on the same pair, and the five
+  `/api/v1/custom-fields` routes with **`tenant:settings` to mutate and `contact:read` to
+  list** — the split that is this story's first acceptance criterion, since every agent holds
+  `contact:write` and carrying definition writes on it would let any of them redefine the
+  tenant's contact record. `rbac.ts` is unchanged and there is no migration. The console gains
+  `/contacts` (search by name, phone or email, filter by one tag, both in the URL so a
+  filtered view is a link), a profile whose **Custom fields** card is rendered from the
+  definition list in `position` order and sends only the keys the agent actually changed, and
+  `/settings/custom-fields` where an admin defines, renames and deletes a field.
+  **Tenant isolation is asserted rather than assumed**: `contacts-tenant-isolation.int-spec.ts`
+  runs two tenants whose fixtures are identical in shape — same tag name `VIP`, same field key
+  `tier`, same stored value `gold` — so a leak is visible rather than plausible, and cross-tenant
+  reads and writes are refused on all three resources under all three roles including admin.
+  Two things the integration run corrected, both now documented rather than assumed:
+  **`tags.name` is plain `text`, not `citext`** unlike `teams.name` and `assignment_rules.name`,
+  so `VIP` and `vip` are two tags a tenant can genuinely hold and the list filter supplies the
+  case-insensitivity the column does not; and amendment 10's delete-strip SQL gained
+  `jsonb_exists` and a `jsonb_typeof(...) = 'object'` guard, because `custom_fields - 'key'`
+  removes an _element_ from an array and _raises_ on a scalar — one contact row from an old
+  import would otherwise turn an admin's settings action into a 500 that aborts the whole
+  delete. Contract changes are additive: `TagCreateInputSchema` and `TagListQuerySchema`, which
+  0002 never published because nothing implemented `POST /tags`.
+  `contact.mapper.ts` moved from `conversations/` to `contacts/` and the inbox imports it, so
+  the inbox and the profile cannot show different tags for the same person.
+  Deliberately out of scope, each for a reason rather than for time: `DELETE /contacts`
+  (erasing a customer touches conversations, tickets and retention), `PATCH`/`DELETE` on tags
+  (deleting one has to reckon with `workflow_references` refusing it), and contact creation in
+  the console (a contact is created by the ingest pipeline the first time somebody messages the
+  tenant, and a screen that invents one is a route into the product nobody designed).
+  ⚠️ **Two concurrent `PATCH`es to different custom-field keys on the same contact can still
+  lose one write** — the merge is a read-modify-write under READ COMMITTED, and both requests
+  answer `200`. It fixes the form-did-not-load-every-key half of the problem, not the
+  concurrency half. TAR-530 closes it.
+  ⚠️ **The console cannot reorder definitions.** `POST /custom-fields/reorder` is implemented
+  and tested; the admin table renders in `position` order with no drag handle, deliberately,
+  rather than shipping a control that could not call the endpoint. Console admins get creation
+  order until a screen exists.
+  ⚠️ **Tags have no server-side cap** while definitions are capped at 50, so a tenant past 100
+  tags gets a partial vocabulary in the console. The console says so on screen rather than
+  mislabelling a tag as deleted, but the asymmetry is unresolved.
+
 - **A new tenant admin now lands in a guided setup checklist they can skip and come back to**
   (TAR-36, TAR-407) — `/onboarding` walks an admin through connecting a WhatsApp number,
   inviting agents and setting branding, gated on `tenant:settings`. The rule that shapes the
