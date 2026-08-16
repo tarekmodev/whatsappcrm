@@ -4,6 +4,8 @@ import {
   CustomFieldDefinitionSchema,
   TagSchema,
   type CustomFieldDefinition,
+  type CustomFieldDefinitionCreateInput,
+  type CustomFieldDefinitionUpdateInput,
   type Tag,
 } from '@whatsappcrm/contracts';
 import { authenticatedRequest } from '@/lib/api/authenticated';
@@ -50,6 +52,59 @@ export async function listTags(): Promise<readonly Tag[]> {
 
 export async function listCustomFieldDefinitions(): Promise<readonly CustomFieldDefinition[]> {
   return listOrEmptyUntilShipped(CUSTOM_FIELDS_PATH, CustomFieldDefinitionSchema);
+}
+
+/**
+ * The write half of the definition surface — 0002 amendment 10, `tenant:settings`.
+ *
+ * Deliberately **not** wrapped in `listOrEmptyUntilShipped`'s `not_found`
+ * tolerance. "This tenant has no vocabulary yet" is a sensible reading of a
+ * missing *list*; a create that 404s is a broken deployment, and answering it
+ * with a success the admin can see no result from would be worse than the error.
+ *
+ * There is no reorder call here yet: `POST /custom-fields/reorder` exists in the
+ * contract, but nothing in this console offers a way to drag a field, and an
+ * unused mutation is an endpoint nobody has exercised. Raised as follow-up on
+ * TAR-33 rather than shipped untested.
+ */
+export async function createCustomFieldDefinition(
+  input: CustomFieldDefinitionCreateInput,
+): Promise<CustomFieldDefinition> {
+  const response = await authenticatedRequest({
+    method: 'POST',
+    path: CUSTOM_FIELDS_PATH,
+    body: input,
+  });
+
+  return CustomFieldDefinitionSchema.parse(response);
+}
+
+/**
+ * `label` and `options` only. `key` and `type` are immutable after creation —
+ * renaming the key orphans every stored value and silently stops every routing
+ * rule naming it, and changing the type leaves agents holding a profile the API
+ * refuses to save back. `CustomFieldDefinitionUpdateInputSchema` is what refuses
+ * either; this signature is what keeps a caller from trying.
+ */
+export async function updateCustomFieldDefinition(
+  id: string,
+  input: CustomFieldDefinitionUpdateInput,
+): Promise<CustomFieldDefinition> {
+  const response = await authenticatedRequest({
+    method: 'PATCH',
+    path: `${CUSTOM_FIELDS_PATH}/${encodeURIComponent(id)}`,
+    body: input,
+  });
+
+  return CustomFieldDefinitionSchema.parse(response);
+}
+
+/** Strips the key from every contact in the tenant, in the same transaction. */
+export async function deleteCustomFieldDefinition(id: string): Promise<void> {
+  await authenticatedRequest({
+    method: 'DELETE',
+    path: `${CUSTOM_FIELDS_PATH}/${encodeURIComponent(id)}`,
+  });
 }
 
 async function listOrEmptyUntilShipped<T>(

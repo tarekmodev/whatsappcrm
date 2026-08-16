@@ -7,10 +7,15 @@ import {
   BRANDING_ASSET_LIMITS,
   BRANDING_UPLOAD_FIELD,
   BrandingAssetKindSchema,
+  CUSTOM_FIELD_LIMITS,
+  ContactListQuerySchema,
+  ContactUpdateInputSchema,
   ConversationAssignInputSchema,
   ConversationListQuerySchema,
   ConversationStatusUpdateInputSchema,
   CursorPageQuerySchema,
+  CustomFieldDefinitionCreateInputSchema,
+  CustomFieldDefinitionUpdateInputSchema,
   DashboardExportQuerySchema,
   DashboardMetricsQuerySchema,
   IdSchema,
@@ -49,6 +54,7 @@ import {
   WorkflowUpdateInputSchema,
   brandingAssetPath,
   canAgentTransition,
+  customFieldValueIssue,
   isRoleWithin,
   isSlaBreached,
   renderTemplateBody,
@@ -60,6 +66,7 @@ import {
   type AssignmentRuleListResponse,
   type AssignmentRuleResponse,
   type ConnectedWhatsAppBusinessAccountResponse,
+  type ContactResponse,
   type ConversationResponse,
   type CursorPage,
   type CustomFieldDefinition,
@@ -106,6 +113,7 @@ import { mockState, nextMockId } from '@/lib/api/mock/store';
 import { MOCK_IDS } from '@/lib/api/mock/fixtures';
 import type {
   MockAssignmentRule,
+  MockContact,
   MockConversation,
   MockCustomFieldDefinition,
   MockInternalNote,
@@ -359,9 +367,48 @@ const ROUTES: readonly Route[] = [
   },
   {
     method: 'GET',
+    pattern: /^\/v1\/contacts$/,
+    permission: 'contact:read',
+    handle: listContacts,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/contacts/${UUID_SEGMENT}$`),
+    permission: 'contact:read',
+    handle: getContact,
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/v1/contacts/${UUID_SEGMENT}$`),
+    permission: 'contact:write',
+    handle: updateContact,
+  },
+  {
+    method: 'GET',
     pattern: /^\/v1\/custom-fields$/,
     permission: 'contact:read',
     handle: listCustomFieldDefinitions,
+  },
+  {
+    // `tenant:settings` to mutate, `contact:read` to list — 0002 amendment 10.
+    // `contact:write` deliberately cannot carry the write half: every agent
+    // holds it, which is TAR-33's criterion inverted.
+    method: 'POST',
+    pattern: /^\/v1\/custom-fields$/,
+    permission: 'tenant:settings',
+    handle: createCustomFieldDefinition,
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/v1/custom-fields/${UUID_SEGMENT}$`),
+    permission: 'tenant:settings',
+    handle: updateCustomFieldDefinition,
+  },
+  {
+    method: 'DELETE',
+    pattern: new RegExp(`^/v1/custom-fields/${UUID_SEGMENT}$`),
+    permission: 'tenant:settings',
+    handle: deleteCustomFieldDefinition,
   },
   {
     method: 'GET',
@@ -1467,7 +1514,160 @@ function describeWorkflowAction(principal: SessionPrincipal, action: WorkflowAct
   }
 }
 
-// --- Contact vocabulary (TAR-33's resources, read-only here) ---------------
+// --- Contacts (TAR-33) -----------------------------------------------------
+
+function listContacts({ principal, query }: RouteContext): CursorPage<ContactResponse> {
+  const parsed = ContactListQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { q, tagId, limit } = parsed.data;
+  const needle = q?.trim().toLowerCase();
+
+  const items = tenantContacts(principal)
+    // The API's single `q`, matched against name, phone and email — the three
+    // things somebody has in front of them when they go looking for a contact.
+    .filter(
+      (contact) =>
+        needle === undefined ||
+        contact.displayName.toLowerCase().includes(needle) ||
+        contact.phone.toLowerCase().includes(needle) ||
+        (contact.email ?? '').toLowerCase().includes(needle),
+    )
+    .filter((contact) => tagId === undefined || contact.tags.some((tag) => tag.id === tagId))
+    .sort((left, right) => left.displayName.localeCompare(right.displayName))
+    .slice(0, limit)
+    .map(toContactResponse);
+
+  return { items, nextCursor: null };
+}
+
+function getContact({ principal, params }: RouteContext): ContactResponse {
+  return toContactResponse(findContactInTenant(principal, params[0]));
+}
+
+function updateContact({ principal, params, body }: RouteContext): ContactResponse {
+  const contact = findContactInTenant(principal, params[0]);
+  const parsed = ContactUpdateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { displayName, email, tagIds, customFields } = parsed.data;
+
+  return toContactResponse(
+    writeContact(principal, {
+      ...contact,
+      displayName: displayName ?? contact.displayName,
+      email: email === undefined ? contact.email : email,
+      tags: tagIds === undefined ? contact.tags : resolveTagsInTenant(principal, tagIds),
+      customFields:
+        customFields === undefined
+          ? contact.customFields
+          : mergeCustomFields(principal, contact, customFields),
+      updatedAt: MOCK_UPDATED_AT,
+    }),
+  );
+}
+
+/**
+ * 0002 amendment 10's merge, and the validation that goes with it.
+ *
+ * Keys present are set, an explicit `null` clears one, and keys absent are left
+ * exactly as they were. A key naming no definition is `validation_failed` rather
+ * than silently dropped, and every value is checked with the contract's own
+ * `customFieldValueIssue` — the same function the console disables its save
+ * with, so a request the UI let through is a bug in the UI and not a difference
+ * of opinion between two copies of the rules.
+ */
+function mergeCustomFields(
+  principal: SessionPrincipal,
+  contact: MockContact,
+  patch: Record<string, string | null>,
+): Record<string, string> {
+  const definitions = tenantCustomFieldDefinitions(principal);
+  // Rebuilt rather than spread, so the result can be `Record<string, string>`:
+  // a response carries only the keys the contact has a value for, and a `null`
+  // in it would be the placeholder amendment 10 says never crosses the wire.
+  const merged: Record<string, string> = Object.fromEntries(
+    Object.entries(contact.customFields).filter(
+      (entry): entry is [string, string] => entry[1] !== null,
+    ),
+  );
+
+  for (const [key, value] of Object.entries(patch)) {
+    const definition = definitions.find((candidate) => candidate.key === key);
+
+    if (definition === undefined) {
+      throw refused(
+        'validation_failed',
+        `No custom field is defined with the key ${key}.`,
+        HTTP_UNPROCESSABLE,
+      );
+    }
+
+    if (value === null) {
+      // An explicit clear. `delete`, not `= null`: a response carries only the
+      // keys the contact has a value for, never a null placeholder.
+      delete merged[key];
+      continue;
+    }
+
+    const issue = customFieldValueIssue(definition, value);
+
+    if (issue !== null) {
+      throw refused('validation_failed', `${definition.label}: ${issue}`, HTTP_UNPROCESSABLE);
+    }
+
+    merged[key] = value;
+  }
+
+  return merged;
+}
+
+/**
+ * Writes the contact **and** the snapshot every conversation embeds of it, so
+ * the inbox context panel cannot go on showing a tag the profile has removed.
+ * The real API denormalises the same way; a mock that only wrote one of the two
+ * would hide the staleness rather than reproduce it.
+ */
+function writeContact(principal: SessionPrincipal, contact: MockContact): MockContact {
+  const state = mockState();
+
+  state.contacts.set(contact.id, contact);
+
+  const response = toContactResponse(contact);
+
+  for (const conversation of tenantConversations(principal)) {
+    if (conversation.contact.id === contact.id) {
+      state.conversations.set(conversation.id, { ...conversation, contact: response });
+    }
+  }
+
+  return contact;
+}
+
+/** Whole `Tag` records for the ids a write named, refusing any from another tenant. */
+function resolveTagsInTenant(principal: SessionPrincipal, tagIds: readonly string[]): Tag[] {
+  const vocabulary = tenantTags(principal);
+
+  return tagIds.map((id) => {
+    const tag = vocabulary.find((candidate) => candidate.id === id);
+
+    if (tag === undefined) {
+      // 404, not 403 — the two are indistinguishable by design so nothing can be
+      // enumerated across tenants.
+      throw notFound();
+    }
+
+    return toTagResponse(tag);
+  });
+}
+
+// --- Contact vocabulary (TAR-33's resources) -------------------------------
 
 function listTags({ principal }: RouteContext): CursorPage<Tag> {
   const items = tenantTags(principal)
@@ -1482,11 +1682,170 @@ function listCustomFieldDefinitions({
 }: RouteContext): CursorPage<CustomFieldDefinition> {
   // `position` ascending, `id` as the tie-break — 0002 amendment 10's ordering,
   // not alphabetical: the admin chose this order and the profile form renders it.
-  const items = tenantCustomFieldDefinitions(principal)
-    .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id))
-    .map(toCustomFieldDefinitionResponse);
+  const items = orderedCustomFieldDefinitions(principal).map(toCustomFieldDefinitionResponse);
 
   return { items, nextCursor: null };
+}
+
+function createCustomFieldDefinition({ principal, body }: RouteContext): CustomFieldDefinition {
+  const parsed = CustomFieldDefinitionCreateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const existing = tenantCustomFieldDefinitions(principal);
+
+  // Exceeding the cap is `conflict`, per amendment 10 — the bounded list is a
+  // promise the server keeps by refusing here rather than by truncating a read.
+  if (existing.length >= CUSTOM_FIELD_LIMITS.definitionsPerTenant) {
+    throw refused(
+      'conflict',
+      `This workspace already has ${String(CUSTOM_FIELD_LIMITS.definitionsPerTenant)} custom fields.`,
+      HTTP_CONFLICT,
+    );
+  }
+
+  // `(tenant_id, key)` is unique, and the key is what every stored value is
+  // filed under — so a duplicate is a conflict, not an overwrite.
+  if (existing.some((definition) => definition.key === parsed.data.key)) {
+    throw refused(
+      'conflict',
+      `A custom field with the key ${parsed.data.key} already exists.`,
+      HTTP_CONFLICT,
+    );
+  }
+
+  const created: MockCustomFieldDefinition = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    key: parsed.data.key,
+    label: parsed.data.label.trim(),
+    type: parsed.data.type,
+    options: [...parsed.data.options],
+    // Server-side `max(position) + 1`, so two admins creating a field at the
+    // same moment do not both land on `0`.
+    position:
+      existing.reduce((highest, definition) => Math.max(highest, definition.position), -1) + 1,
+    createdAt: MOCK_CREATED_AT,
+    updatedAt: MOCK_UPDATED_AT,
+  };
+
+  mockState().customFieldDefinitions.set(created.id, created);
+
+  return toCustomFieldDefinitionResponse(created);
+}
+
+/**
+ * `label` and `options` only. `key` and `type` are immutable — the schema is
+ * what refuses a body carrying either, so nothing here has to check for them.
+ */
+function updateCustomFieldDefinition({
+  principal,
+  params,
+  body,
+}: RouteContext): CustomFieldDefinition {
+  const definition = findCustomFieldDefinitionInTenant(principal, params[0]);
+  const parsed = CustomFieldDefinitionUpdateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { label, options } = parsed.data;
+
+  if (options !== undefined && options.length > 0 !== (definition.type === 'select')) {
+    throw refused(
+      'validation_failed',
+      '`options` is required for `select` and forbidden otherwise.',
+      HTTP_UNPROCESSABLE,
+    );
+  }
+
+  const updated: MockCustomFieldDefinition = {
+    ...definition,
+    label: label?.trim() ?? definition.label,
+    // Removing an option rewrites no contact: a stored value outside the current
+    // list survives untouched until that field is next written.
+    options: options === undefined ? definition.options : [...options],
+    updatedAt: MOCK_UPDATED_AT,
+  };
+
+  mockState().customFieldDefinitions.set(updated.id, updated);
+
+  return toCustomFieldDefinitionResponse(updated);
+}
+
+/**
+ * Deletes the definition **and** strips its key from every contact in the
+ * tenant, in what the real API does in one transaction.
+ *
+ * Leaving the values orphaned would be cheaper and is the trap amendment 10
+ * names: keys are unique per tenant, so an admin who deletes a field and later
+ * re-creates the same key would get every old value back, on a screen giving no
+ * hint they were ever there.
+ */
+function deleteCustomFieldDefinition({ principal, params }: RouteContext): null {
+  const definition = findCustomFieldDefinitionInTenant(principal, params[0]);
+
+  // A rule whose condition can never match again is a silent failure, so the
+  // delete is refused with `conflict` and the admin disables the rule first.
+  const blocking = tenantRules(principal).filter((rule) =>
+    rule.conditions.some(
+      (condition) => condition.type === 'contact_attribute' && condition.key === definition.key,
+    ),
+  );
+
+  if (blocking.length > 0) {
+    throw refused(
+      'conflict',
+      `This field is used by the routing ${blocking.length === 1 ? 'rule' : 'rules'} ${blocking
+        .map((rule) => rule.name)
+        .join(', ')}. Remove the condition first.`,
+      HTTP_CONFLICT,
+    );
+  }
+
+  const state = mockState();
+
+  state.customFieldDefinitions.delete(definition.id);
+
+  for (const contact of tenantContacts(principal)) {
+    if (!(definition.key in contact.customFields)) {
+      continue;
+    }
+
+    const customFields = { ...contact.customFields };
+
+    delete customFields[definition.key];
+
+    writeContact(principal, { ...contact, customFields, updatedAt: MOCK_UPDATED_AT });
+  }
+
+  return null;
+}
+
+function orderedCustomFieldDefinitions(principal: SessionPrincipal): MockCustomFieldDefinition[] {
+  // `position` ascending, `id` as the tie-break — 0002 amendment 10's ordering,
+  // not alphabetical: the admin chose this order and the profile form renders it.
+  return tenantCustomFieldDefinitions(principal).sort(
+    (left, right) => left.position - right.position || left.id.localeCompare(right.id),
+  );
+}
+
+function findCustomFieldDefinitionInTenant(
+  principal: SessionPrincipal,
+  id: string | undefined,
+): MockCustomFieldDefinition {
+  const definition = tenantCustomFieldDefinitions(principal).find(
+    (candidate) => candidate.id === id,
+  );
+
+  if (definition === undefined) {
+    throw notFound();
+  }
+
+  return definition;
 }
 
 // --- Session (TAR-56) ------------------------------------------------------
@@ -3507,6 +3866,26 @@ function tenantTemplates(principal: SessionPrincipal): MockMessageTemplate[] {
   );
 }
 
+function tenantContacts(principal: SessionPrincipal): MockContact[] {
+  return [...mockState().contacts.values()].filter(
+    (contact) => contact.tenantId === principal.tenantId,
+  );
+}
+
+/**
+ * A record in another tenant answers 404, never 403 — the two are
+ * indistinguishable by design so nothing can be enumerated across tenants.
+ */
+function findContactInTenant(principal: SessionPrincipal, id: string | undefined): MockContact {
+  const contact = tenantContacts(principal).find((candidate) => candidate.id === id);
+
+  if (contact === undefined) {
+    throw notFound();
+  }
+
+  return contact;
+}
+
 function tenantTags(principal: SessionPrincipal): MockTag[] {
   return [...mockState().tags.values()].filter((tag) => tag.tenantId === principal.tenantId);
 }
@@ -4002,6 +4381,10 @@ function toTeamResponse(team: MockTeam): TeamResponse {
 
 function toTagResponse(tag: MockTag): Tag {
   return stripTenant(tag);
+}
+
+function toContactResponse(contact: MockContact): ContactResponse {
+  return stripTenant(contact);
 }
 
 function toCustomFieldDefinitionResponse(

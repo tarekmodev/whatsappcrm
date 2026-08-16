@@ -1,6 +1,7 @@
 import {
   ONBOARDING_STEP_IDS,
   type AssignmentRuleResponse,
+  type ContactResponse,
   type ConversationResponse,
   type CustomFieldDefinition,
   type InternalNoteResponse,
@@ -141,6 +142,20 @@ const TAG_IDS = {
   otherTenant: '0192f00b-0000-7000-8000-000000000b99',
 } as const;
 
+/**
+ * The tag records themselves, declared here rather than inside `MOCK_TAGS`
+ * because a contact embeds whole `Tag` objects and is defined further up this
+ * module than the tag list is. One definition, two readers — a contact's badge
+ * and the tag vocabulary can never name the same id differently.
+ */
+const MOCK_TAG_VALUES = {
+  vip: { id: TAG_IDS.vip, name: 'VIP', color: '#7c3aed' },
+  refundRequested: { id: TAG_IDS.refundRequested, name: 'Refund requested', color: '#dc2626' },
+  escalated: { id: TAG_IDS.escalated, name: 'Escalated', color: '#ea580c' },
+  /** Present only so tenant scoping can be asserted, never rendered. */
+  otherTenant: { id: TAG_IDS.otherTenant, name: 'Rival tenant tag', color: '#0ea5e9' },
+} as const satisfies Record<string, Tag>;
+
 const CUSTOM_FIELD_IDS = {
   planTier: '0192f00c-0000-7000-8000-000000000c01',
   accountManager: '0192f00c-0000-7000-8000-000000000c02',
@@ -206,6 +221,7 @@ export interface TenantScoped {
 export type MockUser = UserResponse & TenantScoped;
 export type MockTeam = TeamResponse & TenantScoped;
 export type MockTag = Tag & TenantScoped;
+export type MockContact = ContactResponse & TenantScoped;
 export type MockCustomFieldDefinition = CustomFieldDefinition & TenantScoped;
 export type MockAssignmentRule = AssignmentRuleResponse & TenantScoped;
 export type MockConversation = ConversationResponse & TenantScoped;
@@ -376,20 +392,154 @@ function domainsOf(tenantId: string): TenantDomain[] {
   }));
 }
 
-function contact(id: string, displayName: string, phone: string): ConversationResponse['contact'] {
-  return {
-    id,
-    phone,
-    waProfileName: displayName,
-    displayName,
+/**
+ * The tenant's contacts — the directory TAR-33 builds, and the record every
+ * conversation is with.
+ *
+ * The **one** definition of a contact in this fixture set. A conversation
+ * embeds a snapshot of it (`ConversationResponse.contact`), and that snapshot is
+ * taken from here rather than written out again, so a tag added on the profile
+ * cannot disagree with the tag the inbox shows.
+ *
+ * Declared above `MOCK_CONVERSATIONS` because that array reads it while this
+ * module initialises; a `const` further down would still be in its temporal dead
+ * zone.
+ */
+export const MOCK_CONTACTS: readonly MockContact[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CONTACT_IDS.fatima,
+    phone: '+966501234567',
+    waProfileName: 'Fatima Al-Zahra',
+    displayName: 'Fatima Al-Zahra',
+    email: 'fatima@northwind.example',
+    tags: [MOCK_TAG_VALUES.vip],
+    // Both defined fields filled in, so the profile has something to render
+    // before anybody edits it.
+    customFields: { plan_tier: 'gold', account_manager: 'Priya Raman' },
+    lastContactedAt: '2026-08-10T08:45:00.000Z',
+    optedOutAt: null,
+    createdAt: '2026-07-01T08:00:00.000Z',
+    updatedAt: '2026-08-10T08:45:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CONTACT_IDS.jonas,
+    phone: '+4640123456',
+    waProfileName: 'Jonas Berg',
+    displayName: 'Jonas Berg',
     email: null,
+    tags: [MOCK_TAG_VALUES.refundRequested],
+    /**
+     * `plan_tier` holds a value the definition no longer offers. Amendment 10
+     * keeps such a value until that field is next written, and the profile form
+     * has to offer it back or saving anything else would silently drop it — so
+     * the state that rule exists for is in the fixtures rather than only in a
+     * test.
+     */
+    customFields: { plan_tier: 'platinum' },
+    lastContactedAt: '2026-08-10T06:30:00.000Z',
+    optedOutAt: null,
+    createdAt: '2026-07-04T10:00:00.000Z',
+    updatedAt: '2026-08-10T06:30:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CONTACT_IDS.mei,
+    phone: '+81312345678',
+    waProfileName: 'Mei Tanaka',
+    displayName: 'Mei Tanaka',
+    email: 'mei.tanaka@northwind.example',
+    // No tags and no custom values: the empty half of every list on the profile.
     tags: [],
     customFields: {},
+    lastContactedAt: '2026-08-09T22:10:00.000Z',
+    optedOutAt: null,
+    createdAt: '2026-07-06T09:30:00.000Z',
+    updatedAt: '2026-08-09T22:10:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CONTACT_IDS.sofia,
+    phone: '+34911234567',
+    waProfileName: 'Sofia Marchetti',
+    displayName: 'Sofia Marchetti',
+    email: null,
+    tags: [MOCK_TAG_VALUES.vip, MOCK_TAG_VALUES.refundRequested],
+    customFields: { plan_tier: 'silver' },
+    lastContactedAt: '2026-08-08T11:20:00.000Z',
+    // The opted-out state, so the badge and the notice have somebody to appear on.
+    optedOutAt: '2026-08-09T07:00:00.000Z',
+    createdAt: '2026-06-20T12:00:00.000Z',
+    updatedAt: '2026-08-09T07:00:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CONTACT_IDS.karim,
+    phone: '+201001234567',
+    waProfileName: null,
+    displayName: 'Karim Nasser',
+    email: 'karim.nasser@northwind.example',
+    tags: [],
+    customFields: { account_manager: 'Liang Wei' },
+    // Never messaged out to; the "Never" branch of the last-contacted column.
+    lastContactedAt: null,
+    optedOutAt: null,
+    createdAt: '2026-08-01T15:45:00.000Z',
+    updatedAt: '2026-08-01T15:45:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: CONTACT_IDS.yuki,
+    phone: '+819012345678',
+    waProfileName: 'Yuki Sato',
+    displayName: 'Yuki Sato',
+    email: null,
+    tags: [MOCK_TAG_VALUES.vip],
+    customFields: { plan_tier: 'bronze', account_manager: 'Amina Haddad' },
+    lastContactedAt: '2026-08-05T13:00:00.000Z',
+    optedOutAt: null,
+    createdAt: '2026-05-11T09:00:00.000Z',
+    updatedAt: '2026-08-05T13:00:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: CONTACT_IDS.otherTenant,
+    phone: '+12025550199',
+    waProfileName: 'Rival Tenant Contact',
+    displayName: 'Rival Tenant Contact',
+    email: null,
+    tags: [],
+    customFields: { rival_field: 'do not leak' },
     lastContactedAt: '2026-08-09T09:15:00.000Z',
     optedOutAt: null,
     createdAt: '2026-07-01T08:00:00.000Z',
     updatedAt: '2026-08-09T09:15:00.000Z',
-  };
+  },
+];
+
+/**
+ * The snapshot a conversation embeds. Read from `MOCK_CONTACTS` rather than
+ * written out again, so the inbox context panel and the contact profile can
+ * never show a different set of tags for the same person.
+ */
+function contact(id: string): ConversationResponse['contact'] {
+  const record = MOCK_CONTACTS.find((candidate) => candidate.id === id);
+
+  if (record === undefined) {
+    throw new Error(`No mock contact with id ${id}.`);
+  }
+
+  const { tenantId, ...response } = record;
+
+  // Asserted rather than discarded silently, exactly as `stripTenant` does in
+  // the handlers: a fixture that lost its scope would be readable by everyone.
+  if (tenantId.length === 0) {
+    throw new Error(`Mock contact ${id} is missing its tenant scope.`);
+  }
+
+  return response;
 }
 
 /**
@@ -635,7 +785,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
   {
     tenantId: MOCK_TENANT_ID,
     id: CONVERSATION_IDS.assignedToAmina,
-    contact: contact(CONTACT_IDS.fatima, 'Fatima Al-Zahra', '+966501234567'),
+    contact: contact(CONTACT_IDS.fatima),
     whatsappAccountId: WHATSAPP_ACCOUNT_ID,
     status: 'open',
     assignedUserId: USER_IDS.amina,
@@ -656,7 +806,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
   {
     tenantId: MOCK_TENANT_ID,
     id: CONVERSATION_IDS.billingTeam,
-    contact: contact(CONTACT_IDS.jonas, 'Jonas Berg', '+4640123456'),
+    contact: contact(CONTACT_IDS.jonas),
     whatsappAccountId: WHATSAPP_ACCOUNT_ID,
     status: 'pending',
     assignedUserId: null,
@@ -673,7 +823,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
   {
     tenantId: MOCK_TENANT_ID,
     id: CONVERSATION_IDS.assignedToLiang,
-    contact: contact(CONTACT_IDS.mei, 'Mei Tanaka', '+81312345678'),
+    contact: contact(CONTACT_IDS.mei),
     whatsappAccountId: WHATSAPP_ACCOUNT_ID,
     status: 'open',
     assignedUserId: USER_IDS.liang,
@@ -690,7 +840,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
   {
     tenantId: MOCK_TENANT_ID,
     id: CONVERSATION_IDS.unassigned,
-    contact: contact(CONTACT_IDS.fatima, 'Fatima Al-Zahra', '+966501234567'),
+    contact: contact(CONTACT_IDS.fatima),
     whatsappAccountId: WHATSAPP_ACCOUNT_ID,
     status: 'open',
     assignedUserId: null,
@@ -708,7 +858,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     // Present only so tenant scoping can be asserted, never rendered.
     tenantId: OTHER_TENANT_ID,
     id: CONVERSATION_IDS.otherTenant,
-    contact: contact(CONTACT_IDS.otherTenant, 'Rival Tenant Contact', '+12025550199'),
+    contact: contact(CONTACT_IDS.otherTenant),
     whatsappAccountId: WHATSAPP_ACCOUNT_ID,
     status: 'open',
     assignedUserId: USER_IDS.otherTenant,
@@ -1374,21 +1524,10 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
  * to offer instead of asking a supervisor to type a UUID.
  */
 export const MOCK_TAGS: readonly MockTag[] = [
-  { tenantId: MOCK_TENANT_ID, id: TAG_IDS.vip, name: 'VIP', color: '#7c3aed' },
-  {
-    tenantId: MOCK_TENANT_ID,
-    id: TAG_IDS.refundRequested,
-    name: 'Refund requested',
-    color: '#dc2626',
-  },
-  { tenantId: MOCK_TENANT_ID, id: TAG_IDS.escalated, name: 'Escalated', color: '#ea580c' },
-  {
-    // Present only so tenant scoping can be asserted, never rendered.
-    tenantId: OTHER_TENANT_ID,
-    id: TAG_IDS.otherTenant,
-    name: 'Rival tenant tag',
-    color: '#0ea5e9',
-  },
+  { tenantId: MOCK_TENANT_ID, ...MOCK_TAG_VALUES.vip },
+  { tenantId: MOCK_TENANT_ID, ...MOCK_TAG_VALUES.refundRequested },
+  { tenantId: MOCK_TENANT_ID, ...MOCK_TAG_VALUES.escalated },
+  { tenantId: OTHER_TENANT_ID, ...MOCK_TAG_VALUES.otherTenant },
 ];
 
 /**
