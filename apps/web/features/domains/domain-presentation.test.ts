@@ -48,13 +48,29 @@ describe('domainCapabilities', () => {
   it('refuses to make an unverified hostname primary', () => {
     // Invite and password-reset links are mailed to the primary domain.
     expect(domainCapabilities(domain()).canMakePrimary).toBe(false);
-    expect(domainCapabilities(domain({ verifiedAt: NOW })).canMakePrimary).toBe(true);
+  });
+
+  it('refuses a verified hostname the edge is not serving yet', () => {
+    // Verified is not live: an operator still has to attach the hostname, and
+    // between the two every reset link would be mailed to a host with no
+    // certificate. The API refuses it, so the button is not offered.
+    const verified = domain({ status: 'verified', verifiedAt: NOW });
+    const live = domain({ status: 'live', verifiedAt: NOW, activatedAt: NOW });
+
+    expect(domainCapabilities(verified).canMakePrimary).toBe(false);
+    expect(domainCapabilities(live).canMakePrimary).toBe(true);
+  });
+
+  it('offers it for the platform subdomain, which is served without activation', () => {
+    const platform = domain({ kind: 'platform', status: 'verified', verifiedAt: NOW });
+
+    expect(domainCapabilities(platform).canMakePrimary).toBe(true);
   });
 
   it('does not offer to re-make the current primary primary', () => {
-    expect(domainCapabilities(domain({ verifiedAt: NOW, isPrimary: true })).canMakePrimary).toBe(
-      false,
-    );
+    const primary = domain({ status: 'live', verifiedAt: NOW, activatedAt: NOW, isPrimary: true });
+
+    expect(domainCapabilities(primary).canMakePrimary).toBe(false);
   });
 });
 

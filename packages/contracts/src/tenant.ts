@@ -494,6 +494,21 @@ export const TenantResponseSchema = z.object({
   slug: TenantSlugSchema,
   status: TenantStatusSchema,
   branding: TenantBrandingSchema,
+  /**
+   * The tenant's hostnames — but **`verification` and `routing` are null unless
+   * the caller holds `domain:write`**, which is what `GET /tenant/domains`
+   * requires for the same rows.
+   *
+   * `GET /tenant` is reachable by every signed-in member because the shell needs
+   * the workspace name, its colours and the address it answers on. The DNS
+   * challenge is a different question, so it is not on this route for a caller
+   * who could not read it on the other one. Anything that needs the setup half —
+   * the domains settings screen — fetches `/tenant/domains` under its own
+   * permission and gets the unabridged rows.
+   *
+   * Same shape either way, so a client parses one type; what changes is how much
+   * of it is populated.
+   */
   domains: z.array(TenantDomainSchema),
   trialEndsAt: TimestampSchema.nullable(),
   createdAt: TimestampSchema,

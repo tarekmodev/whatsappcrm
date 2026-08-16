@@ -98,9 +98,9 @@ export class AdminDomainsService {
    * so allowing it on an unproved claim would only produce a row that says
    * `live` while answering `tenant_not_found`, which is worse than a refusal.
    *
-   * Idempotent: attaching a domain twice is a no-op, and the operator finding
-   * out it was already done is a `200` rather than a conflict they have to
-   * interpret mid-incident.
+   * Idempotent: attaching a domain twice is a no-op that answers `204` like the
+   * first call did, rather than a conflict the operator has to interpret
+   * mid-incident.
    */
   async activate(hostname: string): Promise<void> {
     await this.setActivation(hostname, new Date());

@@ -1,14 +1,19 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { Prisma } from '../../generated/prisma/client';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../../prisma/prisma.tokens';
 import { DomainOwnershipChecker } from './domain-ownership.checker';
 
 /**
- * How many pending claims one sweep re-checks.
+ * How many *due* claims one sweep re-checks.
  *
  * Bounded, like the webhook sweep: each one is an outbound DNS query, and a
  * backlog after an outage must drain across several intervals rather than
  * arrive as one burst at somebody else's nameservers.
+ *
+ * Every row in the batch is one this sweep will actually query — `dueClauses`
+ * keeps the backed-off ones out of it — so the bound is on work done rather than
+ * on rows read.
  */
 const SWEEP_BATCH_SIZE = 100;
 
@@ -136,7 +141,20 @@ export class DomainVerificationSweeper {
    */
   private async recheckPendingClaims(now: Date): Promise<{ checked: number; verified: number }> {
     const pending = await this.systemPrisma.tenantDomain.findMany({
-      where: { kind: 'custom', verifiedAt: null, verificationRequestedAt: { not: null } },
+      where: {
+        kind: 'custom',
+        verifiedAt: null,
+        verificationRequestedAt: { not: null },
+        // Due-ness is part of the query, and it has to be. Applied in JavaScript
+        // after `take`, a backed-off row still occupied its slot in the batch:
+        // once the fleet held `SWEEP_BATCH_SIZE` pending claims — twenty tenants
+        // at `MAX_CUSTOM_DOMAINS_PER_TENANT`, and an abandoned claim lives for
+        // the full TTL — every slot was held by a row at its six-hour ceiling
+        // and a claim made today never entered the window. Background
+        // verification stopped arriving for new customers, silently, with the
+        // manual button as the only way through.
+        OR: dueClauses(now),
+      },
       select: {
         id: true,
         hostname: true,
@@ -144,9 +162,16 @@ export class DomainVerificationSweeper {
         verificationAttempts: true,
         verificationLastCheckedAt: true,
       },
-      // The order `tenant_domains_unverified` is built in: oldest claim first,
-      // so a backlog drains in the order tenants joined it.
-      orderBy: { verificationRequestedAt: 'asc' },
+      // Least-recently-checked first, never-checked ahead of all of them: the
+      // round robin the backoff table assumes. Oldest-claim-first would put the
+      // same long-abandoned rows at the head of every batch, which is the
+      // starvation above wearing a different hat.
+      //
+      // `tenant_domains_unverified` still serves the predicate; the sort is not
+      // index-ordered, and that is accepted — the partial index holds only
+      // unverified rows, so the set being sorted is the fleet's pending claims
+      // and nothing else, on a job that runs off the request path.
+      orderBy: { verificationLastCheckedAt: { sort: 'asc', nulls: 'first' } },
       take: SWEEP_BATCH_SIZE,
     });
 
@@ -154,7 +179,9 @@ export class DomainVerificationSweeper {
     let verified = 0;
 
     for (const row of pending) {
-      if (row.verificationToken === null || !isDue(row, now)) {
+      if (row.verificationToken === null) {
+        // `tenant_domains_custom_needs_token` makes this unreachable; the guard
+        // is for a row written before that constraint existed.
         continue;
       }
 
@@ -185,17 +212,22 @@ export class DomainVerificationSweeper {
   }
 }
 
-/** Has this claim waited out its backoff? A claim never checked is always due. */
-function isDue(
-  row: { verificationAttempts: number; verificationLastCheckedAt: Date | null },
-  now: Date,
-): boolean {
-  if (row.verificationLastCheckedAt === null) {
-    return true;
-  }
+/**
+ * `RECHECK_BACKOFF_MS` as a `where`: which claims have waited out their backoff.
+ *
+ * The wait depends on the row's own `verification_attempts`, so this cannot be
+ * one comparison — but the table has six entries, so it is six, plus the
+ * never-checked case, which no `lte` would match against a null column. The last
+ * entry is the ceiling and therefore matches `>=` rather than a single count.
+ */
+function dueClauses(now: Date): Prisma.TenantDomainWhereInput[] {
+  const ceiling = RECHECK_BACKOFF_MS.length - 1;
 
-  const index = Math.min(row.verificationAttempts, RECHECK_BACKOFF_MS.length - 1);
-  const wait = RECHECK_BACKOFF_MS[index] ?? 0;
-
-  return now.getTime() - row.verificationLastCheckedAt.getTime() >= wait;
+  return [
+    { verificationLastCheckedAt: null },
+    ...RECHECK_BACKOFF_MS.map((wait, attempts) => ({
+      verificationAttempts: attempts === ceiling ? { gte: attempts } : attempts,
+      verificationLastCheckedAt: { lte: new Date(now.getTime() - wait) },
+    })),
+  ];
 }

@@ -17,6 +17,8 @@ import { TenantDomainsService } from './domains/tenant-domains.service';
 import { HostTenantGuard } from './host-tenant.guard';
 import { TenantProfileService } from './tenant-profile.service';
 import {
+  DomainNotActivatedError,
+  DomainNotVerifiedError,
   PlatformDomainNotRemovableError,
   PlatformHostnameNotClaimableError,
   TenantDomainNotFoundError,
@@ -149,6 +151,19 @@ describe('branding and custom domains, end to end', () => {
         return tenantContext.tenantId;
       },
     );
+  }
+
+  /**
+   * TAR-419's operator step, which has no tenant-facing route: the hostname is
+   * attached at the edge and its certificate issued. Written through
+   * `systemPrisma` because that is the plane an operator acts on, and because
+   * `AdminDomainsService` is not one of the services under test here.
+   */
+  async function activateAtEdge(hostname: string): Promise<void> {
+    await systemPrisma.tenantDomain.updateMany({
+      where: { hostname },
+      data: { activatedAt: new Date() },
+    });
   }
 
   async function removeFixture(): Promise<void> {
@@ -463,6 +478,7 @@ describe('branding and custom domains, end to end', () => {
       ];
 
       await asTenant(TENANT_A, () => domains.verify(claimed.domain.id));
+      await activateAtEdge(CUSTOM_A);
       await asTenant(TENANT_A, () => domains.setPrimary(claimed.domain.id));
       await asTenant(TENANT_A, () => domains.remove(claimed.domain.id));
 
@@ -478,7 +494,56 @@ describe('branding and custom domains, end to end', () => {
 
       await expect(
         asTenant(TENANT_A, () => domains.setPrimary(claimed.domain.id)),
-      ).rejects.toThrow();
+      ).rejects.toBeInstanceOf(DomainNotVerifiedError);
+    });
+
+    it('refuses to promote a proved domain the edge is not serving yet', async () => {
+      // Verification and activation are separate states, and the gap between
+      // them is an operator's manual queue. Promoted inside it, every invite and
+      // password-reset link is mailed to a hostname with no route and no
+      // certificate — and the mail sends without error, so nothing surfaces
+      // until a customer cannot get back into their account.
+      const claimed = await asTenant(TENANT_A, () => domains.claim(CUSTOM_A));
+
+      publishedTxt[`_whatsappcrm-challenge.${CUSTOM_A}`] = [
+        [claimed.domain.verification?.recordValue ?? ''],
+      ];
+
+      await asTenant(TENANT_A, () => domains.verify(claimed.domain.id));
+
+      await expect(
+        asTenant(TENANT_A, () => domains.setPrimary(claimed.domain.id)),
+      ).rejects.toBeInstanceOf(DomainNotActivatedError);
+
+      await activateAtEdge(CUSTOM_A);
+
+      await expect(
+        asTenant(TENANT_A, () => domains.setPrimary(claimed.domain.id)),
+      ).resolves.toMatchObject({ hostname: CUSTOM_A, isPrimary: true, status: 'live' });
+    });
+
+    it('promotes the platform subdomain on verification alone, which never activates', async () => {
+      // It is served by the same edge as every other tenant's, so activation is
+      // not a state it has — `AdminDomainsService` will not stamp one. Requiring
+      // it here would leave the tenant's floor permanently unpromotable, and the
+      // floor is where `remove()` puts primary back.
+      const claimed = await asTenant(TENANT_A, () => domains.claim(CUSTOM_A));
+
+      publishedTxt[`_whatsappcrm-challenge.${CUSTOM_A}`] = [
+        [claimed.domain.verification?.recordValue ?? ''],
+      ];
+
+      await asTenant(TENANT_A, () => domains.verify(claimed.domain.id));
+      await activateAtEdge(CUSTOM_A);
+      await asTenant(TENANT_A, () => domains.setPrimary(claimed.domain.id));
+
+      const platform = (await asTenant(TENANT_A, () => domains.list())).find(
+        (domain) => domain.kind === 'platform',
+      );
+
+      await expect(
+        asTenant(TENANT_A, () => domains.setPrimary(platform?.id ?? '')),
+      ).resolves.toMatchObject({ hostname: HOST_A, isPrimary: true, activatedAt: null });
     });
   });
 });
