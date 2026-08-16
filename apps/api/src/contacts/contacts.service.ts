@@ -146,11 +146,16 @@ export class ContactsService {
    * The two differ because a tag list is a small set an agent sees whole on the
    * screen they are editing, while a custom-field map is rendered from a
    * definition list a form may only have loaded part of.
+   *
+   * Both of those are read-modify-write, so the row lock below is what makes
+   * them correct rather than merely intended — see `lockContact`.
    */
   async update(contactId: string, input: ContactUpdateInput): Promise<ContactResponse> {
     const tenantId = this.tenantContext.requireTenantId();
 
     return await this.prisma.$tenantTransaction(async (tx) => {
+      await lockContact(tx, tenantId, contactId);
+
       const before = await tx.contact.findUnique({
         where: { id: contactId },
         select: { id: true, customFields: true, tags: { select: { tagId: true } } },
@@ -227,6 +232,51 @@ function searchFilter(q: string): Prisma.ContactWhereInput {
       { email: { contains: q } },
     ],
   };
+}
+
+/**
+ * Takes the contact's row lock **before** anything in the transaction reads it,
+ * so a second writer blocks before its own read rather than in the middle of its
+ * read-modify-write.
+ *
+ * `update` computes both of its writes in JavaScript from a row it read earlier
+ * in the same transaction — the custom-field map through
+ * `mergeCustomFieldValues`, the tag delta through `replaceTags`. Under
+ * `READ COMMITTED` a read takes a fresh snapshot per statement and takes no
+ * lock, so without this two `PATCH`es to *different* custom-field keys both read
+ * the same stored map, the second one's `UPDATE` waits on the first one's row
+ * lock, and then overwrites it with a map computed before the first write
+ * existed. Both answer `200` and one key is gone — the same silent data loss the
+ * merge exists to prevent, arriving by the other route.
+ *
+ * Locking first is what closes it: the second transaction waits here, and every
+ * statement it runs afterwards is a new snapshot taken once the first has
+ * committed, so it merges into the map the first one actually wrote. It also
+ * orders this write against `CustomFieldsService.delete`'s value strip, so a
+ * value cannot be resurrected under a key whose definition was just deleted.
+ *
+ * One extra round trip per `PATCH`, served by the primary key. `FOR UPDATE`
+ * rather than `FOR NO KEY UPDATE`: `contact_tags` reaches this row through
+ * `(tenant_id, id)`, and the stronger lock is what stops a tag row being
+ * attached to a contact whose tag set is being rewritten concurrently.
+ *
+ * An id that names no contact in this tenant locks nothing and returns nothing —
+ * RLS and the explicit `tenant_id` predicate both see to that — and the caller's
+ * own `findUnique` is what turns that into `ContactNotFoundError`, so there is
+ * no second not-found path to keep in step.
+ */
+async function lockContact(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  contactId: string,
+): Promise<void> {
+  await tx.$queryRaw`
+    SELECT id
+    FROM contacts
+    WHERE tenant_id = ${tenantId}::uuid
+      AND id = ${contactId}::uuid
+    FOR UPDATE
+  `;
 }
 
 /** Re-read through the response projection, so a write answers exactly what a read would. */
