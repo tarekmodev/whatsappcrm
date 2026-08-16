@@ -42,13 +42,36 @@ function trigger(
 }
 
 describe('workflowDedupeKey', () => {
-  it('keys the two ticket-scoped triggers on the ticket alone', () => {
+  it('keys each ticket-scoped trigger once per ticket, under its own namespace', () => {
     // "Once per ticket, ever" — for `ticket_created` because a ticket is created
     // once, and for `ticket_unresolved_for` because the escalation must not
     // repeat on every sweep tick.
-    expect(workflowDedupeKey(trigger({ triggerType: 'ticket_created' }))).toBe(`ticket:${TICKET}`);
+    expect(workflowDedupeKey(trigger({ triggerType: 'ticket_created' }))).toBe(
+      `ticket:${TICKET}:created`,
+    );
     expect(workflowDedupeKey(trigger({ triggerType: 'ticket_unresolved_for' }))).toBe(
-      `ticket:${TICKET}`,
+      `ticket:${TICKET}:elapsed`,
+    );
+  });
+
+  it('keeps the two ticket-scoped keys distinct, so an edited trigger is not pre-spent', () => {
+    // The whole reason for the suffix. A workflow has one trigger at a time, but
+    // that trigger is editable and `workflow_runs` rows outlive the edit — so a
+    // rule that ran on 800 tickets as `ticket_created` and is then re-pointed at
+    // `ticket_unresolved_for` would find its own earlier claims sitting on every
+    // one of them, and could never fire on any of them again.
+    expect(workflowDedupeKey(trigger({ triggerType: 'ticket_created' }))).not.toBe(
+      workflowDedupeKey(trigger({ triggerType: 'ticket_unresolved_for' })),
+    );
+  });
+
+  it('spells the elapsed key the way the sweep rebuilds it in SQL', () => {
+    // `workflow-elapsed.sweep.ts` reconstructs this literal in a correlated
+    // subquery, which cannot call this function. If the two drift the anti-join
+    // silently stops matching and the sweep starves again — so the format is
+    // pinned from this side too.
+    expect(workflowDedupeKey(trigger({ triggerType: 'ticket_unresolved_for' }))).toBe(
+      `ticket:${TICKET}:elapsed`,
     );
   });
 

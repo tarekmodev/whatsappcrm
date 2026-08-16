@@ -908,11 +908,14 @@ export type WorkflowEvaluateTicketTrigger = z.infer<typeof WorkflowEvaluateTicke
  *
  * | Trigger                 | Key                                       | Meaning                      |
  * | ----------------------- | ----------------------------------------- | ---------------------------- |
- * | `ticket_created`        | `ticket:{ticketId}`                       | Once per ticket, ever        |
+ * | `ticket_created`        | `ticket:{ticketId}:created`               | Once per ticket, ever        |
  * | `ticket_status_changed` | `ticket:{ticketId}:event:{ticketEventId}` | Once per recorded change     |
  * | `ticket_assigned`       | `ticket:{ticketId}:event:{ticketEventId}` | Once per recorded assignment |
  * | `ticket_sla_breached`   | `ticket:{ticketId}:timer:{slaTimerId}`    | Once per breached timer      |
- * | `ticket_unresolved_for` | `ticket:{ticketId}`                       | **Once per ticket, ever**    |
+ * | `ticket_unresolved_for` | `ticket:{ticketId}:elapsed`               | **Once per ticket, ever**    |
+ *
+ * The two ticket-scoped keys carry a suffix so they cannot collide with each
+ * other across an edit of the workflow's own trigger — see the switch below.
  *
  * The last row is the one to read twice. A sweep that re-evaluates the same
  * overdue ticket every minute would notify a supervisor every minute; this
@@ -923,9 +926,22 @@ export function workflowDedupeKey(trigger: WorkflowEvaluateTicketTrigger): strin
   const ticket = `ticket:${trigger.ticketId}`;
 
   switch (trigger.triggerType) {
+    // The two ticket-scoped keys are **namespaced apart**, and the suffix is the
+    // whole point of this arm rather than decoration.
+    //
+    // A workflow has one trigger at a time, so a bare `ticket:{id}` for both
+    // looks safe — but `WorkflowUpdateInputSchema.trigger` is editable and
+    // `workflow_runs` rows survive the edit, so a workflow carries its own spent
+    // keys across a change between these two types. A rule that ran on 800
+    // tickets as `ticket_created` and is then re-pointed at
+    // `ticket_unresolved_for` would find its own earlier claims already sitting
+    // on every one of those tickets, and could never fire on any of them again —
+    // silently, permanently, and with nothing in the run list to show for it,
+    // because no run is ever claimed.
     case 'ticket_created':
+      return `${ticket}:created`;
     case 'ticket_unresolved_for':
-      return ticket;
+      return `${ticket}:elapsed`;
     case 'ticket_status_changed':
     case 'ticket_assigned':
       return `${ticket}:event:${trigger.occurrenceId ?? 'unknown'}`;

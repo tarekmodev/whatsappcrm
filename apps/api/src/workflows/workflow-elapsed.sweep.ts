@@ -199,15 +199,47 @@ export class WorkflowElapsedSweep {
    * candidate set has to be narrowed by the claim itself.
    *
    * A ticket therefore qualifies only while **some** armed elapsed workflow still
-   * has an unspent `ticket:{id}` claim on it. Once every one of them has run, the
-   * ticket drops out — which is also what stops the fifty ahead of it costing a
-   * fact-sheet read per tick for the rest of their lives.
+   * has an unspent `ticket:{id}:elapsed` claim on it. Once every one of them has
+   * run, the ticket drops out — which is also what stops the fifty ahead of it
+   * costing a fact-sheet read per tick for the rest of their lives.
    *
-   * The correlated `NOT EXISTS` is served by
-   * `workflow_runs (tenant_id, workflow_id, dedupe_key)` — the same unique index
-   * that is the claim — so it is an index probe per (armed workflow, candidate
-   * ticket), bounded by `elapsedTriggerWorkflowsPerTenant` × the row cap. The
-   * statement still returns two uuid columns and still reaches no caller.
+   * ⚠️ That literal is the **only** place this key format is rebuilt in SQL
+   * rather than produced by `workflowDedupeKey`, because a correlated subquery
+   * cannot call it. The two must move together: a change to the elapsed arm of
+   * that function without a change here silently stops the anti-join matching,
+   * and the sweep goes back to re-offering tickets that have already fired —
+   * which is the starvation this clause exists to prevent, returning quietly.
+   * `workflows.test.ts` pins the format from the other side.
+   *
+   * ## What the anti-join actually costs, which is not what it looks like
+   *
+   * The `NOT EXISTS` rides `workflow_runs (tenant_id, workflow_id, dedupe_key)`
+   * — the same unique index that is the claim — so each probe is cheap. The
+   * **number** of probes is the part worth stating honestly, because the obvious
+   * reading is wrong: `LIMIT 50` bounds the rows returned, not the rows examined.
+   *
+   * In the steady state the inner scan walks every open ticket older than the
+   * tenant's largest armed threshold before it accumulates fifty qualifying
+   * ones, and each already-fired ticket it steps over costs the **maximum**
+   * number of probes rather than the minimum — the `EXISTS` can only short-
+   * circuit on a workflow that has *not* fired, so a ticket every workflow has
+   * already handled is examined once per armed workflow before being rejected.
+   *
+   * Real bound: O(open tickets older than the largest armed threshold) × armed
+   * elapsed workflows, per tenant, per tick — and it is **cheapest when there is
+   * work and most expensive on the quiet ticks**, which is the inverse of the
+   * profile a reader would assume. It is bounded by
+   * `elapsedTriggerWorkflowsPerTenant` only in the second factor.
+   *
+   * Not changed, because the prefix scan is what makes it correct and the
+   * alternatives — a watermark column on `tickets` — trade away "the sweep writes
+   * nothing", which is the property the rest of this class is built on. The
+   * instrumentation to notice already exists: `sweep()` logs elapsed time on
+   * every run that finds work. Stated rather than left to be measured, for the
+   * same reason `WORKFLOW_ACTION_TIMEOUT_MS` was deleted — the next reader will
+   * budget against whatever number is written here.
+   *
+   * The statement still returns two uuid columns and still reaches no caller.
    */
   private async findOverdueTickets(thresholdMinutes: number): Promise<OverdueTicketRow[]> {
     return await this.systemPrisma.$queryRaw<OverdueTicketRow[]>`
@@ -230,7 +262,7 @@ export class WorkflowElapsedSweep {
                       FROM workflow_runs r
                      WHERE r.tenant_id = n.id
                        AND r.workflow_id = aw.id
-                       AND r.dedupe_key = 'ticket:' || t.id
+                       AND r.dedupe_key = 'ticket:' || t.id || ':elapsed'
                   )
              )
            ORDER BY t.created_at

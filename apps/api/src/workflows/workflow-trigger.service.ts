@@ -3,7 +3,7 @@ import {
   WORKFLOWS_QUEUE,
   WORKFLOW_EVALUATE_TICKET_JOB,
   WORKFLOW_LIMITS,
-  triggerIsTicketScoped,
+  ELAPSED_WORKFLOW_TRIGGER_TYPE,
   workflowDedupeKey,
   type WorkflowActionResult,
   type WorkflowDefinition,
@@ -64,11 +64,12 @@ import {
  *
  * ## The elapsed threshold is checked *before* the claim, and that is load-bearing
  *
- * `ticket_unresolved_for` dedupes on `ticket:{id}` — once per ticket, ever. If a
- * 24-hour workflow claimed that key at hour four (because the sweep enqueued the
- * ticket for a 4-hour workflow in the same tenant) it would record `skipped` and
- * could **never fire again**, because the key is spent. So a workflow whose own
- * threshold is not yet met is passed over without claiming anything.
+ * `ticket_unresolved_for` dedupes on `ticket:{id}:elapsed` — once per ticket,
+ * ever. If a 24-hour workflow claimed that key at hour four (because the sweep
+ * enqueued the ticket for a 4-hour workflow in the same tenant) it would record
+ * `skipped` and could **never fire again**, because the key is spent. So a
+ * workflow whose own threshold is not yet met is passed over without claiming
+ * anything, and so is one whose ticket is over the run budget.
  */
 
 /** What one evaluation did, for the runner's log line and for the tests. */
@@ -207,9 +208,35 @@ export class WorkflowTriggerService {
     let skipped = 0;
     let failed = 0;
 
-    // A ticket-scoped key — `ticket:{id}` — is spendable exactly once, ever, so
-    // anything that consumes it without doing the work is permanent.
-    const keyIsSpendableOnce = triggerIsTicketScoped(trigger.triggerType);
+    // The elapsed trigger, and **only** it, defers instead of spending its key.
+    //
+    // Both ticket-scoped keys are spendable once, so the argument for deferring
+    // looks like it should cover `ticket_created` too. It must not: that trigger
+    // has no reconciler — `TicketQueueRunner` says so in as many words, and
+    // nothing re-offers a missed creation — so deferring it would turn a loss
+    // that is at least *recorded* on a failed run into one that is invisible.
+    // The elapsed trigger is the one the sweep re-derives from
+    // `tickets.created_at` on the next tick, which is what makes "late rather
+    // than lost" true for it and false for the other.
+    const deferInsteadOfSpending = trigger.triggerType === ELAPSED_WORKFLOW_TRIGGER_TYPE;
+
+    // Asked once per job rather than once per candidate, so a tenant with ten
+    // armed elapsed workflows emits one line instead of ten byte-identical ones.
+    // The bound is a property of the *ticket*, not of any one workflow, and the
+    // docblock calls this "the support conversation the bound exists for" — a
+    // signal worth having is a signal worth being able to count.
+    if (deferInsteadOfSpending && (await budgetExceeded())) {
+      // Nothing is claimed and nothing is written, so the next sweep re-offers
+      // the ticket and the escalation happens late rather than never. Logged
+      // rather than silent: the run list cannot carry this one.
+      this.logger.warn(
+        `Deferred ${trigger.triggerType} for ticket ${trigger.ticketId} across ` +
+          `${candidates.length} workflow(s): over ${WORKFLOW_LIMITS.runsPerTicketPerHour} runs ` +
+          'this hour. No claim was spent, so it will be retried rather than lost.',
+      );
+
+      return { ...EMPTY_REPORT, candidates: candidates.length };
+    }
 
     for (const candidate of candidates) {
       // Before the claim, and only for the elapsed trigger — see the class
@@ -222,25 +249,6 @@ export class WorkflowTriggerService {
         }
       }
 
-      // Bound 3, and it has to be asked **before** the claim for a ticket-scoped
-      // trigger, for the same reason the threshold above does. Claiming and then
-      // recording `run_budget_exceeded` spends `ticket:{id}` — so a ticket that
-      // happened to be busy in the hour its four-hour escalation came due would
-      // record the refusal once and never escalate again, even after it went
-      // quiet. The budget is a *rate* limit; it must not become a permanent one.
-      if (keyIsSpendableOnce && (await budgetExceeded())) {
-        // Nothing is claimed and nothing is written, so the next sweep re-offers
-        // the ticket and the escalation happens late rather than never. Logged
-        // rather than silent: the run list cannot carry this one, and a tenant
-        // hitting it repeatedly is the support conversation the bound exists for.
-        this.logger.warn(
-          `Deferred ${trigger.triggerType} for ticket ${trigger.ticketId}: over ` +
-            `${WORKFLOW_LIMITS.runsPerTicketPerHour} runs this hour. Its claim is left unspent, ` +
-            'so it will be retried rather than lost.',
-        );
-        continue;
-      }
-
       const runId = await this.claim(trigger, candidate, dedupeKey);
 
       if (runId === null) {
@@ -250,11 +258,17 @@ export class WorkflowTriggerService {
       claimed += 1;
 
       if (await budgetExceeded()) {
-        // The event triggers land here, and for them a **failed run rather than
-        // a silent drop** is right: their key is per-occurrence, so spending it
-        // costs that one occurrence and nothing after it — and a supervisor with
-        // a runaway workflow needs to find it in the run list rather than in our
-        // logs.
+        // Everything except the elapsed trigger lands here, and for all of it a
+        // **failed run rather than a silent drop** is right.
+        //
+        // For the three event triggers because their key is per-occurrence, so
+        // spending it costs that one occurrence and nothing after it. For
+        // `ticket_created` for the opposite reason: its key *is* spendable once,
+        // but nothing re-offers a missed creation — `TicketQueueRunner` has no
+        // reconciler — so deferring it would trade a loss that is at least
+        // recorded on the run row for one that is invisible. A supervisor with a
+        // runaway workflow needs to find it in the run list rather than in our
+        // logs, and for that trigger the run list is the only place it can be.
         await this.finish(runId, 'failed', [], 'run_budget_exceeded', null);
         failed += 1;
         continue;

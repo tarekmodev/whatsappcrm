@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   WORKFLOW_LIMITS,
   workflowDedupeKey,
@@ -282,7 +283,7 @@ describe('the elapsed trigger', () => {
     const report = await service.evaluate(elapsed);
 
     expect(report.claimed).toBe(1);
-    expect(store.claimedKeys).toEqual([`${WORKFLOW}|ticket:${TICKET}`]);
+    expect(store.claimedKeys).toEqual([`${WORKFLOW}|ticket:${TICKET}:elapsed`]);
   });
 
   it('lets the slower workflow claim once the ticket is old enough', async () => {
@@ -293,7 +294,7 @@ describe('the elapsed trigger', () => {
 
     await service.evaluate(elapsed);
 
-    expect(store.claimedKeys).toEqual([`${OTHER_WORKFLOW}|ticket:${TICKET}`]);
+    expect(store.claimedKeys).toEqual([`${OTHER_WORKFLOW}|ticket:${TICKET}:elapsed`]);
   });
 });
 
@@ -381,6 +382,61 @@ describe('loop protection', () => {
 
     expect(report.claimed).toBe(1);
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a failed run for ticket_created over budget, because nothing re-offers it', async () => {
+    // `ticket_created` is ticket-scoped like the elapsed trigger, so deferring it
+    // looks symmetrical — and would be wrong. Nothing re-offers a missed
+    // creation, so deferring trades a loss that is at least *recorded* for one
+    // that is invisible. It keeps the failed run it can be seen in.
+    const created = trigger({ triggerType: 'ticket_created', occurrenceId: null });
+    const { service, store } = harness([
+      {
+        id: WORKFLOW,
+        version: 1,
+        definition: {
+          trigger: { type: 'ticket_created' },
+          conditions: [],
+          actions: [{ type: 'set_priority', priority: 'urgent' }],
+        },
+      },
+    ]);
+
+    store.runCount.mockResolvedValue(WORKFLOW_LIMITS.runsPerTicketPerHour + 1);
+
+    const report = await service.evaluate(created);
+
+    expect(report.claimed).toBe(1);
+    expect(store.finished).toEqual([
+      { runId: 'run-1', status: 'failed', failureReason: 'run_budget_exceeded' },
+    ]);
+  });
+
+  it('warns once per job when deferring, not once per candidate workflow', async () => {
+    // The bound is a property of the ticket, not of any one workflow, so ten
+    // armed elapsed workflows must not emit ten byte-identical lines.
+    const elapsed = trigger({ triggerType: 'ticket_unresolved_for', occurrenceId: null });
+    const { service, store } = harness(
+      [
+        { id: WORKFLOW, version: 1, definition: elapsedDefinition(240) },
+        { id: OTHER_WORKFLOW, version: 1, definition: elapsedDefinition(240) },
+      ],
+      { facts: facts({ ageMinutes: 300 }) },
+    );
+
+    store.runCount.mockResolvedValue(WORKFLOW_LIMITS.runsPerTicketPerHour + 1);
+
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const report = await service.evaluate(elapsed);
+
+      expect(report.claimed).toBe(0);
+      expect(report.candidates).toBe(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('raises a chained trigger carrying depth + 1 and the causing run', async () => {
