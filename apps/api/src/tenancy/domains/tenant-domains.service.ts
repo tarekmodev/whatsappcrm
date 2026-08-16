@@ -9,6 +9,7 @@ import type { Prisma } from '../../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../../prisma/prisma.tokens';
 import { isUniqueViolationOn } from '../../prisma/unique-violation';
 import {
+  DomainNotActivatedError,
   DomainNotVerifiedError,
   DomainRoutingUnconfiguredError,
   DomainVerificationThrottledError,
@@ -106,12 +107,15 @@ export class TenantDomainsService {
   }
 
   /**
-   * Every hostname this tenant holds, platform subdomain included.
+   * Every hostname this tenant holds, platform subdomain included, in full.
    *
    * The platform subdomain is in the list rather than filtered out because it is
    * the address that keeps working while a custom domain is being set up, and a
    * settings screen that does not show it cannot explain why the tenant is still
    * reachable after removing everything else.
+   *
+   * ⚠️ This is the `domain:write` view — it carries the DNS challenge. A caller
+   * that has not been through that gate gets `listForCaller()` below.
    */
   async list(): Promise<TenantDomain[]> {
     const rows = await this.prisma.tenantDomain.findMany({
@@ -120,6 +124,33 @@ export class TenantDomainsService {
     });
 
     return rows.map((row) => this.present(row));
+  }
+
+  /**
+   * The same list, narrowed to what the caller in scope may see.
+   *
+   * `GET /api/v1/tenant` is `@AnyPrincipal()` — every signed-in user needs the
+   * workspace name, its colours and its address to render the shell — while
+   * `GET /api/v1/tenant/domains` is `domain:write`, which only an admin holds.
+   * Composing the full list into the open route handed an agent the pending
+   * challenge tokens and the failure reasons the other route refuses them one
+   * path over, and two routes disagreeing about the same rows is the bug
+   * regardless of which one is right.
+   *
+   * What is withheld is the *setup* half: the TXT challenge and the routing
+   * record, which are what `domain:write` exists to protect. What remains —
+   * hostname, kind, status, which one is primary, and the timestamps `status` is
+   * derived from — is what the shell renders and what any member can read off
+   * their own address bar.
+   */
+  async listForCaller(): Promise<TenantDomain[]> {
+    const domains = await this.list();
+
+    if (this.maySeeVerification()) {
+      return domains;
+    }
+
+    return domains.map((domain) => ({ ...domain, verification: null, routing: null }));
   }
 
   /**
@@ -163,14 +194,10 @@ export class TenantDomainsService {
       return { domain: await this.refreshLapsedClaim(existing), created: false };
     }
 
-    const held = await this.prisma.tenantDomain.count({ where: { kind: 'custom' } });
-
-    if (held >= MAX_CUSTOM_DOMAINS_PER_TENANT) {
-      throw new TooManyCustomDomainsError(MAX_CUSTOM_DOMAINS_PER_TENANT);
-    }
-
     const row = await this.prisma
       .$tenantTransaction(async (tx) => {
+        await assertUnderDomainCap(tx);
+
         const created = await tx.tenantDomain.create({
           data: {
             tenantId,
@@ -259,10 +286,26 @@ export class TenantDomainsService {
   /**
    * Makes one domain the tenant's primary address.
    *
-   * Refuses a domain that is not verified, and that refusal is security-relevant
-   * rather than tidiness: `TenantLinkService.primaryHostname()` builds invite and
-   * password-reset links from this row, so pointing it at a hostname nobody has
-   * proved control of mails a live token to a host the tenant does not own.
+   * Both refusals below exist because `TenantLinkService.primaryHostname()`
+   * builds invite and password-reset links from this row, so the primary has to
+   * be a hostname that is *both* the tenant's and reachable:
+   *
+   *   * **Not verified** — security. Pointing it at a hostname nobody has proved
+   *     control of mails a live token to a host the tenant does not own.
+   *   * **Verified but not activated** — availability. `verified` and `live` are
+   *     deliberately separate states: attaching the hostname at the edge is a
+   *     manual operator step (TAR-419, `docs/runbooks/custom-domains.md`) and can
+   *     sit in `AdminDomainsService.pending()` for hours. Promoting inside that
+   *     window aims every invite and reset link at a host with no route and no
+   *     certificate, and nothing here fails — the mail sends, and nobody in the
+   *     tenant can accept an invitation or reset a password until an operator
+   *     gets to the queue.
+   *
+   * Activation is asked of a custom domain only. A platform subdomain is issued
+   * under our own zone and served by the same edge as every other tenant's, so
+   * it is deliverable the moment it exists; `AdminDomainsService` will not stamp
+   * one, and requiring it here would leave the tenant's floor — the fallback
+   * `remove()` promotes back — permanently unpromotable.
    *
    * One transaction, because `tenant_domains_one_primary` is a unique index: the
    * old primary has to be cleared before the new one is set or the second
@@ -273,6 +316,10 @@ export class TenantDomainsService {
 
     if (row.verifiedAt === null) {
       throw new DomainNotVerifiedError(row.hostname);
+    }
+
+    if (row.kind === 'custom' && row.activatedAt === null) {
+      throw new DomainNotActivatedError(row.hostname);
     }
 
     if (row.isPrimary) {
@@ -387,6 +434,17 @@ export class TenantDomainsService {
     return this.present(refreshed);
   }
 
+  /**
+   * Whether the caller may see the DNS setup half of a domain row.
+   *
+   * `domain:write` rather than a role, and the same permission
+   * `TenantDomainsController` is behind — so the two routes cannot drift apart
+   * without somebody editing this line.
+   */
+  private maySeeVerification(): boolean {
+    return this.tenantContext.requirePrincipal().permissions.includes('domain:write');
+  }
+
   /** The per-domain floor. See `VERIFY_FLOOR_MS`. */
   private assertCheckAllowed(row: TenantDomainRow): void {
     const lastCheckedAt = row.verificationLastCheckedAt;
@@ -445,4 +503,29 @@ export class TenantDomainsService {
  */
 function newVerificationToken(): string {
   return randomBytes(VERIFICATION_TOKEN_BYTES).toString('hex');
+}
+
+/**
+ * Refuses the claim if the tenant already holds `MAX_CUSTOM_DOMAINS_PER_TENANT`.
+ *
+ * Counted **inside** the transaction that inserts the row, so the check reads
+ * the state the insert lands on rather than a number taken before the
+ * transaction opened — a double-submitted form was enough to get past the
+ * outside-the-transaction version.
+ *
+ * Two claims committing in the same instant can still both pass, and that is
+ * accepted rather than locked, on `assertUnderFieldCap`'s reasoning
+ * (`contacts/custom-fields.service.ts`): this is a plan bound on how many
+ * hostnames a tenant may hold, not an isolation control, so the consequence is a
+ * sixth entry in a list of five and an operator seeing one extra row in the
+ * activation queue. An advisory lock on every claim — the mechanism
+ * `PlanLimitsService` uses for seats, where the cap is a commercial guarantee —
+ * is heavier than that risk deserves.
+ */
+async function assertUnderDomainCap(tx: Prisma.TransactionClient): Promise<void> {
+  const held = await tx.tenantDomain.count({ where: { kind: 'custom' } });
+
+  if (held >= MAX_CUSTOM_DOMAINS_PER_TENANT) {
+    throw new TooManyCustomDomainsError(MAX_CUSTOM_DOMAINS_PER_TENANT);
+  }
 }

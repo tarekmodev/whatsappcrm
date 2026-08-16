@@ -18,7 +18,8 @@ import {
  *   - one tenant's branding is never observable under another's context;
  *   - a hostname another tenant holds is refused **without saying who holds it**;
  *   - the platform subdomain can never be removed;
- *   - primary requires a proved hostname, because invite and reset links go there.
+ *   - primary requires a hostname that is both proved **and** actually served,
+ *     because invite and password-reset links are mailed to it.
  *
  * `server-only` throws outside a React Server Component, and `next/headers` needs
  * a request scope — both are stubbed so these stay plain unit tests.
@@ -76,6 +77,35 @@ async function addDomain(hostname: string): Promise<TenantDomain> {
     path: '/v1/tenant/domains',
     body: { hostname },
   })) as TenantDomain;
+}
+
+/**
+ * Proves the hostname and then attaches it at the edge.
+ *
+ * The second half has **no tenant-facing route on purpose** — it is the platform
+ * operator's step, and writing to the store directly is the honest way to say
+ * so. A mock route that let the console activate its own domain would
+ * misrepresent the half of the split the tenant does not hold, which is the
+ * whole isolation argument for custom domains.
+ */
+async function addLiveDomain(hostname: string): Promise<TenantDomain> {
+  const claimed = await addDomain(hostname);
+
+  await handleMockRequest({ method: 'POST', path: `/v1/tenant/domains/${claimed.id}/verify` });
+
+  const stored = mockState().tenantDomains.get(claimed.id);
+
+  if (stored === undefined) {
+    throw new Error(`the mock store lost ${hostname} between claiming and activating it`);
+  }
+
+  mockState().tenantDomains.set(claimed.id, {
+    ...stored,
+    status: 'live',
+    activatedAt: '2026-08-15T09:00:00.000Z',
+  });
+
+  return claimed;
 }
 
 describe('tenant branding isolation', () => {
@@ -288,19 +318,30 @@ describe('custom domains', () => {
     ).rejects.toMatchObject({ code: 'conflict' });
   });
 
-  it('moves primary in one step, leaving exactly one', async () => {
+  it('refuses to make a proved hostname primary before the edge serves it', async () => {
+    // Verified is not enough. Attaching is a manual operator step, and the
+    // primary is where invite and password-reset links are mailed — promoting
+    // inside that window aims live tokens at a host with no route.
     const claimed = await addDomain('help.example.com');
 
     await handleMockRequest({ method: 'POST', path: `/v1/tenant/domains/${claimed.id}/verify` });
+
+    await expect(
+      handleMockRequest({ method: 'POST', path: `/v1/tenant/domains/${claimed.id}/primary` }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('moves primary in one step, leaving exactly one', async () => {
+    const claimed = await addLiveDomain('help.example.com');
+
     await handleMockRequest({ method: 'POST', path: `/v1/tenant/domains/${claimed.id}/primary` });
 
     expect((await listDomains()).filter((domain) => domain.isPrimary)).toHaveLength(1);
   });
 
   it('returns primary to the platform subdomain when the primary is removed', async () => {
-    const claimed = await addDomain('help.example.com');
+    const claimed = await addLiveDomain('help.example.com');
 
-    await handleMockRequest({ method: 'POST', path: `/v1/tenant/domains/${claimed.id}/verify` });
     await handleMockRequest({ method: 'POST', path: `/v1/tenant/domains/${claimed.id}/primary` });
     await handleMockRequest({ method: 'DELETE', path: `/v1/tenant/domains/${claimed.id}` });
 

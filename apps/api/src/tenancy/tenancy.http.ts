@@ -8,6 +8,7 @@ import {
   BrandingAssetTypeUnsupportedError,
   BrandingAssetUnreadableError,
   BrandingFileMissingError,
+  DomainNotActivatedError,
   DomainNotVerifiedError,
   DomainRoutingUnconfiguredError,
   DomainVerificationThrottledError,
@@ -90,7 +91,9 @@ export function translateTenancyFailure(error: unknown): never {
     throw new ApiException('conflict', error.message);
   }
 
-  if (error instanceof DomainNotVerifiedError) {
+  if (error instanceof DomainNotVerifiedError || error instanceof DomainNotActivatedError) {
+    // Both are `conflict`: the request is well formed and the caller is
+    // permitted, the resource is simply in a state that does not allow it yet.
     throw new ApiException('conflict', error.message);
   }
 

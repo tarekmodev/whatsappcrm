@@ -11,9 +11,12 @@ import type { BadgeTone } from '@/components/ui/Badge';
  *   - the **platform subdomain can never be removed** — it is the tenant's floor,
  *     and a tenant that deleted its last domain would be unreachable and
  *     unrecoverable without an operator;
- *   - **primary may only be moved to a proved hostname**, because invite and
- *     password-reset links are mailed to it, and pointing those at an unverified
- *     host is the attack the link service exists to prevent;
+ *   - **primary may only be moved to a hostname that is both proved and
+ *     serving**, because invite and password-reset links are mailed to it:
+ *     pointing those at an unverified host is the attack the link service exists
+ *     to prevent, and pointing them at a verified one that the edge has not
+ *     attached yet sends every member to a hostname with no certificate while
+ *     the mail itself reports success;
  *   - **verification is only offered while there is something to verify**.
  *
  * Kept out of the components so the rules are testable and stated once. The API
@@ -33,7 +36,13 @@ export function domainCapabilities(domain: TenantDomain): DomainCapabilities {
   return {
     // Nothing to prove for a subdomain we issued ourselves.
     canVerify: !isPlatform && domain.verifiedAt === null,
-    canMakePrimary: !domain.isPrimary && domain.verifiedAt !== null,
+    // A platform subdomain is served by the same edge as every other tenant's,
+    // so it is deliverable as soon as it exists and is never activated. A custom
+    // domain waits for an operator to attach it — `activatedAt`, `status: 'live'`
+    // — and the API refuses the promotion until then, so the button is not
+    // offered until then either.
+    canMakePrimary:
+      !domain.isPrimary && (isPlatform ? domain.verifiedAt !== null : domain.activatedAt !== null),
     canRemove: !isPlatform,
   };
 }

@@ -1821,7 +1821,29 @@ function getPublicTenant({ principal }: RouteContext): TenantPublicResponse {
 }
 
 function getTenant({ principal }: RouteContext): TenantResponse {
-  return currentTenant(principal);
+  return asTenantResponse(principal, currentTenant(principal));
+}
+
+/**
+ * `GET /v1/tenant` and its `PATCH` are reachable without `domain:write`, so the
+ * domain rows they carry drop the DNS setup half — the challenge token and the
+ * routing record — for a principal who could not read them on
+ * `GET /v1/tenant/domains`.
+ *
+ * Mirrors `TenantDomainsService.listForCaller()`. Modelled here rather than
+ * left to the real API because mock mode is where the console's own screens get
+ * reviewed, and a shell that renders from fields the live API withholds would
+ * pass review and break in production.
+ */
+function asTenantResponse(principal: SessionPrincipal, tenant: TenantResponse): TenantResponse {
+  if (roleHasPermission(principal.role, 'domain:write')) {
+    return tenant;
+  }
+
+  return {
+    ...tenant,
+    domains: tenant.domains.map((domain) => ({ ...domain, verification: null, routing: null })),
+  };
 }
 
 /**
@@ -1845,7 +1867,7 @@ function updateTenant({ principal, body }: RouteContext): TenantResponse {
 
   mockState().tenants.set(tenant.id, updated);
 
-  return updated;
+  return asTenantResponse(principal, updated);
 }
 
 /**
@@ -2090,12 +2112,28 @@ function verifyTenantDomain({ principal, params }: RouteContext): TenantDomain {
   return stripTenant(verified);
 }
 
-/** One transaction: clear the current primary, set the new one. */
+/**
+ * One transaction: clear the current primary, set the new one.
+ *
+ * Both refusals are the API's (`TenantDomainsService.setPrimary`): invite and
+ * password-reset links are mailed to the primary, so it has to be a hostname the
+ * tenant has proved *and* one the edge is actually serving. A custom domain
+ * waits for an operator to attach it; a platform subdomain never does.
+ */
 function setPrimaryTenantDomain({ principal, params }: RouteContext): TenantDomain {
   const domain = findDomainInTenant(principal, params[0]);
 
   if (domain.verifiedAt === null) {
     throw refused('conflict', 'Verify this domain before making it primary.', HTTP_CONFLICT);
+  }
+
+  if (domain.kind === 'custom' && domain.activatedAt === null) {
+    throw refused(
+      'conflict',
+      'This domain is verified but is not serving traffic yet. It can be the main address once ' +
+        'its certificate has been issued.',
+      HTTP_CONFLICT,
+    );
   }
 
   const state = mockState();

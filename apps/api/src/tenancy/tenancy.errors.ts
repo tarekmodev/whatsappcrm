@@ -150,6 +150,25 @@ export class DomainNotVerifiedError extends TenancyError {
   }
 }
 
+/**
+ * Proved, but not yet attached at the edge — so it has no route and no
+ * certificate, and every invite and reset link mailed to it would go nowhere.
+ *
+ * A separate error from `DomainNotVerifiedError` because the remedy is
+ * completely different: verification is something the tenant does and can
+ * retry, activation is something an operator does and the tenant waits for.
+ * Telling them to re-check a TXT record they already published correctly is the
+ * kind of message that produces a support ticket.
+ */
+export class DomainNotActivatedError extends TenancyError {
+  constructor(readonly hostname: string) {
+    super(
+      `${hostname} is verified but is not serving traffic yet. It can be the workspace's main ` +
+        'address once its certificate has been issued.',
+    );
+  }
+}
+
 /** The per-domain floor between two ownership checks. */
 export class DomainVerificationThrottledError extends TenancyError {
   constructor(readonly retryAfterSeconds: number) {

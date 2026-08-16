@@ -20,6 +20,7 @@ import {
   BRANDING_ASSET_LIMITS,
   BRANDING_UPLOAD_FIELD,
   BrandingAssetKindSchema,
+  TENANT_HOST_HEADER,
   TenantUpdateInputSchema,
   type BrandingAssetKind,
   type TenantBranding,
@@ -103,6 +104,13 @@ const BRANDING_UPLOAD_OPTIONS = {
  * host. Any cache in front of them, at the edge or in the web tier's `fetch`,
  * must key on the host. A cache keyed on the URL alone is a direct cross-tenant
  * leak, and it is the highest-severity mistake available in this feature.
+ *
+ * The two `@Public()` routes therefore say so on the wire: `Vary` names
+ * `TENANT_HOST_HEADER`, because on the hop that actually matters — the Next
+ * rewrite in `apps/web/next.config.mjs`, where every tenant reaches one
+ * `API_BASE_URL` — the host travels in that header and nowhere in the URL. The
+ * asset route pairs a one-year `public, immutable` lifetime with it; without the
+ * `Vary` those two lines together are the leak the paragraph above describes.
  */
 @Controller({ path: 'tenant', version: '1' })
 @UseFilters(ApiExceptionFilter)
@@ -122,7 +130,9 @@ export class TenantController {
    */
   @Get('public')
   @Public()
-  async public(): Promise<TenantPublicResponse> {
+  async public(@Res({ passthrough: true }) response: Response): Promise<TenantPublicResponse> {
+    response.setHeader('vary', TENANT_HOST_HEADER);
+
     return await this.profile
       .readPublic()
       .catch((error: unknown) => translateTenancyFailure(error));
@@ -164,6 +174,10 @@ export class TenantController {
     response.setHeader('x-content-type-options', 'nosniff');
     response.setHeader('content-security-policy', "default-src 'none'");
     response.setHeader('etag', `"${kind}-${current}"`);
+    // The tenant is not in the URL, so it has to be in `Vary` — see the class
+    // comment. `public, immutable` without this is one shared cache away from
+    // serving one tenant's logo under another tenant's brand.
+    response.setHeader('vary', TENANT_HOST_HEADER);
     response.setHeader(
       'cache-control',
       version === current ? 'public, max-age=31536000, immutable' : 'public, max-age=60',
@@ -178,6 +192,11 @@ export class TenantController {
    * `@AnyPrincipal()`: every signed-in user needs the product name and the
    * colours to render the shell, so gating this behind `tenant:settings` would
    * refuse the whole call to an agent who may read the workspace name.
+   *
+   * The domain list it carries is narrowed to match — see
+   * `TenantDomainsService.listForCaller()`. An open route composing the full
+   * rows would hand every member the pending challenge tokens that
+   * `GET /tenant/domains` refuses them one path over.
    */
   @Get()
   @AnyPrincipal()
@@ -249,12 +268,16 @@ export class TenantController {
    * Concurrent because they are independent queries on one connection pool and
    * the response cannot be assembled without all three; sequential would be
    * three round trips of latency for nothing.
+   *
+   * `listForCaller()` rather than `list()`, on both routes that use this: the
+   * `PATCH` is `branding:write`, which an admin holds and a supervisor does not,
+   * so it is the same question and it gets the same answer.
    */
   private async tenantResponse(): Promise<TenantResponse> {
     const [profile, branding, domains] = await Promise.all([
       this.profile.read(),
       this.branding.read(),
-      this.domains.list(),
+      this.domains.listForCaller(),
     ]).catch((error: unknown) => translateTenancyFailure(error));
 
     return { ...profile, branding, domains };

@@ -125,8 +125,47 @@ describe('DomainCard', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('offers primary once ownership is proved', () => {
+  it('still withholds primary from a proved domain the edge is not serving yet', () => {
+    // Ownership is not enough. Attaching the hostname at the edge is a manual
+    // operator step that can sit in the queue for hours, and invite and
+    // password-reset links are mailed to the primary — so offering the button
+    // here aims real tokens at a host with no route and no certificate, and the
+    // mail leaves without an error.
     renderCard(domain({ status: 'verified', verifiedAt: '2026-08-14T10:00:00.000Z' }));
+
+    expect(
+      screen.queryByRole('button', { name: content.domains.setPrimaryButton }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers primary once the domain is live', () => {
+    renderCard(
+      domain({
+        status: 'live',
+        verifiedAt: '2026-08-14T10:00:00.000Z',
+        activatedAt: '2026-08-15T09:00:00.000Z',
+      }),
+    );
+
+    expect(
+      screen.getByRole('button', { name: content.domains.setPrimaryButton }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers primary on a platform subdomain on verification alone', () => {
+    // The exemption, and the reason it is not an oversight: a platform subdomain
+    // is served by the same edge as every other tenant's and is never activated,
+    // so requiring activation would leave the tenant's floor permanently
+    // unpromotable — and the floor is exactly where removing a primary puts it
+    // back.
+    renderCard(
+      domain({
+        kind: 'platform',
+        hostname: 'acme.whatsappcrm.example',
+        status: 'verified',
+        verifiedAt: '2026-06-01T08:00:00.000Z',
+      }),
+    );
 
     expect(
       screen.getByRole('button', { name: content.domains.setPrimaryButton }),
