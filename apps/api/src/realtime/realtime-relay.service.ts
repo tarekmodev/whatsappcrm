@@ -189,7 +189,7 @@ export class RealtimeRelayService {
    * **Two events, two audiences, and neither substitutes for the other.**
    *
    *   * `sla.breached` goes to `user:{recipientUserId}` — one emit per
-   *     `sla_alerts` row the sweep actually inserted, and to nobody else.
+   *     `notifications` row the sweep actually inserted, and to nobody else.
    *     Deliberately not `tenantReadersRoom`: the read rule for an alert is "you
    *     are a named recipient", the rows say who that is, and this file's own
    *     amendment rules that a fan-out wider than the read rule is an
