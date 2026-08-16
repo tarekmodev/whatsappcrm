@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   LIFECYCLE_POLICY,
+  SIGNUP_POLICY,
   permissionsForRole,
   type MailerPort,
   type SessionPrincipal,
@@ -326,27 +327,60 @@ export class TenantSignupService {
    * that is the intended answer: the way to get another full window is to sign
    * up again, which the expiry sweep has by then made possible.
    *
+   * **Bounded on the row, not only in the cache.** A resend creates nothing, so
+   * the durable row counts behind the Redis windows cannot see one — which left
+   * this route unbounded whenever Redis was unreachable, on an endpoint whose
+   * whole effect is sending mail to an address nobody has verified. The ceiling
+   * is therefore `resend_count` on the signup itself, carried in the `UPDATE`'s
+   * own predicate so the check and the increment are one statement and two
+   * simultaneous resends cannot both pass it.
+   *
+   * Past the ceiling the statement matches nothing and the caller gets the same
+   * `202` as an address with nothing outstanding — deliberately, because a
+   * distinct answer here would confirm that this address has a signup in flight.
+   *
    * Answers the same shape whether or not there was anything to resend. An
    * address with no signup in flight gets no mail and the same `202`, because the
    * alternative is an oracle for which addresses have signed up.
    */
   async resend(email: string, ipAddress: string | null): Promise<RequestedSignup> {
     this.assertEnabled();
-    await this.throttle.assertMayRequest(email, ipAddress);
+    await this.throttle.assertMayResend(email, ipAddress);
 
     const token = generateAuthToken();
 
-    // One statement, so a signup consumed between a read and a write cannot be
-    // handed a fresh token — and `RETURNING` rather than a row count, because the
-    // response has to carry the row's **own** expiry rather than one this method
-    // computed. Reporting a recomputed deadline would tell the caller the window
-    // had moved when it had not.
+    // **Exactly one row**, chosen by id. An address can hold more than one live
+    // signup — the slug reservation is unique per slug, not per email, so
+    // signing up twice for two different names is legitimate — and an unbounded
+    // `WHERE email = $1` would write the same `token_hash` to all of them and
+    // trip `tenant_signups_token` on the second. That is a 500 on a route an
+    // anonymous caller can reach at will.
+    //
+    // The newest outstanding one, because that is the signup the person is most
+    // likely asking about, and the one whose reservation has longest to run.
+    // Ordering by `id` rather than `created_at` is deliberate: the ids are
+    // UUIDv7, so they are already in creation order, and a single column keeps
+    // the subquery on the primary key.
+    //
+    // Still one statement: a signup consumed between a read and a write cannot
+    // be handed a fresh token, because the predicate is re-evaluated by the
+    // `UPDATE` itself. `RETURNING` rather than a row count, because the response
+    // has to carry the row's **own** expiry — reporting a recomputed deadline
+    // would tell the caller the window had moved when it had not.
     const [refreshed] = await this.prisma.$queryRaw<{ expires_at: Date }[]>`
       UPDATE tenant_signups
-      SET token_hash = ${hashAuthToken(token)}
-      WHERE email       = ${email}::citext
-        AND consumed_at IS NULL
-        AND expires_at  > now()
+      SET token_hash    = ${hashAuthToken(token)},
+          resend_count  = resend_count + 1
+      WHERE id = (
+        SELECT id
+        FROM tenant_signups
+        WHERE email       = ${email}::citext
+          AND consumed_at IS NULL
+          AND expires_at  > now()
+          AND resend_count < ${SIGNUP_POLICY.resendsPerSignup}
+        ORDER BY id DESC
+        LIMIT 1
+      )
       RETURNING expires_at
     `;
 

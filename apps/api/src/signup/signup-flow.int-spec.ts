@@ -264,27 +264,31 @@ describe('public self-signup', () => {
     });
 
     /**
-     * AC 3, and the half of it a unit test cannot reach: the caps enforcement
-     * reads have to be the trial's, and they have to be readable *by the tenant*,
-     * on the connection that is subject to RLS.
+     * AC 3, and the half of it a unit test cannot reach: the entitlements
+     * enforcement reads have to be the trial's, and they have to be readable *by
+     * the tenant*, on the connection that is subject to RLS.
      */
-    it('puts the tenant on the trial caps, readable through TenantPrisma', async () => {
+    it('puts the tenant on the trial entitlements, readable through TenantPrisma', async () => {
       await signup.request(signupInput(), null);
       const completed = await signup.verify(mailedToken(), ORIGIN);
 
-      const limits = await tenantContext.run(
+      const [row] = await tenantContext.run(
         { requestId: REQUEST_ID, tenantId: completed.tenant.id, userId: null, principal: null },
         () =>
           tenantPrisma.$tenantTransaction((tx) =>
-            tx.tenantPlanLimits.findMany({
-              select: { planKey: true, seatCap: true, conversationCap: true },
+            tx.tenantEntitlements.findMany({
+              select: { planKey: true, planName: true, entitlements: true },
             }),
           ),
       );
 
-      // The caps themselves are the column defaults TAR-403 set, deliberately not
-      // restated by provisioning — so this is also what pins them.
-      expect(limits).toEqual([{ planKey: 'trial', seatCap: 3, conversationCap: 1000 }]);
+      expect(row).toMatchObject({ planKey: 'trial', planName: 'Trial' });
+      // The limits themselves are the column default — 0009's published trial
+      // shape, deliberately not restated by provisioning — so this is also what
+      // pins them, and what would fail if the default drifted from the contract.
+      expect(row?.entitlements).toMatchObject({
+        limits: { seats: 3, conversationsPerPeriod: 1000 },
+      });
     });
 
     it('issues a session the new admin is signed in with', async () => {
@@ -444,6 +448,74 @@ describe('public self-signup', () => {
       });
 
       expect(mailbox).toHaveLength(0);
+    });
+
+    /**
+     * One address can legitimately hold two live signups — the slug reservation
+     * is unique per slug, not per email — and an unbounded `WHERE email = $1`
+     * would write the same `token_hash` to both and trip `tenant_signups_token`.
+     * That is a 500 on a route an anonymous caller can reach at will.
+     */
+    it('rotates exactly one row when the address has two signups in flight', async () => {
+      await signup.request(signupInput(), null);
+      await signup.request(signupInput({ slug: OTHER_SLUG }), null);
+
+      await expect(signup.resend(EMAIL, null)).resolves.toMatchObject({ email: EMAIL });
+
+      const rows = await systemPrisma.tenantSignup.findMany({
+        where: { email: EMAIL },
+        select: { desiredSlug: true, resendCount: true },
+        orderBy: { id: 'asc' },
+      });
+
+      // The newest — the one the person most likely means, and whose reservation
+      // has longest to run. The older one is untouched.
+      expect(rows).toEqual([
+        { desiredSlug: SLUG, resendCount: 0 },
+        { desiredSlug: OTHER_SLUG, resendCount: 1 },
+      ]);
+    });
+
+    /**
+     * A resend writes no new row, so the durable row counts cannot see one. Its
+     * ceiling lives on the row instead — otherwise this route mails an unverified
+     * address without limit for as long as Redis is unreachable.
+     */
+    it('stops re-sending once the signup has spent its resends', async () => {
+      await signup.request(signupInput(), null);
+
+      for (let n = 0; n < SIGNUP_POLICY.resendsPerSignup; n += 1) {
+        await signup.resend(EMAIL, null);
+      }
+
+      const sentSoFar = mailbox.length;
+
+      // Same 202, no mail: a distinct answer here would confirm the address has a
+      // signup in flight.
+      await expect(signup.resend(EMAIL, null)).resolves.toMatchObject({ email: EMAIL });
+      expect(mailbox).toHaveLength(sentSoFar);
+
+      const row = await systemPrisma.tenantSignup.findFirstOrThrow({
+        where: { desiredSlug: SLUG },
+        select: { resendCount: true },
+      });
+
+      expect(row.resendCount).toBe(SIGNUP_POLICY.resendsPerSignup);
+    });
+
+    /** And the link from the last permitted resend still works. */
+    it('leaves the last issued link usable after the ceiling is reached', async () => {
+      await signup.request(signupInput(), null);
+
+      for (let n = 0; n < SIGNUP_POLICY.resendsPerSignup; n += 1) {
+        await signup.resend(EMAIL, null);
+      }
+
+      const last = mailedToken();
+
+      await signup.resend(EMAIL, null);
+
+      await expect(signup.verify(last, ORIGIN)).resolves.toMatchObject({ tenant: { slug: SLUG } });
     });
   });
 

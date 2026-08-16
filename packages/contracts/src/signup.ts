@@ -62,6 +62,22 @@ export const SIGNUP_POLICY = {
    * answer it gives away is already public in DNS.
    */
   slugChecksPerIpPerMinute: 30,
+  /**
+   * How many times one pending signup may have its link re-sent.
+   *
+   * Counted on the row itself (`tenant_signups.resend_count`) rather than in a
+   * window, which is what makes it survive a cache outage: a resend creates no
+   * row, so a counter that only sees rows created cannot see it at all, and the
+   * endpoint would be unbounded exactly when the cache is down.
+   *
+   * Three is the mailbox that swallowed the first two. Past that the address is
+   * not receiving our mail, and sending more is not what fixes it.
+   *
+   * With `signupsPerEmailPerDay` this bounds total verification mail to one
+   * address at `signupsPerEmailPerDay * (1 + resendsPerSignup)` a day, all of it
+   * enforced in Postgres.
+   */
+  resendsPerSignup: 3,
 } as const;
 
 // ---------------------------------------------------------------------------

@@ -53,6 +53,12 @@ const DAY_MS = 24 * HOUR_MS;
  * already needs. An outage loosens the limits to whatever the durable layer
  * says; it does not remove them. `/signup` is never unbounded.
  *
+ * `POST /signup/resend` needs its own answer, because it creates no row for
+ * these counts to see. Its durable ceiling is `tenant_signups.resend_count`,
+ * enforced inside the `UPDATE` in `TenantSignupService.resend` rather than here.
+ * Between the two, verification mail to one address is capped at
+ * `signupsPerEmailPerDay * (1 + resendsPerSignup)` a day with no cache involved.
+ *
  * `assertMayCheckSlug` is the one that is Redis-only, and deliberately: an
  * availability check creates no row, so there is nothing durable to count. It is
  * a debounce backstop on an answer already public in DNS — losing it during an
@@ -68,7 +74,7 @@ export class SignupThrottleService {
   ) {}
 
   /**
-   * Refuses a signup or resend that has spent either allowance.
+   * Refuses a **signup** that has spent either allowance.
    *
    * **Two layers, and the second is why a Redis outage does not open the door.**
    * The Redis windows above are the cheap first line and they fail open, as
@@ -106,6 +112,52 @@ export class SignupThrottleService {
     }
 
     await this.assertRowsWithin(email, ipAddress);
+  }
+
+  /**
+   * Refuses a **resend** that has spent its allowance.
+   *
+   * Its own per-email window rather than the signup one, and that is a fix
+   * rather than a nicety: sharing `signup:email:` would let one signup plus two
+   * resends exhaust the daily signup allowance, so `resendsPerSignup` could
+   * never actually be reached and a customer who mistyped nothing would be told
+   * to come back tomorrow. They are different actions — one claims a slug and
+   * creates a row, the other re-sends mail about a row that already exists — and
+   * they are counted separately.
+   *
+   * The per-address window **is** shared with signup, deliberately: an address
+   * flooding the endpoint is the same abuse whichever route it uses, and it is
+   * the client address rather than the action that identifies it.
+   *
+   * The durable half of this limit is not here. A resend writes no row for
+   * `assertRowsWithin` to count, so its ceiling is `tenant_signups.resend_count`,
+   * enforced inside the `UPDATE` in `TenantSignupService.resend`.
+   */
+  async assertMayResend(email: string, ipAddress: string | null): Promise<void> {
+    // The **total** across every signup this address may hold, not the per-signup
+    // ceiling: an address is allowed `signupsPerEmailPerDay` signups and each of
+    // those may be re-sent `resendsPerSignup` times, so anything tighter here
+    // would refuse a legitimate resend for a second signup and — worse — would
+    // fire before `resend_count` ever bound anything, leaving the durable
+    // ceiling unreachable and untested whenever Redis was up.
+    //
+    // So the two are layered rather than duplicated: this bounds the address,
+    // `resend_count` bounds each signup.
+    await this.assertWithin(
+      `signup:resend:${hashed(email)}`,
+      SIGNUP_POLICY.resendsPerSignup * SIGNUP_POLICY.signupsPerEmailPerDay,
+      DAY_MS,
+      'verification re-sends for one address',
+    );
+
+    if (ipAddress !== null) {
+      await this.assertWithin(
+        `signup:ip:${hashed(ipAddress)}`,
+        SIGNUP_POLICY.signupsPerIpPerHour,
+        HOUR_MS,
+        'signup requests from one client address',
+      );
+    }
   }
 
   /**
