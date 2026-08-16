@@ -3012,14 +3012,42 @@ model HandoffEvent {
 // Canned responses — TAR-31
 // ---------------------------------------------------------------------------
 
+/// The tenant-shared quick-reply library of TAR-31. Four bounds live in the
+/// database and cannot appear here — Prisma has no syntax for a CHECK and its
+/// describer ignores them, so `migrate dev` proposes neither to create nor to
+/// drop `canned_responses_shortcut_format`, `_title_length`, `_body_length` or
+/// `_is_shared`, and that is not drift. `src/prisma/canned-response-schema.int-spec.ts`
+/// fails if any of them goes missing (TAR-475).
 model CannedResponse {
   id              String   @id @default(uuid(7)) @db.Uuid
   tenantId        String   @map("tenant_id") @db.Uuid
-  /// What an agent types to expand it, e.g. `/refund`.
-  shortcut        String
+  /// What an agent types to expand it, leading `/` included, e.g. `/refund`.
+  ///
+  /// `citext`, on the same reasoning as `tenants.slug` and `teams.name`
+  /// (conventions, rule 6): this is a *unique* key within the tenant that a
+  /// human types, so `/Hours` and `/hours` colliding on the unique index is the
+  /// correct answer. It is also what makes the console's case-insensitive
+  /// picker agree with the database about which row `/HOURS` means — decision 4
+  /// of 0011 has the shortcut resolved client-side, against a local copy.
+  ///
+  /// A CHECK constraint holds it to `^/[a-z0-9][a-z0-9_-]{0,38}$`: 40
+  /// characters including the slash, matching what
+  /// `CANNED_RESPONSE_LIMITS.shortcutLength` publishes.
+  shortcut        String   @db.Citext
+  /// The picker's label, 1..80 characters by CHECK. Never the body — a 4 kB
+  /// preview is not a menu item.
   title           String
+  /// Literal text, no interpolation at v1. 1..4096 characters by CHECK, 4096
+  /// being `SendTextInputSchema.body`'s ceiling, so an inserted body is always
+  /// sendable as-is.
   body            String
+  /// Always true at v1, enforced by CHECK rather than remembered: TAR-31 scopes
+  /// this to a tenant-shared library. The constraint is the seam a future
+  /// personal-responses story drops — at which point the *audience* changes
+  /// too, from the tenant room to the owner's (0011, open question 3).
   isShared        Boolean  @default(true) @map("is_shared")
+  /// Set from the writing principal. Nullable and `NoAction`, so the row
+  /// survives its creator being removed from the tenant.
   createdByUserId String?  @map("created_by_user_id") @db.Uuid
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -3027,7 +3055,21 @@ model CannedResponse {
   tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdBy User?  @relation(fields: [tenantId, createdByUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
 
+  /// Case-insensitive since `shortcut` became `citext`. `tenant_id` leads it
+  /// (conventions, rule 3), so a conflict can only ever be caused by this
+  /// tenant's own row — which is also what stops it being used as an oracle for
+  /// another tenant's shortcut namespace. It serves the list's
+  /// `ORDER BY shortcut` too, so that read needs no index of its own.
   @@unique([tenantId, shortcut])
+  /// Kept although **no application query reads by creator** — the composite
+  /// foreign key does. Deleting a `users` row makes Postgres check the
+  /// referencing side, and it does not index that side for you; without this,
+  /// each such delete is a sequential scan of the whole table. Removing one user
+  /// is a status change rather than a delete (rule 4), but TAR-397's tenant
+  /// purge cascades `users` and `canned_responses` together. 0011 recommends
+  /// dropping this as write amplification; writes here are a supervisor's, "a
+  /// few times a month", so the saving is not worth a seq scan on the purge path
+  /// (TAR-475).
   @@index([tenantId, createdByUserId])
   @@map("canned_responses")
 }
