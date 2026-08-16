@@ -1,4 +1,4 @@
--- Backfills the two attribution columns 20260815180000 added (TAR-30, ADR 0010
+-- Backfills the two attribution columns 20260816150000 added (TAR-30, ADR 0010
 -- decision 4).
 --
 -- A separate file from the DDL on purpose. The columns are usable the moment

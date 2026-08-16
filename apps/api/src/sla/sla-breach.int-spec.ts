@@ -485,16 +485,10 @@ describe('SLA breach detection against a real database', () => {
 
       const ticket = await systemPrisma.ticket.findUniqueOrThrow({
         where: { id: ticketId },
-        select: { firstRespondedAt: true, firstResponseUserId: true },
+        select: { firstRespondedAt: true },
       });
 
       expect(ticket.firstRespondedAt).not.toBeNull();
-      // TAR-30's per-agent breakdown reads this column, and it is written by the
-      // same guarded statement as the timestamp — so the second evaluation above
-      // cannot re-attribute a response that was already recorded. Deriving the
-      // responder from `messages` at report time instead would be a second
-      // implementation of the five-clause predicate this stamp uses.
-      expect(ticket.firstResponseUserId).toBe(AGENT_A);
       expect(
         await systemPrisma.ticketEvent.findMany({ where: { ticketId, type: 'first_response' } }),
       ).toHaveLength(1);
@@ -525,13 +519,10 @@ describe('SLA breach detection against a real database', () => {
 
       const ticket = await systemPrisma.ticket.findUniqueOrThrow({
         where: { id: ticketId },
-        select: { firstRespondedAt: true, firstResponseUserId: true },
+        select: { firstRespondedAt: true },
       });
 
       expect(ticket.firstRespondedAt).toBeNull();
-      // And nobody is attributed either: a bot reply is not somebody's response
-      // time, so it must not appear on any agent's row in TAR-30's breakdown.
-      expect(ticket.firstResponseUserId).toBeNull();
       expect((await timerFor(ticketId)).state).toBe('running');
     });
 

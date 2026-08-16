@@ -1,6 +1,6 @@
--- Reverses 20260815180000_reporting_attribution_and_anchors.
+-- Reverses 20260816150000_reporting_attribution_and_anchors.
 --
--- Run 20260815180100_reporting_attribution_backfill/down.sql **first** if that
+-- Run 20260816150100_reporting_attribution_backfill/down.sql **first** if that
 -- migration has been applied. It is not strictly required — dropping a column
 -- takes its data with it — but it is the order the rollback runner replays, and
 -- keeping to it means the two files read in the direction they were written.
@@ -13,7 +13,7 @@
 -- path: `GET /reports/dashboard` still answers correctly and starts reading the
 -- tenant's whole ticket history for those three metrics. Dropping the two
 -- columns **loses data** — every attribution recorded since deploy. The backfill
--- in 20260815180100 reconstructs most of it on the way back up, within the
+-- in 20260816150100 reconstructs most of it on the way back up, within the
 -- limits its header states (a resolution with no `status_changed` event, and
 -- 0006 risk 3's second-conversation reply, are gone for good).
 --
