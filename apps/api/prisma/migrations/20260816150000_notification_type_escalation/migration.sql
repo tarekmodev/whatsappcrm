@@ -1,0 +1,62 @@
+-- `notification_type` gains `escalation` (TAR-468).
+--
+-- One statement in a directory of its own, and it has to be: **PostgreSQL
+-- refuses to _use_ an enum label in the transaction that added it**, and Prisma
+-- runs each migration file in one transaction. The next migration writes rows
+-- and a CHECK constraint naming this value, so the two cannot share a file.
+--
+-- Same arrangement, same reason, as `20260813120000_sla_timer_state_paused` and
+-- `20260815120000_tenant_lifecycle_status_vocabulary`. Splitting it costs a
+-- directory and removes a class of deploy failure that only shows up on a fresh
+-- database.
+--
+-- ---------------------------------------------------------------------------
+-- Why `escalation` is a value here and not a fourth alerts table
+-- ---------------------------------------------------------------------------
+--
+-- ADR 0011 decision 5 specified a parallel `escalation_alerts` table, mirroring
+-- `sla_alerts`. It accepted two tables explicitly as a price rather than a
+-- design — "the **third** notification type is the stated trigger" to fold them
+-- into one — because folding mid-story meant migrating a shipped table and
+-- rewriting `GET /api/v1/sla-alerts` inside a one-day estimate.
+--
+-- TAR-394 then reached that point first, at the *second* type, and
+-- `20260816130000_notifications_generalisation` performed the fold. So the
+-- premise 0011 reasoned from no longer holds: escalation is not arriving into a
+-- world of one bespoke alerts table, it is arriving into a world where the
+-- generic one already exists. Building the fourth table now would be the
+-- deviation, and its cost is the one both ADRs name — two unread counts, two
+-- acknowledge endpoints, and a supervisor who has to look in two places.
+--
+-- **The published API contract is unaffected.** `GET /api/v1/escalation-alerts`
+-- and its acknowledge become a `type = 'escalation'` view over `notifications`,
+-- which is exactly the arrangement TAR-394 kept for `sla-alerts`. TAR-470 mocks
+-- the same response shape either way.
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+--   Duration     Microseconds. One row in `pg_enum`.
+--   Locks        A brief ACCESS EXCLUSIVE-equivalent on the type itself. No
+--                table is read, written or rewritten — adding a label does not
+--                touch rows, because the on-disk representation of the existing
+--                labels does not change.
+--   Blocking     Nil in practice. Nothing can be holding a conflicting lock on
+--                a type.
+--   Data loss    None. Purely additive.
+--   Rollback     `down.sql` beside this file — and read its header first, because
+--                removing an enum label is the one operation in this repository
+--                that PostgreSQL provides no direct support for.
+--
+-- `IF NOT EXISTS` matches every other `ADD VALUE` in this directory
+-- (`sla_timer_state.paused`, `workflow_run_status.skipped`, the three
+-- `tenant_status` labels): the bare form errors on a label that is already
+-- there, so a replay by hand — or a re-apply after the rollback below, which
+-- deliberately leaves the label in place — would fail on a database that is
+-- already correct.
+
+SET LOCAL lock_timeout = '3s';
+
+-- AlterEnum
+ALTER TYPE "notification_type" ADD VALUE IF NOT EXISTS 'escalation';
