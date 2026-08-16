@@ -1,8 +1,14 @@
-import { AI_CONFIG_DEFAULTS, BOT_CONFIDENCE } from '@whatsappcrm/contracts';
+import {
+  AI_CONFIG_DEFAULTS,
+  BOT_CONFIDENCE,
+  SLA_EVALUATE_TICKET_JOB,
+  SLA_QUEUE,
+} from '@whatsappcrm/contracts';
 import type { BotInboundTrigger } from '@whatsappcrm/contracts';
 import type { AutomatedMessageSender } from '../conversations/automated-message.sender';
 import { Prisma } from '../generated/prisma/client';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
+import type { QueueService } from '../queue/queue.service';
 import type { AiSettings } from './ai-config.service';
 import type { BotEligibilityService, BotGateSnapshot } from './bot-eligibility.service';
 import { BotTurnService } from './bot-turn.service';
@@ -105,12 +111,15 @@ describe('BotTurnService', () => {
   let chunks: RetrievedChunk[];
   let modelResult: BotCallResult;
   let claimSucceeds: boolean;
+  /** Rows the pause statement matched — zero when an agent already moved the ticket. */
+  let ticketsPaused: number;
 
   let answer: jest.Mock;
   let recordHandoff: jest.Mock;
   let requestRouting: jest.Mock;
   let writeOutboundText: jest.Mock;
   let dispatch: jest.Mock;
+  let enqueue: jest.Mock;
   let botTurnUpdates: Record<string, unknown>[];
   let botTurnCreates: Record<string, unknown>[];
   let ticketUpdates: Record<string, unknown>[];
@@ -141,6 +150,7 @@ describe('BotTurnService', () => {
     chunks = [STRONG_CHUNK];
     modelResult = answered();
     claimSucceeds = true;
+    ticketsPaused = 1;
 
     botTurnUpdates = [];
     botTurnCreates = [];
@@ -152,6 +162,7 @@ describe('BotTurnService', () => {
     requestRouting = jest.fn(() => Promise.resolve());
     writeOutboundText = jest.fn(() => Promise.resolve(REPLY));
     dispatch = jest.fn(() => Promise.resolve());
+    enqueue = jest.fn(() => Promise.resolve('added'));
 
     const transactionClient = {
       botTurn: {
@@ -172,7 +183,7 @@ describe('BotTurnService', () => {
         updateMany: jest.fn((args: { where: unknown; data: Record<string, unknown> }) => {
           ticketUpdates.push({ ...args.data, where: args.where });
 
-          return Promise.resolve({ count: 1 });
+          return Promise.resolve({ count: ticketsPaused });
         }),
       },
     };
@@ -237,6 +248,7 @@ describe('BotTurnService', () => {
         requestRoutingIfUnowned: requestRouting,
       } as unknown as HandoffService,
       { writeOutboundText, dispatch } as unknown as AutomatedMessageSender,
+      { enqueue } as unknown as QueueService,
     );
   });
 
@@ -276,6 +288,69 @@ describe('BotTurnService', () => {
       // Without this, a perfectly answered conversation still breaches its
       // first-response SLA and pages a supervisor (0010 decision 7).
       expect(ticketUpdates).toEqual([{ status: 'pending', where: { id: TICKET, status: 'open' } }]);
+    });
+
+    describe('and the evaluation that makes the pause take effect', () => {
+      /**
+       * The condition 0006's owner attached to signing off decision 7. The status
+       * column alone pauses nothing until something evaluates the ticket: without
+       * the enqueue the pause lands only when the breach sweep next reconciles,
+       * and the resume arithmetic is wrong in both directions — a customer
+       * replying after `due_at` gets a zero-budget breach, one replying before it
+       * has the whole bot exchange charged to the human's first-response window.
+       */
+      it('enqueues an SLA evaluation for the ticket it paused', async () => {
+        await service.handle(TRIGGER);
+
+        expect(enqueue).toHaveBeenCalledWith(
+          SLA_QUEUE,
+          SLA_EVALUATE_TICKET_JOB,
+          { tenantId: TENANT, ticketId: TICKET, reason: 'status_changed' },
+          expect.objectContaining({ attempts: 3 }),
+        );
+      });
+
+      it('sends no custom job id, so a later trigger cannot collapse into this one', () => {
+        // A ticket-keyed id silently collapsed every trigger after the first into
+        // the completed key of the one before it — the bug that made an agent's
+        // reply fail to stop a clock. The handler is a reconciler; an id buys
+        // nothing.
+        return service.handle(TRIGGER).then(() => {
+          const [, , , options] = enqueue.mock.calls[0] as [
+            string,
+            string,
+            unknown,
+            Record<string, unknown>,
+          ];
+
+          expect(options).not.toHaveProperty('jobId');
+        });
+      });
+
+      it('does not enqueue when the ticket was not the one that moved', async () => {
+        // An agent resolved it while the model was thinking, so the guarded
+        // update matched nothing. There is no status change to evaluate.
+        ticketsPaused = 0;
+
+        await service.handle(TRIGGER);
+
+        expect(enqueue).not.toHaveBeenCalled();
+      });
+
+      it('does not enqueue for a conversation with no ticket', async () => {
+        await service.handle({ ...TRIGGER, ticketId: null });
+
+        expect(enqueue).not.toHaveBeenCalled();
+      });
+
+      it('still replies when the queue is unavailable', async () => {
+        // The reply has gone to the customer and the ticket is already `pending`;
+        // a Redis blip must degrade to the sweep reconciling late, not fail the
+        // turn after the fact.
+        enqueue.mockResolvedValue('unavailable');
+
+        await expect(service.handle(TRIGGER)).resolves.toBe('replied');
+      });
     });
 
     it('takes the conversation, guarded so it cannot take it back from a human', async () => {

@@ -1,11 +1,14 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   BOT_CONFIDENCE,
+  SLA_EVALUATE_TICKET_JOB,
+  SLA_QUEUE,
   compositeConfidence,
   retrievalConfidence,
   type BotInboundTrigger,
   type BotTurnOutcome,
   type HandoffReason,
+  type SlaEvaluateTicketTrigger,
 } from '@whatsappcrm/contracts';
 import { AutomatedMessageSender } from '../conversations/automated-message.sender';
 import type { Prisma } from '../generated/prisma/client';
@@ -18,6 +21,7 @@ import {
 } from '../generated/prisma/enums';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { isUniqueViolationOn } from '../prisma/unique-violation';
+import { QueueService } from '../queue/queue.service';
 import { CONVERSATION_HISTORY_TURNS } from './ai.constants';
 import {
   BotEligibilityService,
@@ -55,12 +59,15 @@ import { KnowledgeRetrieverService, type RetrievedChunk } from './knowledge-retr
  *
  * ## What a successful reply also does
  *
- * It moves the ticket to `pending`, which pauses the SLA clock. Without that,
+ * It moves the ticket to `pending`, which pauses the SLA clock, **and enqueues
+ * the evaluation that makes the pause take effect**. Without the status change,
  * every conversation the bot handles perfectly still breaches its first-response
  * SLA and pages a supervisor about a customer who already got an answer —
  * `SlaTimerService` stops that timer on an outbound message with a **non-null**
- * sender, and a bot reply has none. `pending` is also semantically honest:
- * after the bot answers, the ticket is waiting on the customer.
+ * sender, and a bot reply has none. Without the evaluation, the pause lands only
+ * when the sweep next reconciles, and the resume arithmetic is wrong in both
+ * directions. `pending` is also semantically honest: after the bot answers, the
+ * ticket is waiting on the customer.
  */
 @Injectable()
 export class BotTurnService {
@@ -73,6 +80,7 @@ export class BotTurnService {
     private readonly claude: ClaudeClient,
     private readonly handoffs: HandoffService,
     private readonly sender: AutomatedMessageSender,
+    private readonly queue: QueueService,
   ) {}
 
   async handle(trigger: BotInboundTrigger): Promise<BotTurnOutcome> {
@@ -215,7 +223,7 @@ export class BotTurnService {
   ): Promise<BotTurnOutcome> {
     const sentAt = new Date();
 
-    const messageId = await this.prisma.$tenantTransaction(async (tx) => {
+    const committed = await this.prisma.$tenantTransaction(async (tx) => {
       const replyMessageId = await this.sender.writeOutboundText(tx, {
         tenantId: trigger.tenantId,
         conversationId: trigger.conversationId,
@@ -253,19 +261,27 @@ export class BotTurnService {
         },
       });
 
-      await this.pauseSla(tx, trigger.ticketId);
+      const paused = await this.pauseSla(tx, trigger.ticketId);
 
-      return replyMessageId;
+      return { replyMessageId, paused };
     });
 
     await this.sender.dispatch({
       tenantId: trigger.tenantId,
       conversationId: trigger.conversationId,
       contactId: trigger.contactId,
-      messageId,
+      messageId: committed.replyMessageId,
       body,
       sentAt,
     });
+
+    // After the commit, never inside it: an evaluation job that overtook its own
+    // transaction would read a ticket that is still `open` and pause nothing.
+    // Only when the status actually moved — a ticket an agent had already
+    // resolved has no pause to record.
+    if (committed.paused && trigger.ticketId !== null) {
+      await this.queueSlaEvaluation(trigger.tenantId, trigger.ticketId);
+    }
 
     return 'replied';
   }
@@ -440,17 +456,75 @@ export class BotTurnService {
    * deliberately emits no `ticket.updated`.
    *
    * `updateMany` guarded on `open`, so a ticket an agent already resolved is not
-   * dragged back into a live state by a reply that raced them.
+   * dragged back into a live state by a reply that raced them — and reporting
+   * *whether* it moved is what lets the caller enqueue an evaluation only for a
+   * status change that actually happened.
    */
-  private async pauseSla(tx: Prisma.TransactionClient, ticketId: string | null): Promise<void> {
+  private async pauseSla(tx: Prisma.TransactionClient, ticketId: string | null): Promise<boolean> {
     if (ticketId === null) {
-      return;
+      return false;
     }
 
-    await tx.ticket.updateMany({
+    const { count } = await tx.ticket.updateMany({
       where: { id: ticketId, status: TicketStatus.open },
       data: { status: TicketStatus.pending },
     });
+
+    return count > 0;
+  }
+
+  /**
+   * Tells the SLA module the ticket's status changed (0006's `status_changed`
+   * trigger), after the transaction that changed it has committed.
+   *
+   * ## Why the status write alone is not enough
+   *
+   * `TICKET_STATUS_PAUSES_SLA` makes `pending` a paused state, but nothing reads
+   * that column until something evaluates the ticket. Without this enqueue the
+   * pause lands only when the breach sweep next reconciles, and the arithmetic
+   * is wrong in both directions on resume: a customer who replies after `due_at`
+   * gets a zero-budget breach, and one who replies before it has the whole bot
+   * exchange charged to the human's first-response window. That is the condition
+   * 0006's owner attached to signing off decision 7, and this is the one call
+   * site it asked for.
+   *
+   * The same shape `MessageSendService.queueSlaEvaluation` uses, deliberately:
+   *
+   *   * **No custom `jobId`.** A ticket-keyed id collapses every later trigger
+   *     into the completed key of the one before it — the bug that made a reply
+   *     silently fail to stop a clock. The handler is a reconciler, so an id
+   *     buys nothing.
+   *   * **Retried**, because the status is durable and the evaluation is owed: a
+   *     job that overtook its own transaction succeeds on the next attempt.
+   *   * **A queue name, not an import.** `SlaModule` is L4 and so is this one;
+   *     what crosses is the shape in `@whatsappcrm/contracts/sla`.
+   *
+   * Never throws, per `QueueService`'s contract. The reply has already gone to
+   * the customer and the ticket is already `pending`; a Redis blip must not turn
+   * that into a failed turn, and the sweep still reconciles it late — which is
+   * the pre-fix behaviour, now the degraded path rather than the normal one.
+   */
+  private async queueSlaEvaluation(tenantId: string, ticketId: string): Promise<void> {
+    const trigger: SlaEvaluateTicketTrigger = { tenantId, ticketId, reason: 'status_changed' };
+
+    const outcome = await this.queue.enqueue<SlaEvaluateTicketTrigger>(
+      SLA_QUEUE,
+      SLA_EVALUATE_TICKET_JOB,
+      trigger,
+      {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1_000 },
+        removeOnComplete: 1_000,
+        removeOnFail: 5_000,
+      },
+    );
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      this.logger.warn(
+        `Ticket ${ticketId} was paused by a bot reply but its SLA evaluation was not queued ` +
+          `(${outcome}); the clock will not pause until the sweep reconciles it.`,
+      );
+    }
   }
 
   /**
