@@ -25,6 +25,14 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   size?: ButtonSize;
   isPending?: boolean;
+  /**
+   * What a screen reader hears while `isPending`. Defaults to the form layer's
+   * "Saving…", which is right for a submit and wrong for anything else — an
+   * export is preparing a file, not saving one. Overriding it keeps the
+   * announcement inside the button rather than adding a second live region
+   * beside it, which would say the same thing twice.
+   */
+  pendingLabel?: string;
   /** Renders at full width; used by the drawer and sheet layouts. */
   isBlock?: boolean;
 }
@@ -35,6 +43,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     variant = 'secondary',
     size = 'md',
     isPending = false,
+    pendingLabel,
     isBlock = false,
     className,
     disabled,
@@ -72,7 +81,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     >
       {isPending ? (
         <span className={styles.pending}>
-          <Spinner label={content.form.submitting} />
+          <Spinner label={pendingLabel ?? content.form.submitting} />
         </span>
       ) : null}
       <span className={styles.label} data-pending={isPending ? 'true' : undefined}>

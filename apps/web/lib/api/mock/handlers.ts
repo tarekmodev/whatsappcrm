@@ -11,6 +11,7 @@ import {
   ConversationListQuerySchema,
   ConversationStatusUpdateInputSchema,
   CursorPageQuerySchema,
+  DashboardExportQuerySchema,
   DashboardMetricsQuerySchema,
   IdSchema,
   InternalNoteCreateInputSchema,
@@ -95,6 +96,7 @@ import {
 } from '@whatsappcrm/contracts';
 import { ApiRequestError, type ApiRequest } from '@/lib/api/http';
 import { dashboardMetrics } from '@/lib/api/mock/reporting';
+import { dashboardCsv } from '@/lib/api/mock/report-csv';
 import { mockState, nextMockId } from '@/lib/api/mock/store';
 import { MOCK_IDS } from '@/lib/api/mock/fixtures';
 import type {
@@ -473,6 +475,14 @@ const ROUTES: readonly Route[] = [
     // never here (ADR 0009 decision 6).
     permission: 'report:read',
     handle: reportDashboard,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/reports\/dashboard\/export$/,
+    // The same permission as the JSON route, deliberately: the export is a
+    // representation of that resource, not a wider one (ADR 0009 decision 1).
+    permission: 'report:read',
+    handle: reportDashboardExport,
   },
   {
     method: 'GET',
@@ -2759,6 +2769,40 @@ function reportDashboard({ principal, query }: RouteContext): DashboardMetricsRe
     tickets: tenantTickets(principal),
     users: tenantUsers(principal),
   });
+}
+
+/**
+ * `GET /v1/reports/dashboard/export` — the same numbers, as CSV (TAR-431).
+ *
+ * **It calls `dashboardMetrics` and serialises what comes back.** There is no
+ * second aggregation here and there must never be one: that is ADR 0009
+ * decision 1 reproduced in the fixture layer, so the mock export cannot drift
+ * from the mock dashboard any more than the real one can from the real dashboard.
+ * `section` selects a code path in the serialiser and touches nothing about the
+ * figures.
+ *
+ * It answers a string rather than an object, which is what the real route does
+ * with bytes. `handleMockRequest`'s callers treat the body as opaque, so nothing
+ * downstream has to know which of the two it got.
+ */
+function reportDashboardExport({ principal, query }: RouteContext): string {
+  const parsed = DashboardExportQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { section, ...metricsQuery } = parsed.data;
+
+  return dashboardCsv(
+    dashboardMetrics({
+      principal,
+      query: metricsQuery,
+      tickets: tenantTickets(principal),
+      users: tenantUsers(principal),
+    }),
+    section,
+  );
 }
 
 // --- SLA alerts (TAR-26, ADR 0006) -----------------------------------------

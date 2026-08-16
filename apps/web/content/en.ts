@@ -2187,6 +2187,32 @@ export const content = {
       `${date}: ${String(created)} opened, ${String(resolved)} resolved`,
     seriesEmptyHeading: 'No tickets in this range',
     seriesEmptyBody: 'Nothing was opened or resolved between these dates.',
+
+    // --- Taking the report away (TAR-431) -----------------------------------
+    exportAction: 'Export CSV',
+    /**
+     * What a screen reader hears while the file is being prepared. The button's
+     * default — the form layer's "Saving…" — would be wrong: nothing is written.
+     */
+    exportPending: 'Preparing your report',
+    /**
+     * The range is in the accessible name because the file is fixed by what is
+     * on screen, and somebody arriving at the control by keyboard should not
+     * have to hunt for which range they are about to download. It opens with the
+     * visible label so speech input can still say "Export CSV" (WCAG 2.5.3).
+     */
+    exportAria: (from: string, to: string) => `Export CSV for ${from} to ${to}`,
+    exportHint: 'The file covers exactly the range and scope shown on this page.',
+    /** Specific, not "Done": it names the file that has just landed. */
+    exportReady: (fileName: string) => `${fileName} downloaded`,
+    exportFailed: 'We could not prepare that report. Try again in a moment.',
+    exportForbidden: 'Your role cannot export this report. Ask a workspace admin if you need it.',
+    /**
+     * The console checks the range against the contract before sending it, so
+     * reaching this means the API refused a range the screen thought was fine —
+     * a shorter one is the thing the supervisor can actually do about it.
+     */
+    exportRangeRefused: 'That date range cannot be exported. Choose a shorter range and try again.',
   },
 
   form: {
