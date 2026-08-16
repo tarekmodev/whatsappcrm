@@ -2,6 +2,7 @@ import { permissionsForRole, userRoom, type SessionPrincipal } from '@whatsappcr
 import type { Server } from 'socket.io';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { SessionService } from '../identity/session.service';
+import type { CannedResponseResourceService } from './canned-response-resource.service';
 import type { ConversationResourceService } from './conversation-resource.service';
 import type { MessageResourceService } from './message-resource.service';
 import { RealtimeRelayService } from './realtime-relay.service';
@@ -99,6 +100,7 @@ function harnessFor(sockets: FakeSocket[], live: string[] = [LIVE_SESSION]): Har
     {} as unknown as MessageResourceService,
     {} as unknown as ConversationResourceService,
     {} as unknown as SlaBreachResourceService,
+    {} as unknown as CannedResponseResourceService,
     {} as unknown as TenantHostnameService,
     sessions,
     tenantContext,
@@ -185,6 +187,7 @@ describe('a revocation reaching an open socket', () => {
       {} as unknown as MessageResourceService,
       {} as unknown as ConversationResourceService,
       {} as unknown as SlaBreachResourceService,
+      {} as unknown as CannedResponseResourceService,
       {} as unknown as TenantHostnameService,
       {} as unknown as SessionService,
       new TenantContextService(),

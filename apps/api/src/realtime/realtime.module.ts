@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ResponseOriginService } from '../common/response-origin.service';
+import { CannedResponseResourceService } from './canned-response-resource.service';
 import { ConversationAccessService } from './conversation-access.service';
 import { ConversationResourceService } from './conversation-resource.service';
 import { MessageResourceService } from './message-resource.service';
@@ -48,6 +49,7 @@ import { TenantHostnameService } from './tenant-hostname.service';
     ConversationResourceService,
     MessageResourceService,
     SlaBreachResourceService,
+    CannedResponseResourceService,
     TenantHostnameService,
     ResponseOriginService,
   ],

@@ -65,9 +65,19 @@ function effectOfEvent(event: ServerEvent): InboxEffect {
     // defaulted, like the two beside it, so this switch stays exhaustive: the
     // day a wire event is added and this screen should react to it, the compiler
     // is what says so.
+    //
+    // The two canned-response events are that compiler prompt arriving
+    // (TAR-485). They are answered here rather than left to break the build, and
+    // answered with `ignore` because nothing this table drives is stale after
+    // one: `refetch` re-renders the *inbox route*, and an edit to the shared
+    // library changes neither a thread nor a message. Which surface does react —
+    // the composer's copy of the set, and the settings list — and whether it
+    // reuses this hook at all is TAR-486's call, and its scope note says so.
     case 'agent.typing':
     case 'ticket.updated':
     case 'sla.breached':
+    case 'canned_response.saved':
+    case 'canned_response.deleted':
       return 'ignore';
   }
 }

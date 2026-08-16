@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CannedResponseResponseSchema } from './canned-responses';
 import { IdSchema, TimestampSchema } from './common';
 import { ConversationResponseSchema } from './conversations';
 import { MessageResponseSchema } from './messages';
@@ -79,6 +80,26 @@ export function tenantRoom(tenantId: string): string {
  */
 export function tenantReadersRoom(tenantId: string): string {
   return `tenant:${tenantId}:conversation-readers`;
+}
+
+/**
+ * The sockets in this tenant whose principal holds `canned_response:read` — the
+ * audience for an edit to the tenant's shared canned-response library (TAR-31,
+ * 0011 decision 2).
+ *
+ * Every role holds that permission under today's `ROLE_PERMISSIONS`, so this is
+ * the same set of sockets as `tenantRoom` — and it is still a separate room, on
+ * `tenantReadersRoom`'s precedent and for its reason. The equality is a fact
+ * about a constant TAR-22 may replace with tenant-configurable rows, while the
+ * amendment above is a rule: a fan-out wider than the read rule is an
+ * authorization bypass. Deriving the room from the permission is what stops that
+ * from being discovered after it ships rather than before.
+ *
+ * Nested under the tenant prefix like every other room in this file, so a room
+ * name confined to the wrong scope is obvious on sight.
+ */
+export function tenantCannedResponseRoom(tenantId: string): string {
+  return `tenant:${tenantId}:canned-response-readers`;
 }
 
 export function conversationRoom(conversationId: string): string {
@@ -221,6 +242,33 @@ export const ServerEventSchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('session.revoked'),
     sessionId: IdSchema,
+  }),
+  /**
+   * A canned response was created or updated, published to
+   * `tenantCannedResponseRoom` (TAR-31, 0011).
+   *
+   * **One event for both**, unlike the audit trail, which distinguishes them: an
+   * auditor asks "who added this", while every consumer of this event performs
+   * the same upsert. A discriminant nothing branches on is a discriminant that
+   * drifts.
+   *
+   * The payload is the committed row, read back by the relay — a whole resource,
+   * per this file's rule — so a console that prefers to patch its cache can,
+   * without a contract change. The shipped console refetches instead
+   * (`inbox-events.ts`), which is the console's call and not this contract's.
+   */
+  z.object({
+    event: z.literal('canned_response.saved'),
+    cannedResponse: CannedResponseResponseSchema,
+  }),
+  /**
+   * A canned response is gone. The id alone, because there is no row left to
+   * read back — the one place in this union where a whole resource is neither
+   * available nor needed.
+   */
+  z.object({
+    event: z.literal('canned_response.deleted'),
+    cannedResponseId: IdSchema,
   }),
 ]);
 

@@ -12,6 +12,7 @@ import {
   IdSchema,
   conversationRoom,
   teamRoom,
+  tenantCannedResponseRoom,
   tenantReadersRoom,
   tenantRoom,
   userRoom,
@@ -133,6 +134,14 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       void socket.join(tenantReadersRoom(principal.tenantId));
     }
 
+    // The canned-response library is tenant configuration rather than an
+    // assignable record, so its audience is a permission rather than a branch of
+    // `isVisibleOrUnclaimed` — same guard, same shape, read off the same
+    // resolved principal (TAR-485).
+    if (principal.permissions.includes(CANNED_RESPONSE_READ)) {
+      void socket.join(tenantCannedResponseRoom(principal.tenantId));
+    }
+
     this.logger.log(
       `Socket ${socket.id} joined tenant ${principal.tenantId} as user ${principal.userId} ` +
         `(request ${socket.data.requestId}).`,
@@ -222,6 +231,16 @@ const ConversationSubscriptionSchema = z.object({ conversationId: IdSchema });
  * use of the same string.
  */
 const CONVERSATION_READ_ALL = 'conversation:read_all';
+
+/**
+ * The permission that decides whether a socket joins the tenant's
+ * canned-response room, named here for the same reason the one above is.
+ *
+ * Every role holds it today, so the room and `tenantRoom` currently contain the
+ * same sockets. Joining on the permission anyway is what keeps the fan-out equal
+ * to the read rule if that stops being true (0011 decision 2).
+ */
+const CANNED_RESPONSE_READ = 'canned_response:read';
 
 /**
  * What a subscribe or unsubscribe acknowledges: whether the socket is now in the
