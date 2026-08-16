@@ -7,10 +7,37 @@ import { CursorPageQuerySchema } from './pagination';
  * custom-field editors; TAR-20 creates contacts implicitly from inbound traffic.
  */
 
+export const TAG_NAME_LENGTH = 40;
+
 export const TagSchema = z.object({
   id: IdSchema,
-  name: z.string().min(1).max(40),
+  name: z.string().min(1).max(TAG_NAME_LENGTH),
   color: HexColorSchema,
+});
+
+/**
+ * `POST /api/v1/tags`. 0002 publishes the route and the response and never
+ * published an input shape, because nothing implemented it — TAR-479 does, and
+ * this is that shape. Additive: no existing caller reads it.
+ *
+ * `color` is optional on the way in and required on the way out. `tags.color` is
+ * nullable, and a tag created without one renders in the neutral colour the
+ * contact mapper assigns rather than being dropped from a response or failing
+ * `TagSchema` — so "no colour" is a legal thing to ask for and never a legal
+ * thing to receive.
+ */
+export const TagCreateInputSchema = z.object({
+  name: z.string().min(1).max(TAG_NAME_LENGTH),
+  color: HexColorSchema.optional(),
+});
+
+/**
+ * `q` matches the tag name, on `ContactListQuerySchema`'s reasoning: the picker
+ * that reads this is a type-ahead, and `tags.name` is `citext`, so the match is
+ * case-insensitive at the column.
+ */
+export const TagListQuerySchema = CursorPageQuerySchema.extend({
+  q: z.string().min(1).max(TAG_NAME_LENGTH).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -263,6 +290,8 @@ export const ContactListQuerySchema = CursorPageQuerySchema.extend({
 });
 
 export type Tag = z.infer<typeof TagSchema>;
+export type TagCreateInput = z.infer<typeof TagCreateInputSchema>;
+export type TagListQuery = z.infer<typeof TagListQuerySchema>;
 export type CustomFieldType = z.infer<typeof CustomFieldTypeSchema>;
 export type CustomFieldDefinition = z.infer<typeof CustomFieldDefinitionSchema>;
 export type CustomFieldDefinitionCreateInput = z.infer<

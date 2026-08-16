@@ -1,7 +1,7 @@
 import type { ConversationResponse } from '@whatsappcrm/contracts';
+import { CONTACT_PROJECTION, toContactResponse } from '../contacts/contact.mapper';
 import type { Prisma } from '../generated/prisma/client';
 import type { TicketStatus } from '../generated/prisma/enums';
-import { CONTACT_PROJECTION, toContactResponse } from './contact.mapper';
 
 /**
  * `conversations` → `ConversationResponse`.
