@@ -6,6 +6,7 @@ import { AuditModule } from './audit/audit.module';
 import { TenantContextMiddleware } from './common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
 import { RequestPipelineModule } from './common/request-pipeline/request-pipeline.module';
+import { ContactsModule } from './contacts/contacts.module';
 import { ConversationsModule } from './conversations/conversations.module';
 import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
@@ -21,6 +22,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { ReportingModule } from './reporting/reporting.module';
 import { REPOSITORY_ENV_FILE } from './repository-env-file';
 import { SlaModule } from './sla/sla.module';
+import { TagsModule } from './tags/tags.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
@@ -65,6 +67,11 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     RealtimeModule,
     TenancyModule,
     PeopleModule,
+    // The contact taxonomy, before the module whose contacts wear it. Neither
+    // imports the other — `ContactsService` reaches tags through `TenantPrisma`
+    // — so the ordering here is readability, not a dependency.
+    TagsModule,
+    ContactsModule,
     WhatsAppModule,
     TicketsModule,
     // After `TicketsModule`, whose tickets it routes. It imports neither that

@@ -43,6 +43,23 @@ export const AUDIT_ACTIONS = {
   assignmentRuleUpdated: 'assignment_rule.updated',
   assignmentRuleDeleted: 'assignment_rule.deleted',
   assignmentRuleReordered: 'assignment_rule.reordered',
+  /**
+   * Custom field definition writes (TAR-33, 0002 amendment 10). Tenant
+   * configuration in the same class as a routing rule: a definition change
+   * alters the shape of every contact record in the tenant, and a delete
+   * destroys the values stored under that key across every contact — which is
+   * the one action on this surface with no undo, so it has to leave a trail.
+   *
+   * Contact and tag *writes* are deliberately not audited. Editing a customer's
+   * record is the product's ordinary work rather than a security event, and the
+   * metadata would be the customer's own data — this table is exported for
+   * compliance review and is not the place to discover PII, which is why the
+   * routing-rule entries above carry a rule's name and never its conditions.
+   */
+  customFieldCreated: 'custom_field.created',
+  customFieldUpdated: 'custom_field.updated',
+  customFieldDeleted: 'custom_field.deleted',
+  customFieldReordered: 'custom_field.reordered',
   sessionRevoked: 'session.revoked',
   /**
    * An account crossing `AUTH_POLICY.loginFailureThreshold` (TAR-53,
