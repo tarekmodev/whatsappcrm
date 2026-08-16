@@ -1,4 +1,3 @@
-import { SectionCard } from '@/components/ui/SectionCard';
 import { Stack } from '@/components/layout/Stack';
 import { Notice } from '@/components/ui/Notice';
 import { content } from '@/content/en';
@@ -9,6 +8,10 @@ import { ConversationList, ConversationListSkeleton } from './ConversationList';
 /**
  * Fetches and renders the conversation list. Usage: inside a Suspense boundary
  * on the inbox page, with `InboxSectionSkeleton` as the fallback.
+ *
+ * No card and no heading: since TAR-513 the list is a column of the workspace
+ * rather than a section of a document, and `InboxLayout` owns the column's
+ * frame, its scrolling and its accessible name.
  */
 
 export interface InboxSectionProps {
@@ -34,24 +37,22 @@ export async function InboxSection({ query, selectedId, isScopeNarrowed }: Inbox
     canClaim || canAssign ? { currentUserId: session.principal.userId, canClaim, canAssign } : null;
 
   return (
-    <SectionCard id="conversations" title={content.inbox.conversationsHeading}>
-      <Stack gap="3">
-        {isScopeNarrowed ? (
-          // The API narrows `all` rather than refusing it; saying so is what
-          // stops an agent wondering why a shared supervisor link shows so
-          // little.
-          <Notice tone="info">{content.inbox.scopeNarrowedAllNotice}</Notice>
-        ) : null}
-        <ConversationList
-          conversations={conversations}
-          userNames={userNames}
-          teamNames={teamNames}
-          query={{ scope: query.scope, status: query.status, q: query.q }}
-          selectedId={selectedId}
-          claim={claim}
-        />
-      </Stack>
-    </SectionCard>
+    <Stack gap="3">
+      {isScopeNarrowed ? (
+        // The API narrows `all` rather than refusing it; saying so is what
+        // stops an agent wondering why a shared supervisor link shows so
+        // little.
+        <Notice tone="info">{content.inbox.scopeNarrowedAllNotice}</Notice>
+      ) : null}
+      <ConversationList
+        conversations={conversations}
+        userNames={userNames}
+        teamNames={teamNames}
+        query={{ scope: query.scope, status: query.status, q: query.q }}
+        selectedId={selectedId}
+        claim={claim}
+      />
+    </Stack>
   );
 }
 
@@ -63,8 +64,8 @@ export async function InboxSection({ query, selectedId, isScopeNarrowed }: Inbox
  */
 export function InboxSectionSkeleton({ hasClaim = false }: { hasClaim?: boolean }) {
   return (
-    <SectionCard id="conversations" title={content.inbox.conversationsHeading}>
+    <Stack gap="3">
       <ConversationListSkeleton hasClaim={hasClaim} />
-    </SectionCard>
+    </Stack>
   );
 }

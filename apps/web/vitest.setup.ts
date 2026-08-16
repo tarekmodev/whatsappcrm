@@ -43,6 +43,24 @@ Element.prototype.scrollIntoView = function scrollIntoView() {
   // Intentionally empty: jsdom does not lay out, so there is nothing to scroll.
 };
 
+/**
+ * And no `ResizeObserver`, for the same reason — any component that measures
+ * itself (`useToastClearance`, and whatever follows it) dies in an effect with
+ * `ResizeObserver is not defined`.
+ *
+ * A no-op rather than a fake: without layout every box jsdom reports is zero, so
+ * there is nothing for an observation to report. What the stub buys is that a
+ * component measuring itself still *renders*, which is what those tests are
+ * about; the measurement is verified in the browser.
+ */
+if (!('ResizeObserver' in globalThis)) {
+  globalThis.ResizeObserver = class ResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  };
+}
+
 // Vitest is configured without globals, so Testing Library cannot auto-register
 // its own cleanup. Without this, rendered trees leak between tests and
 // `getByRole` starts finding duplicates.

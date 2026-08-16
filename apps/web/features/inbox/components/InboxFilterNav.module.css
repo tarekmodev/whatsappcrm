@@ -1,12 +1,14 @@
+/*
+ * No card chrome: this *is* the workspace's first column since TAR-513, and
+ * `InboxLayout` owns its background and the hairline separating it from the
+ * list. A bordered card inside a bordered column is two frames for one region.
+ */
 .column {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   min-inline-size: 0;
   padding: var(--space-3);
-  background: var(--color-surface);
-  border: var(--border-hairline) solid var(--color-border);
-  border-radius: var(--radius-lg);
 }
 
 .header {
@@ -28,9 +30,15 @@
 }
 
 /* --- The small-screen disclosure ------------------------------------------ */
+/*
+ * Sized to the column it stands in for, and left-aligned — not stretched across
+ * the band. A 700px-wide control naming one filter reads as a `<select>` for the
+ * whole page rather than as the filter column folded up, which is what it is.
+ * It still shrinks below `--size-pane-filters` at 320px.
+ */
 .disclosure {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 var(--size-pane-filters);
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
@@ -170,8 +178,11 @@
  * grid track at the same width — the two describe one layout change.
  */
 @media (min-width: 84rem) {
+  /* `min-block-size` rather than `block-size`: the footer pins to the foot of
+     the column while the entries are short, and the column grows past it — and
+     scrolls, in the region around it — once they are not. */
   .column {
-    block-size: 100%;
+    min-block-size: 100%;
   }
 
   .heading {

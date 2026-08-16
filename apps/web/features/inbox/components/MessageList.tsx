@@ -34,7 +34,11 @@ export function MessageList({ messages, senderNames, hasOlderMessages }: Message
   const scrollerRef = useStickToBottom(newest?.id ?? null);
 
   if (messages.length === 0) {
-    return <EmptyState heading={content.thread.emptyHeading} body={content.thread.emptyBody} />;
+    return (
+      <div className={styles.emptyState}>
+        <EmptyState heading={content.thread.emptyHeading} body={content.thread.emptyBody} />
+      </div>
+    );
   }
 
   return (

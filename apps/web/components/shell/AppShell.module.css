@@ -11,11 +11,39 @@
   /* Without this a wide table inside main stretches the grid column instead of
      scrolling, and the whole page gains a horizontal scrollbar. */
   min-inline-size: 0;
+  /* And without this the column refuses to shrink below its content, which is
+     what would make a fill-mode route scroll the document anyway. */
+  min-block-size: 0;
 }
 
 .main {
   flex: 1 1 auto;
   min-inline-size: 0;
+  min-block-size: 0;
+}
+
+/*
+ * Fill mode: a route whose content is a fixed-height workspace rather than a
+ * scrolling document — `PageShell variant="fill"`, which the inbox uses.
+ *
+ * The frame stops growing with its content and `<main>` measures whatever the
+ * bar left it. Deliberately *not* `calc(100dvh - var(--size-bar))`: the bar is
+ * `flex-wrap: wrap` with a safe-area inset, so below 48rem the search field
+ * takes a line of its own and the bar is taller than that token — exactly the
+ * width where a pinned composer matters most. Flex already knows the real
+ * number, and it stays right when the bar changes.
+ *
+ * `:has()` rather than a prop, because the shell is an ancestor of the page and
+ * a page cannot hand its ancestor one. `[data-page-shell]` is the documented
+ * seam, the same kind as `[data-rail]` in the other direction.
+ */
+.frame:has([data-page-shell='fill']) {
+  block-size: 100dvh;
+  overflow: hidden;
+}
+
+.frame:has([data-page-shell='fill']) .main {
+  overflow: hidden;
 }
 
 @media (min-width: 48rem) {
