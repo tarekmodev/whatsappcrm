@@ -5,6 +5,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import {
   ApiErrorSchema,
+  TicketEscalationResponseSchema,
   TicketResponseSchema,
   permissionsForRole,
   type Permission,
@@ -13,6 +14,7 @@ import {
 import request from 'supertest';
 import { configureApp } from '../bootstrap';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
+import { IdempotencyService } from '../common/idempotency/idempotency.service';
 import { TenantContextMiddleware } from '../common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from '../common/tenant-context/tenant-context.module';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
@@ -20,11 +22,14 @@ import { PermissionGuard } from '../rbac/permission.guard';
 import { PrincipalGuard } from '../rbac/principal.guard';
 import { ANONYMOUS, PRINCIPAL_SOURCE, resolved } from '../rbac/principal.source';
 import { TicketCommandService } from './ticket-command.service';
+import { TicketEventQueryService } from './ticket-event-query.service';
 import { TicketQueryService } from './ticket-query.service';
 import { TicketsController } from './tickets.controller';
 import {
   TicketCloseNotPermittedError,
+  TicketHandoffNotPermittedError,
   TicketNotFoundError,
+  TicketReasonRequiredError,
   TicketStatusChangedConcurrentlyError,
   TicketTransitionNotAllowedError,
   UnknownTicketAssigneeError,
@@ -116,12 +121,26 @@ describe('ticket routes', () => {
   let get: jest.Mock;
   let update: jest.Mock;
   let assign: jest.Mock;
+  let escalate: jest.Mock;
+  let listEvents: jest.Mock;
+  let execute: jest.Mock;
 
   beforeAll(async () => {
     list = jest.fn();
     get = jest.fn();
     update = jest.fn();
     assign = jest.fn();
+    escalate = jest.fn();
+    listEvents = jest.fn();
+    // The generic middleware, stubbed to run its work and report a first
+    // execution. What the header *does* is `idempotency.service.spec.ts`'s
+    // business; what this file asserts is that the route reaches it at all, and
+    // only when a key was sent.
+    execute = jest.fn(async (_request: unknown, work: () => Promise<unknown>) => ({
+      statusCode: 200,
+      body: await work(),
+      replayed: false,
+    }));
 
     const moduleRef = await Test.createTestingModule({
       imports: [TenantContextModule],
@@ -129,7 +148,9 @@ describe('ticket routes', () => {
       providers: [
         ApiExceptionFilter,
         { provide: TicketQueryService, useValue: { list, get } },
-        { provide: TicketCommandService, useValue: { update, assign } },
+        { provide: TicketCommandService, useValue: { update, assign, escalate } },
+        { provide: TicketEventQueryService, useValue: { list: listEvents } },
+        { provide: IdempotencyService, useValue: { execute } },
         // Read by `configureApp` for the CORS allow-list; nothing here needs it.
         { provide: ConfigService, useValue: { get: () => undefined } },
         {
@@ -344,10 +365,34 @@ describe('ticket routes', () => {
       principal = SUPERVISOR;
     });
 
-    it('refuses a caller without ticket:assign', async () => {
-      // An agent, which is every role below supervisor: the console offers the
-      // control on the supervisor's page only, and this is what enforces it.
+    it('admits an agent, because the route declares ticket:handoff', async () => {
+      // TAR-32's first acceptance criterion opens "as an agent", and ADR 0011
+      // decision 2 resolves it by declaring the weaker permission here and
+      // applying the bound in the service. An agent reaching the service is
+      // therefore the correct behaviour — and the *bound* is what stops them
+      // taking a colleague's ticket, asserted in the service spec and against a
+      // real database in `ticket-handoff.int-spec.ts`.
       principal = AGENT;
+      assign.mockResolvedValue(TICKET_RESPONSE);
+
+      await request(server)
+        .post(path)
+        .send({ userId: TEAMMATE, reason: 'Going off shift' })
+        .expect(200);
+
+      expect(assign).toHaveBeenCalledWith(TICKET, {
+        userId: TEAMMATE,
+        reason: 'Going off shift',
+      });
+    });
+
+    it('refuses a caller holding neither ticket:handoff nor ticket:assign', async () => {
+      // Nothing in `ROLE_PERMISSIONS` is such a caller today — every role holds
+      // `ticket:handoff` — so this asserts the guard rather than a role, which
+      // is what keeps the route from becoming public if the matrix changes.
+      principal = principalWith(
+        permissionsForRole('agent').filter((permission) => permission !== 'ticket:handoff'),
+      );
 
       await request(server).post(path).send({ userId: TEAMMATE }).expect(403);
       expect(assign).not.toHaveBeenCalled();
@@ -424,6 +469,181 @@ describe('ticket routes', () => {
       const response = await request(server).post(path).send({ userId: TEAMMATE }).expect(404);
 
       expect(ApiErrorSchema.parse(response.body).error.code).toBe('not_found');
+    });
+
+    it('maps a refused handoff to forbidden, not not_found', async () => {
+      // The caller passed the visibility check and is looking at the ticket, so
+      // what is refused is the act (0011 decision 2).
+      assign.mockRejectedValue(TicketHandoffNotPermittedError.notHeld());
+
+      const response = await request(server).post(path).send({ userId: TEAMMATE }).expect(403);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('forbidden');
+    });
+
+    it('maps a missing reason to validation_failed, pointing at the field', async () => {
+      assign.mockRejectedValue(new TicketReasonRequiredError());
+
+      const response = await request(server).post(path).send({ userId: TEAMMATE }).expect(400);
+      const { error } = ApiErrorSchema.parse(response.body);
+
+      expect(error.code).toBe('validation_failed');
+      expect(error.details).toEqual([{ path: 'reason', message: expect.any(String) as string }]);
+    });
+
+    it('refuses a blank reason at the schema, before the service', async () => {
+      // The trim and the three-character floor: whitespace is not a reason, and
+      // the empty string would otherwise satisfy "present" and log nothing.
+      const response = await request(server)
+        .post(path)
+        .send({ userId: TEAMMATE, reason: '   ' })
+        .expect(400);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('validation_failed');
+      expect(assign).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/v1/tickets/{id}/escalate', () => {
+    const path = `/api/v1/tickets/${TICKET}/escalate`;
+    const ESCALATION = {
+      event: {
+        id: '25444444-4444-7444-8444-4444444444a1',
+        ticketId: TICKET,
+        type: 'escalated' as const,
+        actorUserId: AGENT.userId,
+        fromValue: null,
+        toValue: null,
+        assignment: null,
+        reason: 'Customer is threatening chargeback',
+        cause: 'agent' as const,
+        createdAt: '2026-08-16T10:00:00.000Z',
+      },
+      notifiedUserIds: ['25444444-4444-7444-8444-4444444444d4'],
+    };
+
+    it('admits an agent: ticket:escalate is granted to every role', async () => {
+      escalate.mockResolvedValue(ESCALATION);
+
+      const response = await request(server)
+        .post(path)
+        .send({ reason: 'Customer is threatening chargeback' })
+        .expect(200);
+
+      expect(TicketEscalationResponseSchema.parse(response.body).notifiedUserIds).toHaveLength(1);
+      expect(escalate).toHaveBeenCalledWith(TICKET, {
+        reason: 'Customer is threatening chargeback',
+      });
+    });
+
+    it('refuses a caller without ticket:escalate', async () => {
+      principal = principalWith(
+        permissionsForRole('agent').filter((permission) => permission !== 'ticket:escalate'),
+      );
+
+      await request(server).post(path).send({ reason: 'Please look at this' }).expect(403);
+      expect(escalate).not.toHaveBeenCalled();
+    });
+
+    it('refuses a body with no reason', async () => {
+      // Unconditionally required here: there is no escalation without something
+      // to escalate, so the reason is the whole payload (0011 decision 3).
+      const response = await request(server).post(path).send({}).expect(400);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('validation_failed');
+      expect(escalate).not.toHaveBeenCalled();
+    });
+
+    it('refuses a whitespace-only reason', async () => {
+      await request(server).post(path).send({ reason: '   ' }).expect(400);
+      expect(escalate).not.toHaveBeenCalled();
+    });
+
+    it('answers 200 with an empty notifiedUserIds when nobody could be told', async () => {
+      // A real outcome, not an error: the agent did nothing wrong and has no way
+      // to fix a tenant with no active supervisor.
+      escalate.mockResolvedValue({ ...ESCALATION, notifiedUserIds: [] });
+
+      const response = await request(server)
+        .post(path)
+        .send({ reason: 'Nobody is on call tonight' })
+        .expect(200);
+
+      expect(TicketEscalationResponseSchema.parse(response.body).notifiedUserIds).toEqual([]);
+    });
+
+    it('does not reach the idempotency middleware without a key', async () => {
+      escalate.mockResolvedValue(ESCALATION);
+
+      await request(server).post(path).send({ reason: 'A second ask is legitimate' }).expect(200);
+
+      expect(execute).not.toHaveBeenCalled();
+      expect(escalate).toHaveBeenCalled();
+    });
+
+    it('runs through the idempotency middleware when a key is sent', async () => {
+      escalate.mockResolvedValue(ESCALATION);
+
+      await request(server)
+        .post(path)
+        .set('Idempotency-Key', '25444444-4444-7444-8444-4444444444ff')
+        .send({ reason: 'Retried after a dropped response' })
+        .expect(200);
+
+      expect(execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          key: '25444444-4444-7444-8444-4444444444ff',
+          operation: 'ticket.escalate',
+          target: TICKET,
+        }),
+        expect.any(Function),
+      );
+    });
+
+    it('refuses a malformed key rather than ignoring it', async () => {
+      // Accepting it would silently drop the protection the caller asked for.
+      const response = await request(server)
+        .post(path)
+        .set('Idempotency-Key', 'not-a-uuid')
+        .send({ reason: 'Please look at this' })
+        .expect(400);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('validation_failed');
+      expect(escalate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/v1/tickets/{id}/events', () => {
+    const path = `/api/v1/tickets/${TICKET}/events`;
+
+    it('needs only ticket:read, and binds the cursor page defaults', async () => {
+      listEvents.mockResolvedValue({ items: [], nextCursor: null });
+
+      await request(server).get(path).expect(200);
+
+      expect(listEvents).toHaveBeenCalledWith(TICKET, { limit: 25 });
+    });
+
+    it('answers not_found for a ticket this principal may not see', async () => {
+      // The log inherits the ticket's visibility rule rather than becoming a
+      // side channel onto one — 404, never 403.
+      listEvents.mockRejectedValue(new TicketNotFoundError(TICKET));
+
+      const response = await request(server).get(path).expect(404);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('not_found');
+    });
+
+    it('refuses an id that is not a UUID', async () => {
+      await request(server).get('/api/v1/tickets/not-a-uuid/events').expect(400);
+      expect(listEvents).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unauthenticated caller before reaching the service', async () => {
+      signedIn = false;
+
+      await request(server).get(path).expect(401);
+      expect(listEvents).not.toHaveBeenCalled();
     });
   });
 });

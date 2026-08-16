@@ -3,6 +3,7 @@ import { ResponseOriginService } from '../common/response-origin.service';
 import { CannedResponseResourceService } from './canned-response-resource.service';
 import { ConversationAccessService } from './conversation-access.service';
 import { ConversationResourceService } from './conversation-resource.service';
+import { EscalationResourceService } from './escalation-resource.service';
 import { MessageResourceService } from './message-resource.service';
 import { RealtimeGateway } from './realtime.gateway';
 import { RealtimeHandshakeService } from './realtime-handshake.service';
@@ -50,6 +51,7 @@ import { TenantHostnameService } from './tenant-hostname.service';
     MessageResourceService,
     SlaBreachResourceService,
     CannedResponseResourceService,
+    EscalationResourceService,
     TenantHostnameService,
     ResponseOriginService,
   ],

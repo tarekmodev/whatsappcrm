@@ -153,6 +153,100 @@ export class UnknownTicketAssigneeError extends TicketError {
   }
 }
 
+/**
+ * A reassignment with no `reason` — a write that takes work away from somebody
+ * and does not say why (TAR-32, ADR 0011 decision 1).
+ *
+ * `validation_failed` naming the field, and **not** `conflict`: nothing about
+ * the row's state refused a well-formed request, a field of the body is
+ * missing, and that is what `validation_failed` means everywhere else in this
+ * API. The console highlights the textarea from `details[0].path` rather than
+ * showing a banner.
+ *
+ * Raised by the service rather than by the schema because Zod sees the body and
+ * the rule is about the row — `ticketAssignRequiresReason` is the published
+ * predicate, and the console asks it *before* it submits so this error is the
+ * backstop rather than the normal path.
+ */
+export class TicketReasonRequiredError extends TicketError {
+  constructor() {
+    super('A reason is required when reassigning a ticket somebody already holds.');
+  }
+}
+
+/**
+ * A caller holding `ticket:handoff` but not `ticket:assign`, making a write the
+ * handoff bound refuses (ADR 0011 decision 2).
+ *
+ * `forbidden`, never `not_found`: by this point the caller has passed `require`
+ * and is looking at the ticket, so its existence is no secret from them — what
+ * is refused is the act. The same reading `TicketCloseNotPermittedError` gets.
+ *
+ * Three refusals share the class and differ in message, because they are one
+ * fact to a client — this write needs `ticket:assign` — and inventing three
+ * error codes for it would make `error-codes.ts` something an implementation
+ * edits.
+ */
+export class TicketHandoffNotPermittedError extends TicketError {
+  private constructor(message: string) {
+    super(message);
+  }
+
+  /** Not theirs to give: the ticket is a colleague's, or a team's. */
+  static notHeld(): TicketHandoffNotPermittedError {
+    return new TicketHandoffNotPermittedError(
+      'You can only hand on a ticket that is assigned to you.',
+    );
+  }
+
+  /** Parking work on people the caller has nothing to do with. */
+  static notATeammate(): TicketHandoffNotPermittedError {
+    return new TicketHandoffNotPermittedError(
+      'You can only hand a ticket to a teammate or to one of your own teams.',
+    );
+  }
+
+  /** Abandonment rather than a handoff: it leaves the ticket with nobody. */
+  static releasing(): TicketHandoffNotPermittedError {
+    return new TicketHandoffNotPermittedError(
+      'Releasing a ticket needs the ticket:assign permission. Hand it to somebody instead.',
+    );
+  }
+}
+
+/**
+ * An escalation naming a `toUserId` this tenant does not have, one who cannot
+ * act, or one who could not read the ticket anyway.
+ *
+ * `validation_failed` on the field, for `UnknownTicketAssigneeError`'s reasons —
+ * the ticket was found and what is wrong is a field of the body — and the three
+ * cases are folded into one message so it cannot be used to learn that a UUID
+ * names somebody real elsewhere.
+ *
+ * The `ticket:read_all` half is not decoration: it is what makes the
+ * notification safe to send. A recipient who already holds that permission can
+ * read the ticket, so telling them about it exposes nothing new (ADR 0006
+ * decision 4).
+ */
+export class UnknownEscalationRecipientError extends TicketError {
+  constructor(readonly id: string) {
+    super(`${id} does not name an active supervisor or admin in this tenant.`);
+  }
+}
+
+/**
+ * An escalation alert id that names nothing this principal was sent.
+ *
+ * `not_found` and never `forbidden`, exactly as `SlaAlertNotFoundError` is: a
+ * 403 would confirm the id names a real alert somebody else was sent, and every
+ * read of this resource is narrowed to the calling principal on top of RLS.
+ */
+export class EscalationAlertNotFoundError extends TicketError {
+  constructor(readonly alertId: string) {
+    super('No escalation alert matches that id.');
+  }
+}
+
 /** A cursor this build cannot act on. `tickets.http.ts` turns it into `validation_failed`. */
 export class InvalidTicketCursorError extends TicketError {
   constructor(readonly parameter: string) {

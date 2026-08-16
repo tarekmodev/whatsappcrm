@@ -23,6 +23,7 @@ import type {
 import type { SessionService } from '../identity/session.service';
 import type { CannedResponseResourceService } from './canned-response-resource.service';
 import type { ConversationResourceService } from './conversation-resource.service';
+import type { EscalationResourceService } from './escalation-resource.service';
 import type { MessageResourceService, RelayableMessage } from './message-resource.service';
 import { RealtimeRelayService } from './realtime-relay.service';
 import type { SlaBreachResourceService } from './sla-breach-resource.service';
@@ -264,9 +265,11 @@ function harnessFor(
   const relay = new RealtimeRelayService(
     messages,
     conversations,
-    // TAR-280's breach relay has its own spec; nothing in this file emits one.
+    // TAR-280's breach relay and TAR-32's escalation relay have their own specs;
+    // nothing in this file emits either.
     {} as unknown as SlaBreachResourceService,
     cannedResponses,
+    {} as unknown as EscalationResourceService,
     hostnames,
     sessions,
     tenantContext,

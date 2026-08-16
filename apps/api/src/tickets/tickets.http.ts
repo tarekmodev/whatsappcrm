@@ -1,11 +1,19 @@
 import { ApiException } from '../common/errors/api.exception';
+import {
+  IdempotencyKeyReusedError,
+  IdempotentRequestInFlightError,
+} from '../common/idempotency/idempotency.errors';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
 import {
+  EscalationAlertNotFoundError,
   InvalidTicketCursorError,
   TicketCloseNotPermittedError,
+  TicketHandoffNotPermittedError,
   TicketNotFoundError,
+  TicketReasonRequiredError,
   TicketStatusChangedConcurrentlyError,
   TicketTransitionNotAllowedError,
+  UnknownEscalationRecipientError,
   UnknownTicketAssigneeError,
 } from './tickets.errors';
 
@@ -35,6 +43,13 @@ import {
  *     `not_found`.** The ticket was found; what is wrong is a field of the body,
  *     and a 404 here would read as "the ticket is gone" — see
  *     `UnknownTicketAssigneeError`.
+ *   * **A refused handoff is `forbidden` for the same reason a refused close
+ *     is** (TAR-32, ADR 0011 decision 2): the caller passed the visibility check
+ *     and is looking at the ticket, so what is refused is the act. A
+ *     `not_found` would send an agent hunting for a ticket on their screen.
+ *   * **Another principal's escalation alert is `not_found`.** Every read of
+ *     that resource is narrowed to the calling principal, and a 403 would
+ *     confirm the id names a real alert somebody else was sent.
  *
  * Both conflict cases share `conflict`, and deliberately: a refused transition
  * and a lost compare-and-set are the same fact to a client — the row's state
@@ -46,7 +61,7 @@ import {
  * database outage as a validation error would hide it.
  */
 export function translateTicketFailure(error: unknown): never {
-  if (error instanceof TicketNotFoundError) {
+  if (error instanceof TicketNotFoundError || error instanceof EscalationAlertNotFoundError) {
     throw new ApiException('not_found', error.message);
   }
 
@@ -57,8 +72,34 @@ export function translateTicketFailure(error: unknown): never {
     throw new ApiException('conflict', error.message);
   }
 
-  if (error instanceof TicketCloseNotPermittedError) {
+  if (
+    error instanceof TicketCloseNotPermittedError ||
+    error instanceof TicketHandoffNotPermittedError
+  ) {
     throw new ApiException('forbidden', error.message);
+  }
+
+  if (error instanceof TicketReasonRequiredError) {
+    throw new ApiException('validation_failed', error.message, [
+      { path: 'reason', message: 'Required when the ticket has an assignee.' },
+    ]);
+  }
+
+  if (error instanceof UnknownEscalationRecipientError) {
+    throw new ApiException('validation_failed', error.message, [
+      { path: 'toUserId', message: error.message },
+    ]);
+  }
+
+  if (error instanceof IdempotencyKeyReusedError) {
+    throw new ApiException('idempotency_key_reused', error.message);
+  }
+
+  if (error instanceof IdempotentRequestInFlightError) {
+    // A client that retried before its first escalate answered. `conflict`
+    // rather than a wait: the honest answer is available immediately, and the
+    // same key replayed once the first attempt lands returns its result.
+    throw new ApiException('conflict', error.message);
   }
 
   if (error instanceof InvalidTicketCursorError) {

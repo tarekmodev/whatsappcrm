@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { CannedResponseResponseSchema } from './canned-responses';
 import { IdSchema, TimestampSchema } from './common';
 import { ConversationResponseSchema } from './conversations';
+import { EscalationAlertResponseSchema } from './escalations';
 import { MessageResponseSchema } from './messages';
 import { SlaAlertResponseSchema } from './sla';
 import { TicketResponseSchema } from './tickets';
@@ -233,6 +234,30 @@ export const ServerEventSchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('sla.breached'),
     alert: SlaAlertResponseSchema,
+    ticket: TicketResponseSchema,
+  }),
+  /**
+   * An agent asked for supervisor attention (TAR-32, ADR 0011 decision 5), sent
+   * to `user:{recipientUserId}` — once per alert row the escalation actually
+   * inserted, and to nobody else.
+   *
+   * Addressed exactly as `sla.breached` is, and for the same reason: the read
+   * rule for an alert is "you are a named recipient", the rows say who that is,
+   * and the amendment above rules that a fan-out wider than the read rule is an
+   * authorization bypass. Deliberately **not** `tenantReadersRoom`, and
+   * deliberately **not** the ticket's own audience — the escalation is a request
+   * aimed at particular people, not news for everyone who can see the ticket.
+   *
+   * Unlike `sla.breached` there is no `ticket.updated` beside it: escalation
+   * moves nothing on the ticket (0011 decision 3), so there is no queue row to
+   * re-render.
+   *
+   * `ticket` rides along so the console renders without a second fetch, per this
+   * file's whole-resources rule.
+   */
+  z.object({
+    event: z.literal('ticket.escalated'),
+    alert: EscalationAlertResponseSchema,
     ticket: TicketResponseSchema,
   }),
   /**

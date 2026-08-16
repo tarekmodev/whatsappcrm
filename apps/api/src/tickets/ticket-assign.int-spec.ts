@@ -10,6 +10,7 @@ import type { PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import type { QueueService } from '../queue/queue.service';
+import { EscalationAlertService } from './escalation-alert.service';
 import { TicketCommandService } from './ticket-command.service';
 import { TicketQueryService } from './ticket-query.service';
 import { TicketNotFoundError, UnknownTicketAssigneeError } from './tickets.errors';
@@ -205,6 +206,9 @@ describe('assigning a ticket by hand, end to end', () => {
       // No Redis in this suite, and none needed: an assignment enqueues nothing
       // in any case — 0006's fourth SLA trigger is a *status* change.
       stubQueue(),
+      // Real, and against the same scoped client: nothing here escalates, but a
+      // stub would make the wiring untested in the one suite that has a database.
+      new EscalationAlertService(tenantPrisma, tenantContext),
     );
 
     await removeFixture();
@@ -268,11 +272,22 @@ describe('assigning a ticket by hand, end to end', () => {
     });
   });
 
+  /**
+   * `HELD` is held by an agent, so every release below is a *reassignment* and
+   * carries a reason — TAR-32's rule, published as `ticketAssignRequiresReason`
+   * and enforced in `TicketCommandService.assign`. The reasonless case is the
+   * placement of `DEFERRED` above, which is the asymmetry ADR 0011 decision 1
+   * designs.
+   */
   describe('an explicit release', () => {
     it('returns the ticket to pending, which the CHECK accepts after the insert', async () => {
       // 0008 amendment 2, and the assertion that `pending` is not an insert-only
       // value: nobody holds it, and no supervisor has judged it stuck.
-      const released = await assign(HELD, { userId: null, teamId: null });
+      const released = await assign(HELD, {
+        userId: null,
+        teamId: null,
+        reason: 'Ada has left the team',
+      });
 
       expect(released.assignedUserId).toBeNull();
       expect(released.routing).toEqual({
@@ -285,13 +300,13 @@ describe('assigning a ticket by hand, end to end', () => {
     it('does not put the ticket back in the flagged queue', async () => {
       // A supervisor releasing a ticket deliberately is not rotation failing to
       // place one, and the two must not read the same.
-      await assign(HELD, { userId: null, teamId: null });
+      await assign(HELD, { userId: null, teamId: null, reason: 'Ada has left the team' });
 
       expect(await flaggedQueue()).toEqual([DEFERRED]);
     });
 
-    it('records it as unassigned, carrying who had it', async () => {
-      await assign(HELD, { userId: null });
+    it('records it as unassigned, carrying who had it and why', async () => {
+      await assign(HELD, { userId: null, reason: 'Ada has left the team' });
 
       expect(await eventsOn(HELD)).toEqual([
         {
@@ -303,6 +318,7 @@ describe('assigning a ticket by hand, end to end', () => {
             previousAssignedUserId: AGENT_A,
             previousAssignedTeamId: null,
             cause: 'agent',
+            reason: 'Ada has left the team',
           },
         },
       ]);
@@ -350,8 +366,10 @@ describe('assigning a ticket by hand, end to end', () => {
   describe('a repeated submit', () => {
     it('answers with the ticket and appends no second event', async () => {
       // A double-clicked Assign button, and a retry after a dropped response.
+      // The second submit carries a reason because the first one gave the ticket
+      // a holder — the rule is about the row, not about the request.
       await assign(DEFERRED, { userId: AGENT_A });
-      const again = await assign(DEFERRED, { userId: AGENT_A });
+      const again = await assign(DEFERRED, { userId: AGENT_A, reason: 'Retrying the placement' });
 
       expect(again.assignedUserId).toBe(AGENT_A);
       expect(await eventsOn(DEFERRED)).toHaveLength(1);

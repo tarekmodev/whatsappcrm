@@ -1,7 +1,11 @@
 import { Module } from '@nestjs/common';
 import { TICKET_LINKER } from '@whatsappcrm/contracts';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
+import { IdempotencyModule } from '../common/idempotency/idempotency.module';
+import { EscalationAlertService } from './escalation-alert.service';
+import { EscalationAlertsController } from './escalation-alerts.controller';
 import { TicketCommandService } from './ticket-command.service';
+import { TicketEventQueryService } from './ticket-event-query.service';
 import { TicketLinkerService } from './ticket-linker.service';
 import { TicketQueryService } from './ticket-query.service';
 import { TicketQueueRunner } from './ticket-queue.runner';
@@ -33,18 +37,39 @@ import { TicketsController } from './tickets.controller';
  * message has committed. The two sides still never meet in code — only over the
  * queue, and only through the contract's shape.
  *
+ * ## TAR-32's escalation surface lives here, not in `SlaModule`
+ *
+ * An escalation is a ticket event with recipients, and `TicketCommandService`
+ * is its writer — so `EscalationAlertService` and the supervisor's
+ * `/escalation-alerts` routes belong to this module. The alternative would be a
+ * module edge from L3 to L4, which the layering forbids in that direction.
+ *
+ * What *is* shared with `SlaModule` is `resolveAlertRecipients`, a pure function
+ * imported from `sla/sla-recipients.ts` with no provider, no injection and no
+ * module edge — the same category of sharing `SlaBreachResourceService`
+ * documents. A breach and an escalation ask the same question, and two answers
+ * that drift would send them to different people.
+ *
+ * `IdempotencyModule` is the one import: `POST /tickets/{id}/escalate` is the
+ * first non-billing route in this API that genuinely creates, and it honours an
+ * optional `Idempotency-Key` so a retry after a dropped response cannot notify
+ * a supervisor twice.
+ *
  * Everything else comes from global modules — `TenantPrisma` from
  * `PrismaModule`, `TenantContextService` from `TenantContextModule`,
  * `EventEmitter2` from the root `EventEmitterModule`, `QueueService` from
  * `QueueModule`.
  */
 @Module({
-  controllers: [TicketsController],
+  imports: [IdempotencyModule],
+  controllers: [TicketsController, EscalationAlertsController],
   providers: [
     { provide: TICKET_LINKER, useClass: TicketLinkerService },
     TicketQueueRunner,
     TicketQueryService,
+    TicketEventQueryService,
     TicketCommandService,
+    EscalationAlertService,
     ApiExceptionFilter,
   ],
   exports: [TICKET_LINKER],

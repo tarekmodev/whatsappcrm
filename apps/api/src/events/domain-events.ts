@@ -29,6 +29,7 @@ export const MESSAGE_STATUS_CHANGED_EVENT = 'message.status_changed';
 export const MESSAGE_ATTACHMENT_SETTLED_EVENT = 'message.attachment_settled';
 export const TICKET_CREATED_EVENT = 'ticket.created';
 export const TICKET_UPDATED_EVENT = 'ticket.updated';
+export const TICKET_ESCALATED_EVENT = 'ticket.escalated';
 export const CONVERSATION_ASSIGNED_EVENT = 'conversation.assigned';
 export const SLA_BREACHED_EVENT = 'sla.breached';
 export const CANNED_RESPONSE_CHANGED_EVENT = 'canned_response.changed';
@@ -205,6 +206,41 @@ export interface TicketUpdatedEvent {
   readonly priority: TicketPriority;
   /** Null when the writer was the system — the reopen path, which does not emit today. */
   readonly actorUserId: string | null;
+}
+
+/**
+ * An agent asked for supervisor attention, and the alerts for it are committed
+ * (TAR-32, ADR 0011 decision 5).
+ *
+ * Emitted by `POST /api/v1/tickets/{id}/escalate` **after** its transaction
+ * commits, and only when at least one `notifications` row was actually inserted.
+ * An escalation in a tenant with nobody to tell emits nothing — there is no
+ * audience to address, and the event is on the ticket's history either way.
+ *
+ * ## Why loss is acceptable
+ *
+ * The row is the record and the socket is the immediacy. By the time this is
+ * emitted the rows that make "the supervisor is notified" true are committed,
+ * and a supervisor who was offline sees them on their next
+ * `GET /api/v1/escalation-alerts` — so a missed relay costs one page load, which
+ * is exactly what this bus is for.
+ *
+ * ## No `ticket.updated` beside it, unlike `sla.breached`
+ *
+ * Escalation moves nothing on the ticket (0011 decision 3), so there is no queue
+ * row to re-render and nobody outside the named recipients to tell.
+ *
+ * ## It carries ids, not resources
+ *
+ * The subscriber reads both back, for the reason `conversation.assigned` and
+ * `sla.breached` do: the payload a socket publishes must be the committed
+ * resource rather than the writer's view of it.
+ */
+export interface TicketEscalatedEvent {
+  readonly tenantId: string;
+  readonly ticketId: string;
+  /** The alert rows this escalation inserted. One socket per id, and no more. */
+  readonly alertIds: readonly string[];
 }
 
 /**

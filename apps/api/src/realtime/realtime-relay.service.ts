@@ -18,16 +18,19 @@ import {
   MESSAGE_STATUS_CHANGED_EVENT,
   SESSIONS_REVOKED_EVENT,
   SLA_BREACHED_EVENT,
+  TICKET_ESCALATED_EVENT,
   type CannedResponseChangedEvent,
   type ConversationAssignedEvent,
   type MessageCreatedEvent,
   type MessageStatusChangedEvent,
   type SessionsRevokedEvent,
   type SlaBreachedEvent,
+  type TicketEscalatedEvent,
 } from '../events/domain-events';
 import { SessionService } from '../identity/session.service';
 import { CannedResponseResourceService } from './canned-response-resource.service';
 import { ConversationResourceService } from './conversation-resource.service';
+import { EscalationResourceService } from './escalation-resource.service';
 import { MessageResourceService } from './message-resource.service';
 import type { RealtimeSocketData } from './realtime-socket';
 import { SlaBreachResourceService } from './sla-breach-resource.service';
@@ -118,6 +121,7 @@ export class RealtimeRelayService {
     private readonly conversations: ConversationResourceService,
     private readonly breaches: SlaBreachResourceService,
     private readonly cannedResponses: CannedResponseResourceService,
+    private readonly escalations: EscalationResourceService,
     private readonly hostnames: TenantHostnameService,
     private readonly sessions: SessionService,
     private readonly tenantContext: TenantContextService,
@@ -315,6 +319,65 @@ export class RealtimeRelayService {
     } catch (error: unknown) {
       this.logger.error(
         `Could not relay canned response ${event.cannedResponseId} to tenant ${event.tenantId}: ${describe(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Puts an agent's request for help in front of the supervisors it was
+   * addressed to (TAR-32, 0011 decision 5).
+   *
+   * **One event, one audience, and it is narrower than the breach's.**
+   * `ticket.escalated` goes to `user:{recipientUserId}` — one emit per
+   * `notifications` row the escalation actually inserted, and to nobody else.
+   * Deliberately not `tenantReadersRoom`: the read rule for an alert is "you are
+   * a named recipient", the rows say who that is, and this file's own amendment
+   * rules that a fan-out wider than the read rule is an authorization bypass.
+   *
+   * There is no `ticket.updated` beside it, unlike `onSlaBreached`, and that is
+   * the decision rather than an omission: escalation does not move the
+   * assignment or the status (0011 decision 3), so the ticket's queue row is
+   * unchanged and there is nothing for its audience to re-render. Pushing one
+   * anyway would tell the whole audience that an agent asked for help, which is
+   * a wider disclosure than the rows the escalation wrote.
+   *
+   * The rows are the record and this is the accelerator, so a failure here costs
+   * one page load. That is why it is caught and logged like every other relay
+   * rather than allowed to reject.
+   */
+  @OnEvent(TICKET_ESCALATED_EVENT)
+  async onTicketEscalated(event: TicketEscalatedEvent): Promise<void> {
+    const server = this.server;
+
+    if (server === null) {
+      this.logger.warn(
+        `No Socket.IO server attached; dropping an escalation for ticket ${event.ticketId}.`,
+      );
+      return;
+    }
+
+    try {
+      const escalation = await this.tenantContext.run(
+        { requestId: randomUUID(), tenantId: event.tenantId, userId: null, principal: null },
+        async () => await this.escalations.findForRelay(event.ticketId, event.alertIds),
+      );
+
+      if (escalation === null) {
+        return;
+      }
+
+      for (const delivery of escalation.deliveries) {
+        const payload: ServerEvent = {
+          event: 'ticket.escalated',
+          alert: delivery.alert,
+          ticket: escalation.ticket,
+        };
+
+        server.to(userRoom(delivery.recipientUserId)).emit(payload.event, payload);
+      }
+    } catch (error: unknown) {
+      this.logger.error(
+        `Could not relay the escalation on ticket ${event.ticketId} to tenant ${event.tenantId}: ${describe(error)}`,
       );
     }
   }

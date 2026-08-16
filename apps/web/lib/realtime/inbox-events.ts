@@ -60,11 +60,12 @@ function effectOfEvent(event: ServerEvent): InboxEffect {
     case 'conversation.updated':
     case 'note.created':
       return 'refetch';
-    // `sla.breached` is addressed to a supervisor's own user room and belongs to
-    // the alert surface TAR-281 builds, not to the inbox. Listed rather than
-    // defaulted, like the two beside it, so this switch stays exhaustive: the
-    // day a wire event is added and this screen should react to it, the compiler
-    // is what says so.
+    // `sla.breached` and `ticket.escalated` are both addressed to a supervisor's
+    // own user room and belong to the alert surfaces, not to the inbox — and an
+    // escalation moves nothing on the ticket, so there is nothing on this screen
+    // to re-render either. Listed rather than defaulted, like the ones beside
+    // them, so this switch stays exhaustive: the day a wire event is added and
+    // this screen should react to it, the compiler is what says so.
     //
     // The two canned-response events are that compiler prompt arriving
     // (TAR-485). They are answered here rather than left to break the build, and
@@ -76,6 +77,7 @@ function effectOfEvent(event: ServerEvent): InboxEffect {
     case 'agent.typing':
     case 'ticket.updated':
     case 'sla.breached':
+    case 'ticket.escalated':
     case 'canned_response.saved':
     case 'canned_response.deleted':
       return 'ignore';
