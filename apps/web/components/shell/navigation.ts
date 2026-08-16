@@ -73,6 +73,15 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     requiresAny: ['report:read_all', 'assignment_rule:read'],
   },
   {
+    id: 'settings-workflows',
+    label: content.nav.workflows,
+    href: routes.settingsWorkflows(),
+    icon: 'automation',
+    // The permission the endpoints behind it require (ADR 0009). `workflow:read`
+    // alone is enough to see the list; writing is gated separately on the page.
+    requiresAny: ['workflow:read'],
+  },
+  {
     id: 'settings-whatsapp',
     label: content.nav.whatsapp,
     href: routes.settingsWhatsApp(),

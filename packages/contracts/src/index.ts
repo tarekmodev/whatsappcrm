@@ -27,6 +27,9 @@ export * from './admin';
 // --- Routing and assignment -------------------------------------------------
 export * from './assignment';
 
+// --- Automation -------------------------------------------------------------
+export * from './workflows';
+
 // --- CRM, inbox and helpdesk ------------------------------------------------
 export * from './contacts';
 export * from './conversations';

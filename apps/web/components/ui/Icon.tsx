@@ -64,6 +64,18 @@ const ICON_PATHS = {
    * on", and a breached ticket is somebody else's work needing attention.
    */
   alert: ['M18 9.5a6 6 0 1 0-12 0c0 5-2 6.5-2 6.5h16s-2-1.5-2-6.5', 'M13.8 20a2 2 0 0 1-3.6 0'],
+  /**
+   * Automation (TAR-27): one trigger branching into what it does. Deliberately
+   * not a gear — `settings` already owns that shape — and not a lightning bolt,
+   * which this set uses for nothing and reads as "fast" rather than "automatic".
+   */
+  automation: [
+    'M7 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0',
+    'M21 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0',
+    'M21 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0',
+    'M7 6h10',
+    'M5 8v8a2 2 0 0 0 2 2h10',
+  ],
   plus: ['M12 5v14', 'M5 12h14'],
   /** Opens a menu below its trigger; never mirrored, unlike the chevrons below. */
   chevronDown: ['m6 9 6 6 6-6'],

@@ -62,6 +62,19 @@ export const API_ERROR_CODES = [
    * tenant that reaches zero admins can only be recovered by platform support.
    */
   'last_admin_required',
+  /**
+   * A workflow names a tag, team or user that no longer exists, and the request
+   * would arm it (TAR-27, 0009 decision 6).
+   *
+   * Distinct from `validation_failed` because the body is well-formed and the
+   * caller changed nothing: what is wrong is a reference that was valid when the
+   * workflow was written. The console's next action differs too — "pick a
+   * replacement", not "fix your input" — and `details` names each broken
+   * reference by its path in the definition. Flattened into `validation_failed`,
+   * the builder would be left string-matching on `message`, which is the thing
+   * `code` exists to prevent.
+   */
+  'workflow_reference_broken',
   /** Payload exceeds the documented size cap. */
   'payload_too_large',
   /** Too many requests for this tenant or principal in the current window. */
@@ -129,6 +142,7 @@ export const API_ERROR_STATUS: Record<ApiErrorCode, number> = {
   conflict: 409,
   idempotency_key_reused: 409,
   last_admin_required: 409,
+  workflow_reference_broken: 400,
   payload_too_large: 413,
   rate_limited: 429,
 
