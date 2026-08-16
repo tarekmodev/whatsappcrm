@@ -16,10 +16,6 @@
  * Which ceiling refused the write — the limits in `tenant_entitlements`, named
  * as `PlanLimitsSchema` names them so the field a client reads matches the
  * published vocabulary.
- *
- * `conversationsPerPeriod` has no factory below yet: its enforcement point is
- * the outbound send, and the `conversations_opened` usage counter it would be
- * compared against has no writer on `main`. See `plan-limits.service.ts`.
  */
 export type PlanLimitName = 'seats' | 'conversationsPerPeriod';
 
@@ -56,6 +52,25 @@ export class PlanLimitExceededError extends Error {
       used,
       `This workspace's plan includes ${cap} seat(s) and all of them are taken. ` +
         'Remove a member or withdraw a pending invitation, or contact support to raise the limit.',
+    );
+  }
+
+  /**
+   * The period's conversation allowance is spent.
+   *
+   * The message says what is still working, because the difference matters to
+   * the person reading it and is the whole design of this cap: inbound is never
+   * refused. A customer's message is accepted and stored whatever the counter
+   * says; what the cap withholds is the tenant's ability to reply.
+   */
+  static conversationsPerPeriod(cap: number, used: number): PlanLimitExceededError {
+    return new PlanLimitExceededError(
+      'conversationsPerPeriod',
+      cap,
+      used,
+      `This workspace's plan includes ${cap} conversation(s) per period, and that has been ` +
+        'reached. Incoming messages are still being received and stored; contact support to ' +
+        'raise the limit before replying.',
     );
   }
 }

@@ -19,6 +19,8 @@ import { LoginThrottleService } from './login-throttle.service';
 import { PasswordService } from './password.service';
 import { PlanLimitExceededError } from '../entitlements/entitlements.errors';
 import { PlanLimitsService } from '../entitlements/plan-limits.service';
+import { UsageCounterService } from '../entitlements/usage-counter.service';
+import { UsagePeriodResolver } from '../entitlements/usage-period.resolver';
 import { createSessionToken, hashSessionToken } from './session-token';
 import type { SessionService } from './session.service';
 
@@ -329,7 +331,7 @@ function buildService(state: FakeState): {
     // The real one. It is a pure reader over the transaction client, so the fake
     // above is all it needs — and stubbing it would make the seat-cap tests
     // below assert against a mock instead of against the counting rule.
-    new PlanLimitsService(),
+    new PlanLimitsService(new UsageCounterService(new UsagePeriodResolver())),
   );
 
   return { invites, recorded, tenantContext };

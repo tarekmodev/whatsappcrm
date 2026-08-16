@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
+import { EntitlementsModule } from '../entitlements/entitlements.module';
 import { WebhookEventsRepository } from './webhook-events.repository';
 import { WebhookIngestService } from './webhook-ingest.service';
 import { WebhookQueueRunner } from './webhook-queue.runner';
@@ -27,6 +28,10 @@ import { WhatsAppWebhookController } from './whatsapp-webhook.controller';
  * by its own queue, never called by another module.
  */
 @Module({
+  // `EntitlementsModule` for the usage counter. Ingest meters conversations
+  // opened; it reads no limit and refuses nothing — a customer's message is
+  // stored whatever the plan says (TAR-405).
+  imports: [EntitlementsModule],
   controllers: [WhatsAppWebhookController],
   providers: [
     WebhookEventsRepository,
