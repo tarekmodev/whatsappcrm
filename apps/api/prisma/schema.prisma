@@ -1290,7 +1290,12 @@ model User {
   sentMessages          Message[]
   uploadedMedia         MediaObject[]
   internalNotes         InternalNote[]
-  assignedTickets       Ticket[]
+  assignedTickets       Ticket[]             @relation("TicketAssignee")
+  /// The two sides of TAR-30's per-agent breakdown (0010 decision 4). Named
+  /// because there are now three relations between `User` and `Ticket`, and
+  /// Prisma refuses more than one unnamed relation between a pair of models.
+  ticketsFirstResponded Ticket[]             @relation("TicketFirstResponder")
+  ticketsResolved       Ticket[]             @relation("TicketResolver")
   ticketEvents          TicketEvent[]
   assignmentRules       AssignmentRule[]
   assignmentCursors     AssignmentState[]
@@ -2044,24 +2049,91 @@ model Ticket {
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  conversation  Conversation?  @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-  contact       Contact?       @relation(fields: [tenantId, contactId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-  assignedUser  User?          @relation(fields: [tenantId, assignedUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-  assignedTeam  Team?          @relation(fields: [tenantId, assignedTeamId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-  events        TicketEvent[]
-  slaTimers     SlaTimer[]
-  notifications Notification[]
-  handoffEvents HandoffEvent[]
+  /// **Who** answered and **who** resolved, recorded when it happens (TAR-30,
+  /// 0010 decision 4). The per-agent breakdown needs both and neither was
+  /// recorded anywhere: `sla-timer.service.ts` writes the `first_response`
+  /// event with no actor on purpose — "the timer observed the reply, it did not
+  /// make it".
+  ///
+  /// Denormalised deliberately, and the two rejected alternatives are the
+  /// reason. Deriving the responder from `messages` at query time is a second
+  /// implementation of `stampFirstResponse`'s five-clause definition of "who
+  /// answered", correct until somebody changes one of them; attributing to
+  /// `assigned_user_id` rewrites history, because a ticket reassigned in March
+  /// moves its January response time onto a different agent's row after that
+  /// period was reported to a client.
+  ///
+  /// **Null means "not recorded"**, which the report renders as its
+  /// `unattributed` row rather than redistributing. The backfill is best-effort
+  /// (0010 decision 4) and inherits 0006 risk 3 — a reply sent on a second
+  /// conversation for a multi-number tenant is invisible to both the stamp and
+  /// the backfill.
+  ///
+  /// Neither column is ever written by a read path, and nothing but the two
+  /// single writers below writes them at all:
+  /// `SlaTimerService.stampFirstResponse` and `TicketCommandService`, each in
+  /// the transaction that already establishes the fact.
+  firstResponseUserId String? @map("first_response_user_id") @db.Uuid
+  resolvedByUserId    String? @map("resolved_by_user_id") @db.Uuid
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation   Conversation?  @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  contact        Contact?       @relation(fields: [tenantId, contactId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  /// Three relations from this model to `User` now, so all three carry a name:
+  /// Prisma cannot disambiguate more than one unnamed relation between the same
+  /// pair of models, and naming only the new ones is a schema error rather than
+  /// a style choice. The relation name is a client-side concept — it changes no
+  /// column and no foreign-key constraint name.
+  assignedUser   User?          @relation("TicketAssignee", fields: [tenantId, assignedUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  firstResponder User?          @relation("TicketFirstResponder", fields: [tenantId, firstResponseUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  resolver       User?          @relation("TicketResolver", fields: [tenantId, resolvedByUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  assignedTeam   Team?          @relation(fields: [tenantId, assignedTeamId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  events         TicketEvent[]
+  slaTimers      SlaTimer[]
+  notifications  Notification[]
+  handoffEvents  HandoffEvent[]
   /// Automation-written ticket tags (TAR-27). `TicketResponse.tags` is mapped
   /// from here, and the existing ticket queries take one batched join.
-  tags          TicketTag[]
-  workflowRuns  WorkflowRun[]
+  tags           TicketTag[]
+  workflowRuns   WorkflowRun[]
 
   @@unique([tenantId, number])
   @@unique([tenantId, id])
   /// Ticket queues and supervisor dashboards (TAR-39, index table).
   @@index([tenantId, status, priority, createdAt(sort: Desc)])
+  /// The three range anchors `tickets_reporting_metrics_idx` cannot serve
+  /// (TAR-428, completing ADR 0010's data model).
+  ///
+  /// 0010 decision 2 anchors each metric on the timestamp that makes it true —
+  /// response time on `first_response_at`, resolution on `resolved_at`,
+  /// closed-unworked on `closed_at` — so each of those is a range on its own
+  /// column, and a range needs its column as a **start condition**.
+  /// `tickets_reporting_metrics_idx` below leads with `(tenant_id, created_at)`
+  /// and puts `first_response_at` fifth and `resolved_at` sixth, unreachable
+  /// without an equality on everything before them; a report deliberately spans
+  /// every status and every assignee. `closed_at` is not in it at all. That is
+  /// TAR-427's own argument against `(tenant_id, status, priority, created_at
+  /// DESC)`, applied to the other three anchors.
+  ///
+  /// **No `(tenant_id, created_at)` here on purpose**: TAR-427's index leads
+  /// with exactly that pair and covers the aggregated columns too, so the
+  /// created-at anchor and the daily series are already served.
+  ///
+  /// Not partial, though `first_response_at IS NOT NULL` would halve two of
+  /// them: Prisma cannot express an index predicate, and an index created
+  /// outside this file is something `migrate dev` proposes to drop. The same
+  /// trade `sla_timers` documents, with the same escalation — make them partial
+  /// out of band, with a spec asserting their definition, once size makes the
+  /// drift caveat worth paying.
+  ///
+  /// Three more btrees on the most-written table, on top of TAR-427's. If that
+  /// has to be cut, ADR 0010 risk 4 names the lever: `(tenant_id, closed_at)`
+  /// serves the supplementary `closedWithoutResolution` count alone, and
+  /// dropping that index and that response field together is a coherent
+  /// reduction. The other two are load-bearing for TAR-30's stated metrics.
+  @@index([tenantId, firstRespondedAt])
+  @@index([tenantId, resolvedAt])
+  @@index([tenantId, closedAt])
   /// The `ticket:read` (no `_all`) queue, the ticket half of the same agent
   /// scope as `conversations` above, carrying its own sort key for the same
   /// reason. Measured: the narrower index still applied the scope, but every
@@ -3041,14 +3113,42 @@ model HandoffEvent {
 // Canned responses — TAR-31
 // ---------------------------------------------------------------------------
 
+/// The tenant-shared quick-reply library of TAR-31. Four bounds live in the
+/// database and cannot appear here — Prisma has no syntax for a CHECK and its
+/// describer ignores them, so `migrate dev` proposes neither to create nor to
+/// drop `canned_responses_shortcut_format`, `_title_length`, `_body_length` or
+/// `_is_shared`, and that is not drift. `src/prisma/canned-response-schema.int-spec.ts`
+/// fails if any of them goes missing (TAR-475).
 model CannedResponse {
   id              String   @id @default(uuid(7)) @db.Uuid
   tenantId        String   @map("tenant_id") @db.Uuid
-  /// What an agent types to expand it, e.g. `/refund`.
-  shortcut        String
+  /// What an agent types to expand it, leading `/` included, e.g. `/refund`.
+  ///
+  /// `citext`, on the same reasoning as `tenants.slug` and `teams.name`
+  /// (conventions, rule 6): this is a *unique* key within the tenant that a
+  /// human types, so `/Hours` and `/hours` colliding on the unique index is the
+  /// correct answer. It is also what makes the console's case-insensitive
+  /// picker agree with the database about which row `/HOURS` means — decision 4
+  /// of 0011 has the shortcut resolved client-side, against a local copy.
+  ///
+  /// A CHECK constraint holds it to `^/[a-z0-9][a-z0-9_-]{0,38}$`: 40
+  /// characters including the slash, matching what
+  /// `CANNED_RESPONSE_LIMITS.shortcutLength` publishes.
+  shortcut        String   @db.Citext
+  /// The picker's label, 1..80 characters by CHECK. Never the body — a 4 kB
+  /// preview is not a menu item.
   title           String
+  /// Literal text, no interpolation at v1. 1..4096 characters by CHECK, 4096
+  /// being `SendTextInputSchema.body`'s ceiling, so an inserted body is always
+  /// sendable as-is.
   body            String
+  /// Always true at v1, enforced by CHECK rather than remembered: TAR-31 scopes
+  /// this to a tenant-shared library. The constraint is the seam a future
+  /// personal-responses story drops — at which point the *audience* changes
+  /// too, from the tenant room to the owner's (0011, open question 3).
   isShared        Boolean  @default(true) @map("is_shared")
+  /// Set from the writing principal. Nullable and `NoAction`, so the row
+  /// survives its creator being removed from the tenant.
   createdByUserId String?  @map("created_by_user_id") @db.Uuid
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -3056,7 +3156,21 @@ model CannedResponse {
   tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdBy User?  @relation(fields: [tenantId, createdByUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
 
+  /// Case-insensitive since `shortcut` became `citext`. `tenant_id` leads it
+  /// (conventions, rule 3), so a conflict can only ever be caused by this
+  /// tenant's own row — which is also what stops it being used as an oracle for
+  /// another tenant's shortcut namespace. It serves the list's
+  /// `ORDER BY shortcut` too, so that read needs no index of its own.
   @@unique([tenantId, shortcut])
+  /// Kept although **no application query reads by creator** — the composite
+  /// foreign key does. Deleting a `users` row makes Postgres check the
+  /// referencing side, and it does not index that side for you; without this,
+  /// each such delete is a sequential scan of the whole table. Removing one user
+  /// is a status change rather than a delete (rule 4), but TAR-397's tenant
+  /// purge cascades `users` and `canned_responses` together. 0011 recommends
+  /// dropping this as write amplification; writes here are a supervisor's, "a
+  /// few times a month", so the saving is not worth a seq scan on the purge path
+  /// (TAR-475).
   @@index([tenantId, createdByUserId])
   @@map("canned_responses")
 }

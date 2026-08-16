@@ -21,7 +21,7 @@ import {
  */
 
 export const metadata: Metadata = {
-  title: `${content.people.title} · ${content.app.name}`,
+  title: content.people.title,
   description: content.people.subtitle,
 };
 

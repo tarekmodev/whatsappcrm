@@ -1,0 +1,76 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/*
+ * A fixed box, for the same reason `BrandLogo` uses one: the API publishes a
+ * logo's bytes and not its dimensions, so a box sized from the image is zero
+ * until it decodes and shifts the card when it lands.
+ */
+.preview {
+  display: grid;
+  place-items: center;
+  block-size: calc(var(--size-brand-block-lg) + var(--space-5));
+  padding: var(--space-3);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+
+/*
+ * A logo drawn for a dark rail is usually white, and on a white card it is
+ * invisible — which reads as a failed upload rather than as a correct one.
+ */
+.preview[data-tone='rail'] {
+  background: var(--color-rail);
+}
+
+.image {
+  max-block-size: 100%;
+  max-inline-size: 100%;
+  object-fit: contain;
+}
+
+/* A favicon is 16–32px in use; showing it larger would flatter a blurry one. */
+.preview[data-kind='favicon'] .image {
+  inline-size: var(--size-icon-md);
+  block-size: var(--size-icon-md);
+  image-rendering: crisp-edges;
+}
+
+.empty {
+  margin: 0;
+  max-inline-size: var(--measure-body);
+  text-align: center;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+.preview[data-tone='rail'] .empty {
+  color: var(--color-on-rail);
+}
+
+.meta {
+  margin: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.actions > * {
+  flex: 1 1 auto;
+}
+
+@media (min-width: 30rem) {
+  .actions > * {
+    flex: 0 0 auto;
+  }
+}

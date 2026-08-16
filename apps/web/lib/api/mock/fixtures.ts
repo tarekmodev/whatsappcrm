@@ -11,9 +11,11 @@ import {
   type SlaAlertResponse,
   type Tag,
   type TeamResponse,
+  type TenantDomain,
   type TenantLifecycleResponse,
   type TenantResponse,
   type TenantRole,
+  type TicketEvent,
   type TicketResponse,
   type TicketRouting,
   type TicketSla,
@@ -156,6 +158,8 @@ const ASSIGNMENT_RULE_IDS = {
 
 const TENANT_DOMAIN_IDS = {
   northwindPlatform: '0192f00e-0000-7000-8000-000000000e01',
+  /** A custom domain mid-verification (TAR-418). */
+  northwindCustom: '0192f00e-0000-7000-8000-000000000e02',
   southwindPlatform: '0192f00e-0000-7000-8000-000000000e99',
 } as const;
 
@@ -232,6 +236,8 @@ export type MockTicket = TicketResponse &
  */
 export type MockSlaAlert = SlaAlertResponse & TenantScoped & { readonly recipientUserId: string };
 
+export type MockTicketEvent = TicketEvent & TenantScoped;
+
 /**
  * One tenant's onboarding checklist. Keyed by tenant in the store rather than by
  * an id of its own: a tenant has exactly one, and giving it a surrogate id would
@@ -250,9 +256,13 @@ export type MockOnboardingChecklist = TenantScoped & {
  * `connect_whatsapp` and `invite_agents` are flipped to `completed` by the
  * handlers that do the real thing (connecting a WABA, sending an invitation), not
  * by a client PATCH: completion is server-derived, per `contracts/onboarding.ts`.
- * `set_branding` therefore stays pending until TAR-29 ships a branding write —
- * which is exactly the case the skip path exists for, and worth being able to
- * walk.
+ *
+ * `set_branding` stays pending, and the reason changed with TAR-418: the branding
+ * write it was waiting for now exists (`PATCH /v1/tenant`), but that handler does
+ * not report to the checklist. Deriving it belongs with whoever owns the two
+ * together — TAR-407 defines what "done" means for a step and TAR-420 owns the
+ * real endpoint — so this is left honest rather than half-wired here. The skip
+ * path still covers it, and remains worth being able to walk.
  */
 export const MOCK_ONBOARDING_CHECKLISTS: readonly MockOnboardingChecklist[] = [
   MOCK_TENANT_ID,
@@ -268,6 +278,103 @@ export const MOCK_ONBOARDING_CHECKLISTS: readonly MockOnboardingChecklist[] = [
   completedAt: null,
   updatedAt: MOCK_ONBOARDING_UPDATED_AT,
 }));
+
+// --- Tenant domains (TAR-29) ------------------------------------------------
+
+/**
+ * A tenant's hostnames, mutable independently of the tenant row.
+ *
+ * They live in their own fixture — and their own store map — rather than only
+ * inline on `MOCK_TENANTS`, because they are added, verified and removed one at
+ * a time. `MOCK_TENANTS[].domains` is composed from this list below, so there is
+ * exactly one source of truth and a verify cannot leave the tenant row stale.
+ */
+export type MockTenantDomain = TenantDomain & TenantScoped;
+
+export const MOCK_TENANT_DOMAINS: readonly MockTenantDomain[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: TENANT_DOMAIN_IDS.northwindPlatform,
+    hostname: 'northwind.app.example.com',
+    kind: 'platform',
+    status: 'live',
+    isPrimary: true,
+    verifiedAt: '2026-07-01T09:00:00.000Z',
+    activatedAt: '2026-07-01T09:05:00.000Z',
+    // Ours to issue; there was never anything to prove or to point.
+    verification: null,
+    routing: null,
+    createdAt: '2026-07-01T09:00:00.000Z',
+  },
+  {
+    /**
+     * A claim mid-verification — the state the domains screen has the most to
+     * say about, and the one a reviewer should meet first.
+     */
+    tenantId: MOCK_TENANT_ID,
+    id: TENANT_DOMAIN_IDS.northwindCustom,
+    hostname: 'support.northwind.example',
+    kind: 'custom',
+    status: 'pending_verification',
+    isPrimary: false,
+    verifiedAt: null,
+    activatedAt: null,
+    verification: {
+      recordType: 'TXT',
+      recordName: '_whatsappcrm-challenge.support.northwind.example',
+      // 32 hex characters, matching what the API's CSPRNG issues. A literal
+      // rather than a generated value: a token that changed per render would
+      // break hydration and make the test that reads it time-dependent.
+      recordValue: 'whatsappcrm-domain-verification=7f3c1a9be25d4867b0a1c4e8d9f2b6a3',
+      lastCheckedAt: '2026-08-14T09:30:00.000Z',
+      lastFailureReason: 'record_not_found',
+      expiresAt: '2026-08-21T09:00:00.000Z',
+    },
+    routing: {
+      recordType: 'CNAME',
+      recordName: 'support.northwind.example',
+      recordValue: 'whatsappcrm-web.onrender.example',
+    },
+    createdAt: '2026-08-14T09:00:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: TENANT_DOMAIN_IDS.southwindPlatform,
+    hostname: 'southwind.app.example.com',
+    kind: 'platform',
+    status: 'live',
+    isPrimary: true,
+    verifiedAt: '2026-06-01T09:00:00.000Z',
+    activatedAt: '2026-06-01T09:05:00.000Z',
+    verification: null,
+    routing: null,
+    createdAt: '2026-06-01T09:00:00.000Z',
+  },
+];
+
+/**
+ * The wire shape: every domain this tenant holds, without the scoping column.
+ *
+ * Field by field rather than by rest-spread, matching `stripTenant` in the
+ * handlers: a column added to `MockTenantDomain` would otherwise be published by
+ * a spread without anyone deciding to, and this row is the one place where
+ * publishing a column by accident is a cross-tenant leak.
+ */
+function domainsOf(tenantId: string): TenantDomain[] {
+  return MOCK_TENANT_DOMAINS.filter((domain) => domain.tenantId === tenantId).map((domain) => ({
+    id: domain.id,
+    hostname: domain.hostname,
+    kind: domain.kind,
+    status: domain.status,
+    isPrimary: domain.isPrimary,
+    verifiedAt: domain.verifiedAt,
+    activatedAt: domain.activatedAt,
+    verification: domain.verification,
+    routing: domain.routing,
+    createdAt: domain.createdAt,
+  }));
+}
 
 function contact(id: string, displayName: string, phone: string): ConversationResponse['contact'] {
   return {
@@ -298,23 +405,25 @@ export const MOCK_TENANTS: readonly TenantResponse[] = [
     name: 'Northwind Traders',
     slug: 'northwind',
     status: 'trialing',
+    /**
+     * Deliberately nothing like the platform's green (TAR-418): the isolation
+     * criterion is that one tenant's branding is never observable under
+     * another's, and two tenants that both looked like the platform could not
+     * tell a working implementation from a broken one.
+     *
+     * `logo` and `favicon` are `null` — the state every tenant starts in, and
+     * the one the wordmark fallback exists for. A seeded logo would hide the
+     * path most tenants actually run.
+     */
     branding: {
-      logoUrl: null,
-      faviconUrl: null,
-      primaryColor: '#16a34a',
-      accentColor: '#15803d',
       productName: 'Northwind Support',
+      primaryColor: '#0f6fde',
+      accentColor: '#7c3aed',
       supportEmail: 'support@northwind.example',
+      logo: null,
+      favicon: null,
     },
-    domains: [
-      {
-        id: TENANT_DOMAIN_IDS.northwindPlatform,
-        hostname: 'northwind.app.example.com',
-        kind: 'platform_subdomain',
-        verifiedAt: '2026-07-01T09:00:00.000Z',
-        isPrimary: true,
-      },
-    ],
+    domains: domainsOf(MOCK_TENANT_ID),
     trialEndsAt: TRIAL_ENDS_AT,
     createdAt: '2026-07-01T09:00:00.000Z',
   },
@@ -325,22 +434,16 @@ export const MOCK_TENANTS: readonly TenantResponse[] = [
     slug: 'southwind',
     status: 'active',
     branding: {
-      logoUrl: null,
-      faviconUrl: null,
-      primaryColor: '#2563eb',
-      accentColor: '#1d4ed8',
       productName: 'Southwind Helpdesk',
+      // Unmistakably not Northwind's, so a leak reads as a wrong colour rather
+      // than as a slightly different shade of the same one.
+      primaryColor: '#b45309',
+      accentColor: '#0f766e',
       supportEmail: null,
+      logo: null,
+      favicon: null,
     },
-    domains: [
-      {
-        id: TENANT_DOMAIN_IDS.southwindPlatform,
-        hostname: 'southwind.app.example.com',
-        kind: 'platform_subdomain',
-        verifiedAt: '2026-06-01T09:00:00.000Z',
-        isPrimary: true,
-      },
-    ],
+    domains: domainsOf(OTHER_TENANT_ID),
     trialEndsAt: null,
     createdAt: '2026-06-01T09:00:00.000Z',
   },
@@ -1400,6 +1503,126 @@ export const MOCK_ASSIGNMENT_RULES: readonly MockAssignmentRule[] = [
   },
 ];
 
+// --- Ticket events (TAR-32, ADR 0011 decision 4) -----------------------------
+//
+// The append-only per-ticket trail the history view reads. Seeded on Fatima's
+// urgent ticket only, so the surface has one ticket with a real story on it and
+// the rest genuinely render the empty state — a fixture set where every ticket
+// has a history would hide it.
+//
+// The story is the one TAR-32 is about, in order: opened, routed to Billing by a
+// rule, handed from Liang to Amina with a reason, then escalated when the refund
+// decision needed somebody senior. It covers every branch the renderer has:
+// an actor and no actor, a reason and no reason, an assignment on both sides, an
+// escalation addressed to a person and one addressed to nobody in particular.
+//
+// The prefix continues the file's one-per-entity-type rule: `…010`, after the
+// SLA timers' `…00f`.
+
+const TICKET_EVENT_IDS = {
+  fatimaCreated: '0192f010-0000-7000-8000-000000001001',
+  fatimaRouted: '0192f010-0000-7000-8000-000000001002',
+  fatimaReassigned: '0192f010-0000-7000-8000-000000001003',
+  fatimaEscalatedToPriya: '0192f010-0000-7000-8000-000000001004',
+  fatimaEscalatedToNobody: '0192f010-0000-7000-8000-000000001005',
+  otherTenant: '0192f010-0000-7000-8000-000000001099',
+} as const;
+
+const NO_ASSIGNMENT = {
+  fromUserId: null,
+  fromTeamId: null,
+  toUserId: null,
+  toTeamId: null,
+} as const;
+
+function ticketEvent(
+  overrides: Pick<MockTicketEvent, 'id' | 'ticketId' | 'type' | 'createdAt'> &
+    Partial<MockTicketEvent>,
+): MockTicketEvent {
+  return {
+    tenantId: MOCK_TENANT_ID,
+    actorUserId: null,
+    fromValue: null,
+    toValue: null,
+    assignment: null,
+    reason: null,
+    cause: null,
+    ...overrides,
+  };
+}
+
+export const MOCK_TICKET_EVENTS: readonly MockTicketEvent[] = [
+  ticketEvent({
+    id: TICKET_EVENT_IDS.fatimaCreated,
+    ticketId: TICKET_IDS.fatimaUrgent,
+    type: 'created',
+    // No actor and no cause: the auto-linker opened it when Fatima wrote in.
+    createdAt: '2026-08-09T14:05:00.000Z',
+  }),
+  ticketEvent({
+    id: TICKET_EVENT_IDS.fatimaRouted,
+    ticketId: TICKET_IDS.fatimaUrgent,
+    type: 'assigned',
+    // Routing's own write, so `automation` rather than `agent` — the badge that
+    // distinguishes "a rule did this" from "a person did this".
+    cause: 'automation',
+    assignment: { ...NO_ASSIGNMENT, toUserId: USER_IDS.liang, toTeamId: TEAM_IDS.billing },
+    createdAt: '2026-08-09T14:05:02.000Z',
+  }),
+  ticketEvent({
+    id: TICKET_EVENT_IDS.fatimaReassigned,
+    ticketId: TICKET_IDS.fatimaUrgent,
+    // A reassignment is an `assigned` whose previous holder happened to be
+    // non-null — not a third type, which would make every consumer learn all
+    // three (ADR 0011 decision 4).
+    type: 'assigned',
+    actorUserId: USER_IDS.liang,
+    cause: 'agent',
+    assignment: {
+      fromUserId: USER_IDS.liang,
+      fromTeamId: TEAM_IDS.billing,
+      toUserId: USER_IDS.amina,
+      toTeamId: TEAM_IDS.billing,
+    },
+    reason: 'Going off shift and Amina has the refund history on this account.',
+    createdAt: '2026-08-09T16:40:00.000Z',
+  }),
+  ticketEvent({
+    id: TICKET_EVENT_IDS.fatimaEscalatedToPriya,
+    ticketId: TICKET_IDS.fatimaUrgent,
+    type: 'escalated',
+    actorUserId: USER_IDS.amina,
+    cause: 'agent',
+    // Addressed to a named supervisor: `toValue` carries the id.
+    toValue: USER_IDS.priya,
+    reason: 'Customer is threatening a chargeback and wants a refund decision today.',
+    createdAt: '2026-08-10T08:45:00.000Z',
+  }),
+  ticketEvent({
+    id: TICKET_EVENT_IDS.fatimaEscalatedToNobody,
+    ticketId: TICKET_IDS.fatimaUrgent,
+    type: 'escalated',
+    actorUserId: USER_IDS.amina,
+    cause: 'agent',
+    // `toValue` null on purpose, and it is meaningful rather than missing: the
+    // escalation went to whoever supervises this ticket rather than to a person.
+    // Re-escalation is allowed, so a second one an hour later is legitimate.
+    reason: 'Still nothing back — raising it again to whoever is covering Billing.',
+    createdAt: '2026-08-10T09:50:00.000Z',
+  }),
+  ticketEvent({
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: TICKET_EVENT_IDS.otherTenant,
+    ticketId: TICKET_IDS.otherTenant,
+    type: 'escalated',
+    actorUserId: USER_IDS.otherTenant,
+    cause: 'agent',
+    reason: 'This must never appear in another tenant’s history.',
+    createdAt: '2026-06-02T09:30:00.000Z',
+  }),
+];
+
 // --- SLA alerts (TAR-26) ----------------------------------------------------
 //
 // One row per recipient per breached timer, which is what makes them the
@@ -1687,6 +1910,7 @@ export const MOCK_IDS = {
   notes: NOTE_IDS,
   templates: TEMPLATE_IDS,
   tickets: TICKET_IDS,
+  ticketEvents: TICKET_EVENT_IDS,
   tags: TAG_IDS,
   customFields: CUSTOM_FIELD_IDS,
   assignmentRules: ASSIGNMENT_RULE_IDS,

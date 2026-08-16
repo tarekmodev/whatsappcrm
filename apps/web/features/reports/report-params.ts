@@ -4,6 +4,7 @@ import {
   ReportScopeSchema,
   reportRangeDays,
   type DashboardMetricsQuery,
+  type ReportExportSection,
   type ReportScope,
 } from '@whatsappcrm/contracts';
 import { DEFAULT_RANGE_DAYS } from '@/features/reports/constants';
@@ -65,6 +66,33 @@ function parseRange(
   return isUsableRange(parsedFrom.data, parsedTo.data)
     ? { from: parsedFrom.data, to: parsedTo.data }
     : defaultRange(today);
+}
+
+/**
+ * The applied query as a search string — the **one** serialisation both reads
+ * use (ADR 0009 decision 1, part one).
+ *
+ * It lives here rather than beside the metrics client because the export is
+ * fetched by the browser and `lib/api/reports.ts` is `server-only`: a second
+ * copy for the client is precisely the drift this function exists to prevent.
+ * Passing `section` adds the export's only extra parameter, which selects a
+ * serialiser and touches nothing about the figures.
+ */
+export function reportSearchParams(
+  query: DashboardMetricsQuery,
+  section?: ReportExportSection,
+): URLSearchParams {
+  const params = new URLSearchParams({ from: query.from, to: query.to, scope: query.scope });
+
+  if (query.assignedTeamId !== undefined) {
+    params.set('assignedTeamId', query.assignedTeamId);
+  }
+
+  if (section !== undefined) {
+    params.set('section', section);
+  }
+
+  return params;
 }
 
 /**

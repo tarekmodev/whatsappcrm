@@ -32,7 +32,7 @@ import { parseInboxParams } from '@/features/inbox/inbox-params';
  */
 
 export const metadata: Metadata = {
-  title: `${content.inbox.title} · ${content.app.name}`,
+  title: content.inbox.title,
   description: content.app.description,
 };
 

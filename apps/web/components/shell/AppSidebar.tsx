@@ -1,8 +1,10 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
+import type { TenantBranding } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { routes } from '@/lib/routes';
 import { RAIL_NAV_ID } from '@/lib/shell/rail';
+import { BrandLogo } from '@/components/brand/BrandLogo';
 import { RailNav } from './RailNav';
 import { RailToggle } from './RailToggle';
 import type { NavItem } from './navigation';
@@ -22,9 +24,16 @@ import styles from './AppSidebar.module.css';
  */
 export function AppSidebar({
   items,
+  branding,
   footer,
 }: {
   items: readonly NavItem[];
+  /**
+   * The resolved tenant's branding. Passed in rather than read here, so the
+   * shell owns no data access and the value cannot outlive the request it was
+   * resolved for (`lib/branding/read-branding.ts`).
+   */
+  branding: TenantBranding;
   /**
    * Pinned to the foot of the rail, below the navigation. `RailCard` is the
    * shape it expects; see that component for what belongs there and why nothing
@@ -38,16 +47,22 @@ export function AppSidebar({
     // inside is the landmark.
     <div className={styles.rail}>
       <div className={styles.brandRow}>
-        <Link href={routes.inbox()} className={styles.brand}>
-          {/*
-            Two spellings of the same wordmark: the full name, and the initial
-            that survives the collapsed width. Both are content, so TAR-29's
-            white-label branding replaces them in one place.
-          */}
-          <span className={styles.brandMark} aria-hidden="true">
-            {content.app.name.charAt(0)}
-          </span>
-          <span className={styles.brandName}>{content.app.name}</span>
+        <Link href={routes.inbox()} className={styles.brand} aria-label={branding.productName}>
+          {branding.logo === null ? (
+            <>
+              {/*
+                Two spellings of the same wordmark: the full name, and the
+                initial that survives the collapsed width. Both come from the
+                tenant's branding, so white-labelling replaces them here.
+              */}
+              <span className={styles.brandMark} aria-hidden="true">
+                {branding.productName.charAt(0)}
+              </span>
+              <span className={styles.brandName}>{branding.productName}</span>
+            </>
+          ) : (
+            <BrandLogo branding={branding} />
+          )}
         </Link>
         <RailToggle />
       </div>

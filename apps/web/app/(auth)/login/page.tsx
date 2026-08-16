@@ -18,7 +18,7 @@ import { LoginForm } from '@/features/auth/components/LoginForm';
  */
 
 export const metadata: Metadata = {
-  title: `${content.auth.signInTitle} · ${content.app.name}`,
+  title: content.auth.signInTitle,
   description: content.auth.signInDescription,
 };
 

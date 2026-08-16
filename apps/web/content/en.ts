@@ -1,14 +1,18 @@
 import type {
   AgentAvailability,
   ConversationStatus,
+  DomainVerificationFailureReason,
   FallbackAssignmentReason,
   MessageStatus,
   MessageType,
   OnboardingStepId,
   OnboardingStepStatus,
   SlaTargetKind,
+  TenantDomainKind,
+  TenantDomainStatus,
   TenantRole,
   TenantStatus,
+  TicketEventType,
   TicketPriority,
   TicketStatus,
   UserStatus,
@@ -71,6 +75,8 @@ export const content = {
     assignment: 'Assignment',
     workflows: 'Workflows',
     whatsapp: 'WhatsApp',
+    branding: 'Branding',
+    domains: 'Domains',
     security: 'Security',
     onboarding: 'Getting started',
     /** The rail's own expand/collapse boundary — not the drawer's open/close. */
@@ -533,6 +539,139 @@ export const content = {
      * be worse than saying who actually did it, which is the customer.
      */
     reopenedByCustomer: 'Reopened — customer replied',
+
+    // --- Handing a ticket on, and asking for help (TAR-32, ADR 0011) --------
+    /**
+     * "Handoff" rather than "Assignment": this card is about giving work away
+     * and asking for help, and the word an agent uses for both is a handoff.
+     * The card that *places* a ticket nobody holds lives on the supervisor's
+     * assignment surface and keeps its own word.
+     */
+    handoffHeading: 'Handoff',
+    handoffDescription:
+      'Hand this ticket to a teammate, or ask a supervisor to look at it. Both are recorded in its history.',
+    reassign: 'Reassign',
+    escalate: 'Escalate',
+    /**
+     * Said rather than left as two missing buttons. Both permissions are in
+     * every role's set today, so this is the rare case — a role that has had
+     * them taken away — and a card with no controls and no explanation reads as
+     * broken.
+     */
+    handoffNotPermitted:
+      'Your role can read this ticket but not hand it on or escalate it. Ask a workspace admin.',
+
+    reassignTitle: (label: string) => `Reassign ${label}`,
+    reassignDescription:
+      'The person you pick takes it over from here. Your reason is the first thing they read in its history.',
+    reassignAgentLabel: 'Hand it to',
+    /**
+     * Says what the list *is*, because the API bounds it: without
+     * `ticket:assign` a caller may hand a ticket only to somebody they share a
+     * team with, so a name missing from here is a rule rather than an oversight.
+     */
+    reassignAgentHint: 'People you share a team with, plus anyone your role can assign to.',
+    reassignReasonLabel: 'Why you are handing it on',
+    reassignReasonHint: 'The next person reads this before anything else. Say what is left to do.',
+    reassignSubmit: 'Reassign ticket',
+    reassignSuccess: (label: string, agentName: string) => `${label} is now with ${agentName}`,
+    /**
+     * The bound above, seen from inside the dialog with nobody on the other side
+     * of it. An empty picker would read as a broken control; this says what is
+     * missing and who can fix it.
+     */
+    reassignNoTeammates:
+      'You share no team with anyone who could take this. Ask a supervisor to reassign it.',
+
+    escalateTitle: (label: string) => `Escalate ${label}`,
+    /**
+     * The first sentence is load-bearing and is the thing agents get wrong:
+     * escalating does **not** hand the ticket over. Saying so here is what stops
+     * "Escalate" being read as the button that loses your work.
+     */
+    escalateDescription:
+      'You keep this ticket. A supervisor is asked to look at it, and your reason goes on its history.',
+    escalateSupervisorLabel: 'Ask someone in particular',
+    escalateSupervisorHint:
+      'Leave this as it is unless you need a specific person — otherwise whoever covers this ticket is asked.',
+    /** The `toUserId`-absent case, named rather than rendered as a blank option. */
+    escalateSupervisorAnyone: 'Whoever is covering this ticket',
+    escalateReasonLabel: 'What you need decided',
+    escalateReasonHint:
+      'Say what is stuck and what would unblock it. Include a deadline if there is one.',
+    escalateSubmit: 'Escalate ticket',
+    escalateSuccess: (label: string, count: number) =>
+      count === 1
+        ? `${label} escalated. 1 person has been told.`
+        : `${label} escalated. ${String(count)} people have been told.`,
+    /**
+     * `notifiedUserIds: []` is a real outcome, not a failure: a tenant with no
+     * active supervisor still gets the escalation recorded (ADR 0011
+     * decision 3). A green tick here would be a lie, and an error would blame an
+     * agent who did nothing wrong and cannot fix it.
+     */
+    escalateSuccessNobody: (label: string) =>
+      `${label} is recorded as escalated, but nobody in this workspace is set up to receive it. Ask a workspace admin.`,
+
+    /**
+     * Client-side because the field is required *before* submit — the form must
+     * not be submittable without one (TAR-32 AC1). The API refuses the same
+     * request a second time; this is the version the agent can act on without a
+     * round trip.
+     */
+    reasonRequiredError:
+      'Add a reason — it is what makes the handoff make sense to the next person.',
+    reasonTooShortError: (minLength: number) =>
+      `Use at least ${String(minLength)} characters, so the history says something.`,
+    reasonTooLongError: (maxLength: number) => `Use at most ${String(maxLength)} characters`,
+
+    // --- The history the two of them write ----------------------------------
+    historyHeading: 'History',
+    historyDescription: 'Everything that has happened to this ticket, newest first.',
+    historyLoading: 'Loading this ticket’s history',
+    historyEmptyHeading: 'Nothing recorded yet',
+    historyEmptyBody:
+      'Status changes, handoffs and escalations appear here as they happen, with who did them and why.',
+    /** The API answers one page; claiming a total would mean paging the whole log. */
+    historyMore: 'Older entries are not shown.',
+    historyReason: 'Reason',
+    historyBy: (name: string) => `by ${name}`,
+    /** No actor: routing, the SLA sweep and the auto-linker write through the same column. */
+    historyByAutomation: 'by the system',
+    historyActorUnresolved: 'another agent',
+
+    /**
+     * One line per event type, named by what happened rather than by the column
+     * that changed. `assigned` and `unassigned` are reused for reassignment
+     * (ADR 0011 decision 4), so their copy has to read correctly whether or not
+     * somebody held the ticket before — which is why the from/to detail is a
+     * separate line rather than baked into these.
+     */
+    historyEvents: {
+      created: 'Ticket opened',
+      conversation_linked: 'A message arrived on another conversation',
+      status_changed: 'Status changed',
+      priority_changed: 'Priority changed',
+      assigned: 'Handed on',
+      unassigned: 'Released',
+      escalated: 'Escalated',
+      assignment_deferred: 'Auto-assignment could not place it',
+      first_response: 'First reply sent',
+      sla_breached: 'SLA missed',
+      reopened: 'Reopened',
+      bot_handoff: 'Handed over by the chatbot',
+    } satisfies Record<TicketEventType, string>,
+
+    historyValueChange: (from: string, to: string) => `${from} → ${to}`,
+    historyHandedTo: (name: string) => `to ${name}`,
+    historyHandedFromTo: (from: string, to: string) => `from ${from} to ${to}`,
+    historyEscalatedTo: (name: string) => `to ${name}`,
+    /**
+     * A null `toValue` on an `escalated` event is meaningful rather than
+     * missing: the escalation was addressed to whoever supervises the ticket
+     * rather than to a person, and the two must not render the same.
+     */
+    historyEscalatedToAnyone: 'to whoever is covering this ticket',
   },
 
   /**
@@ -940,6 +1079,15 @@ export const content = {
      * that is the remedy ADR 0008 names for `all_at_capacity`.
      */
     assignTicketAgentHint: 'Anyone in this list can take it, including you — even at their limit.',
+    /**
+     * A flagged ticket routed to a team still carries `assignedTeamId`, and
+     * `ticketAssignRequiresReason` counts that as held — so the API requires a
+     * reason for this placement too (ADR 0011 decision 1). Asked for up front
+     * rather than discovered as a 400 after the supervisor has picked somebody.
+     */
+    assignTicketReasonLabel: 'Why this person',
+    assignTicketReasonHint:
+      'Auto-assignment could not place this, so the override is recorded on the ticket’s history.',
     assignTicketSubmit: 'Assign ticket',
     assignTicketSuccess: (ticketLabel: string, agentName: string) =>
       `${ticketLabel} assigned to ${agentName}`,
@@ -1773,6 +1921,174 @@ export const content = {
     },
   },
 
+  /**
+   * White-label branding (TAR-29). The copy an admin reads while changing what
+   * every other person in the tenant sees, so it says what each choice affects
+   * and where it will show up.
+   */
+  branding: {
+    title: 'Branding',
+    subtitle: 'Your logo, colours and product name, across the console and the sign-in screen.',
+    loading: 'Loading branding',
+
+    identityHeading: 'Identity',
+    identityDescription: 'What this workspace is called, and where people write for help.',
+    productNameLabel: 'Product name',
+    productNameHint:
+      'Replaces the platform name in the console, the sign-in screen and the browser tab.',
+    supportEmailLabel: 'Support email',
+    supportEmailHint: 'Shown to your agents when something needs a human. Leave empty to hide it.',
+
+    coloursHeading: 'Colours',
+    coloursDescription:
+      'The primary colour carries every action. The decorative colour is used for backdrops and highlights only, never behind text.',
+    primaryColorLabel: 'Primary colour',
+    primaryColorHint: 'Buttons, links, focus rings and the current-page marker.',
+    accentColorLabel: 'Decorative colour',
+    accentColorHint:
+      'Backdrops and highlights. Never used behind text, so it is not contrast-checked.',
+    hexLabel: (label: string) => `${label} hex value`,
+    /**
+     * Reported rather than enforced. Every text pair the console derives is
+     * corrected to clear AA automatically, so a low-contrast pick is a taste
+     * problem, not a broken screen — and telling an admin their colour scored
+     * 2.1:1 is more useful than silently changing it.
+     */
+    contrastScore: (ratio: string) => `${ratio}:1 against its own text`,
+    contrastPasses: 'Meets WCAG AA',
+    contrastAdjusted: 'Text on this colour is adjusted automatically to stay readable',
+    resetColours: 'Reset to the default colours',
+
+    // --- Field-level refusals ------------------------------------------------
+    productNameRequired: 'Give this workspace a name',
+    productNameTooLong: (max: number) => `Use ${max} characters or fewer`,
+    supportEmailInvalid: 'Enter an email address, or leave it empty',
+    colorInvalid: 'Use a six-digit hex colour, like #067a52',
+
+    previewHeading: 'Preview',
+    previewDescription: 'Live, and exactly what the console will use once you save.',
+    previewButton: 'Primary action',
+    previewSecondaryButton: 'Secondary',
+    previewBadge: 'Highlight',
+    previewLinkText: 'A link in running text',
+    previewBodyText: 'Body text stays on the platform palette — only the accent family is yours.',
+
+    assetsHeading: 'Logo and favicon',
+    assetsDescription: 'PNG, JPEG or WebP. SVG is not accepted, because an SVG can carry script.',
+    logoLabel: 'Logo',
+    logoHint: 'Shown in the navigation rail, the mobile top bar and above the sign-in form.',
+    faviconLabel: 'Favicon',
+    faviconHint: 'The small icon in a browser tab.',
+    assetAlt: (productName: string) => `${productName} logo`,
+    chooseFile: (label: string) => `Choose a new ${label.toLowerCase()}`,
+    removeAsset: (label: string) => `Remove ${label.toLowerCase()}`,
+    noAsset: 'Nothing uploaded — the product name is shown instead.',
+    assetMeta: (size: string, updated: string) => `${size} · updated ${updated}`,
+    /** Checked in the browser before the upload is spent; the API checks again. */
+    tooLarge: (label: string, limit: string) => `That ${label.toLowerCase()} is over ${limit}.`,
+    wrongType: (label: string, types: string) =>
+      `That ${label.toLowerCase()} is not a supported image. Use ${types}.`,
+    uploading: 'Uploading',
+    uploadedToast: (label: string) => `${label} updated`,
+    removedToast: (label: string) => `${label} removed`,
+    savedToast: 'Branding saved',
+    removeConfirmTitle: (label: string) => `Remove the ${label.toLowerCase()}?`,
+    removeConfirmBody: (label: string) =>
+      `The ${label.toLowerCase()} disappears from every screen in this workspace immediately. You can upload a new one at any time.`,
+    removeConfirm: 'Remove',
+  },
+
+  /**
+   * Custom domains (TAR-29). Every string here is read by somebody who is about
+   * to edit DNS, so the records are quoted exactly and the states say what is
+   * true rather than what we hope.
+   */
+  domains: {
+    title: 'Domains',
+    subtitle: 'The addresses this workspace answers on.',
+    loading: 'Loading domains',
+
+    listHeading: 'Your domains',
+    listDescription:
+      'Your platform subdomain always works. Add your own hostname to serve the console from it.',
+    emptyHeading: 'No custom domain yet',
+    emptyBody:
+      'Add a hostname you control — support.example.com — and we will show you the DNS records to add.',
+
+    addButton: 'Add a domain',
+    addTitle: 'Add a domain',
+    hostnameLabel: 'Hostname',
+    hostnameHint: 'A hostname you control, without https:// — for example support.example.com.',
+    addSubmit: 'Add domain',
+    addedToast: (hostname: string) => `${hostname} added — add the DNS records to verify it`,
+
+    statusLabel: 'Status',
+    statuses: {
+      pending_verification: 'Awaiting DNS',
+      verified: 'Verified',
+      live: 'Live',
+      expired: 'Claim expired',
+    } satisfies Record<TenantDomainStatus, string>,
+    statusDescriptions: {
+      pending_verification:
+        'Add the TXT record below, then check again. DNS changes can take up to an hour to appear.',
+      verified:
+        'Ownership is proved. We are attaching the certificate — the domain starts serving traffic once that finishes.',
+      live: 'Serving traffic with a certificate.',
+      expired:
+        'This claim was not verified in time and has been released. Remove it and add the hostname again to start over.',
+    } satisfies Record<TenantDomainStatus, string>,
+    kinds: {
+      platform: 'Platform subdomain',
+      custom: 'Custom domain',
+    } satisfies Record<TenantDomainKind, string>,
+    primaryBadge: 'Primary',
+    primaryExplanation: 'Invite and password-reset links are sent to the primary domain.',
+
+    verificationHeading: 'Step 1 — prove you own it',
+    verificationBody: 'Add this TXT record at your DNS provider, then check again.',
+    routingHeading: 'Step 2 — point it at us',
+    routingBody: 'Once verified, add this record so traffic reaches the console.',
+    recordType: 'Type',
+    recordName: 'Name',
+    recordValue: 'Value',
+    copyRecord: (field: string) => `Copy the ${field.toLowerCase()}`,
+    copiedToast: 'Copied',
+    lastCheckedLabel: 'Last checked',
+    neverChecked: 'Not checked yet',
+    /** Followed by a relative time, so the claim's deadline is never a bare date. */
+    expiresLabel: 'Unverified claim released',
+
+    failureReasons: {
+      record_not_found:
+        'We could not find that TXT record yet. DNS changes can take up to an hour.',
+      record_mismatch:
+        'A TXT record exists at that name but its value does not match. Check for a typo or an old record.',
+      lookup_failed: 'We could not reach that domain’s nameservers. We will keep trying.',
+      lookup_timeout: 'The DNS lookup timed out. We will keep trying.',
+    } satisfies Record<DomainVerificationFailureReason, string>,
+
+    verifyButton: 'Check DNS',
+    verifiedToast: (hostname: string) => `${hostname} is verified`,
+    stillPendingToast: (hostname: string) => `${hostname} is not verified yet`,
+
+    setPrimaryButton: 'Make primary',
+    setPrimaryToast: (hostname: string) => `${hostname} is now the primary domain`,
+
+    removeButton: 'Remove',
+    removeConfirmTitle: (hostname: string) => `Remove ${hostname}?`,
+    removeConfirmBody:
+      'The console stops answering on this hostname immediately, and anyone using it gets an error until you point them somewhere else. Your platform subdomain is unaffected.',
+    removePrimaryWarning:
+      'This is the primary domain, so invite and password-reset links move back to your platform subdomain.',
+    removeConfirm: 'Remove domain',
+    removedToast: (hostname: string) => `${hostname} removed`,
+    /** The platform subdomain is the tenant's floor and can never be deleted. */
+    platformNotRemovable:
+      'Your platform subdomain cannot be removed — it is how you always reach the console.',
+    limitReached: (limit: number) => `You can have up to ${limit} custom domains.`,
+  },
+
   auth: {
     // --- Shared ------------------------------------------------------------
     emailLabel: 'Email address',
@@ -2014,6 +2330,32 @@ export const content = {
       `${date}: ${String(created)} opened, ${String(resolved)} resolved`,
     seriesEmptyHeading: 'No tickets in this range',
     seriesEmptyBody: 'Nothing was opened or resolved between these dates.',
+
+    // --- Taking the report away (TAR-431) -----------------------------------
+    exportAction: 'Export CSV',
+    /**
+     * What a screen reader hears while the file is being prepared. The button's
+     * default — the form layer's "Saving…" — would be wrong: nothing is written.
+     */
+    exportPending: 'Preparing your report',
+    /**
+     * The range is in the accessible name because the file is fixed by what is
+     * on screen, and somebody arriving at the control by keyboard should not
+     * have to hunt for which range they are about to download. It opens with the
+     * visible label so speech input can still say "Export CSV" (WCAG 2.5.3).
+     */
+    exportAria: (from: string, to: string) => `Export CSV for ${from} to ${to}`,
+    exportHint: 'The file covers exactly the range and scope shown on this page.',
+    /** Specific, not "Done": it names the file that has just landed. */
+    exportReady: (fileName: string) => `${fileName} downloaded`,
+    exportFailed: 'We could not prepare that report. Try again in a moment.',
+    exportForbidden: 'Your role cannot export this report. Ask a workspace admin if you need it.',
+    /**
+     * The console checks the range against the contract before sending it, so
+     * reaching this means the API refused a range the screen thought was fine —
+     * a shorter one is the thing the supervisor can actually do about it.
+     */
+    exportRangeRefused: 'That date range cannot be exported. Choose a shorter range and try again.',
   },
 
   form: {

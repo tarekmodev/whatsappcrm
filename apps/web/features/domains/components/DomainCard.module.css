@@ -1,0 +1,86 @@
+.card {
+  padding: var(--space-4);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.identity {
+  min-inline-size: 0;
+}
+
+/*
+ * A hostname is one long unbreakable token. Without `anywhere` a 60-character
+ * subdomain pushes the card past a 320px viewport and the whole page scrolls
+ * sideways.
+ */
+.hostname {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-lg);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-tight);
+}
+
+.kind {
+  margin: var(--space-1) 0 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+.statusBody {
+  margin: 0;
+  max-inline-size: var(--measure-body);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+.stepHeading {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-strong);
+}
+
+.stepBody {
+  margin: 0;
+  max-inline-size: var(--measure-body);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+.checkedAt {
+  margin: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+.notRemovable {
+  margin: 0;
+  max-inline-size: var(--measure-body);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Full-width buttons where the screen is narrow enough that a hugging one is a
+   small target; the explanatory line never stretches. */
+.actions > button {
+  flex: 1 1 auto;
+}
+
+@media (min-width: 30rem) {
+  .actions > button {
+    flex: 0 0 auto;
+  }
+}

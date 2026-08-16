@@ -4,14 +4,19 @@ import {
   AssignmentRuleCreateInputSchema,
   AssignmentRuleReorderInputSchema,
   AssignmentRuleUpdateInputSchema,
+  BRANDING_ASSET_LIMITS,
+  BRANDING_UPLOAD_FIELD,
+  BrandingAssetKindSchema,
   ConversationAssignInputSchema,
   ConversationListQuerySchema,
   ConversationStatusUpdateInputSchema,
   CursorPageQuerySchema,
+  DashboardExportQuerySchema,
   DashboardMetricsQuerySchema,
   IdSchema,
   InternalNoteCreateInputSchema,
   InviteCreateInputSchema,
+  MAX_CUSTOM_DOMAINS_PER_TENANT,
   MessageListQuerySchema,
   MessageTemplateListQuerySchema,
   ONBOARDING_STEP_IDS,
@@ -27,8 +32,11 @@ import {
   TICKET_STATUS_REQUIRES_CLOSE,
   TeamCreateInputSchema,
   TeamUpdateInputSchema,
+  TenantDomainCreateInputSchema,
   TenantUpdateInputSchema,
   TicketAssignInputSchema,
+  TicketEscalateInputSchema,
+  TicketEventListQuerySchema,
   TicketListQuerySchema,
   TicketUpdateInputSchema,
   UserListQuerySchema,
@@ -39,11 +47,13 @@ import {
   WorkflowReorderInputSchema,
   WorkflowTestInputSchema,
   WorkflowUpdateInputSchema,
+  brandingAssetPath,
   canAgentTransition,
   isRoleWithin,
   isSlaBreached,
   renderTemplateBody,
   roleHasPermission,
+  ticketAssignRequiresReason,
   whatsAppSignupFailureDetails,
   workflowCatalog,
   type ApiError,
@@ -68,8 +78,14 @@ import {
   type SlaAlertResponse,
   type Tag,
   type TeamResponse,
+  type TenantBranding,
+  type TenantDomain,
+  type TenantDomainListResponse,
   type TenantLifecycleResponse,
+  type TenantPublicResponse,
   type TenantResponse,
+  type TicketEscalationResponse,
+  type TicketEvent,
   type TicketListQuery,
   type TicketResponse,
   type UserResponse,
@@ -85,6 +101,7 @@ import {
 } from '@whatsappcrm/contracts';
 import { ApiRequestError, type ApiRequest } from '@/lib/api/http';
 import { dashboardMetrics } from '@/lib/api/mock/reporting';
+import { dashboardCsv } from '@/lib/api/mock/report-csv';
 import { mockState, nextMockId } from '@/lib/api/mock/store';
 import { MOCK_IDS } from '@/lib/api/mock/fixtures';
 import type {
@@ -98,7 +115,9 @@ import type {
   MockSlaAlert,
   MockTag,
   MockTeam,
+  MockTenantDomain,
   MockTicket,
+  MockTicketEvent,
   MockUser,
   MockWorkflow,
   MockWorkflowRun,
@@ -448,10 +467,30 @@ const ROUTES: readonly Route[] = [
     handle: updateTicket,
   },
   {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}/events$`),
+    // `ticket:read`, and the ticket goes through the same visibility rule the
+    // GET does — the event log inherits the ticket's rule exactly rather than
+    // becoming a side channel onto one the principal may not open.
+    permission: 'ticket:read',
+    handle: listTicketEvents,
+  },
+  {
     method: 'POST',
     pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}/assign$`),
-    permission: 'ticket:assign',
+    // The **weaker** of the two, per ADR 0011 decision 2: every role may hand
+    // off a ticket they hold, and `assertTicketHandoffAllowed` applies the bound
+    // that `ticket:assign` skips. A route whose declared permission is weaker
+    // than one of its behaviours is where authorization bugs live, so the bound
+    // is modelled here rather than assumed of the API.
+    permission: 'ticket:handoff',
     handle: assignTicket,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}/escalate$`),
+    permission: 'ticket:escalate',
+    handle: escalateTicket,
   },
   {
     method: 'GET',
@@ -462,6 +501,14 @@ const ROUTES: readonly Route[] = [
     // never here (ADR 0009 decision 6).
     permission: 'report:read',
     handle: reportDashboard,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/reports\/dashboard\/export$/,
+    // The same permission as the JSON route, deliberately: the export is a
+    // representation of that resource, not a wider one (ADR 0009 decision 1).
+    permission: 'report:read',
+    handle: reportDashboardExport,
   },
   {
     method: 'GET',
@@ -495,6 +542,71 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/whatsapp\/business-accounts$/,
     permission: 'channel:manage',
     handle: connectWhatsAppBusinessAccount,
+  },
+  // --- Tenant, branding and domains (TAR-29) -------------------------------
+  {
+    method: 'GET',
+    // Unauthenticated by design: the sign-in screen has to be branded before
+    // anybody has a session. It takes no parameters — the *host* names the
+    // tenant, and an identifier on this route would be an enumeration oracle.
+    pattern: /^\/v1\/tenant\/public$/,
+    permission: null,
+    handle: getPublicTenant,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/tenant$/,
+    // Any signed-in principal: the shell reads its own tenant's name.
+    permission: null,
+    handle: getTenant,
+  },
+  {
+    method: 'PATCH',
+    pattern: /^\/v1\/tenant$/,
+    permission: 'branding:write',
+    handle: updateTenant,
+  },
+  {
+    method: 'PUT',
+    pattern: /^\/v1\/tenant\/branding\/(logo|favicon)$/,
+    permission: 'branding:write',
+    handle: putBrandingAsset,
+  },
+  {
+    method: 'DELETE',
+    pattern: /^\/v1\/tenant\/branding\/(logo|favicon)$/,
+    permission: 'branding:write',
+    handle: deleteBrandingAsset,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/tenant\/domains$/,
+    permission: 'domain:write',
+    handle: listTenantDomains,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/tenant\/domains$/,
+    permission: 'domain:write',
+    handle: createTenantDomain,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/tenant/domains/${UUID_SEGMENT}/verify$`),
+    permission: 'domain:write',
+    handle: verifyTenantDomain,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/tenant/domains/${UUID_SEGMENT}/primary$`),
+    permission: 'domain:write',
+    handle: setPrimaryTenantDomain,
+  },
+  {
+    method: 'DELETE',
+    pattern: new RegExp(`^/v1/tenant/domains/${UUID_SEGMENT}$`),
+    permission: 'domain:write',
+    handle: deleteTenantDomain,
   },
   {
     method: 'GET',
@@ -1689,7 +1801,24 @@ function signupFailed(reason: 'code_expired'): ApiRequestError {
   );
 }
 
-// --- Tenant record and lifecycle (TAR-409, ADR 0009) -----------------------
+// --- Tenant record, branding and domains (TAR-409, TAR-418) ----------------
+
+/** Every domain read starts here, so no handler can iterate the map unscoped. */
+function tenantDomains(principal: SessionPrincipal): MockTenantDomain[] {
+  return [...mockState().tenantDomains.values()].filter(
+    (domain) => domain.tenantId === principal.tenantId,
+  );
+}
+
+/**
+ * `GET /v1/tenant/public` — what an anonymous caller on this host may see, and
+ * nothing else. No slug, no status, no domains, no trial date.
+ */
+function getPublicTenant({ principal }: RouteContext): TenantPublicResponse {
+  const tenant = currentTenant(principal);
+
+  return { id: tenant.id, name: tenant.name, branding: tenant.branding };
+}
 
 function getTenant({ principal }: RouteContext): TenantResponse {
   return currentTenant(principal);
@@ -1754,6 +1883,14 @@ function getTenantLifecycle({ principal }: RouteContext): TenantLifecycleRespons
   };
 }
 
+/**
+ * The tenant row, with `domains` recomposed from the live domain map rather than
+ * read off the stored copy (TAR-418).
+ *
+ * That map is the mutable source of truth — domains are added, verified and
+ * removed one at a time — so returning the seeded array would show a hostname as
+ * still pending immediately after a reviewer verified it.
+ */
 function currentTenant(principal: SessionPrincipal): TenantResponse {
   const tenant = mockState().tenants.get(principal.tenantId);
 
@@ -1761,9 +1898,266 @@ function currentTenant(principal: SessionPrincipal): TenantResponse {
     throw notFound();
   }
 
-  return tenant;
+  return { ...tenant, domains: tenantDomains(principal).map(stripTenant) };
 }
 
+/**
+ * `PUT /v1/tenant/branding/{kind}` — multipart.
+ *
+ * The bytes are dropped: this transport has nowhere to put them and the console
+ * never reads them back through JavaScript, only through an `<img src>` the
+ * browser fetches. What it *does* model is everything the UI depends on — the
+ * cache-busted path, the sniffed type, the size and the timestamp — so the
+ * asset card, the rail and the favicon all render from a real shape.
+ *
+ * ⚠️ The consequence is visible in mock mode and is **not a bug in the upload**:
+ * the image at that path 404s, so the preview shows a broken image. The alt text
+ * and the fallback path are what a reviewer can check here; the bytes need the
+ * real endpoint.
+ */
+function putBrandingAsset({ principal, params, body }: RouteContext): TenantBranding {
+  const tenant = currentTenant(principal);
+  const kind = BrandingAssetKindSchema.parse(params[0]);
+
+  if (!(body instanceof FormData)) {
+    throw validationFailed();
+  }
+
+  const file = body.get(BRANDING_UPLOAD_FIELD);
+
+  if (!(file instanceof File)) {
+    throw validationFailed();
+  }
+
+  const limits = BRANDING_ASSET_LIMITS[kind];
+
+  // The same two refusals the API makes, so the console's inline error path is
+  // exercised against a real rejection rather than only against its own
+  // pre-check.
+  if (!limits.mimeTypes.includes(file.type)) {
+    throw refused('validation_failed', 'That file type is not supported.', HTTP_UNPROCESSABLE);
+  }
+
+  if (file.size > limits.maxBytes) {
+    throw refused('validation_failed', 'That file is too large.', HTTP_UNPROCESSABLE);
+  }
+
+  const updatedAt = new Date(MOCK_UPDATED_AT);
+  const branding: TenantBranding = {
+    ...tenant.branding,
+    [kind]: {
+      path: brandingAssetPath(kind, updatedAt),
+      mimeType: file.type,
+      sizeBytes: file.size,
+      updatedAt: updatedAt.toISOString(),
+    },
+  };
+
+  mockState().tenants.set(tenant.id, { ...tenant, branding });
+
+  return branding;
+}
+
+/** 204 either way: removing an asset that is already absent is not an error. */
+function deleteBrandingAsset({ principal, params }: RouteContext): null {
+  const tenant = currentTenant(principal);
+  const kind = BrandingAssetKindSchema.parse(params[0]);
+
+  mockState().tenants.set(tenant.id, {
+    ...tenant,
+    branding: { ...tenant.branding, [kind]: null },
+  });
+
+  return null;
+}
+
+function listTenantDomains({ principal }: RouteContext): TenantDomainListResponse {
+  return { items: tenantDomains(principal).map(stripTenant) };
+}
+
+function createTenantDomain({ principal, body }: RouteContext): TenantDomain {
+  const parsed = TenantDomainCreateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { hostname } = parsed.data;
+  const state = mockState();
+  const mine = tenantDomains(principal).find((domain) => domain.hostname === hostname);
+
+  // Re-adding a hostname this tenant already holds is idempotent, not an error.
+  if (mine !== undefined) {
+    return stripTenant(mine);
+  }
+
+  // The global unique index, which lives *below* row-level security: the
+  // insert fails without this tenant being able to read — or learn anything
+  // about — the conflicting row. The message must not say who holds it.
+  if ([...state.tenantDomains.values()].some((domain) => domain.hostname === hostname)) {
+    throw refused('conflict', 'That hostname is already in use.', HTTP_CONFLICT);
+  }
+
+  if (
+    tenantDomains(principal).filter((domain) => domain.kind === 'custom').length >=
+    MAX_CUSTOM_DOMAINS_PER_TENANT
+  ) {
+    throw refused(
+      'plan_limit_exceeded',
+      `You can have up to ${MAX_CUSTOM_DOMAINS_PER_TENANT} custom domains.`,
+      HTTP_UNPROCESSABLE,
+    );
+  }
+
+  const created: MockTenantDomain = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    hostname,
+    kind: 'custom',
+    status: 'pending_verification',
+    isPrimary: false,
+    verifiedAt: null,
+    activatedAt: null,
+    verification: {
+      recordType: 'TXT',
+      recordName: `_whatsappcrm-challenge.${hostname}`,
+      recordValue: `whatsappcrm-domain-verification=${MOCK_VERIFICATION_TOKEN}`,
+      lastCheckedAt: null,
+      lastFailureReason: null,
+      expiresAt: MOCK_CLAIM_EXPIRES_AT,
+    },
+    routing: {
+      recordType: 'CNAME',
+      recordName: hostname,
+      recordValue: MOCK_EDGE_HOSTNAME,
+    },
+    createdAt: MOCK_CREATED_AT,
+  };
+
+  state.tenantDomains.set(created.id, created);
+
+  return stripTenant(created);
+}
+
+/**
+ * A hostname this transport never verifies, so the "we still cannot see the
+ * record" branch can be walked repeatedly. Any other hostname verifies on the
+ * next check — the seeded `support.northwind.example` starts pending with a
+ * `record_not_found` reason, so both states are reachable without editing a file.
+ */
+export const MOCK_UNVERIFIABLE_HOSTNAME_PREFIX = 'unverifiable.';
+
+/**
+ * `POST /domains/{id}/verify`.
+ *
+ * A check that finds nothing answers **200 with the domain** and a failure
+ * reason, not an error envelope: nothing went wrong with the request. Modelling
+ * it as a refusal here would let the console ship a red error state for a
+ * perfectly normal "DNS has not propagated yet".
+ */
+function verifyTenantDomain({ principal, params }: RouteContext): TenantDomain {
+  const domain = findDomainInTenant(principal, params[0]);
+
+  if (domain.kind === 'platform') {
+    throw refused('forbidden', 'A platform subdomain needs no verification.');
+  }
+
+  const isVerifiable = !domain.hostname.startsWith(MOCK_UNVERIFIABLE_HOSTNAME_PREFIX);
+  const verified: MockTenantDomain = isVerifiable
+    ? {
+        ...domain,
+        status: 'verified',
+        verifiedAt: MOCK_UPDATED_AT,
+        verification:
+          domain.verification === null
+            ? null
+            : { ...domain.verification, lastCheckedAt: MOCK_UPDATED_AT, lastFailureReason: null },
+      }
+    : {
+        ...domain,
+        verification:
+          domain.verification === null
+            ? null
+            : {
+                ...domain.verification,
+                lastCheckedAt: MOCK_UPDATED_AT,
+                lastFailureReason: 'record_not_found',
+              },
+      };
+
+  mockState().tenantDomains.set(verified.id, verified);
+
+  return stripTenant(verified);
+}
+
+/** One transaction: clear the current primary, set the new one. */
+function setPrimaryTenantDomain({ principal, params }: RouteContext): TenantDomain {
+  const domain = findDomainInTenant(principal, params[0]);
+
+  if (domain.verifiedAt === null) {
+    throw refused('conflict', 'Verify this domain before making it primary.', HTTP_CONFLICT);
+  }
+
+  const state = mockState();
+
+  for (const candidate of tenantDomains(principal)) {
+    if (candidate.isPrimary && candidate.id !== domain.id) {
+      state.tenantDomains.set(candidate.id, { ...candidate, isPrimary: false });
+    }
+  }
+
+  const promoted: MockTenantDomain = { ...domain, isPrimary: true };
+
+  state.tenantDomains.set(promoted.id, promoted);
+
+  return stripTenant(promoted);
+}
+
+/**
+ * `DELETE /v1/tenant/domains/{id}`.
+ *
+ * The platform subdomain is refused outright: it is how a tenant always reaches
+ * the console, and one that deleted its last domain would be unreachable and
+ * unrecoverable without an operator. Deleting the current primary moves primary
+ * back to that subdomain in the same transaction, so the tenant is never left
+ * with none.
+ */
+function deleteTenantDomain({ principal, params }: RouteContext): null {
+  const domain = findDomainInTenant(principal, params[0]);
+
+  if (domain.kind === 'platform') {
+    throw refused('forbidden', 'Your platform subdomain cannot be removed.');
+  }
+
+  const state = mockState();
+
+  state.tenantDomains.delete(domain.id);
+
+  if (domain.isPrimary) {
+    const platform = tenantDomains(principal).find((candidate) => candidate.kind === 'platform');
+
+    if (platform !== undefined) {
+      state.tenantDomains.set(platform.id, { ...platform, isPrimary: true });
+    }
+  }
+
+  return null;
+}
+
+function findDomainInTenant(principal: SessionPrincipal, id: string | undefined): MockTenantDomain {
+  const domain = tenantDomains(principal).find((candidate) => candidate.id === id);
+
+  if (domain === undefined) {
+    throw notFound();
+  }
+
+  return domain;
+}
+
+/** Literals, for the reason every other fixture value is one: hydration. */
+const MOCK_VERIFICATION_TOKEN = '3b91c07de42a4d5b8e1f6c2a0d7e9341';
+const MOCK_CLAIM_EXPIRES_AT = '2026-08-28T09:00:00.000Z';
+const MOCK_EDGE_HOSTNAME = 'whatsappcrm-web.onrender.example';
 // --- Conversations ---------------------------------------------------------
 
 /**
@@ -2200,13 +2594,20 @@ function updateTicket({ principal, params, body }: RouteContext): TicketResponse
 }
 
 /**
- * `POST /v1/tickets/{id}/assign` — the manual placement TAR-274 offers.
+ * `POST /v1/tickets/{id}/assign` — the manual placement TAR-274 offers, and the
+ * reassignment TAR-32 adds on top of it (ADR 0011 decision 1).
  *
  * Two writes, not one, and the second is the point: naming an assignee also moves
  * `routing.state` to `manual` and clears the deferred columns, which is what stops
  * a later routing pass overruling the supervisor. Modelled here rather than
  * assumed, because the row vanishing from the flagged queue afterwards is exactly
  * the behaviour that view is claiming.
+ *
+ * The ordering below is the contract's, and it is fixed: `require` (visibility,
+ * done by `findTicketInTenant`) → handoff bound → reason rule → assignee
+ * existence → the no-op check → the write. The reason rule runs **before** the
+ * assignee lookup so a caller missing a reason is told that, rather than being
+ * sent to check a user id that was fine.
  */
 function assignTicket({ principal, params, body }: RouteContext): TicketResponse {
   const ticket = findTicketInTenant(principal, params[0]);
@@ -2216,7 +2617,25 @@ function assignTicket({ principal, params, body }: RouteContext): TicketResponse
     throw validationFailed();
   }
 
-  const { userId, teamId } = parsed.data;
+  const { userId, teamId, reason } = parsed.data;
+  const after = {
+    assignedUserId: userId === undefined ? ticket.assignedUserId : userId,
+    assignedTeamId: teamId === undefined ? ticket.assignedTeamId : teamId,
+  };
+
+  assertTicketHandoffAllowed(principal, ticket, after);
+
+  // The conditional half of decision 1, raised here rather than by the schema:
+  // Zod sees the body and the rule is about the row. It is checked even when the
+  // request moves nothing — silently accepting a reasonless no-op would train a
+  // console to omit the field.
+  if (reason === undefined && ticketAssignRequiresReason(ticket)) {
+    throw refused(
+      'validation_failed',
+      'A reason is required when reassigning a ticket somebody already holds.',
+      HTTP_UNPROCESSABLE,
+    );
+  }
 
   if (typeof userId === 'string') {
     const user = findUserInTenant(principal, userId);
@@ -2230,16 +2649,252 @@ function assignTicket({ principal, params, body }: RouteContext): TicketResponse
     findTeamInTenant(principal, teamId);
   }
 
+  const movesAnything =
+    after.assignedUserId !== ticket.assignedUserId ||
+    after.assignedTeamId !== ticket.assignedTeamId;
+
+  if (!movesAnything) {
+    return toTicketResponse(ticket);
+  }
+
   const assigned: MockTicket = {
     ...ticket,
-    ...(userId === undefined ? {} : { assignedUserId: userId }),
-    ...(teamId === undefined ? {} : { assignedTeamId: teamId }),
+    ...after,
     routing: { state: 'manual', deferredReason: null, deferredSince: null },
   };
 
   mockState().tickets.set(assigned.id, assigned);
+  // `assigned` when somebody still holds it, `unassigned` when the write
+  // released it — the pair TAR-32 reuses rather than adding a third type meaning
+  // "the assignment moved".
+  appendTicketEvent(principal, {
+    ticketId: assigned.id,
+    type:
+      after.assignedUserId === null && after.assignedTeamId === null ? 'unassigned' : 'assigned',
+    actorUserId: principal.userId,
+    cause: 'agent',
+    assignment: {
+      fromUserId: ticket.assignedUserId,
+      fromTeamId: ticket.assignedTeamId,
+      toUserId: after.assignedUserId,
+      toTeamId: after.assignedTeamId,
+    },
+    reason: reason ?? null,
+  });
 
   return toTicketResponse(assigned);
+}
+
+/**
+ * The bound ADR 0011 decision 2 puts on `ticket:handoff`, so the console's
+ * refusals are exercised against a real 403 rather than only described.
+ *
+ * A caller holding `ticket:assign` skips all of it — their write is what TAR-23
+ * shipped. A caller who does not may write only when all three hold:
+ *
+ *   1. **They hold the ticket.** Not "their team holds it": a ticket routed to a
+ *      team is nobody's to give away, and every member could otherwise reassign
+ *      it out from under whoever is working it.
+ *   2. **The target is a teammate**, sharing at least one team with the caller —
+ *      or one of the caller's own teams.
+ *   3. **They are not releasing it.** Dropping a ticket back to unassigned is
+ *      abandonment, and puts it in a state only `ticket:assign` can create.
+ *
+ * `forbidden`, not `not_found`: the caller has already passed the visibility
+ * rule and is looking at the ticket, so what is refused is the act.
+ */
+function assertTicketHandoffAllowed(
+  principal: SessionPrincipal,
+  before: MockTicket,
+  after: { assignedUserId: string | null; assignedTeamId: string | null },
+): void {
+  if (roleHasPermission(principal.role, 'ticket:assign')) {
+    return;
+  }
+
+  if (before.assignedUserId !== principal.userId) {
+    throw refused('forbidden', 'You can only hand on a ticket you are holding.');
+  }
+
+  if (after.assignedUserId === null && after.assignedTeamId === null) {
+    throw refused('forbidden', 'Releasing a ticket needs ticket:assign. Hand it to somebody.');
+  }
+
+  if (after.assignedUserId !== null && after.assignedUserId !== principal.userId) {
+    const target = findUserInTenant(principal, after.assignedUserId);
+    const sharesATeam = target.teamIds.some((teamId) => principal.teamIds.includes(teamId));
+
+    if (!sharesATeam) {
+      throw refused('forbidden', 'You can only hand a ticket to a teammate.');
+    }
+  }
+
+  if (after.assignedTeamId !== null && !principal.teamIds.includes(after.assignedTeamId)) {
+    throw refused('forbidden', 'You can only hand a ticket to one of your own teams.');
+  }
+}
+
+/**
+ * `POST /v1/tickets/{id}/escalate` — raise attention without moving the
+ * assignment (ADR 0011 decision 3).
+ *
+ * The three things the console is built around, all reachable here:
+ *
+ *   * a **named** supervisor, who must exist in this tenant, be active, and hold
+ *     `ticket:read_all` — anything else is `validation_failed` on `toUserId`,
+ *     which is what makes the notification safe to send at all;
+ *   * an **unnamed** escalation, whose recipients are derived the way ADR 0006
+ *     derives them for a breach — supervisors and admins sharing a team with the
+ *     holder, falling back to every candidate;
+ *   * **nobody at all.** A tenant with no active supervisor still gets the event
+ *     written and an empty `notifiedUserIds`. Not an error: the agent did
+ *     nothing wrong and has no way to fix it.
+ *
+ * The ticket itself is never touched, and that is asserted by omission here.
+ */
+function escalateTicket({ principal, params, body }: RouteContext): TicketEscalationResponse {
+  const ticket = findTicketInTenant(principal, params[0]);
+  const parsed = TicketEscalateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { reason, toUserId } = parsed.data;
+  const recipients = escalationRecipients(principal, ticket, toUserId);
+
+  const event = appendTicketEvent(principal, {
+    ticketId: ticket.id,
+    type: 'escalated',
+    actorUserId: principal.userId,
+    cause: 'agent',
+    // Null when the escalation was addressed to whoever supervises this ticket
+    // rather than to a person. Meaningful, not missing.
+    toValue: toUserId ?? null,
+    reason,
+  });
+
+  return { event, notifiedUserIds: recipients.map((user) => user.id) };
+}
+
+/**
+ * Who an escalation is delivered to, mirroring `resolveAlertRecipients`
+ * (ADR 0006 decision 4) rather than inventing a second rule.
+ *
+ * Candidates are active users holding `ticket:read_all` — the population that
+ * can already read the ticket, which is what makes telling them about it
+ * disclose nothing new. They are narrowed to those sharing a team with whoever
+ * holds the ticket, and the narrowing falls back to every candidate when it
+ * yields nobody: an unstaffed team must not swallow the escalation.
+ */
+function escalationRecipients(
+  principal: SessionPrincipal,
+  ticket: MockTicket,
+  toUserId: string | undefined,
+): MockUser[] {
+  const candidates = tenantUsers(principal).filter(
+    (user) => user.status === 'active' && roleHasPermission(user.role, 'ticket:read_all'),
+  );
+
+  if (toUserId !== undefined) {
+    const named = candidates.find((user) => user.id === toUserId);
+
+    if (named === undefined) {
+      // `validation_failed` on the field, mirroring an unknown assignee — never
+      // a 404, which would confirm the id names somebody real elsewhere.
+      throw refused(
+        'validation_failed',
+        'That person cannot receive an escalation for this ticket.',
+        HTTP_UNPROCESSABLE,
+      );
+    }
+
+    return [named];
+  }
+
+  const holderTeamIds =
+    ticket.assignedTeamId === null
+      ? (tenantUsers(principal).find((user) => user.id === ticket.assignedUserId)?.teamIds ?? [])
+      : [ticket.assignedTeamId];
+
+  const shared = candidates.filter((user) =>
+    user.teamIds.some((teamId) => holderTeamIds.includes(teamId)),
+  );
+
+  return shared.length > 0 ? shared : candidates;
+}
+
+/**
+ * `GET /v1/tickets/{id}/events` — newest first, which is the keyset order the
+ * index in ADR 0011 serves.
+ *
+ * The ticket is resolved through `findTicketInTenant` first, so a ticket outside
+ * this reader's scope answers `not_found` here exactly as it does on the GET.
+ */
+function listTicketEvents({ principal, params, query }: RouteContext): CursorPage<TicketEvent> {
+  const ticket = findTicketInTenant(principal, params[0]);
+  const parsed = TicketEventListQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { limit } = parsed.data;
+  const matched = tenantTicketEvents(principal)
+    .filter((event) => event.ticketId === ticket.id)
+    // `created_at DESC, id DESC`. The id tie-break is not decoration: the API
+    // pages this on a keyset, and two events written in the same millisecond
+    // would otherwise straddle a page boundary and lose one.
+    .sort(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+    );
+
+  const items = matched.slice(0, limit);
+  const nextCursor = matched.length > limit ? (items[items.length - 1]?.id ?? null) : null;
+
+  return { items: items.map(toTicketEventResponse), nextCursor };
+}
+
+/**
+ * Writes one row onto the ticket's trail and returns it as the wire shape.
+ *
+ * Every field the caller does not name defaults to null, so a new event type
+ * cannot accidentally inherit another's `fromValue` — and both of TAR-32's
+ * events are always attributed, because neither route is reachable without a
+ * principal and an event claiming a system actor on a human decision would be a
+ * lie the trail cannot recover from.
+ */
+function appendTicketEvent(
+  principal: SessionPrincipal,
+  event: Pick<MockTicketEvent, 'ticketId' | 'type'> & Partial<MockTicketEvent>,
+): TicketEvent {
+  const created: MockTicketEvent = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    actorUserId: null,
+    fromValue: null,
+    toValue: null,
+    assignment: null,
+    reason: null,
+    cause: null,
+    createdAt: new Date().toISOString(),
+    ...event,
+  };
+
+  mockState().ticketEvents.set(created.id, created);
+
+  return toTicketEventResponse(created);
+}
+
+function tenantTicketEvents(principal: SessionPrincipal): MockTicketEvent[] {
+  return [...mockState().ticketEvents.values()].filter(
+    (event) => event.tenantId === principal.tenantId,
+  );
+}
+
+function toTicketEventResponse(event: MockTicketEvent): TicketEvent {
+  return stripTenant(event);
 }
 
 /**
@@ -2401,6 +3056,40 @@ function reportDashboard({ principal, query }: RouteContext): DashboardMetricsRe
     tickets: tenantTickets(principal),
     users: tenantUsers(principal),
   });
+}
+
+/**
+ * `GET /v1/reports/dashboard/export` — the same numbers, as CSV (TAR-431).
+ *
+ * **It calls `dashboardMetrics` and serialises what comes back.** There is no
+ * second aggregation here and there must never be one: that is ADR 0009
+ * decision 1 reproduced in the fixture layer, so the mock export cannot drift
+ * from the mock dashboard any more than the real one can from the real dashboard.
+ * `section` selects a code path in the serialiser and touches nothing about the
+ * figures.
+ *
+ * It answers a string rather than an object, which is what the real route does
+ * with bytes. `handleMockRequest`'s callers treat the body as opaque, so nothing
+ * downstream has to know which of the two it got.
+ */
+function reportDashboardExport({ principal, query }: RouteContext): string {
+  const parsed = DashboardExportQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { section, ...metricsQuery } = parsed.data;
+
+  return dashboardCsv(
+    dashboardMetrics({
+      principal,
+      query: metricsQuery,
+      tickets: tenantTickets(principal),
+      users: tenantUsers(principal),
+    }),
+    section,
+  );
 }
 
 // --- SLA alerts (TAR-26, ADR 0006) -----------------------------------------
