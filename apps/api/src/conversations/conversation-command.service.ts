@@ -11,7 +11,7 @@ import {
   type ConversationAssignedEvent,
 } from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
-import { UserStatus } from '../generated/prisma/enums';
+import { ConversationBotState, UserStatus } from '../generated/prisma/enums';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { claimableFilter } from '../rbac/visibility';
 import {
@@ -75,7 +75,22 @@ export class ConversationCommandService {
   ): Promise<ConversationResponse> {
     await this.conversations.requireHeld(conversationId);
 
-    return this.write(conversationId, { status });
+    // Resolving or closing a thread resets the bot (TAR-28, 0010 decision 5).
+    // `human_active` and `handed_off` are terminal for the conversation's
+    // *active* life, and this is what stops that meaning "one handoff disables
+    // the bot for this contact for ever" — a new question next month starts at
+    // `off` and is eligible again.
+    //
+    // `bot_engaged_at` is cleared with it, because the column is the start of
+    // the window the handoff DTO's `botExchange` spans and a stale one would
+    // make the next handoff quote a conversation that has already been closed.
+    // The database's own CHECK requires the pair to move together.
+    const reset =
+      status === 'resolved' || status === 'closed'
+        ? { botState: ConversationBotState.off, botEngagedAt: null }
+        : {};
+
+    return this.write(conversationId, { status, ...reset });
   }
 
   /**
@@ -125,7 +140,12 @@ export class ConversationCommandService {
 
     const { count } = await this.prisma.conversation.updateMany({
       where: { id: conversationId, ...claimableFilter() },
-      data: { assignedUserId: userId },
+      // Taking a thread out of the shared pool is a person taking it, so the bot
+      // is done with it (TAR-28, 0010 decision 5). Written in the same
+      // compare-and-set rather than after it, so the agent who wins the claim is
+      // the one whose state change lands — a second statement could be applied
+      // by a caller who lost.
+      data: { assignedUserId: userId, botState: ConversationBotState.human_active },
     });
 
     if (count === 0) {
@@ -169,6 +189,12 @@ export class ConversationCommandService {
     const assigned = await this.write(conversationId, {
       ...(input.userId === undefined ? {} : { assignedUserId: input.userId }),
       ...(input.teamId === undefined ? {} : { assignedTeamId: input.teamId }),
+      // A named person now owns the thread, so the bot stops (TAR-28, 0010
+      // decision 5). Only when a *user* is being set: releasing the thread back
+      // to the pool (`userId: null`) or routing it to a team is not somebody
+      // taking it, and marking either as `human_active` would silently disable
+      // the bot on a conversation nobody has actually picked up.
+      ...(typeof input.userId === 'string' ? { botState: ConversationBotState.human_active } : {}),
     });
 
     this.announceHandover(before, assigned);

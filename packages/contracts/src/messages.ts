@@ -29,6 +29,21 @@ export const MESSAGE_TYPES = [
 export const MessageTypeSchema = z.enum(MESSAGE_TYPES);
 
 /**
+ * Who authored a message (0010 decision 14, TAR-28).
+ *
+ * `sentByAutomation` is derived from "outbound with no sender", and TAR-27's
+ * workflows are about to send with a null sender too — so that flag stops
+ * distinguishing a bot reply from a workflow reply, and the console has to badge
+ * exactly one of them. Both stay published; `sentByAutomation` keeps its meaning
+ * as `origin` being neither `contact` nor `agent`.
+ *
+ * `workflow` is deliberately absent: it is TAR-27's value to append when its send
+ * action lands. The list is written to be extended rather than replaced.
+ */
+export const MESSAGE_ORIGINS = ['contact', 'agent', 'bot', 'system'] as const;
+export const MessageOriginSchema = z.enum(MESSAGE_ORIGINS);
+
+/**
  * Outbound lifecycle: `queued → sent → delivered → read`, or `failed`.
  * Inbound messages are born `delivered` — there is nothing to track.
  */
@@ -93,8 +108,17 @@ export const MessageResponseSchema = z.object({
   attachments: z.array(MessageAttachmentSchema),
   /** Set on outbound agent replies; null for inbound and for automation sends. */
   sentByUserId: IdSchema.nullable(),
-  /** True when the AI chatbot (TAR-28) or a workflow (TAR-27) produced the message. */
+  /**
+   * True when the AI chatbot (TAR-28) or a workflow (TAR-27) produced the
+   * message. **Unchanged in meaning**, now derived from `origin`.
+   */
   sentByAutomation: z.boolean(),
+  /**
+   * Who authored the message (0010 decision 14). Additive, and the field a
+   * console badges a bot reply from — `sentByAutomation` cannot tell a bot
+   * reply from a workflow reply or a delivery placeholder.
+   */
+  origin: MessageOriginSchema,
   /** Meta's id. Unique per tenant, and the idempotency key for webhook replays. */
   providerMessageId: z.string().nullable(),
   /** Meta's error code and title, when `status` is `failed`. */
@@ -217,6 +241,7 @@ export const MessageListQuerySchema = CursorPageQuerySchema.extend({
 });
 
 export type MessageDirection = z.infer<typeof MessageDirectionSchema>;
+export type MessageOrigin = (typeof MESSAGE_ORIGINS)[number];
 export type MessageType = z.infer<typeof MessageTypeSchema>;
 export type MessageAttachment = z.infer<typeof MessageAttachmentSchema>;
 export type MessageResponse = z.infer<typeof MessageResponseSchema>;

@@ -29,13 +29,16 @@ import type { TicketStatus } from '../generated/prisma/enums';
  *     `tickets_one_active_per_contact` makes at most one exist, so `take: 1` is
  *     the whole answer rather than a truncation.
  *
- * ## And one that has no column *yet*
+ * ## `botHandling` is derived, and `botState` is the column
  *
- * `botHandling` is published as `false` unconditionally. The AI chatbot is
- * TAR-28's, nothing writes such a state, and adding a column no code sets would
- * publish the same constant at the cost of a migration and a field on every
- * insert. It becomes a column when there is something to put in it — and the
- * contract already carries the field, so that day is a one-line change here.
+ * TAR-28 shipped `conversations.bot_state` (0010 decision 5), so the field that
+ * used to be a hardcoded `false` now reads a real state machine. `botHandling`
+ * keeps its published meaning exactly — "the bot is answering and no human has
+ * taken over" — which is `bot_state === 'bot_active'`, so a console running
+ * yesterday's bundle is unaffected. `botState` is published alongside it because
+ * the two things `botHandling` cannot distinguish, a thread the bot never
+ * touched and one it released to a person, are rendered differently in the
+ * inbox.
  */
 
 /** Longest preview the inbox row renders. Beyond this the list is scrolling text, not a list. */
@@ -71,6 +74,7 @@ export const CONVERSATION_PROJECTION = {
   assignedTeamId: true,
   unreadCount: true,
   serviceWindowExpiresAt: true,
+  botState: true,
   lastMessageAt: true,
   createdAt: true,
   updatedAt: true,
@@ -103,7 +107,8 @@ export function toConversationResponse(conversation: ConversationRow): Conversat
     ticketId: conversation.tickets[0]?.id ?? null,
     unreadCount: conversation.unreadCount,
     serviceWindowExpiresAt: conversation.serviceWindowExpiresAt?.toISOString() ?? null,
-    botHandling: false,
+    botHandling: conversation.botState === 'bot_active',
+    botState: conversation.botState,
     lastMessagePreview: toPreview(conversation.messages[0]?.body ?? null),
     // Never null: `last_message_at` is `NOT NULL` (TAR-92) because it leads the
     // inbox's keyset indexes, and a thread with no message yet carries its own

@@ -577,6 +577,32 @@ const envShape = z.object({
   META_EMBEDDED_SIGNUP_CONFIG_ID: MetaIdSchema.optional(),
 
   // ---------------------------------------------------------------------------
+  // AI chatbot (TAR-28, ADR 0010 decision 11)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The Anthropic API key the chatbot answers with.
+   *
+   * **One platform key, not per-tenant credentials.** Per-tenant bring-your-own
+   * keys are deferred; when they land, `AccessTokenCipher` is the existing
+   * pattern and the column would be `ai_configs.api_key_encrypted`. Nothing in
+   * this design forecloses it.
+   *
+   * Optional here and **absent means no tenant gets automated replies** — every
+   * tenant reads `readiness.ready = false` with blocker `provider_not_configured`
+   * and no path calls the provider. The same fail-closed shape
+   * `WHATSAPP_TOKEN_ENCRYPTION_KEY` and `PLATFORM_ADMIN_TOKEN` already use: an
+   * environment that was never configured refuses rather than half-works.
+   * Requiring it outright would instead stop the API booting everywhere the
+   * feature is not in use, trading a local refusal for a global outage.
+   *
+   * It belongs in the platform's secret store. Exactly one class reads it —
+   * `ClaudeClient` — and its value never reaches a DTO, a log line, an error
+   * message, a `bot_turns` row or an issue body.
+   */
+  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+
+  // ---------------------------------------------------------------------------
   // Media pipeline (TAR-20e)
   // ---------------------------------------------------------------------------
 

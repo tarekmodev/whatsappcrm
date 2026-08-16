@@ -32,6 +32,9 @@ export * from './assignment';
 // --- Automation -------------------------------------------------------------
 export * from './workflows';
 
+// --- AI chatbot -------------------------------------------------------------
+export * from './ai';
+
 // --- CRM, inbox and helpdesk ------------------------------------------------
 export * from './canned-responses';
 export * from './contacts';
