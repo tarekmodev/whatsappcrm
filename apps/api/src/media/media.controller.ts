@@ -21,7 +21,7 @@ import {
 import type { Response } from 'express';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ApiException } from '../common/errors/api.exception';
-import { TenantNotActiveError } from '../prisma/prisma.errors';
+import { isTenantNotActiveError, tenantInactive } from '../common/errors/tenant-inactive';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { contentDispositionFor } from './media-file-name';
 import { MEDIA_UPLOAD_FIELD } from './media.constants';
@@ -251,11 +251,12 @@ function translateFailure(error: unknown): never {
     );
   }
 
-  if (error instanceof TenantNotActiveError) {
+  if (isTenantNotActiveError(error)) {
     // A deactivated tenant with a session still open (TAR-51). A runtime state
     // an operator created, not a fault — reporting it as 500 would page someone
-    // every time a tenant was shut off. TAR-41's global filter takes this over.
-    throw new ApiException('forbidden', error.message);
+    // every time a tenant was shut off. The error's own message names the data
+    // layer and the tenant id, so it never becomes the body (TAR-539).
+    throw tenantInactive();
   }
 
   throw error;

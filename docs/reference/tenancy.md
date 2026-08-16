@@ -349,11 +349,11 @@ exist" on every tenant statement — fail-closed, but a full outage rather than 
 layer has no business choosing a status code — but they fall into two families, and the
 difference decides how a filter should report them.
 
-| Error                       | Thrown when                                                        | Family                           | Report as        |
-| --------------------------- | ------------------------------------------------------------------ | -------------------------------- | ---------------- |
-| `MissingTenantContextError` | A query reached `TenantPrisma` with no tenant in the ambient scope | `TenantPrismaError` — a bug      | `internal_error` |
-| `UnscopedModelAccessError`  | `Tenant`, `Plan` or `WebhookEvent` reached in a disallowed way     | `TenantPrismaError` — a bug      | `internal_error` |
-| `TenantNotActiveError`      | The tenant in scope is not `active`                                | Not a bug — an operator did this | `forbidden`      |
+| Error                       | Thrown when                                                        | Family                           | Report as               |
+| --------------------------- | ------------------------------------------------------------------ | -------------------------------- | ----------------------- |
+| `MissingTenantContextError` | A query reached `TenantPrisma` with no tenant in the ambient scope | `TenantPrismaError` — a bug      | `internal_error`        |
+| `UnscopedModelAccessError`  | `Tenant`, `Plan` or `WebhookEvent` reached in a disallowed way     | `TenantPrismaError` — a bug      | `internal_error`        |
+| `TenantNotActiveError`      | The tenant in scope is not `active`                                | Not a bug — an operator did this | `subscription_inactive` |
 
 **No tenant in scope throws before anything is sent.** The query never happens, rather than
 happening and returning nothing. That distinction is the whole point: zero rows is
@@ -366,6 +366,20 @@ with a session still open.
 
 Match the families with the `kind` discriminator (`TENANT_PRISMA_ERROR`,
 `TENANT_NOT_ACTIVE_ERROR`) rather than an `instanceof` chain.
+
+**Never put a `TenantNotActiveError`'s own message in a response body.** It is written for an
+engineer reading a log — it names `TenantPrisma`, `SystemPrisma`, the failing model and operation,
+and the tenant's UUID — and the caller who sees it is by definition one who has just been locked
+out. Throw `tenantInactive()` from `apps/api/src/common/errors/tenant-inactive.ts` instead: it is
+the one published answer (`subscription_inactive`, 402) with one fixed message, and
+`AllExceptionsFilter` gives the same answer for anything that reaches HTTP without a translator —
+a guard, an interceptor, a route added later (TAR-539). The engineer's version is not lost; the
+filter logs the thrown error under the same `requestId` the caller was shown.
+
+It reports as `subscription_inactive` rather than `forbidden` because 0002 reserves pipeline stage
+4 for `TenantStatusGuard` and states that as its answer, and because a client cannot tell
+`forbidden`-the-tenant-is-suspended from `forbidden`-you-lack-this-permission — one of the two is
+fixed by paying.
 
 ## Rules for a new module
 

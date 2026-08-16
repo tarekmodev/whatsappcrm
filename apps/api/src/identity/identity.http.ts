@@ -1,7 +1,7 @@
 import { ApiException } from '../common/errors/api.exception';
+import { isTenantNotActiveError, tenantInactive } from '../common/errors/tenant-inactive';
 import { PlanLimitExceededError } from '../entitlements/entitlements.errors';
 import { translatePeopleFailure } from '../people/people.http';
-import { TenantNotActiveError } from '../prisma/prisma.errors';
 import {
   CurrentPasswordIncorrectError,
   InvalidCredentialsError,
@@ -53,6 +53,8 @@ import {
  * is suspended between `HostTenantGuard`'s read and the login statement — a
  * race rather than a normal flow, but one an unauthenticated caller can
  * observe, and a 500 would report an operator's deliberate action as a fault.
+ * The code and the message come from `tenantInactive()` so that this answer and
+ * the one every other route gives are the same string (TAR-539).
  *
  * Anything it does not recognise is handed to `translatePeopleFailure`, because
  * the invite flow raises people-domain errors verbatim — an address that
@@ -107,11 +109,8 @@ export function translateIdentityFailure(error: unknown): never {
     ]);
   }
 
-  if (error instanceof TenantNotActiveError) {
-    throw new ApiException(
-      'subscription_inactive',
-      'This workspace is not active. Contact your administrator.',
-    );
+  if (isTenantNotActiveError(error)) {
+    throw tenantInactive();
   }
 
   return translatePeopleFailure(error);
