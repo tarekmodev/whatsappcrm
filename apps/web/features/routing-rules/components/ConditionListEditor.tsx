@@ -1,8 +1,7 @@
 'use client';
 
 import { ROUTING_RULE_LIMITS, type RoutingCondition } from '@whatsappcrm/contracts';
-import { Stack } from '@/components/layout/Stack';
-import { Button } from '@/components/ui/Button';
+import { EditorFieldset } from '@/components/ui/EditorFieldset';
 import { useContent } from '@/lib/content';
 import {
   availableConditionTypes,
@@ -10,15 +9,14 @@ import {
   type RoutingRuleVocabulary,
 } from '../presentation';
 import { ConditionRow } from './ConditionRow';
-import styles from './ConditionListEditor.module.css';
 
 /**
  * The rule's condition list, and the controls that grow and shrink it. Usage:
  * `<ConditionListEditor conditions={…} vocabulary={…} onChange={…} />`.
  *
- * A real `fieldset`/`legend`, because the conditions are one question — "when
- * does this rule apply" — asked as several controls. The legend says every one of
- * them has to hold, which is the whole boolean model: conditions AND, rules OR.
+ * The frame is `EditorFieldset`, shared with the workflow builder's two editors.
+ * The legend says every condition has to hold, which is the whole boolean model:
+ * conditions AND, rules OR.
  */
 export function ConditionListEditor({
   conditions,
@@ -44,60 +42,44 @@ export function ConditionListEditor({
   }
 
   return (
-    <fieldset className={styles.group}>
-      <legend className={styles.legend}>{copy.conditionsLegend}</legend>
-      <p className={styles.hint}>{copy.conditionsHint}</p>
-      {error === undefined ? null : (
-        <p className={styles.error} role="alert">
-          {error}
-        </p>
-      )}
+    <EditorFieldset
+      legend={copy.conditionsLegend}
+      hint={copy.conditionsHint}
+      error={error}
+      addLabel={copy.addCondition}
+      isFull={isFull}
+      fullHint={copy.conditionsFullHint(ROUTING_RULE_LIMITS.conditionsPerRule)}
+      onAdd={() => {
+        const type = availableTypes[0];
 
-      <Stack gap="3" as="ul" className={styles.list}>
-        {conditions.map((condition, index) => (
-          <ConditionRow
-            // Index as key: conditions have no id of their own. Removing one does
-            // shift every index after it, so what makes this safe is that
-            // `ConditionRow` holds no state of its own — every control is
-            // controlled from `conditions` — and there is nothing for React to
-            // carry onto the wrong row. Give a row local state and it needs a
-            // real key first.
-            key={index}
-            condition={condition}
-            index={index}
-            availableTypes={availableTypes}
-            vocabulary={vocabulary}
-            error={errorsByCondition[index]}
-            isRemovable={conditions.length > 1}
-            onChange={(next) => {
-              replaceAt(index, next);
-            }}
-            onRemove={() => {
-              onChange(conditions.filter((_unused, position) => position !== index));
-            }}
-          />
-        ))}
-      </Stack>
-
-      <Button
-        variant="secondary"
-        size="sm"
-        disabled={isFull}
-        onClick={() => {
-          const type = availableTypes[0];
-
-          if (type !== undefined) {
-            onChange([...conditions, blankCondition(type, vocabulary)]);
-          }
-        }}
-      >
-        {copy.addCondition}
-      </Button>
-      {isFull ? (
-        <p className={styles.hint}>
-          {copy.conditionsFullHint(ROUTING_RULE_LIMITS.conditionsPerRule)}
-        </p>
-      ) : null}
-    </fieldset>
+        if (type !== undefined) {
+          onChange([...conditions, blankCondition(type, vocabulary)]);
+        }
+      }}
+    >
+      {conditions.map((condition, index) => (
+        <ConditionRow
+          // Index as key: conditions have no id of their own. Removing one does
+          // shift every index after it, so what makes this safe is that
+          // `ConditionRow` holds no state of its own — every control is
+          // controlled from `conditions` — and there is nothing for React to
+          // carry onto the wrong row. Give a row local state and it needs a
+          // real key first.
+          key={index}
+          condition={condition}
+          index={index}
+          availableTypes={availableTypes}
+          vocabulary={vocabulary}
+          error={errorsByCondition[index]}
+          isRemovable={conditions.length > 1}
+          onChange={(next) => {
+            replaceAt(index, next);
+          }}
+          onRemove={() => {
+            onChange(conditions.filter((_unused, position) => position !== index));
+          }}
+        />
+      ))}
+    </EditorFieldset>
   );
 }

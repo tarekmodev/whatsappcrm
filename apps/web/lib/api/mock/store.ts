@@ -15,6 +15,8 @@ import {
   MOCK_TENANT_LIFECYCLES,
   MOCK_TICKETS,
   MOCK_USERS,
+  MOCK_WORKFLOWS,
+  MOCK_WORKFLOW_RUNS,
   type MockAssignmentRule,
   type MockConversation,
   type MockCustomFieldDefinition,
@@ -28,6 +30,8 @@ import {
   type MockTenantLifecycle,
   type MockTicket,
   type MockUser,
+  type MockWorkflow,
+  type MockWorkflowRun,
 } from '@/lib/api/mock/fixtures';
 import type { TenantResponse } from '@whatsappcrm/contracts';
 
@@ -59,6 +63,9 @@ interface MockState {
   tags: Map<string, MockTag>;
   customFieldDefinitions: Map<string, MockCustomFieldDefinition>;
   assignmentRules: Map<string, MockAssignmentRule>;
+  workflows: Map<string, MockWorkflow>;
+  /** A log rather than a ledger: nothing here is written by the console. */
+  workflowRuns: Map<string, MockWorkflowRun>;
   slaAlerts: Map<string, MockSlaAlert>;
   /**
    * Keyed by **tenant**, not by an id of its own: a tenant has exactly one
@@ -124,6 +131,13 @@ function seed(): MockState {
     assignmentRules: new Map(
       MOCK_ASSIGNMENT_RULES.map((rule) => [rule.id, { ...rule, conditions: [...rule.conditions] }]),
     ),
+    workflows: new Map(
+      MOCK_WORKFLOWS.map((workflow) => [
+        workflow.id,
+        { ...workflow, conditions: [...workflow.conditions], actions: [...workflow.actions] },
+      ]),
+    ),
+    workflowRuns: new Map(MOCK_WORKFLOW_RUNS.map((run) => [run.id, run])),
     slaAlerts: new Map(MOCK_SLA_ALERTS.map((item) => [item.id, item])),
     onboarding: new Map(
       MOCK_ONBOARDING_CHECKLISTS.map((checklist) => [

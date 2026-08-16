@@ -61,6 +61,18 @@ export const routes = {
    * path is read by a customer, so it takes the on-screen word.
    */
   settingsWorkspace: () => '/settings/workspace',
+  /**
+   * The automation builder (TAR-27). Its own settings section rather than a
+   * fourth panel on Assignment: a routing rule decides where a *conversation*
+   * goes, while a workflow writes to a *ticket* — and the Assignment page is
+   * already three independently-streamed sections.
+   *
+   * No query parameters. Which workflow is being edited, tested or inspected is
+   * dialog state rather than a shareable view: every one of those is a write or
+   * a per-principal read, so a copied link could only ever reopen a dialog over
+   * a list the recipient may not be entitled to.
+   */
+  settingsWorkflows: () => '/settings/workflows',
   /** Where a tenant admin connects its own WhatsApp Business Account (TAR-169). */
   settingsWhatsApp: () => '/settings/whatsapp',
   settingsSecurity: () => '/settings/security',

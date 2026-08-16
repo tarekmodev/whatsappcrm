@@ -63,6 +63,23 @@ describe('navigation visibility by role', () => {
     expect(navIdsFor('agent')).not.toContain('settings-whatsapp');
   });
 
+  /**
+   * TAR-27: the automation builder follows `workflow:read` rather than a role.
+   *
+   * ADR 0009 moves both workflow permissions to supervisor, and TAR-395 owns
+   * that edit to `rbac.ts` — so today only an admin sees this entry. That is the
+   * point of asserting it against `checkerForRole` rather than against a
+   * hardcoded list: the entry starts appearing for a supervisor the moment the
+   * table changes, with no edit here.
+   */
+  it('shows the workflow builder to exactly the roles the permission table allows', () => {
+    for (const role of TENANT_ROLES) {
+      const expected = checkerForRole(role).can('workflow:read');
+
+      expect(navIdsFor(role).includes('settings-workflows')).toBe(expected);
+    }
+  });
+
   it('gives an admin every entry', () => {
     const ids = navIdsFor('admin');
 
