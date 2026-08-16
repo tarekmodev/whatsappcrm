@@ -13,6 +13,8 @@ import { WebhookIngestService } from './webhook-ingest.service';
 import { WebhookSweeperService } from './webhook-sweeper.service';
 import { WhatsAppAccountResolver } from './whatsapp-account.resolver';
 import { WhatsAppEventProcessor } from './whatsapp-event.processor';
+import { UsageCounterService } from '../entitlements/usage-counter.service';
+import { UsagePeriodResolver } from '../entitlements/usage-period.resolver';
 import { WhatsAppInboundWriter } from './whatsapp-inbound.writer';
 
 /**
@@ -76,6 +78,7 @@ const CUSTOMER = {
   stuck: '966501110006',
   emitted: '966501110007',
   freshThread: '966501110008',
+  metered: '966501110009',
 } as const;
 
 const ENV: Record<string, unknown> = {
@@ -236,7 +239,13 @@ describe('WhatsApp webhook ingestion, end to end', () => {
       CONFIG,
       repository,
       new WhatsAppAccountResolver(systemPrisma),
-      new WhatsAppInboundWriter(CONFIG, tenantPrisma, emitter, queue),
+      new WhatsAppInboundWriter(
+        CONFIG,
+        tenantPrisma,
+        emitter,
+        queue,
+        new UsageCounterService(new UsagePeriodResolver()),
+      ),
       tenantContext,
     );
     sweeper = new WebhookSweeperService(CONFIG, repository, queue);
@@ -450,6 +459,50 @@ describe('WhatsApp webhook ingestion, end to end', () => {
       expect(messages).toBe(1);
       // One message arrived, twice. It is counted once.
       expect(unreadCount).toBe(1);
+    });
+
+    /**
+     * `conversations_opened` meters conversations, not messages — and the
+     * difference is exactly the trap in the increment site (TAR-405). A Prisma
+     * `upsert` returns the row whichever branch it took, so incrementing around
+     * one would count every inbound message and turn a 1000-conversation
+     * allowance into a 1000-message one. The writer uses
+     * `ON CONFLICT DO NOTHING RETURNING id` precisely so it can tell.
+     */
+    it('counts a conversation once, however many messages arrive on it', async () => {
+      const from = CUSTOMER.metered;
+
+      for (const [index, body] of ['first', 'second', 'third'].entries()) {
+        await deliver(
+          inboundPayload({
+            from,
+            wamid: `wamid.tar67.metered-${index}`,
+            body,
+            at: new Date(`2026-08-10T09:2${index}:00.000Z`),
+          }),
+        );
+      }
+
+      const messages = await asTenant(TENANT_A, async () =>
+        tenantPrisma.message.count({
+          where: { conversation: { contact: { phoneE164: `+${from}` } } },
+        }),
+      );
+      const counter = await systemPrisma.usageCounter.findFirstOrThrow({
+        where: { tenantId: TENANT_A, metric: 'conversations_opened' },
+        select: { value: true },
+      });
+
+      expect(messages).toBe(3);
+      // Three messages, one thread, one conversation counted. Other fixtures in
+      // this suite open their own threads, so the assertion is that the counter
+      // did not move three times for this one — hence the message count beside it.
+      expect(counter.value).toBeGreaterThanOrEqual(1n);
+      await expect(
+        asTenant(TENANT_A, async () =>
+          tenantPrisma.conversation.count({ where: { contact: { phoneE164: `+${from}` } } }),
+        ),
+      ).resolves.toBe(1);
     });
 
     it('is a no-op when the same stored event is processed twice', async () => {

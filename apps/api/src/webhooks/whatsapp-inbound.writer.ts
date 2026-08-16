@@ -24,7 +24,9 @@ import {
 } from '../generated/prisma/enums';
 import { DOWNLOAD_INBOUND_MEDIA_JOB, MEDIA_QUEUE } from '../media/media.constants';
 import { downloadInboundMediaJobId, type DownloadInboundMediaJob } from '../media/media-jobs';
+import { UsageCounterService } from '../entitlements/usage-counter.service';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
+import { uuidV7 } from '../prisma/uuid-v7';
 import { QueueService } from '../queue/queue.service';
 import {
   toContentType,
@@ -145,6 +147,7 @@ export class WhatsAppInboundWriter {
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly events: EventEmitter2,
     private readonly queue: QueueService,
+    private readonly usage: UsageCounterService,
   ) {
     this.downloadAttempts = config.getOrThrow<number>('MEDIA_DOWNLOAD_MAX_ATTEMPTS');
     this.ticketLinkAttempts = config.getOrThrow<number>('TICKET_LINK_MAX_ATTEMPTS');
@@ -597,8 +600,27 @@ export class WhatsAppInboundWriter {
    * it. It is only wrong when a message is what created the row, which is
    * exactly this path, so this is where it is corrected.
    *
-   * Updates stay empty on purpose: an existing thread's counters and timestamps
-   * are conditional, and an upsert cannot express "only if this event is newer".
+   * There is no `UPDATE` branch on purpose: an existing thread's counters and
+   * timestamps are conditional, and an upsert cannot express "only if this event
+   * is newer".
+   *
+   * ## Why this is raw SQL rather than `upsert`
+   *
+   * It has to report **which branch ran**. `conversations_opened` meters
+   * conversations opened, and a Prisma `upsert` returns the row either way — so
+   * incrementing around it would count one per inbound message and turn the
+   * conversation allowance into a message allowance an order of magnitude
+   * tighter than the plan says (TAR-405, the Architect's ruling).
+   *
+   * `ON CONFLICT DO NOTHING RETURNING id` returns a row only on insert, which is
+   * exactly the signal needed; the `SELECT` below is the fallback for the
+   * conflict case. `DO UPDATE SET id = id` would return a row in both branches
+   * and cost a pointless write on every inbound message in the product.
+   *
+   * The two statements are not a race: this runs inside the caller's
+   * transaction, and a concurrent insert of the same thread either commits
+   * before ours — in which case we conflict and the `SELECT` finds it — or after,
+   * in which case it conflicts. The unique index is what makes that exhaustive.
    */
   private async upsertConversation(
     tx: Prisma.TransactionClient,
@@ -606,22 +628,47 @@ export class WhatsAppInboundWriter {
     contactId: string,
     opening: ConversationOpening,
   ): Promise<string> {
-    const conversation = await tx.conversation.upsert({
+    const [inserted] = await tx.$queryRaw<{ id: string }[]>`
+      INSERT INTO conversations (
+        id, tenant_id, whatsapp_account_id, contact_id,
+        last_message_at, service_window_expires_at, updated_at
+      )
+      VALUES (
+        ${uuidV7()}::uuid,
+        ${tenantId}::uuid,
+        ${whatsappAccountId}::uuid,
+        ${contactId}::uuid,
+        ${opening.lastMessageAt},
+        ${opening.serviceWindowExpiresAt},
+        now()
+      )
+      ON CONFLICT (tenant_id, whatsapp_account_id, contact_id) DO NOTHING
+      RETURNING id
+    `;
+
+    if (inserted !== undefined) {
+      // In the same transaction as the row that caused it, which is `usage.ts`'s
+      // stated correctness rule: Meta replays deliveries, and a replay that rolls
+      // this transaction back has to take the increment with it. Metering is
+      // unconditional — whether the tenant has a cap is the send path's question,
+      // not this one's.
+      await this.usage.increment(tx, {
+        tenantId,
+        metric: 'conversations_opened',
+        at: opening.lastMessageAt,
+      });
+
+      return inserted.id;
+    }
+
+    const existing = await tx.conversation.findUniqueOrThrow({
       where: {
         tenantId_whatsappAccountId_contactId: { tenantId, whatsappAccountId, contactId },
       },
-      create: {
-        tenantId,
-        whatsappAccountId,
-        contactId,
-        lastMessageAt: opening.lastMessageAt,
-        serviceWindowExpiresAt: opening.serviceWindowExpiresAt,
-      },
-      update: {},
       select: { id: true },
     });
 
-    return conversation.id;
+    return existing.id;
   }
 
   /**

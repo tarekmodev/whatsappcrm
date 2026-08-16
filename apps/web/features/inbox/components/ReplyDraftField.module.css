@@ -1,0 +1,10 @@
+/*
+ * The positioning context the shortcut picker hangs from. Here rather than in
+ * `CannedResponsePicker.module.css` because where a child sits is the parent's
+ * layout, not the child's — the picker only knows it is anchored to the box
+ * above it.
+ */
+.anchor {
+  position: relative;
+  display: block;
+}

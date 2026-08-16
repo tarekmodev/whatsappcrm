@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PlanLimitsService } from './plan-limits.service';
+import { UsageCounterService } from './usage-counter.service';
+import { UsagePeriodResolver } from './usage-period.resolver';
 
 /**
  * Plan entitlements and the write-time enforcement of them (TAR-405).
@@ -15,7 +17,11 @@ import { PlanLimitsService } from './plan-limits.service';
  * `PrismaModule`, so there is nothing to import.
  */
 @Module({
-  providers: [PlanLimitsService],
-  exports: [PlanLimitsService],
+  providers: [PlanLimitsService, UsageCounterService, UsagePeriodResolver],
+  // `UsageCounterService` is exported as well as consumed here: the ingest path
+  // meters conversations without reading any limit, and metering is
+  // unconditional whether or not a cap exists — `usage.ts` records counters from
+  // day one whether or not anything reads them.
+  exports: [PlanLimitsService, UsageCounterService],
 })
 export class EntitlementsModule {}

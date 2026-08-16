@@ -789,6 +789,14 @@ export const content = {
     replyLabel: 'Reply to the customer',
     replyPlaceholder: 'Write a reply…',
     replyHint: 'The customer receives this on WhatsApp.',
+    /**
+     * The same line plus the shortcut affordance, shown only to a tenant that
+     * has canned responses. The trigger is interpolated from the contract rather
+     * than written into the sentence: one character, one source, and a hint that
+     * cannot promise a key the picker does not listen for.
+     */
+    replyHintWithShortcuts: (trigger: string) =>
+      `The customer receives this on WhatsApp. Type ${trigger} to insert a saved reply.`,
     send: 'Send',
     sendSuccess: 'Message sent',
     /**
@@ -824,6 +832,20 @@ export const content = {
       `${kind} files can be up to ${value} ${unit} on WhatsApp. Pick a smaller one.`,
     captionLabel: 'Caption',
     captionHint: 'Sent with the file. Leave it empty to send the file on its own.',
+
+    // --- Canned responses ---------------------------------------------------
+    /**
+     * Names the shortcut list for screen readers; it has no visible heading,
+     * because the hint above the box has already said what it is.
+     */
+    cannedListLabel: 'Saved replies matching what you typed',
+    /**
+     * Announced politely as the token narrows. The textarea points at the
+     * highlighted row with `aria-activedescendant`, which says *which* one — this
+     * says how many there are to arrow through.
+     */
+    cannedMatchCount: (count: number) =>
+      count === 1 ? '1 saved reply matches' : `${String(count)} saved replies match`,
 
     // --- Templates ----------------------------------------------------------
     useTemplate: 'Use a template',
