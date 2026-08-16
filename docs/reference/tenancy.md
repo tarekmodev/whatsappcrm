@@ -156,7 +156,7 @@ message — nothing that is a tenant's data. The same shape of narrow, justified
 Everything the sweep then _does_ with those pairs runs under RLS: they are grouped by tenant
 and processed one `$tenantTransaction` per tenant. That split is the point, because the
 writes are the dangerous half — the sweep writes to `sla_timers`, `ticket_events` and
-`sla_alerts`, and an alert row inserted with the wrong `tenant_id` under the system role is a
+`notifications`, and an alert row inserted with the wrong `tenant_id` under the system role is a
 cross-tenant leak RLS would otherwise have refused. `sla-breach.int-spec.ts` asserts that one
 tenant's sweep never writes into another.
 
