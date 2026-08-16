@@ -37,9 +37,13 @@ import {
 import {
   canAgentTransition,
   TICKET_EVENT_CAUSES,
+  TICKET_EVENT_TYPES,
   TICKET_PRIORITIES,
   TICKET_STATUS_REQUIRES_CLOSE,
   TICKET_STATUSES,
+  ticketAssignRequiresReason,
+  TicketAssignInputSchema,
+  TicketEscalateInputSchema,
   TicketEventSchema,
   TicketListQuerySchema,
   TicketUpdateInputSchema,
@@ -1059,6 +1063,11 @@ describe('ticket event causes', () => {
       actorUserId: null,
       fromValue: 'pending',
       toValue: 'open',
+      // Null on every event that is not an assignment change (TAR-32,
+      // ADR 0011 decision 4). Nullable rather than optional, so a producer
+      // cannot leave it off and have it read as "no assignment moved" by
+      // accident.
+      assignment: null,
       reason: null,
       cause: 'inbound_message',
       createdAt: '2026-08-13T09:00:00.000Z',
@@ -1067,5 +1076,62 @@ describe('ticket event causes', () => {
     expect(TicketEventSchema.parse(event)).toMatchObject({ cause: 'inbound_message' });
     expect(TicketEventSchema.parse({ ...event, cause: null }).cause).toBeNull();
     expect(() => TicketEventSchema.parse({ ...event, cause: 'telepathy' })).toThrow();
+  });
+});
+
+/**
+ * The reassignment and escalation contract (TAR-32, ADR 0011). Pinned here
+ * because the console and the API both read these, and a drift between them is
+ * a form that refuses what the API accepts — or offers what it will not.
+ */
+describe('ticket handoff and escalation', () => {
+  it('requires a reason exactly when somebody already holds the ticket', () => {
+    expect(ticketAssignRequiresReason({ assignedUserId: null, assignedTeamId: null })).toBe(false);
+    expect(ticketAssignRequiresReason({ assignedUserId: 'u', assignedTeamId: null })).toBe(true);
+    // ⚠️ A team hold counts. That is what makes a reason required for a
+    // rule-routed ticket the flagged queue then shows as deferred.
+    expect(ticketAssignRequiresReason({ assignedUserId: null, assignedTeamId: 't' })).toBe(true);
+  });
+
+  it('trims a reason and refuses one that says nothing', () => {
+    const base = { userId: '25444444-4444-7444-8444-4444444444f1' };
+
+    expect(TicketAssignInputSchema.parse({ ...base, reason: '  handing over  ' })).toMatchObject({
+      reason: 'handing over',
+    });
+    // Whitespace is not a reason: the empty string used to satisfy "present"
+    // and log nothing.
+    expect(() => TicketAssignInputSchema.parse({ ...base, reason: '   ' })).toThrow();
+    expect(() => TicketAssignInputSchema.parse({ ...base, reason: 'no' })).toThrow();
+    // Still optional on the body — the conditional half is the service's.
+    expect(TicketAssignInputSchema.parse(base).reason).toBeUndefined();
+  });
+
+  it('makes the escalation reason unconditionally required', () => {
+    expect(() => TicketEscalateInputSchema.parse({})).toThrow();
+    expect(() => TicketEscalateInputSchema.parse({ reason: '  ' })).toThrow();
+
+    const parsed = TicketEscalateInputSchema.parse({ reason: '  needs a decision  ' });
+
+    expect(parsed.reason).toBe('needs a decision');
+    // Absent means "whoever supervises this ticket", so it must stay undefined
+    // rather than being defaulted to anything.
+    expect(parsed.toUserId).toBeUndefined();
+  });
+
+  it('publishes escalated as its own event type, distinct from an assignment', () => {
+    expect(TICKET_EVENT_TYPES).toContain('escalated');
+    expect(TICKET_EVENT_TYPES).toContain('assigned');
+  });
+
+  it('grants handoff and escalate to every role, without widening ticket:assign', () => {
+    for (const role of TENANT_ROLES) {
+      expect(roleHasPermission(role, 'ticket:handoff')).toBe(true);
+      expect(roleHasPermission(role, 'ticket:escalate')).toBe(true);
+    }
+
+    // The whole point of decision 2: an agent still cannot take a ticket off a
+    // colleague.
+    expect(roleHasPermission('agent', 'ticket:assign')).toBe(false);
   });
 });

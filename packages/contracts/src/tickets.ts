@@ -305,12 +305,59 @@ export const TicketAssignInputSchema = z
   .object({
     userId: IdSchema.nullable().optional(),
     teamId: IdSchema.nullable().optional(),
-    /** Recorded on the event log; surfaced in the escalation history (TAR-32). */
-    reason: z.string().max(500).optional(),
+    /**
+     * Recorded on the event log and surfaced in the ticket's history (TAR-32).
+     *
+     * Optional **here** and conditionally required by the service, because Zod
+     * sees the body and the rule is about the row: see
+     * `ticketAssignRequiresReason`. The floor and the trim are what stop the
+     * empty string satisfying "present" and logging nothing.
+     */
+    reason: z.string().trim().min(3).max(500).optional(),
   })
   .refine((v) => v.userId !== undefined || v.teamId !== undefined, {
     message: 'Provide at least one of userId or teamId',
   });
+
+/**
+ * True when `POST /tickets/{id}/assign` requires a `reason` (ADR 0011
+ * decision 1).
+ *
+ * The rule is about the ticket's *current* state, not the request: a
+ * reassignment is a write that takes work away from somebody, which is exactly
+ * the case where the ticket already has a holder. A supervisor emptying the
+ * flagged queue (ADR 0008 decision 3) is placing work nobody held — not a
+ * handoff, and with no handoff to explain.
+ *
+ * Published as a predicate rather than described twice, the same shape as
+ * `canAgentTransition` and `TICKET_STATUS_REQUIRES_CLOSE`: the console has to
+ * know whether to mark the field required *before* it submits, and a second
+ * copy that drifts is a form that refuses a submit the API would have accepted
+ * — or, worse, offers one it will not.
+ */
+export function ticketAssignRequiresReason(ticket: {
+  assignedUserId: string | null;
+  assignedTeamId: string | null;
+}): boolean {
+  return ticket.assignedUserId !== null || ticket.assignedTeamId !== null;
+}
+
+/**
+ * `POST /tickets/{id}/escalate` — raise attention, without moving the
+ * assignment (ADR 0011 decision 3).
+ *
+ * `reason` is **unconditionally** required here. Unlike a placement there is no
+ * escalation without something to escalate: the reason is the whole payload.
+ *
+ * `toUserId` names one supervisor when the agent knows who they need. Absent
+ * means "whoever supervises this ticket", and recipients are derived the way
+ * ADR 0006 already derives them for an SLA breach.
+ */
+export const TicketEscalateInputSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+  /** A named supervisor. Absent means "whoever supervises this ticket". */
+  toUserId: IdSchema.optional(),
+});
 
 /**
  * Append-only audit trail. Every status change, assignment and SLA event lands
@@ -331,6 +378,15 @@ export const TICKET_EVENT_TYPES = [
   'priority_changed',
   'assigned',
   'unassigned',
+  /**
+   * An agent asked for supervisor attention (TAR-32, ADR 0011 decision 4). The
+   * assignment does **not** move, so this is never an `assigned` event and the
+   * two must stay distinguishable in the history.
+   *
+   * Additive with no migration: `ticket_events.type` is text precisely so later
+   * stories add types without one.
+   */
+  'escalated',
   /**
    * Routing ran and nobody was eligible, so the ticket stayed unassigned
    * (0007's `deferred` branch). The event's `reason` is a
@@ -376,6 +432,42 @@ export const TicketEventTypeSchema = z.enum(TICKET_EVENT_TYPES);
 export const TICKET_EVENT_CAUSES = ['agent', 'inbound_message', 'automation', 'sla'] as const;
 export const TicketEventCauseSchema = z.enum(TICKET_EVENT_CAUSES);
 
+/**
+ * Both sides of an assignment change. Null on every event that is not one.
+ *
+ * A nested object rather than more scalar columns, matching the convention
+ * `TicketRouting` and `TicketSla` already set: `fromValue`/`toValue` stay the
+ * scalar pair they were built for (`status_changed`, `priority_changed`), and an
+ * assignment moves up to four ids at once.
+ */
+export const TicketEventAssignmentSchema = z.object({
+  fromUserId: IdSchema.nullable(),
+  fromTeamId: IdSchema.nullable(),
+  toUserId: IdSchema.nullable(),
+  toTeamId: IdSchema.nullable(),
+});
+
+/**
+ * One event on a ticket's append-only history.
+ *
+ * Per-type encoding, and this table is the contract a console renders from
+ * (ADR 0011 decision 4):
+ *
+ * | `type`                | `fromValue`  | `toValue`                    | `assignment` | `reason`   |
+ * | --------------------- | ------------ | ---------------------------- | ------------ | ---------- |
+ * | `created`             | null         | null                         | null         | null       |
+ * | `status_changed`      | old status   | new status                   | null         | null       |
+ * | `priority_changed`    | old priority | new priority                 | null         | null       |
+ * | `assigned`            | null         | null                         | **set**      | when given |
+ * | `unassigned`          | null         | null                         | **set**      | when given |
+ * | `escalated`           | null         | named supervisor, or null    | null         | **always** |
+ * | `assignment_deferred` | null         | null                         | null         | the `FallbackAssignmentReason` |
+ * | `sla_breached`        | null         | the `SlaTargetKind`          | null         | null       |
+ *
+ * `toValue` being null on an `escalated` event is meaningful rather than
+ * missing: it says the escalation was addressed to whoever supervises this
+ * ticket rather than to a person, and the two render differently.
+ */
 export const TicketEventSchema = z.object({
   id: IdSchema,
   ticketId: IdSchema,
@@ -384,10 +476,40 @@ export const TicketEventSchema = z.object({
   actorUserId: IdSchema.nullable(),
   fromValue: z.string().nullable(),
   toValue: z.string().nullable(),
+  /** Set on `assigned` and `unassigned`; null on every other type. */
+  assignment: TicketEventAssignmentSchema.nullable(),
   reason: z.string().nullable(),
   /** Null for the event types that predate the token, and for `created`. */
   cause: TicketEventCauseSchema.nullable(),
   createdAt: TimestampSchema,
+});
+
+/**
+ * `GET /tickets/{id}/events` — keyset paginated like every other list in this
+ * API, because a busy ticket accumulates events indefinitely and an offset page
+ * over an append-only log is the one shape that silently degrades.
+ *
+ * No `type` filter at v1: a ticket's history is short enough to read whole.
+ */
+export const TicketEventListQuerySchema = CursorPageQuerySchema;
+
+/**
+ * What `POST /tickets/{id}/escalate` answers.
+ *
+ * Not a `TicketResponse`: nothing on the ticket moved, so returning one would
+ * tell the console nothing and hide the only fact it needs.
+ */
+export const TicketEscalationResponseSchema = z.object({
+  event: TicketEventSchema,
+  /**
+   * Every recipient an alert row was written for.
+   *
+   * **Empty is a real outcome**, not an error — a tenant with no active
+   * supervisor or admin gets it (ADR 0006 decision 4). The escalation is still
+   * recorded, so the console says "recorded, but nobody was notified" rather
+   * than showing a green tick or a failure the agent cannot fix.
+   */
+  notifiedUserIds: z.array(IdSchema),
 });
 
 export type TicketPriority = z.infer<typeof TicketPrioritySchema>;
@@ -399,6 +521,10 @@ export type TicketResponse = z.infer<typeof TicketResponseSchema>;
 export type TicketListQuery = z.infer<typeof TicketListQuerySchema>;
 export type TicketUpdateInput = z.infer<typeof TicketUpdateInputSchema>;
 export type TicketAssignInput = z.infer<typeof TicketAssignInputSchema>;
+export type TicketEscalateInput = z.infer<typeof TicketEscalateInputSchema>;
 export type TicketEventType = z.infer<typeof TicketEventTypeSchema>;
 export type TicketEventCause = (typeof TICKET_EVENT_CAUSES)[number];
+export type TicketEventAssignment = z.infer<typeof TicketEventAssignmentSchema>;
 export type TicketEvent = z.infer<typeof TicketEventSchema>;
+export type TicketEventListQuery = z.infer<typeof TicketEventListQuerySchema>;
+export type TicketEscalationResponse = z.infer<typeof TicketEscalationResponseSchema>;

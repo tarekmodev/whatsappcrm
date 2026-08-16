@@ -13,12 +13,21 @@ import {
   TicketDetailSection,
   TicketDetailSectionSkeleton,
 } from '@/features/tickets/components/TicketDetailSection';
+import {
+  TicketHistorySection,
+  TicketHistorySectionSkeleton,
+} from '@/features/tickets/components/TicketHistorySection';
 import { TicketUnavailable } from '@/features/tickets/components/TicketUnavailable';
 import { parseTicketId } from '@/features/tickets/ticket-params';
 
 /**
- * One ticket: what it is, and the controls that change its status and priority.
- * Composition only.
+ * One ticket: what it is, the controls that change its status and priority, the
+ * handoff surface, and the history all three of them write. Composition only.
+ *
+ * Two Suspense boundaries rather than one, because the ticket and its trail are
+ * two independent round trips: the controls must not wait on the history, and a
+ * failing history must not take the controls down. Each gets its own error
+ * boundary for the same reason.
  */
 
 export const metadata: Metadata = {
@@ -53,11 +62,19 @@ export default async function TicketPage({ params }: { params: Promise<{ ticketI
         {ticketId === null ? (
           <TicketUnavailable />
         ) : (
-          <SectionErrorBoundary>
-            <Suspense key={ticketId} fallback={<TicketDetailSectionSkeleton />}>
-              <TicketDetailSection ticketId={ticketId} />
-            </Suspense>
-          </SectionErrorBoundary>
+          <>
+            <SectionErrorBoundary>
+              <Suspense key={ticketId} fallback={<TicketDetailSectionSkeleton />}>
+                <TicketDetailSection ticketId={ticketId} />
+              </Suspense>
+            </SectionErrorBoundary>
+
+            <SectionErrorBoundary>
+              <Suspense key={`${ticketId}-history`} fallback={<TicketHistorySectionSkeleton />}>
+                <TicketHistorySection ticketId={ticketId} />
+              </Suspense>
+            </SectionErrorBoundary>
+          </>
         )}
       </Stack>
     </PageShell>

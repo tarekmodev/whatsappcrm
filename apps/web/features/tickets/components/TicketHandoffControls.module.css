@@ -1,0 +1,32 @@
+/*
+ * The handoff card. Two buttons and a line of explanation — nothing here sets a
+ * colour or a size of its own; `Button` owns both.
+ */
+
+/*
+ * Wraps rather than overflowing, and the buttons grow to share the row at the
+ * narrowest widths: two 44px-tall targets side by side fit at 320px only if they
+ * are allowed to take half each.
+ */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.actions > * {
+  flex: 1 1 auto;
+}
+
+@media (min-width: 30rem) {
+  .actions > * {
+    flex: 0 0 auto;
+  }
+}
+
+.hint {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  max-inline-size: var(--measure-body);
+}

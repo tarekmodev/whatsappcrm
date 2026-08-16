@@ -9,6 +9,7 @@ import type {
   SlaTargetKind,
   TenantRole,
   TenantStatus,
+  TicketEventType,
   TicketPriority,
   TicketStatus,
   UserStatus,
@@ -518,6 +519,139 @@ export const content = {
      * be worse than saying who actually did it, which is the customer.
      */
     reopenedByCustomer: 'Reopened — customer replied',
+
+    // --- Handing a ticket on, and asking for help (TAR-32, ADR 0011) --------
+    /**
+     * "Handoff" rather than "Assignment": this card is about giving work away
+     * and asking for help, and the word an agent uses for both is a handoff.
+     * The card that *places* a ticket nobody holds lives on the supervisor's
+     * assignment surface and keeps its own word.
+     */
+    handoffHeading: 'Handoff',
+    handoffDescription:
+      'Hand this ticket to a teammate, or ask a supervisor to look at it. Both are recorded in its history.',
+    reassign: 'Reassign',
+    escalate: 'Escalate',
+    /**
+     * Said rather than left as two missing buttons. Both permissions are in
+     * every role's set today, so this is the rare case — a role that has had
+     * them taken away — and a card with no controls and no explanation reads as
+     * broken.
+     */
+    handoffNotPermitted:
+      'Your role can read this ticket but not hand it on or escalate it. Ask a workspace admin.',
+
+    reassignTitle: (label: string) => `Reassign ${label}`,
+    reassignDescription:
+      'The person you pick takes it over from here. Your reason is the first thing they read in its history.',
+    reassignAgentLabel: 'Hand it to',
+    /**
+     * Says what the list *is*, because the API bounds it: without
+     * `ticket:assign` a caller may hand a ticket only to somebody they share a
+     * team with, so a name missing from here is a rule rather than an oversight.
+     */
+    reassignAgentHint: 'People you share a team with, plus anyone your role can assign to.',
+    reassignReasonLabel: 'Why you are handing it on',
+    reassignReasonHint: 'The next person reads this before anything else. Say what is left to do.',
+    reassignSubmit: 'Reassign ticket',
+    reassignSuccess: (label: string, agentName: string) => `${label} is now with ${agentName}`,
+    /**
+     * The bound above, seen from inside the dialog with nobody on the other side
+     * of it. An empty picker would read as a broken control; this says what is
+     * missing and who can fix it.
+     */
+    reassignNoTeammates:
+      'You share no team with anyone who could take this. Ask a supervisor to reassign it.',
+
+    escalateTitle: (label: string) => `Escalate ${label}`,
+    /**
+     * The first sentence is load-bearing and is the thing agents get wrong:
+     * escalating does **not** hand the ticket over. Saying so here is what stops
+     * "Escalate" being read as the button that loses your work.
+     */
+    escalateDescription:
+      'You keep this ticket. A supervisor is asked to look at it, and your reason goes on its history.',
+    escalateSupervisorLabel: 'Ask someone in particular',
+    escalateSupervisorHint:
+      'Leave this as it is unless you need a specific person — otherwise whoever covers this ticket is asked.',
+    /** The `toUserId`-absent case, named rather than rendered as a blank option. */
+    escalateSupervisorAnyone: 'Whoever is covering this ticket',
+    escalateReasonLabel: 'What you need decided',
+    escalateReasonHint:
+      'Say what is stuck and what would unblock it. Include a deadline if there is one.',
+    escalateSubmit: 'Escalate ticket',
+    escalateSuccess: (label: string, count: number) =>
+      count === 1
+        ? `${label} escalated. 1 person has been told.`
+        : `${label} escalated. ${String(count)} people have been told.`,
+    /**
+     * `notifiedUserIds: []` is a real outcome, not a failure: a tenant with no
+     * active supervisor still gets the escalation recorded (ADR 0011
+     * decision 3). A green tick here would be a lie, and an error would blame an
+     * agent who did nothing wrong and cannot fix it.
+     */
+    escalateSuccessNobody: (label: string) =>
+      `${label} is recorded as escalated, but nobody in this workspace is set up to receive it. Ask a workspace admin.`,
+
+    /**
+     * Client-side because the field is required *before* submit — the form must
+     * not be submittable without one (TAR-32 AC1). The API refuses the same
+     * request a second time; this is the version the agent can act on without a
+     * round trip.
+     */
+    reasonRequiredError:
+      'Add a reason — it is what makes the handoff make sense to the next person.',
+    reasonTooShortError: (minLength: number) =>
+      `Use at least ${String(minLength)} characters, so the history says something.`,
+    reasonTooLongError: (maxLength: number) => `Use at most ${String(maxLength)} characters`,
+
+    // --- The history the two of them write ----------------------------------
+    historyHeading: 'History',
+    historyDescription: 'Everything that has happened to this ticket, newest first.',
+    historyLoading: 'Loading this ticket’s history',
+    historyEmptyHeading: 'Nothing recorded yet',
+    historyEmptyBody:
+      'Status changes, handoffs and escalations appear here as they happen, with who did them and why.',
+    /** The API answers one page; claiming a total would mean paging the whole log. */
+    historyMore: 'Older entries are not shown.',
+    historyReason: 'Reason',
+    historyBy: (name: string) => `by ${name}`,
+    /** No actor: routing, the SLA sweep and the auto-linker write through the same column. */
+    historyByAutomation: 'by the system',
+    historyActorUnresolved: 'another agent',
+
+    /**
+     * One line per event type, named by what happened rather than by the column
+     * that changed. `assigned` and `unassigned` are reused for reassignment
+     * (ADR 0011 decision 4), so their copy has to read correctly whether or not
+     * somebody held the ticket before — which is why the from/to detail is a
+     * separate line rather than baked into these.
+     */
+    historyEvents: {
+      created: 'Ticket opened',
+      conversation_linked: 'A message arrived on another conversation',
+      status_changed: 'Status changed',
+      priority_changed: 'Priority changed',
+      assigned: 'Handed on',
+      unassigned: 'Released',
+      escalated: 'Escalated',
+      assignment_deferred: 'Auto-assignment could not place it',
+      first_response: 'First reply sent',
+      sla_breached: 'SLA missed',
+      reopened: 'Reopened',
+      bot_handoff: 'Handed over by the chatbot',
+    } satisfies Record<TicketEventType, string>,
+
+    historyValueChange: (from: string, to: string) => `${from} → ${to}`,
+    historyHandedTo: (name: string) => `to ${name}`,
+    historyHandedFromTo: (from: string, to: string) => `from ${from} to ${to}`,
+    historyEscalatedTo: (name: string) => `to ${name}`,
+    /**
+     * A null `toValue` on an `escalated` event is meaningful rather than
+     * missing: the escalation was addressed to whoever supervises the ticket
+     * rather than to a person, and the two must not render the same.
+     */
+    historyEscalatedToAnyone: 'to whoever is covering this ticket',
   },
 
   /**
@@ -925,6 +1059,15 @@ export const content = {
      * that is the remedy ADR 0008 names for `all_at_capacity`.
      */
     assignTicketAgentHint: 'Anyone in this list can take it, including you — even at their limit.',
+    /**
+     * A flagged ticket routed to a team still carries `assignedTeamId`, and
+     * `ticketAssignRequiresReason` counts that as held — so the API requires a
+     * reason for this placement too (ADR 0011 decision 1). Asked for up front
+     * rather than discovered as a 400 after the supervisor has picked somebody.
+     */
+    assignTicketReasonLabel: 'Why this person',
+    assignTicketReasonHint:
+      'Auto-assignment could not place this, so the override is recorded on the ticket’s history.',
     assignTicketSubmit: 'Assign ticket',
     assignTicketSuccess: (ticketLabel: string, agentName: string) =>
       `${ticketLabel} assigned to ${agentName}`,

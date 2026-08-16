@@ -1,9 +1,15 @@
 import 'server-only';
 
 import {
+  TicketEscalationResponseSchema,
+  TicketEventSchema,
   TicketResponseSchema,
   type CursorPage,
   type TicketAssignInput,
+  type TicketEscalateInput,
+  type TicketEscalationResponse,
+  type TicketEvent,
+  type TicketEventListQuery,
   type TicketListQuery,
   type TicketResponse,
   type TicketUpdateInput,
@@ -17,8 +23,9 @@ import { parseCursorPage } from '@/lib/api/parse';
  *
  * `POST /tickets` is deliberately absent and is not coming: tickets are opened by
  * the auto-linking pipeline when a customer writes in, never by an agent pressing
- * a button (ADR 0003). `assign` has since landed with TAR-23, below; the event
- * log (TAR-32) still has its own story to come.
+ * a button (ADR 0003). `assign` has since landed with TAR-23, below, and TAR-32
+ * adds the two calls the handoff surface makes — `escalate` and the event log the
+ * ticket resource has had reserved since TAR-25.
  */
 
 const TICKETS_PATH = '/v1/tickets';
@@ -127,6 +134,14 @@ export async function updateTicket(
  * takes a ticket nobody could be given and puts a name on it. The API
  * additionally moves `routing.state` to `manual`, which is what stops a later
  * routing pass overruling the decision.
+ *
+ * Also the **reassignment** surface (TAR-32, ADR 0011 decision 1): one route
+ * rather than a second `/reassign`, because the two writes are the same
+ * transaction over the same columns. `reason` becomes required exactly when the
+ * ticket already has a holder — `ticketAssignRequiresReason` is the predicate
+ * both halves read — and a missing one comes back as `validation_failed` from
+ * the service rather than from the schema, because Zod sees the body and the
+ * rule is about the row.
  */
 export async function assignTicket(
   ticketId: string,
@@ -139,4 +154,55 @@ export async function assignTicket(
   });
 
   return TicketResponseSchema.parse(response);
+}
+
+/**
+ * `POST /api/v1/tickets/{id}/escalate` — ask a supervisor to look (TAR-32).
+ *
+ * **The ticket does not change hands.** An escalation that un-assigned the agent
+ * would leave the customer with nobody while the supervisor sleeps, and would
+ * make "escalate" the one button that loses your work (ADR 0011 decision 3).
+ *
+ * The response is not a `TicketResponse` for exactly that reason — nothing on
+ * the ticket moved. It carries the audit entry and who was told, and an empty
+ * `notifiedUserIds` is a real outcome the caller has to render: a tenant with no
+ * active supervisor still gets the escalation recorded.
+ */
+export async function escalateTicket(
+  ticketId: string,
+  input: TicketEscalateInput,
+): Promise<TicketEscalationResponse> {
+  const response = await authenticatedRequest({
+    method: 'POST',
+    path: `${TICKETS_PATH}/${encodeURIComponent(ticketId)}/escalate`,
+    body: input,
+  });
+
+  return TicketEscalationResponseSchema.parse(response);
+}
+
+/**
+ * `GET /api/v1/tickets/{id}/events` — the ticket's append-only history, newest
+ * first, and the read that makes reassignment and escalation visible at all.
+ *
+ * `ticket:read`, and the ticket goes through the same visibility rule the GET
+ * does: a ticket the caller may not open answers `not_found` here too, so the
+ * event log cannot become a side channel onto one.
+ */
+export async function listTicketEvents(
+  ticketId: string,
+  query: TicketEventListQuery,
+): Promise<CursorPage<TicketEvent>> {
+  const params = new URLSearchParams({ limit: String(query.limit) });
+
+  if (query.cursor !== undefined) {
+    params.set('cursor', query.cursor);
+  }
+
+  const response = await authenticatedRequest({
+    method: 'GET',
+    path: `${TICKETS_PATH}/${encodeURIComponent(ticketId)}/events?${params.toString()}`,
+  });
+
+  return parseCursorPage(TicketEventSchema, response);
 }

@@ -14,6 +14,7 @@ import {
   MOCK_TENANTS,
   MOCK_TENANT_LIFECYCLES,
   MOCK_TICKETS,
+  MOCK_TICKET_EVENTS,
   MOCK_USERS,
   type MockAssignmentRule,
   type MockConversation,
@@ -27,6 +28,7 @@ import {
   type MockTeam,
   type MockTenantLifecycle,
   type MockTicket,
+  type MockTicketEvent,
   type MockUser,
 } from '@/lib/api/mock/fixtures';
 import type { TenantResponse } from '@whatsappcrm/contracts';
@@ -56,6 +58,11 @@ interface MockState {
   internalNotes: Map<string, MockInternalNote>;
   messageTemplates: Map<string, MockMessageTemplate>;
   tickets: Map<string, MockTicket>;
+  /**
+   * Append-only, and treated as such: the handlers add rows and never rewrite
+   * one. A history a fixture layer could edit is not a history.
+   */
+  ticketEvents: Map<string, MockTicketEvent>;
   tags: Map<string, MockTag>;
   customFieldDefinitions: Map<string, MockCustomFieldDefinition>;
   assignmentRules: Map<string, MockAssignmentRule>;
@@ -114,6 +121,7 @@ function seed(): MockState {
     internalNotes: new Map(MOCK_INTERNAL_NOTES.map((note) => [note.id, note])),
     messageTemplates: new Map(MOCK_MESSAGE_TEMPLATES.map((item) => [item.id, item])),
     tickets: new Map(MOCK_TICKETS.map((item) => [item.id, item])),
+    ticketEvents: new Map(MOCK_TICKET_EVENTS.map((item) => [item.id, item])),
     tags: new Map(MOCK_TAGS.map((tag) => [tag.id, tag])),
     customFieldDefinitions: new Map(
       MOCK_CUSTOM_FIELD_DEFINITIONS.map((definition) => [

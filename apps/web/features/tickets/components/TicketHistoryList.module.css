@@ -1,0 +1,83 @@
+/*
+ * The ticket's audit trail. A list of entries, each one a badge, a title, an
+ * optional movement line, an optional quoted reason and a byline.
+ *
+ * No colour or size of its own beyond the tokens: `Badge` owns the tone and
+ * `RelativeTime` owns the timestamp.
+ */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  list-style: none;
+}
+
+/*
+ * A rule between entries rather than around each one. Boxes would turn a trail
+ * into a stack of cards and make the ticket page read as a second queue.
+ */
+.entry + .entry {
+  border-block-start: var(--border-hairline) solid var(--color-border);
+  padding-block-start: var(--space-4);
+}
+
+/*
+ * The badge and the title share a line and wrap together; the timestamp is
+ * pushed to the end above the narrow breakpoint and drops beneath at 320px,
+ * where a badge, a title and a time do not fit on one line.
+ */
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.title {
+  font-weight: var(--font-weight-medium);
+}
+
+.timestamp {
+  margin-inline-start: auto;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.detail {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  max-inline-size: var(--measure-body);
+}
+
+/*
+ * The agent's own words, marked as a quotation rather than styled to look like
+ * one: a screen reader announces a `blockquote`, and the reason is the single
+ * most important line in a handoff entry.
+ */
+.reason {
+  margin-block-start: var(--space-2);
+  border-inline-start: var(--border-hairline) solid var(--color-border-strong);
+  padding-inline-start: var(--space-3);
+  max-inline-size: var(--measure-body);
+  /* Long, unbroken customer references must not push the card sideways. */
+  overflow-wrap: anywhere;
+}
+
+.reasonLabel {
+  display: block;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+.actor {
+  margin-block-start: var(--space-2);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.more {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  max-inline-size: var(--measure-body);
+}
