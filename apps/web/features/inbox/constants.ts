@@ -65,6 +65,16 @@ export const MEDIA_CAPTION_MAX_LENGTH = requireBound(
 export const TEMPLATE_PAGE_SIZE = 100;
 export const TEMPLATE_SKELETON_COUNT = 4;
 
+/**
+ * How many canned responses the composer's shortcut picker offers at once —
+ * ADR 0011's "show at most 8".
+ *
+ * No page size beside it, and no skeleton count: the tenant's whole set is
+ * server-rendered into the route and matched in the browser (0011, decision 1),
+ * so the picker never waits on a request and has nothing to stand in for.
+ */
+export const CANNED_RESPONSE_MATCH_LIMIT = 8;
+
 function requireBound(value: number | null, name: string): number {
   if (value === null) {
     throw new Error(`The contract no longer publishes ${name}; the composer cannot validate.`);

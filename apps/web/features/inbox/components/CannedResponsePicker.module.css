@@ -1,0 +1,71 @@
+.list {
+  /*
+   * Above the textarea, not below it. The composer sits at the foot of the
+   * thread card with the attach control and Send directly under it, so a panel
+   * opening downwards would cover the button the agent is heading for — and on a
+   * short viewport it would open off the bottom of the screen entirely.
+   */
+  position: absolute;
+  inset-block-end: calc(100% + var(--space-1));
+  inset-inline: 0;
+  z-index: var(--z-nav);
+  display: flex;
+  flex-direction: column;
+  /* Eight rows fit a laptop; a phone in landscape scrolls rather than overflows. */
+  max-block-size: var(--size-scroll-region);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-1);
+  margin: 0;
+  list-style: none;
+  background: var(--color-surface-raised);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+}
+
+.option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-3);
+  padding-block: var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .option:hover {
+    background: var(--color-surface-hover);
+  }
+}
+
+/*
+ * The highlighted row. A background alone would carry the state in colour only,
+ * which is the one thing a keyboard user tracking `aria-activedescendant`
+ * visually cannot afford — the inline marker is the second channel, and it
+ * survives forced-colors mode where a background does not.
+ */
+.option[data-active='true'] {
+  background: var(--color-surface-selected);
+  box-shadow: inset var(--focus-ring-width) 0 0 0 var(--color-accent);
+}
+
+.shortcut {
+  font-family: var(--font-family-mono);
+  font-weight: var(--font-weight-medium);
+  /* A shortcut is short by construction, but it must never push the title off. */
+  overflow-wrap: anywhere;
+}
+
+.title {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  color: var(--color-on-surface-muted);
+  overflow-wrap: anywhere;
+}

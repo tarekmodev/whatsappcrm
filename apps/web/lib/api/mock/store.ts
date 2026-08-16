@@ -2,6 +2,7 @@ import 'server-only';
 
 import {
   MOCK_ASSIGNMENT_RULES,
+  MOCK_CANNED_RESPONSES,
   MOCK_CONTACTS,
   MOCK_CONVERSATIONS,
   MOCK_CUSTOM_FIELD_DEFINITIONS,
@@ -21,6 +22,7 @@ import {
   MOCK_WORKFLOWS,
   MOCK_WORKFLOW_RUNS,
   type MockAssignmentRule,
+  type MockCannedResponse,
   type MockContact,
   type MockConversation,
   type MockCustomFieldDefinition,
@@ -75,6 +77,8 @@ interface MockState {
   tags: Map<string, MockTag>;
   customFieldDefinitions: Map<string, MockCustomFieldDefinition>;
   assignmentRules: Map<string, MockAssignmentRule>;
+  /** Read-only from the console at v1: the composer expands them, nothing edits them. */
+  cannedResponses: Map<string, MockCannedResponse>;
   workflows: Map<string, MockWorkflow>;
   /** A log rather than a ledger: nothing here is written by the console. */
   workflowRuns: Map<string, MockWorkflowRun>;
@@ -162,6 +166,7 @@ function seed(): MockState {
     assignmentRules: new Map(
       MOCK_ASSIGNMENT_RULES.map((rule) => [rule.id, { ...rule, conditions: [...rule.conditions] }]),
     ),
+    cannedResponses: new Map(MOCK_CANNED_RESPONSES.map((item) => [item.id, item])),
     workflows: new Map(
       MOCK_WORKFLOWS.map((workflow) => [
         workflow.id,

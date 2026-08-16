@@ -33,6 +33,16 @@ HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
   this.open = false;
 };
 
+/**
+ * jsdom has no layout, so it ships no `scrollIntoView` at all — a component that
+ * keeps a highlighted row in view dies in an effect rather than failing an
+ * assertion. A no-op for the same reason as `showModal` above: the environment is
+ * missing the method, and there is no scroll position here to be right about.
+ */
+Element.prototype.scrollIntoView = function scrollIntoView() {
+  // Intentionally empty: jsdom does not lay out, so there is nothing to scroll.
+};
+
 // Vitest is configured without globals, so Testing Library cannot auto-register
 // its own cleanup. Without this, rendered trees leak between tests and
 // `getByRole` starts finding duplicates.

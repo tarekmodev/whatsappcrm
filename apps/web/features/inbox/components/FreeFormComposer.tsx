@@ -1,11 +1,9 @@
 'use client';
 
 import { useCallback, useRef, useState, type FormEvent } from 'react';
-import type { SendMediaInput, SendTextInput } from '@whatsappcrm/contracts';
+import type { CannedResponseResponse, SendMediaInput, SendTextInput } from '@whatsappcrm/contracts';
 import { Button } from '@/components/ui/Button';
-import { Field } from '@/components/ui/Field';
 import { FormError } from '@/components/ui/FormError';
-import { Textarea } from '@/components/ui/Textarea';
 import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
 import { SkeletonBlock, SkeletonLine } from '@/components/ui/Skeleton';
@@ -25,6 +23,7 @@ import {
   type FreeFormProblem,
 } from '@/features/inbox/free-form-draft';
 import { ComposerAttachment, ComposerAttachmentSkeleton } from './ComposerAttachment';
+import { ReplyDraftField } from './ReplyDraftField';
 
 /**
  * The free-form half of the composer: a message the agent writes themselves,
@@ -48,13 +47,23 @@ import { ComposerAttachment, ComposerAttachmentSkeleton } from './ComposerAttach
  * WhatsApp carries one media object per message, so this holds one. What that
  * does to the send — a media type, a shorter ceiling, the text becoming a
  * caption — is `buildFreeFormSend`'s to decide, not this form's.
+ *
+ * ## Canned responses are the field's, not the form's
+ *
+ * Typing `/hours` inserts a saved reply into the draft (TAR-484). That is
+ * `ReplyDraftField`'s whole job; from here it is an ordinary draft change, which
+ * is exactly what the acceptance criterion asks for — the inserted text is
+ * editable, and the only thing that sends it is the button below.
  */
 export function FreeFormComposer({
   conversationId,
   isWindowOpen,
+  cannedResponses,
 }: {
   conversationId: string;
   isWindowOpen: boolean;
+  /** The tenant's shortcut library. Empty means the field shows no picker. */
+  cannedResponses: readonly CannedResponseResponse[];
 }) {
   const content = useContent();
   const { showToast } = useToast();
@@ -124,30 +133,17 @@ export function FreeFormComposer({
   return (
     <form onSubmit={onSubmit} noValidate>
       <Stack gap="3">
-        <Field
-          label={content.composer.replyLabel}
-          hint={content.composer.replyHint}
+        <ReplyDraftField
+          value={body}
+          onChange={setBody}
+          textareaRef={textareaRef}
+          cannedResponses={cannedResponses}
+          rows={TEXTAREA_ROWS}
+          maxLength={maxLength}
+          isDisabled={!isWindowOpen}
           error={problem === null ? undefined : problemMessages[problem]}
           isRequired={attachment.status !== 'ready'}
-        >
-          {({ controlId, describedBy, isInvalid }) => (
-            <Textarea
-              id={controlId}
-              ref={textareaRef}
-              name="body"
-              value={body}
-              rows={TEXTAREA_ROWS}
-              maxLength={maxLength}
-              disabled={!isWindowOpen}
-              placeholder={content.composer.replyPlaceholder}
-              aria-describedby={describedBy}
-              aria-invalid={isInvalid}
-              onChange={(event) => {
-                setBody(event.target.value);
-              }}
-            />
-          )}
-        </Field>
+        />
 
         <ComposerAttachment
           label={content.composer.attachLabel}
