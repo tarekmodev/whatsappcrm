@@ -31,6 +31,7 @@ export const TICKET_CREATED_EVENT = 'ticket.created';
 export const TICKET_UPDATED_EVENT = 'ticket.updated';
 export const CONVERSATION_ASSIGNED_EVENT = 'conversation.assigned';
 export const SLA_BREACHED_EVENT = 'sla.breached';
+export const CANNED_RESPONSE_CHANGED_EVENT = 'canned_response.changed';
 
 /**
  * Something happened that may have ended one or more of this user's sessions —
@@ -267,4 +268,38 @@ export interface SlaBreachedEvent {
   readonly ticketId: string;
   /** The alert rows this breach inserted. One socket per id, and no more. */
   readonly alertIds: readonly string[];
+}
+
+/**
+ * A canned response was written (TAR-31, 0011).
+ *
+ * Emitted **after the transaction commits**, and only when a column actually
+ * moved — a `PATCH` setting a body to the text it already holds writes nothing
+ * and announces nothing, on `TicketUpdatedEvent`'s rule. A delete that found
+ * nothing to delete is silent for the same reason.
+ *
+ * ## It carries ids, not the resource
+ *
+ * Same reason `conversation.assigned` does: the payload a socket publishes must
+ * be the committed row rather than the writer's view of it, so the relay reads
+ * it back in its own tenant scope. `change: 'deleted'` is terminal — there is
+ * nothing to read back, and the relay publishes the id alone.
+ *
+ * ## One event for both create and update
+ *
+ * Unlike the audit trail, which distinguishes them: an auditor asks "who added
+ * this", while every consumer of this event performs the same upsert. A
+ * discriminant nothing branches on is a discriminant that drifts.
+ *
+ * On the in-process bus, where loss is acceptable: a missed relay costs a
+ * console one stale list until its next render or reconnect, and nothing about
+ * authorization depends on it — the emit is addressed by a room derived from the
+ * subscriber's own permissions. **TAR-485 is that subscriber**; until it lands
+ * this is a producer with no consumer, exactly as `ticket.updated` is, which is
+ * what makes the relay a subscriber away rather than a rewrite.
+ */
+export interface CannedResponseChangedEvent {
+  readonly tenantId: string;
+  readonly cannedResponseId: string;
+  readonly change: 'saved' | 'deleted';
 }
