@@ -47,7 +47,7 @@ This surface **adds no permission and moves no grant**. `sla:read` and `sla:writ
 existed in [the RBAC matrix](../architecture/0004-rbac-permission-matrix.md); `ticket:read`
 is held by everyone.
 
-**The alert routes deliberately have no `_all` permission.** Every `sla_alerts` row names
+**The alert routes deliberately have no `_all` permission.** Every `notifications` row names
 its recipient, and the service adds `recipient_user_id = principal.userId` on top of
 row-level security (RLS). Two layers, and the outer one is what stops one supervisor reading
 another's queue. An agent may call `GET /api/v1/sla-alerts` and gets an empty page — that is
@@ -546,7 +546,7 @@ working a queue wants to know their own ticket breached.
 
 Each recipient gets **both**:
 
-- A durable `sla_alerts` row. This is the record. It survives a restart, a missed socket and a
+- A durable `notifications` row. This is the record. It survives a restart, a missed socket and a
   supervisor who was asleep, and it doubles as the idempotency ledger.
 - An `sla.breached` realtime event addressed to `user:{recipientId}` — one emit per row that
   was actually inserted, after the transaction commits.
@@ -658,8 +658,9 @@ would close this; the breach sweep's re-derivation covers the _stop_ triggers, n
 alone. `breached` is terminal by design, and unwinding it is a data decision rather than a
 code one.
 
-**`sla_alerts` has no retention policy** and the table grows without bound. It must be settled
-before the first large tenant.
+**`notifications` has no retention policy** and the table grows without bound. It must be
+settled before the first large tenant, and TAR-27's `workflow_runs` has since arrived with the
+same gap — one sweeper with two predicates settles both.
 
 ## Verification
 
@@ -692,7 +693,7 @@ Confirmed rather than assumed:
   `SLA sweep: 1 due, 0 breached, 0 alerts in 44ms`.
 - **A genuine breach raises exactly one alert.** The same timer, with the ticket's replies made
   bot-authored, breached on the next sweep —
-  `SLA sweep: 1 due, 1 breached, 1 alerts in 48ms` — writing one `sla_alerts` row and one
+  `SLA sweep: 1 due, 1 breached, 1 alerts in 48ms` — writing one `notifications` row and one
   `sla_breached` ticket event, and no further alert on subsequent sweeps.
 - **Recipients are narrowed by team.** That tenant has three active supervisor/admin
   candidates; only the one sharing a team with the assigned agent received the alert.

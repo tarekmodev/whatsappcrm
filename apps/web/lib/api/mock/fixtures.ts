@@ -11,6 +11,8 @@ import {
   type SlaAlertResponse,
   type Tag,
   type TeamResponse,
+  type TenantLifecycleResponse,
+  type TenantResponse,
   type TenantRole,
   type TicketResponse,
   type TicketRouting,
@@ -148,6 +150,20 @@ const ASSIGNMENT_RULE_IDS = {
   otherTenant: '0192f00d-0000-7000-8000-000000000d99',
 } as const;
 
+const TENANT_DOMAIN_IDS = {
+  northwindPlatform: '0192f00e-0000-7000-8000-000000000e01',
+  southwindPlatform: '0192f00e-0000-7000-8000-000000000e99',
+} as const;
+
+/**
+ * A trial that is still running, so the plan panel renders its countdown rather
+ * than the expired state. A literal like every other timestamp here — a
+ * generated one would make server and client render different markup — which
+ * means it eventually falls into the past. When it does, mock mode shows the
+ * trial as ended; that is a fixture aging out, not the countdown breaking.
+ */
+const TRIAL_ENDS_AT = '2026-08-29T09:00:00.000Z';
+
 const WHATSAPP_ACCOUNT_ID = '0192f005-0000-7000-8000-000000000501';
 const WHATSAPP_BUSINESS_ACCOUNT_ID = '0192f005-0000-7000-8000-000000000502';
 
@@ -264,6 +280,124 @@ function contact(id: string, displayName: string, phone: string): ConversationRe
     updatedAt: '2026-08-09T09:15:00.000Z',
   };
 }
+
+/**
+ * The lifecycle half of a tenant: `GET /v1/tenant/lifecycle` minus `usage`,
+ * which is counted live from the users and conversations in this same store
+ * rather than stored, so the seat meter moves when a reviewer sends an invite.
+ */
+export type MockTenantLifecycle = Omit<TenantLifecycleResponse, 'usage'> & TenantScoped;
+
+export const MOCK_TENANTS: readonly TenantResponse[] = [
+  {
+    id: MOCK_TENANT_ID,
+    name: 'Northwind Traders',
+    slug: 'northwind',
+    status: 'trialing',
+    branding: {
+      logoUrl: null,
+      faviconUrl: null,
+      primaryColor: '#16a34a',
+      accentColor: '#15803d',
+      productName: 'Northwind Support',
+      supportEmail: 'support@northwind.example',
+    },
+    domains: [
+      {
+        id: TENANT_DOMAIN_IDS.northwindPlatform,
+        hostname: 'northwind.app.example.com',
+        kind: 'platform_subdomain',
+        verifiedAt: '2026-07-01T09:00:00.000Z',
+        isPrimary: true,
+      },
+    ],
+    trialEndsAt: TRIAL_ENDS_AT,
+    createdAt: '2026-07-01T09:00:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    id: OTHER_TENANT_ID,
+    name: 'Southwind Ltd',
+    slug: 'southwind',
+    status: 'active',
+    branding: {
+      logoUrl: null,
+      faviconUrl: null,
+      primaryColor: '#2563eb',
+      accentColor: '#1d4ed8',
+      productName: 'Southwind Helpdesk',
+      supportEmail: null,
+    },
+    domains: [
+      {
+        id: TENANT_DOMAIN_IDS.southwindPlatform,
+        hostname: 'southwind.app.example.com',
+        kind: 'platform_subdomain',
+        verifiedAt: '2026-06-01T09:00:00.000Z',
+        isPrimary: true,
+      },
+    ],
+    trialEndsAt: null,
+    createdAt: '2026-06-01T09:00:00.000Z',
+  },
+];
+
+/**
+ * ADR 0009 seeds the `trial` plan at **three** seats, and this fixture says
+ * five. The deviation is deliberate and is the honest one: three is what a
+ * *fresh* signup gets, while Northwind already has four active agents and an
+ * outstanding invitation, so a three-seat cap here would render "5 of 3" — a
+ * state write-time enforcement makes unreachable, and therefore a state the
+ * console should never be designed against.
+ *
+ * Five puts the fixture exactly *at* its cap, which is the state worth having
+ * on screen by default: it is the one the meter warns about and the one that
+ * explains why the next invitation is refused.
+ */
+export const MOCK_TENANT_LIFECYCLES: readonly MockTenantLifecycle[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    status: 'trialing',
+    trialEndsAt: TRIAL_ENDS_AT,
+    gracePeriodEndsAt: null,
+    purgeAt: null,
+    plan: {
+      key: 'trial',
+      name: 'Trial',
+      entitlements: {
+        features: ['assignment_rules', 'sla_policies'],
+        limits: {
+          seats: 5,
+          conversationsPerPeriod: 1000,
+          whatsappNumbers: 1,
+          teams: 2,
+          knowledgeDocuments: 10,
+        },
+      },
+    },
+  },
+  {
+    tenantId: OTHER_TENANT_ID,
+    status: 'active',
+    trialEndsAt: null,
+    gracePeriodEndsAt: null,
+    purgeAt: null,
+    plan: {
+      key: 'trial',
+      name: 'Trial',
+      entitlements: {
+        features: [],
+        limits: {
+          seats: 3,
+          conversationsPerPeriod: 1000,
+          whatsappNumbers: 1,
+          teams: 2,
+          knowledgeDocuments: 10,
+        },
+      },
+    },
+  },
+];
 
 export const MOCK_USERS: readonly MockUser[] = [
   {
@@ -1340,5 +1474,6 @@ export const MOCK_IDS = {
   customFields: CUSTOM_FIELD_IDS,
   assignmentRules: ASSIGNMENT_RULE_IDS,
   slaAlerts: SLA_ALERT_IDS,
+  tenantDomains: TENANT_DOMAIN_IDS,
   whatsappAccount: WHATSAPP_ACCOUNT_ID,
 } as const;

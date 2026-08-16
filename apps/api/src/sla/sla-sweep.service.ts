@@ -154,7 +154,7 @@ export interface SlaSweepReport {
   readonly due: number;
   /** How many timers this sweep flipped to `breached`. */
   readonly breached: number;
-  /** How many `sla_alerts` rows were written. Zero with breaches means no supervisor. */
+  /** How many `notifications` rows were written. Zero with breaches means no supervisor. */
   readonly alerted: number;
   /** Tenants skipped because they are deactivated. Not a fault. */
   readonly skippedTenants: number;

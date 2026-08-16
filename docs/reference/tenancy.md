@@ -156,7 +156,7 @@ message — nothing that is a tenant's data. The same shape of narrow, justified
 Everything the sweep then _does_ with those pairs runs under RLS: they are grouped by tenant
 and processed one `$tenantTransaction` per tenant. That split is the point, because the
 writes are the dangerous half — the sweep writes to `sla_timers`, `ticket_events` and
-`sla_alerts`, and an alert row inserted with the wrong `tenant_id` under the system role is a
+`notifications`, and an alert row inserted with the wrong `tenant_id` under the system role is a
 cross-tenant leak RLS would otherwise have refused. `sla-breach.int-spec.ts` asserts that one
 tenant's sweep never writes into another.
 
@@ -276,6 +276,21 @@ the direction this failure should point.
 > acceptance criteria ("a suspended tenant's agents cannot log in") require. Both cannot be
 > right. TAR-403 kept the stricter behaviour, because loosening a security gate is not a schema
 > migration's call, and left the decision to TAR-397 and TAR-404.
+
+**That decision is now in flight, and this section still describes what runs.** ADR 0009
+decision 2 resolves the inconsistency the other way: `public.assert_tenant_serviceable(text)`
+admits `suspended` as well, because inbound WhatsApp messages must still be received and stored
+for a suspended tenant — they are written through `TenantPrisma` under RLS, and a gate that
+refused them would push the highest-volume write path in the product onto `SystemPrisma`.
+Refusing the _principal_ is `TenantStatusGuard`'s job at request pipeline stage 4, which knows
+who is asking and which route they want; the two gates answer different questions and 0009 says
+they must not be collapsed.
+
+`20260815170000_assert_tenant_serviceable` creates that function **alongside** the one above and
+gives it no callers — phase 1 of an expand → migrate → contract rename, so applying it changes
+nothing. `TenantPrisma` still calls `assert_tenant_active`, and everything in this section holds
+until TAR-404's engine PR moves the call site; this page and `verify-tenant-isolation.sql` move
+with it.
 
 Observed on a local stack, as the app role:
 

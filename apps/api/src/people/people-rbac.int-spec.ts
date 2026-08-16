@@ -229,8 +229,19 @@ describe('agent, team and role management API', () => {
       // TAR-29's unverified custom domain: the row exists while DNS and TLS are
       // still being proved, and honouring it early would let a customer claim a
       // hostname they have not demonstrated control of.
+      //
+      // The token is what "still being proved" means — it is the value the
+      // customer has to publish in DNS — and TAR-417's
+      // `tenant_domains_custom_needs_token` requires every custom row to carry
+      // one. Its presence is precisely not what makes a domain verified;
+      // `verified_at` is, and it stays null here.
       await systemPrisma.tenantDomain.create({
-        data: { tenantId: TENANT_A, hostname: 'unverified.tar81.localhost', kind: 'custom' },
+        data: {
+          tenantId: TENANT_A,
+          hostname: 'unverified.tar81.localhost',
+          kind: 'custom',
+          verificationToken: '81818181818181818181818181818181',
+        },
       });
 
       const response = await call('unverified.tar81.localhost', 'admin').get('/api/v1/users');

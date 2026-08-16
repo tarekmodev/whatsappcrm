@@ -1,0 +1,30 @@
+-- Reverses 20260816120000_workflow_run_status_skipped.
+--
+-- Prisma does not generate down migrations; every migration directory carries a
+-- hand-written one, per docs/adr/0001-stack-decision.md (decision 6).
+--
+-- ---------------------------------------------------------------------------
+-- This one is deliberately a no-op, and that is the safe answer
+-- ---------------------------------------------------------------------------
+--
+-- PostgreSQL has no `ALTER TYPE ... DROP VALUE`. Removing an enum label means
+-- creating a replacement type, rewriting every dependent column, re-pointing
+-- defaults and dropping the old type — a full rewrite of `workflow_runs` holding
+-- an ACCESS EXCLUSIVE lock for its duration, to undo an addition that costs
+-- nothing to leave in place.
+--
+-- It would also lose data once TAR-395 ships: a run that matched nothing has no
+-- other honest value to move to. `succeeded` would claim actions ran, `failed`
+-- would claim something broke, and either is a lie a supervisor debugs against —
+-- so the rewrite would have to pick one, silently, for rows that were correct.
+--
+-- An unused enum label is inert: no query filters on it, no index is affected,
+-- and the catalogue row is a few bytes. Rolling the application back is therefore
+-- complete on its own — code that predates TAR-395 never writes the value, and
+-- code that follows it needs the value present.
+--
+-- If the label genuinely has to go, that is its own forward migration with a
+-- verified backup, a maintenance window sized against `workflow_runs`, and a
+-- recorded decision for the rows already carrying it. It is not a rollback step.
+
+SELECT 1;
