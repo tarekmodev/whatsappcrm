@@ -362,11 +362,19 @@ export class TenantSignupService {
     // UUIDv7, so they are already in creation order, and a single column keeps
     // the subquery on the primary key.
     //
-    // Still one statement: a signup consumed between a read and a write cannot
-    // be handed a fresh token, because the predicate is re-evaluated by the
-    // `UPDATE` itself. `RETURNING` rather than a row count, because the response
-    // has to carry the row's **own** expiry — reporting a recomputed deadline
-    // would tell the caller the window had moved when it had not.
+    // **The ceiling is in the outer `WHERE`, and that placement is the whole
+    // guarantee.** Under READ COMMITTED a second `UPDATE` that blocks on this
+    // row's lock re-evaluates its own `WHERE` against the *new* row version once
+    // the first commits — but only that outer clause. The sub-`SELECT` is
+    // uncorrelated, so it was evaluated once and its result is a constant by
+    // then; a `resend_count` guard living inside it would never be rechecked,
+    // `id = <constant>` would still hold, and both requests would increment past
+    // the ceiling. The subquery picks *which* row; the outer clause decides
+    // whether it may still be written.
+    //
+    // `RETURNING` rather than a row count, because the response has to carry the
+    // row's **own** expiry — reporting a recomputed deadline would tell the
+    // caller the window had moved when it had not.
     const [refreshed] = await this.prisma.$queryRaw<{ expires_at: Date }[]>`
       UPDATE tenant_signups
       SET token_hash    = ${hashAuthToken(token)},
@@ -377,10 +385,12 @@ export class TenantSignupService {
         WHERE email       = ${email}::citext
           AND consumed_at IS NULL
           AND expires_at  > now()
-          AND resend_count < ${SIGNUP_POLICY.resendsPerSignup}
         ORDER BY id DESC
         LIMIT 1
       )
+        AND consumed_at IS NULL
+        AND expires_at  > now()
+        AND resend_count < ${SIGNUP_POLICY.resendsPerSignup}
       RETURNING expires_at
     `;
 

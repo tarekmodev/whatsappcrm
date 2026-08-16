@@ -503,6 +503,40 @@ describe('public self-signup', () => {
       expect(row.resendCount).toBe(SIGNUP_POLICY.resendsPerSignup);
     });
 
+    /**
+     * The ceiling has to hold under concurrency, and only a real database shows
+     * whether it does.
+     *
+     * Under READ COMMITTED the second `UPDATE` blocks on the row lock, then
+     * re-evaluates its own `WHERE` against the committed row — but only the
+     * *outer* clause. With the guard inside the uncorrelated sub-`SELECT` that
+     * recheck saw `id = <constant>`, still true, and both requests incremented:
+     * the count landed one past the ceiling and a second email went out. With
+     * the guard in the outer clause the loser matches nothing.
+     */
+    it('does not let two concurrent resends step over the ceiling', async () => {
+      await signup.request(signupInput(), null);
+
+      // One short of the ceiling, so exactly one of the two below may win.
+      await systemPrisma.tenantSignup.updateMany({
+        where: { desiredSlug: SLUG },
+        data: { resendCount: SIGNUP_POLICY.resendsPerSignup - 1 },
+      });
+
+      mailbox.length = 0;
+
+      await Promise.all([signup.resend(EMAIL, null), signup.resend(EMAIL, null)]);
+
+      const row = await systemPrisma.tenantSignup.findFirstOrThrow({
+        where: { desiredSlug: SLUG },
+        select: { resendCount: true },
+      });
+
+      expect(row.resendCount).toBe(SIGNUP_POLICY.resendsPerSignup);
+      // And exactly one of the two actually mailed anything.
+      expect(mailbox).toHaveLength(1);
+    });
+
     /** And the link from the last permitted resend still works. */
     it('leaves the last issued link usable after the ceiling is reached', async () => {
       await signup.request(signupInput(), null);
