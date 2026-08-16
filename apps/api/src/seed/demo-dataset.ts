@@ -1046,6 +1046,18 @@ function northwind(now: Date): DemoTenant {
     // `tickets_one_active_per_contact` is a partial unique index over
     // (tenant, contact) WHERE status IN ('open','pending'), so a second active
     // ticket for Fatima would make the seed fail on insert.
+    //
+    // `first_response_user_id` / `resolved_by_user_id` are written here beside
+    // the timestamps they attribute (TAR-492). In the running application only
+    // `SlaTimerService.stampFirstResponse` and `TicketCommandService` write
+    // them, each in the transaction that stamps the matching timestamp (0010,
+    // decision 4) — the seed writes rows rather than replaying events, so it
+    // has to supply both halves itself, and the one-time backfill migration has
+    // long since run by the time `db:seed` inserts these. Left null, every
+    // seeded first response and resolution lands in TAR-429's `unattributed`
+    // row and the per-agent breakdown demonstrates nothing. Each actor below is
+    // the sender of the outbound message, or the actor of the `ticket_events`
+    // row, that the timestamp beside it was taken from.
     tickets: [
       {
         id: TICKET_IDS.fatimaInvoice,
@@ -1058,6 +1070,11 @@ function northwind(now: Date): DemoTenant {
         assignedUserId: USER_IDS.amina,
         assignedTeamId: TEAM_IDS.billing,
         firstRespondedAt: ago(now, 175 * MINUTE_MS),
+        // Amina sent `MESSAGE_IDS.fatima2` at that instant. She is also the
+        // assignee, but that is this thread's history rather than a rule: the
+        // column records who actually replied, and reassignment moves
+        // `assigned_user_id` without rewriting it.
+        firstResponseUserId: USER_IDS.amina,
         createdAt: ago(now, 3 * HOUR_MS),
       },
       {
@@ -1072,7 +1089,11 @@ function northwind(now: Date): DemoTenant {
         // Moves with `MESSAGE_IDS.hector2` above, and for the reason given
         // there: 38 minutes inside the window rather than exactly on it.
         firstRespondedAt: ago(now, 6 * DAY_MS + 22 * MINUTE_MS),
+        // Priya sent `MESSAGE_IDS.hector2` and is the actor on
+        // `MISC_IDS.ticketEventOptOutResolved`, so both anchors are hers.
+        firstResponseUserId: USER_IDS.priya,
         resolvedAt: ago(now, 6 * DAY_MS - 5 * MINUTE_MS),
+        resolvedByUserId: USER_IDS.priya,
         createdAt: ago(now, 6 * DAY_MS + HOUR_MS),
       },
       {

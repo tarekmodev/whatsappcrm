@@ -158,6 +158,11 @@ describe('demo dataset', () => {
       expectOptionalMember(ticket.contactId, contacts);
       expectOptionalMember(ticket.assignedUserId, users);
       expectOptionalMember(ticket.assignedTeamId, teams);
+      // Composite foreign keys again, and the same tenant on both sides: a
+      // responder or resolver borrowed from the other tenant is a row the
+      // database refuses and a per-agent breakdown that names a stranger.
+      expectOptionalMember(ticket.firstResponseUserId, users);
+      expectOptionalMember(ticket.resolvedByUserId, users);
     }
     for (const event of tenant.ticketEvents) {
       expect(tickets).toContain(event.ticketId);
@@ -263,6 +268,46 @@ describe('demo dataset', () => {
       // describer skips it — so a second active ticket for one contact is a seed
       // that fails on insert with no schema-level warning first.
       expect(new Set(active).size).toBe(active.length);
+    }
+  });
+
+  it('names the person behind every seeded first response and resolution', () => {
+    for (const tenant of dataset) {
+      for (const ticket of tenant.tickets) {
+        // Both halves or neither, in both directions. A timestamp with no actor
+        // is what TAR-492 was: the reporting query reads
+        // `first_response_user_id` / `resolved_by_user_id` and nothing else, so
+        // the work still counts in the summary cards while every named agent
+        // shows zero and the whole of it lands in the `unattributed` row — a
+        // dashboard that says nobody did the work it is simultaneously
+        // reporting. An actor with no timestamp is the mirror defect: a person
+        // credited for an event the dataset never says happened.
+        expect((ticket.firstResponseUserId ?? null) === null).toBe(
+          (ticket.firstRespondedAt ?? null) === null,
+        );
+        expect((ticket.resolvedByUserId ?? null) === null).toBe(
+          (ticket.resolvedAt ?? null) === null,
+        );
+
+        if ((ticket.firstRespondedAt ?? null) === null) {
+          continue;
+        }
+
+        // And the actor is the one the rest of the dataset already implies.
+        // `first_response_at` is stamped in the same transaction as the outbound
+        // message that earned it, so the seeded thread has to agree about who
+        // sent that message — otherwise the timeline and the breakdown tell a
+        // supervisor two different stories about the same reply.
+        const reply = tenant.messages.find(
+          (message) =>
+            message.conversationId === ticket.conversationId &&
+            message.direction === 'outbound' &&
+            at(message.sentAt) === at(ticket.firstRespondedAt),
+        );
+
+        expect(reply).toBeDefined();
+        expect(reply?.senderUserId).toBe(ticket.firstResponseUserId);
+      }
     }
   });
 
