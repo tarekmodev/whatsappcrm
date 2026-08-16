@@ -1,8 +1,8 @@
 # Data model reference
 
 The database as it stands on `main` after TAR-47, TAR-48, TAR-51, TAR-52, TAR-54, TAR-66,
-TAR-74, TAR-80, TAR-92, TAR-20e, TAR-270, TAR-272 and TAR-403. Written for engineers
-building against it.
+TAR-74, TAR-80, TAR-92, TAR-20e, TAR-270, TAR-272, TAR-403, TAR-427, TAR-440 and TAR-394.
+Written for engineers building against it.
 
 `apps/api/prisma/schema.prisma` is the source of truth for columns, types and defaults,
 and carries the per-model reasoning next to each model. This document does not transcribe
@@ -44,7 +44,7 @@ Six rules hold across every model. A change that breaks one needs a reason in re
 
 ## Tenancy classification
 
-45 models. **41 are tenant-scoped**: they carry a non-null `tenant_id`, have
+50 models. **46 are tenant-scoped**: they carry a non-null `tenant_id`, have
 `ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Four are
 not, each deliberately:
 
@@ -581,6 +581,12 @@ row insert rather than a migration. A non-null `opted_out_at` blocks outbound se
   filter that makes tags useful
 - **Owned by:** TAR-33
 
+`tags` is the one taxonomy and it now has two join tables: `contact_tags` (a permanent
+property of a customer) and [`ticket_tags`](#ticket_tags) (a fact about one incident, written
+by automation). A tag a workflow references **cannot be deleted** — the foreign key out of
+[`workflow_references`](#workflow_references) refuses it, and `ContactsModule` turns that into
+a `conflict` naming the workflows.
+
 #### `custom_field_defs`
 
 - **Unique:** `(tenant_id, key)` — also what answers `conflict` on a duplicate key
@@ -717,10 +723,32 @@ with the note, and never queried the other way round.
   `WHERE status IN ('open','pending')`; **`tickets_routing_deferred_idx`** —
   `(tenant_id, routing_deferred_since) WHERE routing_state = 'deferred'`;
   **`tickets_active_queue_idx`** — `(tenant_id, priority DESC, created_at DESC, id DESC)`
-  `WHERE status IN ('open','pending')`
+  `WHERE status IN ('open','pending')`; `tickets_reporting_metrics_idx` —
+  `(tenant_id, created_at, assigned_user_id, status, first_response_at, resolved_at)`;
+  **`tickets_active_created_at_idx`** —
+  `(tenant_id, created_at) WHERE status IN ('open','pending')`
 - **Checks:** `tickets_routing_deferred_consistent`
 - **Owned by:** TAR-21 / TAR-25, sort keys added by TAR-80, the partial unique index by
-  TAR-74, the routing columns by TAR-272, the active-queue index by TAR-284
+  TAR-74, the routing columns by TAR-272, the active-queue index by TAR-284, the reporting
+  index by TAR-427, the elapsed-sweep index by TAR-394
+
+`tickets_active_created_at_idx` serves phase 1 of the workflow elapsed-trigger sweep: per
+tenant, `status IN ('open','pending') AND created_at <= now() - interval`,
+`ORDER BY created_at LIMIT 50` (0009, decision 3). `tickets_active_queue_idx` leads with
+`priority`, and `(tenant_id, status, priority, created_at DESC)` puts two status ranges and a
+whole column between the tenant and the range the sweep bounds on, so the planner sorts the
+tenant's active set instead of stopping at the fiftieth row. 0009 names a non-partial
+`(tenant_id, status, created_at)`; the partial form is what actually answers the query, and
+the divergence is recorded in the migration.
+
+**`tickets_reporting_metrics_idx` shares its leading prefix** — `(tenant_id, created_at)` —
+and that is the redundancy question worth answering rather than leaving to a reviewer. It is
+not partial, so the sweep would walk every ticket in the range with `status` applied as an
+in-index filter, resolved and closed included, before reaching fifty active ones: its cost
+grows with the tenant's history rather than with its open backlog. The partial index contains
+only active tickets, so the first fifty entries in `created_at` order are the answer. The
+reporting index would still serve the sweep if the partial one were dropped, so getting this
+wrong costs a slow sweep rather than a broken plan.
 
 `tickets_active_queue_idx` serves `GET /api/v1/tickets` — the active queue in
 `priority DESC, created_at DESC, id DESC` order, paged by keyset
@@ -920,27 +948,52 @@ the schema shows up as drift that the next `migrate dev` proposes to drop. Leadi
 `state` gives the same access path at the cost of also indexing finished timers. Revisit
 once timer volume makes the size matter; the query does not have to change.
 
-#### `sla_alerts`
+#### `notifications` — `sla_alerts` until TAR-394
 
-- **Unique:** `(tenant_id, sla_timer_id, recipient_user_id)`
+- **Unique:** `(tenant_id, sla_timer_id, recipient_user_id)`;
+  `(tenant_id, recipient_user_id, dedupe_key)`
 - **Indexes:** `(tenant_id, recipient_user_id, created_at DESC, id DESC)`;
   `(tenant_id, ticket_id)`
-- **Owned by:** TAR-26
+- **CHECK:** `notifications_sla_breach_columns` — `sla_timer_id`, `kind` and `due_at` are
+  non-null for `type = 'sla_breach'` and null for every other type
+- **Owned by:** TAR-26, generalised by TAR-27
 
-One row per recipient per breached timer, and three things at once (0006, decision 5): the
-delivery record that survives an offline supervisor, the read model behind
-`GET /api/v1/sla-alerts`, and the idempotency ledger. `due_at` and `kind` are copied from
-the timer at write time so that a later policy edit cannot rewrite what a supervisor was
-told they missed. `acknowledged_at` is set by the acknowledge endpoint; first write wins.
+One row per recipient per thing worth telling them about, and three things at once (0006,
+decision 5): the delivery record that survives an offline supervisor, the read model behind
+`GET /api/v1/sla-alerts` and `GET /api/v1/notifications`, and the idempotency ledger.
+`due_at` and `kind` are copied from the timer at write time so that a later policy edit
+cannot rewrite what a supervisor was told they missed. `acknowledged_at` is set by the
+acknowledge endpoint; first write wins.
 
-The unique key is the second of three idempotency layers. The load-bearing one is the
-conditional `UPDATE ... WHERE state = 'running'` that flips the timer in the same
-transaction; the BullMQ `jobId` is an optimisation only.
+**The rename was pre-authorised in writing.** 0006 decision 5 rejected a generic
+notifications table and said what should happen when the second type arrived: "generalising
+it is a rename and a `type` column". TAR-27's `notify` action is that second type, so
+`20260816130000_notifications_generalisation` renamed the table, added
+`type notification_type NOT NULL DEFAULT 'sla_breach'`, `data JSONB` and `dedupe_key`, and
+made the three SLA columns nullable behind the CHECK above. No data migration — every
+existing row already was that type — and no frontend change:
+`GET /api/v1/sla-alerts` keeps its path, its response shape and its behaviour as a
+documented `type = 'sla_breach'` view over the same rows. `SLA_BREACH_ONLY` in
+`sla-alert.mapper.ts` is the shared `where` fragment that keeps it one.
 
-Recipients are derived rather than configured — the tenant's active supervisors and admins,
-narrowed to those sharing a team with whoever holds the ticket, falling back to all of them
-when that yields nobody. TAR-22's model carries no manager link, and 0006 decision 4 records
-why v1 does not add one.
+`type` is deliberately **not** in any index: the recipient's list index already bounds the
+set to one recipient and one page, and putting `type` in the middle of it would cost the
+wider notification list its sort order.
+
+Each unique key is the second idempotency layer for one writer —
+`(tenant_id, sla_timer_id, recipient_user_id)` for the breach sweep,
+`(tenant_id, recipient_user_id, dedupe_key)` for a workflow's `notify`. The load-bearing
+layer on the SLA side is the conditional `UPDATE ... WHERE state = 'running'` that flips the
+timer in the same transaction; on the workflow side it is the run's own claim. Neither unique
+index is partial, where 0009 proposed a predicate: PostgreSQL does not collide NULLs, so the
+predicate would change nothing and would cost the describer trap that partial indexes carry
+in this schema.
+
+For a breach, recipients are derived rather than configured — the tenant's active supervisors
+and admins, narrowed to those sharing a team with whoever holds the ticket, falling back to
+all of them when that yields nobody. TAR-22's model carries no manager link, and 0006
+decision 4 records why v1 does not add one. A `notify` action names its own audience and
+reuses the same resolver.
 
 #### What is _not_ on `tickets`
 
@@ -952,15 +1005,120 @@ a person.
 
 ### Workflows — TAR-27
 
-#### `workflows`, `workflow_runs`
+#### `workflows`
 
-- **Unique:** `workflows (tenant_id, name)`, `(tenant_id, id)`
-- **Indexes:** `workflows (tenant_id, is_active)`;
-  `workflow_runs (tenant_id, workflow_id, created_at DESC, id DESC)`,
-  `(tenant_id, status)`
+- **Unique:** `(tenant_id, name)` — `name` is `citext`, so `Escalate` and `escalate` collide;
+  `(tenant_id, id)`
+- **Indexes:** `(tenant_id, is_active, trigger_type, position, id)`
+- **CHECK:** `workflows_broken_is_inactive` — a workflow carrying a `broken_reason` cannot be
+  active
 - **Owned by:** TAR-27
 
-`definition` and `trigger` are JSONB; TAR-27 owns the grammar.
+**A workflow is one rule**: one trigger, one condition set, one ordered action list (0009,
+decision 4). The tenant's workflows _are_ the ordered rule list the console renders, which is
+the shape `assignment_rules` already has. `position` orders **execution, not selection** —
+every matching workflow runs, unlike routing where a first match is the answer — and ties
+break on `id`, which is why the index carries it.
+
+`definition` is JSONB and TAR-27 owns the grammar; `packages/contracts/src/workflows.ts`
+publishes it. JSONB rather than normalised trigger/condition/action tables so that the grammar
+can grow without a migration, with `workflow_references` buying back the one thing JSONB
+cannot give — a foreign key.
+
+`trigger_type` **duplicates a field inside `definition`, deliberately.** The evaluation read
+is "the active workflows in this tenant whose trigger is X", once per triggering occurrence; a
+JSONB extraction in that predicate cannot use a composite index that also carries `position`,
+and an expression index would be a second thing to keep in step with the grammar. It is
+written in the same statement as `definition`.
+
+`broken_reason` is non-null exactly when a reference broke and the workflow was
+auto-deactivated. The CHECK is the API's "fix the reference, then enable" made structural.
+
+The single-column index `(tenant_id, is_active)` was **replaced** rather than kept: it is a
+strict prefix of the evaluation index above.
+
+#### `workflow_runs`
+
+- **Unique:** `(tenant_id, workflow_id, dedupe_key)` — **the exactly-once mechanism**
+- **Indexes:** `(tenant_id, workflow_id, created_at DESC, id DESC)`;
+  `(tenant_id, ticket_id, created_at DESC)`; `(tenant_id, status)`
+- **CHECK:** `workflow_runs_results_is_array`;
+  `workflow_runs_failure_reason_only_when_failed`
+- **Owned by:** TAR-27
+
+What one workflow did about one triggering occurrence, and — in the same row — the reservation
+that stopped a second worker doing it again. The claim is
+`INSERT … ON CONFLICT (tenant_id, workflow_id, dedupe_key) DO NOTHING RETURNING id`, so the
+record and the right to act are one write (0009, decision 2). Two replicas, a BullMQ retry and
+a redelivered job all collapse into one run by construction. `dedupe_key` is
+`ticket:{id}` for `ticket_created` and `ticket_unresolved_for`,
+`ticket:{id}:event:{ticketEventId}` for a status change or an assignment, and
+`ticket:{id}:timer:{slaTimerId}` for an SLA breach — so an overdue ticket escalates once, not
+once per sweep tick.
+
+`workflow_version` is copied rather than joined: the definition a supervisor is reading now is
+not necessarily the one that fired. `results` is the per-action outcome array,
+`'[]'` by default so the claim statement — which does not name the column — writes a
+well-formed value. `failure_reason` is typed because a supervisor filters the run list on it;
+`error` keeps the human-readable detail behind it. The CHECK is one-directional on purpose: a
+reason only ever appears on a `failed` run, but a `failed` run mid-transition may not have one
+yet.
+
+`status` gained `skipped` in `20260816120000_workflow_run_status_skipped` — a run whose
+conditions did not match ran and attempted nothing, which is not a failure and is the answer
+to "why didn't my rule fire".
+
+**Retention is unset and this table grows with ticket volume × active workflows.**
+`WORKFLOW_LIMITS.runsRetentionDays` is 90 with nothing enforcing it (0009, risk 5). It belongs
+in the same sweeper 0006 risk 5 leaves open for acknowledged notifications.
+
+#### `workflow_references`
+
+- **Unique:** `workflow_references_scope_key` on
+  `(tenant_id, workflow_id, tag_id, team_id, user_id)` **`NULLS NOT DISTINCT`**
+- **Indexes:** `(tenant_id, tag_id)`; `(tenant_id, team_id)`; `(tenant_id, user_id)`
+- **CHECK:** `workflow_references_one_target` — `num_nonnulls(tag_id, team_id, user_id) = 1`
+- **Owned by:** TAR-27
+
+The reverse index behind TAR-27's taxonomy-sync criterion (0009, decision 6). One row per
+entity a workflow's `definition` names, rewritten inside the same transaction as every
+workflow write. It does two things a JSONB scan cannot: it answers "which workflows reference
+this tag / team / user?" with one indexed read on the delete path, and it lets **the database**
+refuse a delete that would break a workflow — which is what keeps the enforcement out of an
+upward `ContactsModule` → `WorkflowsModule` import that 0002 forbids.
+
+**Renames need nothing at all.** The definition stores ids and only ids, and names are joined
+at read time into `WorkflowResponse.references` with an `exists` flag. That is what makes a
+broken reference visible rather than silent, and it is a property of the shape rather than of
+any code path.
+
+Two deliberate divergences from 0009, both recorded in
+`20260816140000_workflow_rule_schema` and asserted by
+`src/prisma/workflow-schema.int-spec.ts`:
+
+- **`NO ACTION`, not `RESTRICT`,** on all three references — convention 4. `RESTRICT` is
+  checked the instant the referenced row goes, so the `ON DELETE CASCADE` from `tenants` would
+  abort depending on the order Postgres picked. `NO ACTION` defers to end of statement: a
+  cascading tenant delete succeeds, and a plain `DELETE FROM tags` still raises `23503`.
+- **`NULLS NOT DISTINCT`** on the scope key. Every row carries two NULLs in that key, and
+  Postgres treats NULL-bearing keys as distinct by default — so without those three words the
+  index constrains nothing. Same trap as `assignment_state_tenant_scope_key`.
+
+A removed **user** is the one case that must always succeed: `users.service.ts` deletes these
+rows in the same transaction that already clears `assignment_rules.target_user_id`, and
+deactivates the workflow with `broken_reason = 'reference_removed'`.
+
+#### `ticket_tags`
+
+- **Unique:** `(tenant_id, ticket_id, tag_id)` — applying a tag twice is a no-op
+- **Indexes:** `(tenant_id, tag_id)`
+- **Owned by:** TAR-27
+
+A tag on a **ticket**, mirroring `contact_tags` column for column against the same `tags`
+taxonomy. `escalated` is a fact about one incident; a contact tag is a permanent property of a
+customer, and a workflow writing into the taxonomy TAR-33's segmentation reads would corrupt
+segments silently. Automation-written at v1 — there is no manual ticket-tag endpoint (0009,
+risk 8) — and surfaced as `TicketResponse.tags`.
 
 ### AI — TAR-28
 
@@ -1060,43 +1218,53 @@ never a secret value; a redacted before/after at most.
 
 ## Enums
 
-29 native PostgreSQL enums rather than text plus a `CHECK`. They are the closed sets in the
+40 native PostgreSQL enums rather than text plus a `CHECK`. They are the closed sets in the
 contract, and a typo becomes an error at write time instead of a filter that silently
 matches nothing. The trade-off is that adding a value is cheap (`ALTER TYPE ... ADD VALUE`)
 and removing one is not, so anything genuinely open-ended — `ticket_events.type`, workflow
 definitions — stays text or JSON.
 
-| Enum                                    | Values                                                                                                                                                                                                    |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tenant_status`                         | `created`, `active`, `suspended`, `cancelled`, `trialing`, `past_due`, `deleted` — in catalogue order, because `ADD VALUE` appends. TAR-403 renamed `pending` to `created` and added the last three       |
-| `tenant_domain_kind`                    | `platform`, `custom`                                                                                                                                                                                      |
-| `user_role`                             | `admin`, `supervisor`, `agent` — `owner` removed by TAR-80; it is exactly `TENANT_ROLES` in `packages/contracts/src/rbac.ts`                                                                              |
-| `user_status`                           | `invited`, `active`, `suspended`, `removed`                                                                                                                                                               |
-| `user_availability`                     | `available`, `away`, `offline`                                                                                                                                                                            |
-| `whatsapp_business_verification_status` | `not_verified`, `pending`, `verified`, `rejected`                                                                                                                                                         |
-| `whatsapp_account_status`               | `connected`, `disconnected`, `error`                                                                                                                                                                      |
-| `whatsapp_quality_rating`               | `green`, `yellow`, `red`, `unknown`                                                                                                                                                                       |
-| `message_template_status`               | `pending`, `approved`, `rejected`, `paused`, `disabled`                                                                                                                                                   |
-| `custom_field_type`                     | `text`, `number`, `date`, `boolean`, `select`, `multi_select`                                                                                                                                             |
-| `conversation_status`                   | `open`, `pending`, `resolved`, `closed` — `closed` added by TAR-68; it is exactly `CONVERSATION_STATUSES` in `packages/contracts`                                                                         |
-| `message_direction`                     | `inbound`, `outbound`                                                                                                                                                                                     |
-| `message_status`                        | `received`, `queued`, `sent`, `delivered`, `read`, `failed`                                                                                                                                               |
-| `message_content_type`                  | `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `system`, `unsupported`                                                                      |
-| `media_kind`                            | `image`, `video`, `audio`, `document`, `sticker` — narrower than `message_content_type` on purpose: none of these is not a file                                                                           |
-| `media_source`                          | `inbound`, `upload`                                                                                                                                                                                       |
-| `media_download_state`                  | `pending`, `stored`, `failed`                                                                                                                                                                             |
-| `ticket_status`                         | `open`, `pending`, `resolved`, `closed`                                                                                                                                                                   |
-| `ticket_priority`                       | `low`, `normal`, `high`, `urgent`                                                                                                                                                                         |
-| `ticket_routing_state`                  | `pending`, `assigned`, `deferred`, `manual` — what auto-assignment decided, **not** the ticket's lifecycle (TAR-272)                                                                                      |
-| `ticket_routing_deferred_reason`        | `all_at_capacity`, `none_available`, `no_candidate_pool` — `FALLBACK_ASSIGNMENT_REASONS` (ADR 0007) verbatim, so the column, the decision object and the `assignment_deferred` event speak one vocabulary |
-| `sla_target_kind`                       | `first_response`, `resolution`                                                                                                                                                                            |
-| `sla_timer_state`                       | `running`, `met`, `breached`, `cancelled`, `paused`                                                                                                                                                       |
-| `workflow_run_status`                   | `pending`, `running`, `succeeded`, `failed`                                                                                                                                                               |
-| `knowledge_document_status`             | `pending`, `indexed`, `failed`                                                                                                                                                                            |
-| `billing_interval`                      | `month`, `year`                                                                                                                                                                                           |
-| `subscription_status`                   | `trialing`, `active`, `past_due`, `cancelled`, `incomplete`                                                                                                                                               |
-| `webhook_event_status`                  | `received`, `processing`, `processed`, `failed`                                                                                                                                                           |
-| `idempotency_key_state`                 | `in_progress`, `completed`                                                                                                                                                                                |
+| Enum                                        | Values                                                                                                                                                                                                    |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tenant_status`                             | `created`, `active`, `suspended`, `cancelled`, `trialing`, `past_due`, `deleted` — in catalogue order, because `ADD VALUE` appends. TAR-403 renamed `pending` to `created` and added the last three       |
+| `tenant_domain_kind`                        | `platform`, `custom`                                                                                                                                                                                      |
+| `user_role`                                 | `admin`, `supervisor`, `agent` — `owner` removed by TAR-80; it is exactly `TENANT_ROLES` in `packages/contracts/src/rbac.ts`                                                                              |
+| `user_status`                               | `invited`, `active`, `suspended`, `removed`                                                                                                                                                               |
+| `user_availability`                         | `available`, `away`, `offline`                                                                                                                                                                            |
+| `whatsapp_business_verification_status`     | `not_verified`, `pending`, `verified`, `rejected`                                                                                                                                                         |
+| `whatsapp_account_status`                   | `connected`, `disconnected`, `error`                                                                                                                                                                      |
+| `whatsapp_quality_rating`                   | `green`, `yellow`, `red`, `unknown`                                                                                                                                                                       |
+| `message_template_status`                   | `pending`, `approved`, `rejected`, `paused`, `disabled`                                                                                                                                                   |
+| `custom_field_type`                         | `text`, `number`, `date`, `boolean`, `select`, `multi_select`                                                                                                                                             |
+| `conversation_status`                       | `open`, `pending`, `resolved`, `closed` — `closed` added by TAR-68; it is exactly `CONVERSATION_STATUSES` in `packages/contracts`                                                                         |
+| `message_direction`                         | `inbound`, `outbound`                                                                                                                                                                                     |
+| `message_status`                            | `received`, `queued`, `sent`, `delivered`, `read`, `failed`                                                                                                                                               |
+| `message_content_type`                      | `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `system`, `unsupported`                                                                      |
+| `media_kind`                                | `image`, `video`, `audio`, `document`, `sticker` — narrower than `message_content_type` on purpose: none of these is not a file                                                                           |
+| `media_source`                              | `inbound`, `upload`                                                                                                                                                                                       |
+| `media_download_state`                      | `pending`, `stored`, `failed`                                                                                                                                                                             |
+| `ticket_status`                             | `open`, `pending`, `resolved`, `closed`                                                                                                                                                                   |
+| `ticket_priority`                           | `low`, `normal`, `high`, `urgent`                                                                                                                                                                         |
+| `ticket_routing_state`                      | `pending`, `assigned`, `deferred`, `manual` — what auto-assignment decided, **not** the ticket's lifecycle (TAR-272)                                                                                      |
+| `ticket_routing_deferred_reason`            | `all_at_capacity`, `none_available`, `no_candidate_pool` — `FALLBACK_ASSIGNMENT_REASONS` (ADR 0007) verbatim, so the column, the decision object and the `assignment_deferred` event speak one vocabulary |
+| `sla_target_kind`                           | `first_response`, `resolution`                                                                                                                                                                            |
+| `sla_timer_state`                           | `running`, `met`, `breached`, `cancelled`, `paused`                                                                                                                                                       |
+| `workflow_run_status`                       | `pending`, `running`, `succeeded`, `failed`, `skipped` — `skipped` added by TAR-394; it is exactly `WORKFLOW_RUN_STATUSES` in `packages/contracts`                                                        |
+| `workflow_trigger_type`                     | `ticket_created`, `ticket_status_changed`, `ticket_assigned`, `ticket_sla_breached`, `ticket_unresolved_for` — `WORKFLOW_TRIGGER_TYPES` verbatim                                                          |
+| `workflow_broken_reason`                    | `reference_removed`, `reference_missing` — why a workflow was auto-deactivated, and what blocks re-enabling it                                                                                            |
+| `workflow_failure_reason`                   | `reference_missing`, `transition_refused`, `ticket_gone`, `run_budget_exceeded`, `internal_error`                                                                                                         |
+| `notification_type`                         | `sla_breach`, `workflow_notify`, `workflow_broken` — `sla_breach` is the column default, so a writer that forgets it fails the CHECK rather than inventing a category                                     |
+| `knowledge_document_status`                 | `pending`, `indexed`, `failed`                                                                                                                                                                            |
+| `billing_interval`                          | `month`, `year`                                                                                                                                                                                           |
+| `subscription_status`                       | `trialing`, `active`, `past_due`, `cancelled`, `incomplete`                                                                                                                                               |
+| `webhook_event_status`                      | `received`, `processing`, `processed`, `failed`                                                                                                                                                           |
+| `idempotency_key_state`                     | `in_progress`, `completed`                                                                                                                                                                                |
+| `audit_actor_type`                          | `user`, `platform_operator`, `system`, `unattributed`                                                                                                                                                     |
+| `tenant_domain_verification_failure_reason` | `record_not_found`, `record_mismatch`, `lookup_failed`, `lookup_timeout`                                                                                                                                  |
+| `conversation_bot_state`                    | `off`, `bot_active`, `handed_off`, `human_active`                                                                                                                                                         |
+| `message_origin`                            | `contact`, `agent`, `bot`, `system`                                                                                                                                                                       |
+| `bot_turn_outcome`                          | `replied`, `handed_off`, `suppressed`                                                                                                                                                                     |
+| `handoff_reason`                            | `low_confidence`, `no_match`, `customer_requested`, `max_turns`, `agent_requested`, `bot_error`                                                                                                           |
 
 `message_status` is ordered, and the order is load-bearing: TAR-20's
 `isMessageStatusAdvance` reads it so a late `sent` webhook cannot un-read a message.
@@ -1126,23 +1294,35 @@ Applied in this order. Every directory carries a hand-written `down.sql` beside 
 | `20260813130000_sla_pause_accounting_and_alerts`                          | `paused_at`, `paused_ms`, `breached_at` and the `(state, due_at)` sweep index on `sla_timers`; adds `sla_alerts` and the 39th policy; backfills the default `sla_policies` row for existing tenants                                                                                                                                                                | TAR-270 |
 | `20260813140000_assignment_workload_and_routing_state`                    | `ticket_routing_state` and `ticket_routing_deferred_reason`; the three routing columns and `tickets_routing_deferred_idx` on `tickets`; the workload cap on `users` and `tenant_settings`; `assignment_state.team_id` nullable under `UNIQUE … NULLS NOT DISTINCT`. Adds no table, so no new policy                                                                | TAR-272 |
 | `20260813150000_ticket_active_queue_index`                                | `tickets_active_queue_idx`. One partial index and nothing else: no column, no constraint, no policy. Plain `CREATE INDEX`, not `CONCURRENTLY` — Prisma wraps a migration in a transaction and Postgres forbids the concurrent form there, the same resolution `tickets_one_active_per_contact` took                                                                | TAR-284 |
+| `20260815120000_branding_and_custom_domains`                              | The DNS-challenge columns, two partial indexes and a CHECK on `tenant_domains`; per-asset storage keys on `tenant_branding` replacing the never-written `logo_url` / `favicon_url`, behind four CHECKs. No new table, so no new policy                                                                                                                             | TAR-417 |
 | `20260815120000_tenant_lifecycle_status_vocabulary`                       | Renames `tenant_status`'s `pending` to `created` and adds `trialing`, `past_due`, `deleted`. Nothing else — Postgres forbids _using_ an enum value in the transaction that added it, so everything that does is the next migration                                                                                                                                 | TAR-403 |
 | `20260815130000_tenant_lifecycle_retention_audit_and_limits`              | The four retention timers on `tenants`, `lifecycle_audit_log`, `tenant_plan_limits`, their policies and the append-only trigger; backfills a genesis audit row and an `unlimited` limits row per existing tenant; teaches `assert_tenant_active` to admit `trialing` and `past_due`                                                                                | TAR-403 |
+| `20260815140000_reporting_metrics_index`                                  | `tickets_reporting_metrics_idx`. One index and nothing else — the only bespoke index on `tickets` that is declared in `schema.prisma`, so `migrate dev` regenerates it and its absence _is_ drift                                                                                                                                                                  | TAR-427 |
+| `20260815140000_tenant_signups`                                           | `tenant_signups`, the fourth table with no `tenant_isolation` policy: a signup exists before its tenant does, so the grant is the enforcement                                                                                                                                                                                                                      | TAR-440 |
+| `20260815150000_ai_chatbot_knowledge_base_and_handoff`                    | `knowledge_chunks`, `bot_turns` and `handoff_events` and the 42nd, 43rd and 44th policies; the bot-state columns and four enums behind them. Phase 1 of ADR 0010                                                                                                                                                                                                   | TAR-402 |
 | `20260815160000_lifecycle_trigger_notification_backstop_and_purge_resume` | `lifecycle_trigger` and `lifecycle_audit_log.trigger`; `notified_at` and its backlog index, with the append-only trigger narrowed to permit that one null-to-value stamp; `tenants.purge_started_at`. Both new columns fill existing rows through a constant default that is dropped immediately, so no `UPDATE` runs and the append-only trigger is never tripped | TAR-413 |
 | `20260815170000_assert_tenant_serviceable`                                | `public.assert_tenant_serviceable(text)`, which admits `suspended`, created **alongside** `assert_tenant_active` and with no callers. Phase 1 of ADR 0009 decision 2's expand → migrate → contract rename: applying it changes no behaviour                                                                                                                        | TAR-413 |
+| `20260816120000_workflow_run_status_skipped`                              | `ALTER TYPE workflow_run_status ADD VALUE 'skipped'`, alone in its own migration                                                                                                                                                                                                                                                                                   | TAR-394 |
+| `20260816130000_notifications_generalisation`                             | Renames `sla_alerts` to `notifications` with its pkey, three indexes and four foreign keys; adds `type`, `data` and `dedupe_key` with the dedupe unique; makes `sla_timer_id`, `kind` and `due_at` nullable behind `notifications_sla_breach_columns`. No data migration, no new table, no new policy                                                              | TAR-394 |
+| `20260816140000_workflow_rule_schema`                                     | `workflows.name` to `citext` plus `position`, `trigger_type`, `broken_reason` and the evaluation index; the `workflow_runs` claim columns, its unique dedupe key and two CHECKs; adds `workflow_references` and `ticket_tags` and the 45th and 46th policies; `tickets_active_created_at_idx`                                                                      | TAR-394 |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's
 migration; the 35th, `ticket_counters`, carries its policy in TAR-74's; the 36th,
 `media_objects`, carries its policy in TAR-20e's; the 37th and 38th,
 `password_reset_tokens` and `invite_teams`, carry theirs in TAR-54's; the 39th,
-`sla_alerts`, carries its policy in TAR-270's; and the 40th and 41st,
-`lifecycle_audit_log` and `tenant_plan_limits`, carry theirs in TAR-403's.
+`sla_alerts` — now `notifications` — carries its policy in TAR-270's; the 40th and 41st,
+`lifecycle_audit_log` and `tenant_plan_limits`, carry theirs in TAR-403's; the 42nd to 44th,
+`knowledge_chunks`, `bot_turns` and `handoff_events`, carry theirs in TAR-402's; and the 45th
+and 46th, `workflow_references` and `ticket_tags`, carry theirs in TAR-394's. A rename carries the
+policy with it, because a policy is attached to the table's OID rather than to its name.
 
-`20260813120000_sla_timer_state_paused` is one statement in a directory of its own because
-PostgreSQL refuses to _use_ an enum label in the transaction that added it, and Prisma runs
-each migration in one transaction. Splitting it costs a directory and removes a class of
-deploy failure that only shows up on a fresh database.
+`20260813120000_sla_timer_state_paused` and
+`20260816120000_workflow_run_status_skipped` are each one statement in a directory of their own
+because PostgreSQL refuses to _use_ an enum label in the transaction that added it, and Prisma
+runs each migration in one transaction. Splitting them costs a directory and removes a class of
+deploy failure that only shows up on a fresh database. Creating a _new_ enum type and using it
+in the same migration is fine, which is why TAR-394's four other types are not split out.
 
 `20260810180000_message_content_type_unsupported` shares the `180000` slot with the
 template-list index and is absent from the table above only because it was added on a
@@ -1158,6 +1338,15 @@ TAR-20e reached `main` first and claimed that slot. Two directories sharing a ti
 apply in the order their names sort, which is not the order an already-migrated database
 applied them in — harmless for two independent migrations, and not a difference worth
 leaving in place when the later one has not merged yet and renaming it costs nothing.
+
+TAR-394's three have been moved twice by the same rule, and now sit on `20260816`. They were
+authored at `20260815140000`–`160000`; TAR-427 and TAR-440 reached `main` sharing `140000`,
+which pushed them to `170000`–`190000`, and TAR-413 then reached `main` holding `160000` and
+`170000`. Rather than chase a third clash inside one already-crowded day, they take the next
+day's slots — `20260816120000`, `130000` and `140000` — which is the date they were rebased on
+and leaves the whole of `20260815` to the six migrations already there. All three moved
+together each time, so their relative order stays visible: the enum label has to apply before
+the migration that constrains around it.
 
 ### Adding a table
 

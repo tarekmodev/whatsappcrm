@@ -456,8 +456,79 @@ enum WorkflowRunStatus {
   running
   succeeded
   failed
+  /// The run happened and the conditions did not match, so no action was
+  /// attempted (0009, `WORKFLOW_RUN_STATUSES`). Not `failed` — nothing went
+  /// wrong — and it is the answer to "why didn't my rule fire", which is the
+  /// question a supervisor brings to the run list.
+  ///
+  /// Appended rather than inserted before `failed`, exactly as `paused` was on
+  /// `sla_timer_state`: enum order is the sort order for `ORDER BY status`, no
+  /// query sorts by it, and `BEFORE`/`AFTER` placement would make
+  /// `ADD VALUE IF NOT EXISTS` non-idempotent. Added by
+  /// `20260816120000_workflow_run_status_skipped`, which is its own migration
+  /// file because PostgreSQL refuses to *use* a label in the transaction that
+  /// added it and Prisma runs one migration per transaction.
+  skipped
 
   @@map("workflow_run_status")
+}
+
+/// What fires a workflow (0009, `WORKFLOW_TRIGGER_TYPES`). Exactly one per
+/// workflow — a workflow *is* one rule (0009, decision 4).
+///
+/// This is a column on `workflows` as well as a field inside `definition`, and
+/// the duplication is deliberate: every triggering occurrence reads "the active
+/// workflows in this tenant whose trigger is X", and a JSONB extraction in that
+/// predicate cannot use the composite index that also carries `position`.
+enum WorkflowTriggerType {
+  ticket_created
+  ticket_status_changed
+  ticket_assigned
+  ticket_sla_breached
+  /// The elapsed trigger, detected by the sweep rather than by an event
+  /// (0009, decision 3). Its threshold lives in `definition`, not here.
+  ticket_unresolved_for
+
+  @@map("workflow_trigger_type")
+}
+
+/// Why a workflow was auto-deactivated (0009, `WORKFLOW_BROKEN_REASONS`).
+/// Non-null exactly when that happened, and it blocks re-enabling until every
+/// reference in the definition resolves again.
+enum WorkflowBrokenReason {
+  /// A referenced user was removed. Set in the removal transaction, beside the
+  /// `assignment_rules` cleanup that already lives there (0009, decision 6).
+  reference_removed
+  /// A reference went missing at evaluation time — the belt-and-braces case no
+  /// foreign key covers.
+  reference_missing
+
+  @@map("workflow_broken_reason")
+}
+
+/// Why a run failed (0009, `WORKFLOW_FAILURE_REASONS`). Typed rather than left
+/// to `workflow_runs.error`, because a supervisor filters the run list on it and
+/// free text cannot be filtered.
+enum WorkflowFailureReason {
+  reference_missing
+  transition_refused
+  ticket_gone
+  run_budget_exceeded
+  internal_error
+
+  @@map("workflow_failure_reason")
+}
+
+/// What a `notifications` row is (0009, decision 7). `sla_breach` is the type
+/// `sla_alerts` held before the rename, and it stays the column default so that
+/// a writer which forgets the column lands on the type whose CHECK requires an
+/// `sla_timer_id` and fails loudly rather than quietly inventing a category.
+enum NotificationType {
+  sla_breach
+  workflow_notify
+  workflow_broken
+
+  @@map("notification_type")
 }
 
 enum KnowledgeDocumentStatus {
@@ -679,9 +750,11 @@ model Tenant {
   assignmentStates         AssignmentState[]
   slaPolicies              SlaPolicy[]
   slaTimers                SlaTimer[]
-  slaAlerts                SlaAlert[]
+  notifications            Notification[]
+  ticketTags               TicketTag[]
   workflows                Workflow[]
   workflowRuns             WorkflowRun[]
+  workflowReferences       WorkflowReference[]
   aiConfig                 AiConfig?
   knowledgeDocs            KnowledgeDocument[]
   knowledgeChunks          KnowledgeChunk[]
@@ -1195,7 +1268,8 @@ model User {
   ticketEvents          TicketEvent[]
   assignmentRules       AssignmentRule[]
   assignmentCursors     AssignmentState[]
-  slaAlerts             SlaAlert[]
+  notifications         Notification[]
+  workflowReferences    WorkflowReference[]
   cannedResponses       CannedResponse[]
   auditLogs             AuditLog[]
   lifecycleAuditLog     LifecycleAuditLog[]
@@ -1372,13 +1446,17 @@ model Team {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   members               TeamMember[]
   pendingInvites        InviteTeam[]
   assignedConversations Conversation[]
   assignedTickets       Ticket[]
   assignmentRules       AssignmentRule[]
   assignmentState       AssignmentState?
+  /// Workflows naming this team, as a `reassign` target or inside a condition
+  /// (TAR-27). No team-delete path exists today; when TAR-22 adds one, this is
+  /// the foreign key that makes it refuse rather than break a workflow.
+  workflowReferences    WorkflowReference[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, id])
@@ -1572,8 +1650,15 @@ model Tag {
   color     String?
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contacts ContactTag[]
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contacts           ContactTag[]
+  /// TAR-27's second join table. The same taxonomy, a different subject: a
+  /// contact tag is a property of a customer, a ticket tag is a fact about one
+  /// incident.
+  tickets            TicketTag[]
+  /// Workflows naming this tag (TAR-27). The foreign key out of that table is
+  /// what refuses a delete while one does — see `WorkflowReference`.
+  workflowReferences WorkflowReference[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, id])
@@ -1653,7 +1738,7 @@ model Conversation {
   /// and the assign/claim path on the way to `human_active`, and the conversation
   /// status path on the reset to `off`. It is a plain column rather than an
   /// `AiModule` API precisely so those three need no module edge.
-  botState               ConversationBotState @default(off) @map("bot_state")
+  botState     ConversationBotState @default(off) @map("bot_state")
   /// When the bot took this conversation — the start of the window the handoff
   /// DTO's `botExchange` spans. Null when the bot never replied, and cleared on
   /// the reset to `off`.
@@ -1661,10 +1746,10 @@ model Conversation {
   /// `conversations_bot_engaged_at_requires_engagement` holds the one direction
   /// that matters (`off` implies null). It is a CHECK, so it lives in the
   /// migration rather than here.
-  botEngagedAt           DateTime?          @map("bot_engaged_at") @db.Timestamptz(3)
+  botEngagedAt DateTime?            @map("bot_engaged_at") @db.Timestamptz(3)
 
-  createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   whatsappAccount WhatsappAccount @relation(fields: [tenantId, whatsappAccountId], references: [tenantId, id], onDelete: Cascade)
@@ -1741,12 +1826,12 @@ model Message {
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  conversation     Conversation        @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: Cascade)
-  sender           User?               @relation(fields: [tenantId, senderUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-  attachments      MessageAttachment[]
-  botTurnsHandled  BotTurn[]           @relation("BotTurnInboundMessage")
-  botTurnsReplied  BotTurn[]           @relation("BotTurnReplyMessage")
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation      Conversation        @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: Cascade)
+  sender            User?               @relation(fields: [tenantId, senderUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  attachments       MessageAttachment[]
+  botTurnsHandled   BotTurn[]           @relation("BotTurnInboundMessage")
+  botTurnsReplied   BotTurn[]           @relation("BotTurnReplyMessage")
   handoffsTriggered HandoffEvent[]
 
   @@unique([tenantId, providerMessageId])
@@ -1930,15 +2015,19 @@ model Ticket {
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  conversation Conversation? @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-  contact      Contact?      @relation(fields: [tenantId, contactId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-  assignedUser User?         @relation(fields: [tenantId, assignedUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-  assignedTeam Team?         @relation(fields: [tenantId, assignedTeamId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation  Conversation?  @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  contact       Contact?       @relation(fields: [tenantId, contactId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  assignedUser  User?          @relation(fields: [tenantId, assignedUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  assignedTeam  Team?          @relation(fields: [tenantId, assignedTeamId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
   events        TicketEvent[]
   slaTimers     SlaTimer[]
-  slaAlerts     SlaAlert[]
+  notifications Notification[]
   handoffEvents HandoffEvent[]
+  /// Automation-written ticket tags (TAR-27). `TicketResponse.tags` is mapped
+  /// from here, and the existing ticket queries take one batched join.
+  tags          TicketTag[]
+  workflowRuns  WorkflowRun[]
 
   @@unique([tenantId, number])
   @@unique([tenantId, id])
@@ -2031,6 +2120,29 @@ model Ticket {
 // Same caveat as the index above: Prisma's describer skips predicated indexes,
 // so **nothing in this file will ever regenerate it** and its absence is not
 // drift. `ticket-queue-shape.int-spec.ts` is what catches that.
+//
+// ⚠️ And a third, added by TAR-394: `tickets_active_created_at_idx`, on
+// `(tenant_id, created_at)` `WHERE status IN ('open','pending')`, in the
+// 20260816140000_workflow_rule_schema migration. It serves phase 1 of the
+// workflow elapsed-trigger sweep — per tenant, `status IN ('open','pending') AND
+// created_at <= now() - interval`, `ORDER BY created_at LIMIT 50` (0009,
+// decision 3). `tickets_active_queue_idx` leads with `priority`, and
+// `(tenant_id, status, priority, created_at DESC)` puts two status ranges and a
+// whole column between the tenant and the range the sweep bounds on, so the
+// planner sorts the tenant's active set instead of stopping at the fiftieth row.
+//
+// **`tickets_reporting_metrics_idx` (TAR-427) shares its exact leading prefix**,
+// `(tenant_id, created_at)`, and is therefore the redundancy question this index
+// has to answer. It is not redundant: that index is not partial, so the sweep
+// would walk every ticket in the range — resolved and closed included, with
+// `status` applied as an in-index filter — before it reaches fifty active ones,
+// and its cost grows with the tenant's *history* rather than with its open
+// backlog. This one holds only active tickets, so the first fifty entries in
+// `created_at` order are the answer, and a resolved ticket leaves the index
+// instead of sitting in it. The reporting index would still serve the query if
+// this one were dropped, which makes the failure a slow sweep rather than a
+// broken one. `workflow-schema.int-spec.ts` asserts its definition, and the same
+// describer caveat applies.
 
 /// Append-only audit trail for a single ticket (TAR-32). `type` is text, not an
 /// enum: every later story adds event types, and an enum would make each of
@@ -2236,15 +2348,17 @@ model SlaTimer {
   /// arrives afterwards.
   breachedAt DateTime?     @map("breached_at") @db.Timestamptz(3)
 
-  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticket Ticket     @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
-  policy SlaPolicy  @relation(fields: [tenantId, policyId], references: [tenantId, id], onDelete: Cascade)
-  alerts SlaAlert[]
+  tenant Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket Ticket         @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
+  policy SlaPolicy      @relation(fields: [tenantId, policyId], references: [tenantId, id], onDelete: Cascade)
+  /// The `type = 'sla_breach'` rows in `notifications`. Named `alerts` because
+  /// that is what they are from a timer's point of view.
+  alerts Notification[]
 
   /// One timer per target per ticket. Also what serves the `breachedOnly` ticket
   /// filter's `EXISTS` (0006, `tickets` section).
   @@unique([tenantId, ticketId, kind])
-  /// The composite key `sla_alerts` references, per convention 2 — a plain
+  /// The composite key `notifications` references, per convention 2 — a plain
   /// `sla_timer_id uuid REFERENCES sla_timers(id)` would accept a timer id
   /// belonging to another tenant.
   @@unique([tenantId, id])
@@ -2280,104 +2394,367 @@ model SlaTimer {
   @@map("sla_timers")
 }
 
-/// One supervisor alert, per recipient, per breached timer (TAR-26, 0006
-/// decision 5). Three things at once, and each is load-bearing:
+/// One notification, per recipient, per thing worth telling them about (TAR-26,
+/// 0006 decision 5; generalised by TAR-27, 0009 decision 7). Three things at
+/// once, and each is load-bearing:
 ///
 ///   * **The delivery record.** It survives a restart, a missed socket and a
-///     supervisor who was asleep. The `sla.breached` realtime event is an
-///     accelerator; this row is what makes "the supervisor is notified" true.
-///   * **The read model** behind `GET /api/v1/sla-alerts`, keyset-paginated by
+///     supervisor who was asleep. The `sla.breached` and `notification.created`
+///     realtime events are accelerators; this row is what makes "the supervisor
+///     is notified" true.
+///   * **The read model** behind `GET /api/v1/sla-alerts` and
+///     `GET /api/v1/notifications`, keyset-paginated by
 ///     `(created_at DESC, id DESC)` and narrowed to the calling principal.
 ///   * **The idempotency ledger.** `UNIQUE (tenant_id, sla_timer_id,
 ///     recipient_user_id)` is the second of the three layers that make one
 ///     breach produce exactly one alert; the load-bearing one is the conditional
 ///     `UPDATE ... WHERE state = 'running'` that flips the timer in the same
-///     transaction (0006, decision 3).
+///     transaction (0006, decision 3). `UNIQUE (tenant_id, recipient_user_id,
+///     dedupe_key)` is the same layer for the workflow types.
 ///
-/// Recipients are derived, not configured: the tenant's active supervisors and
-/// admins, narrowed to those sharing a team with whoever holds the ticket, and
-/// falling back to all of them when that yields nobody. TAR-22's model has no
-/// manager link, and 0006 decision 4 records why v1 does not add one.
-model SlaAlert {
-  id              String        @id @default(uuid(7)) @db.Uuid
-  tenantId        String        @map("tenant_id") @db.Uuid
-  slaTimerId      String        @map("sla_timer_id") @db.Uuid
-  ticketId        String        @map("ticket_id") @db.Uuid
-  recipientUserId String        @map("recipient_user_id") @db.Uuid
+/// For `sla_breach`, recipients are derived, not configured: the tenant's active
+/// supervisors and admins, narrowed to those sharing a team with whoever holds
+/// the ticket, and falling back to all of them when that yields nobody. TAR-22's
+/// model has no manager link, and 0006 decision 4 records why v1 does not add
+/// one. A `notify` action names its own audience and reuses the same resolver.
+///
+/// This table shipped as
+/// `sla_alerts` with TAR-270 and was renamed by
+/// `20260816130000_notifications_generalisation` — which is what 0006 decision 5
+/// said should happen when a second notification type arrived: "generalising it
+/// is a rename and a `type` column". `GET /api/v1/sla-alerts` and its
+/// acknowledge keep their paths, their response shape and their behaviour as a
+/// documented `type = 'sla_breach'` view over these rows.
+///
+/// **`sla_timer_id`, `kind` and `due_at` are the `sla_breach` columns**, so they
+/// are nullable now — and `notifications_sla_breach_columns` makes
+/// "non-null exactly for that type" an invariant rather than a convention.
+/// `ticket_id` stays `NOT NULL`: every type this story adds is raised while
+/// evaluating one ticket, and `workflow_broken` is raised from the run that
+/// failed, which has one.
+model Notification {
+  id              String           @id @default(uuid(7)) @db.Uuid
+  tenantId        String           @map("tenant_id") @db.Uuid
+  /// Defaulted rather than required, which is what makes the rename a
+  /// metadata-only migration: every row that existed was already a breach.
+  type            NotificationType @default(sla_breach)
+  slaTimerId      String?          @map("sla_timer_id") @db.Uuid
+  ticketId        String           @map("ticket_id") @db.Uuid
+  recipientUserId String           @map("recipient_user_id") @db.Uuid
   /// Denormalised from the timer so the supervisor's list needs no join.
-  kind            SlaTargetKind
+  kind            SlaTargetKind?
   /// The deadline that was missed, copied at write time. Not read through the
   /// timer: a later policy edit or a resume must not be able to rewrite what the
   /// supervisor was told they missed.
-  dueAt           DateTime      @map("due_at") @db.Timestamptz(3)
+  dueAt           DateTime?        @map("due_at") @db.Timestamptz(3)
+  /// Type-specific payload: `{ workflowId, workflowRunId }` for the two workflow
+  /// types, and the supervisor's own `notify` message. JSON rather than columns
+  /// because it is read as a whole by the console and never filtered on.
+  data            Json?
+  /// The workflow types' second idempotency layer, mirroring the SLA unique
+  /// below. Null for `sla_breach`, whose reservation is
+  /// `(tenant_id, sla_timer_id, recipient_user_id)`.
+  dedupeKey       String?          @map("dedupe_key")
   /// When the breach was *detected*, not when it was due — the sweep's own
   /// clock. `NOT NULL` because it is a keyset sort column.
-  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  /// Set by `POST /api/v1/sla-alerts/{id}/acknowledge`. First write wins; a
-  /// second call is not a conflict.
-  acknowledgedAt  DateTime?     @map("acknowledged_at") @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// Set by the acknowledge endpoint. First write wins; a second call is not a
+  /// conflict.
+  acknowledgedAt  DateTime?        @map("acknowledged_at") @db.Timestamptz(3)
 
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  slaTimer  SlaTimer @relation(fields: [tenantId, slaTimerId], references: [tenantId, id], onDelete: Cascade)
-  ticket    Ticket   @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  slaTimer  SlaTimer? @relation(fields: [tenantId, slaTimerId], references: [tenantId, id], onDelete: Cascade)
+  ticket    Ticket    @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
   /// `NoAction`, matching every other user reference in this file: removing a
   /// user is a status change, never a row delete (convention 4).
-  recipient User     @relation(fields: [tenantId, recipientUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  recipient User      @relation(fields: [tenantId, recipientUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
 
-  /// The second idempotency layer. A retry after a partial failure re-inserts
-  /// nothing.
+  /// The SLA path's second idempotency layer. A retry after a partial failure
+  /// re-inserts nothing.
+  ///
+  /// **Left non-partial**, where 0009 proposed `WHERE sla_timer_id IS NOT NULL`.
+  /// Postgres does not collide NULLs, so a workflow row — whose `sla_timer_id`
+  /// is null — can never conflict here either way, and 0009 says as much
+  /// ("belt-and-braces rather than required"). Adding the predicate would buy
+  /// nothing and cost the one thing this schema keeps being bitten by: Prisma's
+  /// describer skips predicated indexes, so a partial unique index cannot be
+  /// declared on this line and the next `migrate dev` would propose creating a
+  /// second, non-partial one beside it.
   @@unique([tenantId, slaTimerId, recipientUserId])
-  /// The recipient's alert list and its keyset pagination.
+  /// The workflow types' idempotency layer — one `notify` per recipient per
+  /// occurrence. Null for `sla_breach`, which does not collide, for the same
+  /// reason and with the same non-partial shape.
+  @@unique([tenantId, recipientUserId, dedupeKey])
+  /// The recipient's notification list and its keyset pagination.
   @@index([tenantId, recipientUserId, createdAt(sort: Desc), id(sort: Desc)])
-  /// "What alerts did this ticket raise" — TAR-32's escalation log.
+  /// "What did this ticket raise" — TAR-32's escalation log.
   @@index([tenantId, ticketId])
-  @@map("sla_alerts")
+  @@map("notifications")
 }
 
 // ---------------------------------------------------------------------------
 // Workflows — TAR-27
 // ---------------------------------------------------------------------------
 
+/// One automation rule: one trigger, one condition set, one action list (0009,
+/// decision 4). **A workflow is a rule, and the tenant's workflows are the
+/// ordered rule list** the console renders — the same shape as
+/// `assignment_rules`, and what makes the name and the enable switch belong to
+/// the thing a supervisor reasons about.
+///
+/// `position` orders **execution, not selection**: every matching workflow runs,
+/// unlike routing where a first match is the answer. Ties break on `id`, which is
+/// creation order.
+///
+/// `definition` holds the trigger's parameters, the conditions and the actions,
+/// as the grammar `packages/contracts/src/workflows.ts` publishes. JSONB rather
+/// than normalised trigger/condition/action tables so that the grammar can grow
+/// without a migration — and `workflow_references` is what buys back the one
+/// thing JSONB cannot give, a foreign key (0009, decision 6).
+///
+/// **Taxonomy references inside `definition` are ids and only ids** — never a
+/// copied name. A tag or team rename therefore needs no migration, no backfill
+/// and no cache bust: the name is joined at read time. This is TAR-27's second
+/// acceptance criterion, and it is a property of the shape rather than of any
+/// code path.
 model Workflow {
-  id         String   @id @default(uuid(7)) @db.Uuid
-  tenantId   String   @map("tenant_id") @db.Uuid
-  name       String
-  isActive   Boolean  @default(false) @map("is_active")
+  id           String                @id @default(uuid(7)) @db.Uuid
+  tenantId     String                @map("tenant_id") @db.Uuid
+  /// `citext`, on the same reasoning as `teams.name` and `assignment_rules.name`
+  /// (conventions, rule 6): a unique key within the tenant that a human types.
+  /// Without it `UNIQUE (tenant_id, name)` admits `Escalate` beside `escalate`,
+  /// and a supervisor editing one of a pair changes nothing they can see.
+  name         String                @db.Citext
+  /// Defaults to `false`, where an assignment rule defaults to `true`: a rule
+  /// that can close tickets and message supervisors is armed on purpose (0009).
+  isActive     Boolean               @default(false) @map("is_active")
+  /// Execution order within the tenant. Not unique — two workflows created
+  /// normally share `0`, which is why the ordering index also carries `id`.
+  position     Int                   @default(0)
+  /// A column duplicating a `definition` field, deliberately. Every triggering
+  /// occurrence reads "the active workflows in this tenant whose trigger is X",
+  /// which is the hottest query in the module; a JSONB extraction in that
+  /// predicate cannot use a composite index that also carries `position`, and an
+  /// expression index would be a second thing to keep in step with the grammar.
+  /// Written in the same statement as `definition`.
+  triggerType  WorkflowTriggerType   @map("trigger_type")
+  /// Non-null exactly when the workflow was **auto-deactivated** because a
+  /// reference broke (0009, decision 6). What the console renders as a warning,
+  /// and what blocks re-enabling until the reference resolves.
+  /// `workflows_broken_is_inactive` makes the second half structural.
+  brokenReason WorkflowBrokenReason? @map("broken_reason")
   /// Trigger, conditions and actions. TAR-27 owns the grammar.
-  definition Json
-  version    Int      @default(1)
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  definition   Json
+  /// Incremented on every write that changes `definition`, and copied onto each
+  /// run, so a run can be read against the definition that produced it.
+  version      Int                   @default(1)
+  createdAt    DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  runs   WorkflowRun[]
+  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  runs       WorkflowRun[]
+  references WorkflowReference[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, id])
-  @@index([tenantId, isActive])
+  /// The evaluation read, once per triggering occurrence: the active workflows
+  /// for one trigger type, in execution order. Replaces `(tenant_id, is_active)`,
+  /// which is a strict prefix of this and would cost a second index's writes to
+  /// serve queries this one already serves.
+  @@index([tenantId, isActive, triggerType, position, id])
   @@map("workflows")
 }
 
+/// What one workflow did about one triggering occurrence — and, in the same row,
+/// the reservation that stopped a second worker doing it again (0009, decision
+/// 2). `UNIQUE (tenant_id, workflow_id, dedupe_key)` is the whole exactly-once
+/// mechanism: the claim is
+/// `INSERT … ON CONFLICT (tenant_id, workflow_id, dedupe_key) DO NOTHING
+/// RETURNING id`, so the record and the right to act are one write. Everything
+/// else — the `running` status, the BullMQ job id — is optimisation.
+///
+/// The table is a **log, not a ledger**: it grows with ticket volume × active
+/// workflows and `WORKFLOW_LIMITS.runsRetentionDays` (90) is published with
+/// nothing yet enforcing it (0009, risk 5). Whoever builds the acknowledged-alert
+/// sweeper 0006 risk 5 left open should sweep this in the same job.
 model WorkflowRun {
-  id         String            @id @default(uuid(7)) @db.Uuid
-  tenantId   String            @map("tenant_id") @db.Uuid
-  workflowId String            @map("workflow_id") @db.Uuid
-  status     WorkflowRunStatus @default(pending)
-  /// What fired it — `{ event: "ticket.created", ticketId: "..." }`.
-  trigger    Json?
-  context    Json?
-  error      String?
-  startedAt  DateTime?         @map("started_at") @db.Timestamptz(3)
-  finishedAt DateTime?         @map("finished_at") @db.Timestamptz(3)
-  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  id              String                 @id @default(uuid(7)) @db.Uuid
+  tenantId        String                 @map("tenant_id") @db.Uuid
+  workflowId      String                 @map("workflow_id") @db.Uuid
+  /// Every trigger is about a ticket, so this is `NOT NULL`.
+  ticketId        String                 @map("ticket_id") @db.Uuid
+  /// Which `workflows.version` ran. Copied, not joined: the definition a
+  /// supervisor is reading now is not necessarily the one that fired.
+  workflowVersion Int                    @map("workflow_version")
+  /// The occurrence this run *is*, as `workflowDedupeKey` builds it — e.g.
+  /// `ticket:{id}` for `ticket_created` and `ticket_unresolved_for`,
+  /// `ticket:{id}:event:{ticketEventId}` for a status change. Text rather than a
+  /// pair of columns because the shape differs per trigger type and only its
+  /// equality is ever read.
+  dedupeKey       String                 @map("dedupe_key")
+  status          WorkflowRunStatus      @default(pending)
+  /// What fired it — the `WorkflowEvaluateTicketTrigger` payload, including
+  /// `depth` and `causedByRunId` for the loop protection's audit trail.
+  trigger         Json?
+  context         Json?
+  /// Per-action outcome, in definition order:
+  /// `[{ index, type, outcome, reason }]`. `'[]'` rather than null so that the
+  /// response's non-nullable array needs no coalescing, and so the claim
+  /// statement — which does not name this column — writes a well-formed value.
+  results         Json                   @default("[]")
+  /// Typed, because a supervisor filters the run list on it and free text cannot
+  /// be filtered. `error` keeps the human-readable detail behind it.
+  failureReason   WorkflowFailureReason? @map("failure_reason")
+  error           String?
+  startedAt       DateTime?              @map("started_at") @db.Timestamptz(3)
+  finishedAt      DateTime?              @map("finished_at") @db.Timestamptz(3)
+  createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   workflow Workflow @relation(fields: [tenantId, workflowId], references: [tenantId, id], onDelete: Cascade)
+  ticket   Ticket   @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
 
+  /// **The idempotency mechanism.** See the docblock above.
+  @@unique([tenantId, workflowId, dedupeKey])
+  /// The run list for one workflow, keyset-paginated.
   @@index([tenantId, workflowId, createdAt(sort: Desc), id(sort: Desc)])
+  /// "What automation touched this ticket" — the first question a supervisor
+  /// asks, and the only one that starts from the ticket rather than the rule.
+  @@index([tenantId, ticketId, createdAt(sort: Desc)])
   @@index([tenantId, status])
   @@map("workflow_runs")
 }
+
+/// The reverse index of 0009 decision 6: one row per entity a workflow's
+/// `definition` names, rewritten inside the same transaction as every workflow
+/// write. Two jobs, and the second is the reason it is a table rather than a
+/// query:
+///
+///   * **"Which workflows reference this tag / team / user?"** — one indexed read
+///     on a taxonomy delete, instead of a JSONB containment scan over every
+///     definition in the tenant.
+///   * **The database refuses a delete that would break a workflow.** That
+///     cannot be a call from `ContactsModule` (L3) into `WorkflowsModule` (L4) —
+///     0002 forbids the upward import — but a foreign key is enforced by
+///     Postgres and needs no module to know about any other. `ContactsModule`
+///     translates the violation into `conflict` and names the workflows.
+///
+/// ⚠️ **`NoAction`, not `Restrict`, and the difference is load-bearing.** 0009
+/// specifies `RESTRICT` for `tag_id` and `team_id`. This schema's convention 4
+/// forbids it, for the reason that applies exactly here: `RESTRICT` is checked
+/// the instant the referenced row goes, so the `ON DELETE CASCADE` from `tenants`
+/// — which removes the tags and these rows in one statement — would abort
+/// depending on the order Postgres happened to pick, breaking every fixture and
+/// TAR-403's purge. `NoAction` is checked at end of statement instead, so a
+/// cascading tenant delete succeeds and a plain `DELETE FROM tags` still raises
+/// `23503`. Both halves of decision 6 hold; only the keyword changes.
+model WorkflowReference {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  workflowId String   @map("workflow_id") @db.Uuid
+  tagId      String?  @map("tag_id") @db.Uuid
+  teamId     String?  @map("team_id") @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workflow Workflow @relation(fields: [tenantId, workflowId], references: [tenantId, id], onDelete: Cascade)
+  /// Refused at end of statement, so "3 workflows use this tag" is a fixable
+  /// answer rather than a silent trap sprung at 02:00 on a Sunday.
+  tag      Tag?     @relation(fields: [tenantId, tagId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  team     Team?    @relation(fields: [tenantId, teamId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  /// Removing a user is a security action and must always succeed, so this one
+  /// is genuinely permissive: `users.service.ts` deletes these rows in the same
+  /// transaction that already clears `assignment_rules.target_user_id`, and
+  /// deactivates the workflow with `broken_reason = 'reference_removed'`.
+  user     User?    @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  /// One row per (workflow, entity): a workflow naming the same tag from two
+  /// actions stores one row.
+  ///
+  /// ⚠️ **`NULLS NOT DISTINCT` in the database**, which this line cannot say —
+  /// and without it this unique index constrains nothing at all, because every
+  /// row has two NULLs in the key and Postgres treats NULL-bearing keys as
+  /// distinct by default. Prisma matches `@@unique` against the index and reports
+  /// no drift either way, so a `migrate dev` that recreates it for an unrelated
+  /// reason recreates it NULL-distinct and the duplicates come back silently.
+  /// Same trap, same resolution and same reasoning as
+  /// `assignment_state_tenant_scope_key` (TAR-272);
+  /// `workflow-schema.int-spec.ts` is what catches it.
+  @@unique([tenantId, workflowId, tagId, teamId, userId], map: "workflow_references_scope_key")
+  /// The three "which workflows use this?" lookups, one per delete path.
+  @@index([tenantId, tagId])
+  @@index([tenantId, teamId])
+  @@index([tenantId, userId])
+  @@map("workflow_references")
+}
+
+/// A tag on a **ticket**, mirroring `ContactTag` column for column (0009, data
+/// model). `tags` is the one taxonomy — TAR-33 owns it — and this is its second
+/// join table.
+///
+/// **Why not tag the contact instead**, which would need no migration and reuse
+/// 0007's `tag` condition: `escalated` is a fact about one incident, while a
+/// contact tag is a permanent property of a customer. A workflow writing into the
+/// taxonomy TAR-33's segmentation reads would corrupt segments silently and
+/// irreversibly, and "why is this customer tagged `escalated` eight months
+/// later" is a support conversation nobody can answer. A `contact` variant of the
+/// action stays additive — a discriminator on the action, no migration.
+///
+/// Automation-written at v1: there is no manual ticket-tag endpoint (0009,
+/// risk 8).
+model TicketTag {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  ticketId  String   @map("ticket_id") @db.Uuid
+  tagId     String   @map("tag_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket Ticket @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tenantId, tagId], references: [tenantId, id], onDelete: Cascade)
+
+  /// Applying a tag twice is a no-op, not an error — which is what lets the
+  /// action report `no_op` instead of failing a run.
+  @@unique([tenantId, ticketId, tagId])
+  /// "Every ticket with this tag" — the filter that makes ticket tags useful,
+  /// and the read behind the `ticket_tag` condition.
+  @@index([tenantId, tagId])
+  @@map("ticket_tags")
+}
+
+// ⚠️ TAR-27's tables carry six objects this file cannot express. All six live in
+// 20260816130000_notifications_generalisation and
+// 20260816140000_workflow_rule_schema, and `src/prisma/workflow-schema.int-spec.ts`
+// fails if any of them is missing or has been quietly widened:
+//
+//   * `workflows_broken_is_inactive` — CHECK (NOT is_active OR broken_reason IS
+//     NULL). A broken workflow cannot be active: the API's "fix the reference,
+//     then enable" made structural rather than left to a service that could
+//     forget.
+//   * `workflow_runs_results_is_array` — CHECK (jsonb_typeof(results) =
+//     'array'). `WorkflowRunResponse.results` is an array; a writer sending an
+//     object would reach the console as a validation failure on a read.
+//   * `workflow_runs_failure_reason_only_when_failed` — CHECK (failure_reason IS
+//     NULL OR status = 'failed'). One direction only, deliberately: a `failed`
+//     run always has a typed reason in the executor, but making that a
+//     constraint would refuse a two-statement transition, and the cost of the
+//     gap is a null a mapper already handles.
+//   * `workflow_references_one_target` — CHECK (num_nonnulls(tag_id, team_id,
+//     user_id) = 1). A reference row names exactly one entity.
+//   * `workflow_references_scope_key` — UNIQUE **NULLS NOT DISTINCT**. Without
+//     the three words it constrains nothing; see the docblock on
+//     `WorkflowReference`.
+//   * `notifications_sla_breach_columns` — CHECK ((type = 'sla_breach') =
+//     (sla_timer_id IS NOT NULL)). The nullability of the three SLA columns made
+//     an invariant instead of a convention.
+//
+// Prisma's schema language has no CHECK at all, and its describer neither reports
+// CHECKs nor distinguishes `NULLS NOT DISTINCT`, so `migrate dev` proposes
+// neither to create nor to drop any of them. That is not drift — and it means
+// **nothing in this file will ever regenerate them.** A `migrate reset` replays
+// the migrations and is fine; a database built from this schema alone silently
+// loses all six.
 
 // ---------------------------------------------------------------------------
 // AI — TAR-28
@@ -2408,18 +2785,18 @@ model AiConfig {
   /// `ai_configs_min_confidence_range` bounds it 0..1 in the database and not
   /// only in zod, because zod guards the one handler that writes this row today
   /// and the CHECK guards every writer there will ever be.
-  minConfidence   Decimal  @default(0.60) @map("min_confidence") @db.Decimal(3, 2)
+  minConfidence  Decimal @default(0.60) @map("min_confidence") @db.Decimal(3, 2)
   /// Bot replies allowed in one conversation before `handoff:max_turns` — the
   /// loop-breaker for a bot and a customer talking past each other. Bounded
   /// 1..20 by `ai_configs_max_bot_turns_range`.
-  maxBotTurns     Int      @default(5) @map("max_bot_turns")
+  maxBotTurns    Int     @default(5) @map("max_bot_turns")
   /// Sent to the customer once per conversation on handoff. Null = say nothing,
   /// and that is the default: a tenant that hands off on every unmatched
   /// greeting would otherwise spam.
-  handoffMessage  String?  @map("handoff_message")
+  handoffMessage String? @map("handoff_message")
 
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -2478,13 +2855,13 @@ model KnowledgeDocument {
 /// roughly 1200 characters with one paragraph of overlap, so the split follows
 /// boundaries the author already chose and needs no tokenizer at write time.
 model KnowledgeChunk {
-  id         String   @id @default(uuid(7)) @db.Uuid
-  tenantId   String   @map("tenant_id") @db.Uuid
-  documentId String   @map("document_id") @db.Uuid
+  id           String                   @id @default(uuid(7)) @db.Uuid
+  tenantId     String                   @map("tenant_id") @db.Uuid
+  documentId   String                   @map("document_id") @db.Uuid
   /// Position within the document. Ordering context for the prompt, and what
   /// makes a citation locatable in the source the tenant authored.
-  ordinal    Int
-  content    String
+  ordinal      Int
+  content      String
   /// `to_tsvector('simple', content)`, GENERATED ALWAYS ... STORED, so it is
   /// written once at index time and cannot drift from `content`.
   ///
@@ -2497,23 +2874,23 @@ model KnowledgeChunk {
   /// `content`, live in raw SQL in
   /// `20260815150000_ai_chatbot_knowledge_base_and_handoff` for the same reason.
   searchVector Unsupported("tsvector")? @default(dbgenerated("to_tsvector('simple'::regconfig, content)")) @map("search_vector")
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdAt    DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
 
   tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   document KnowledgeDocument @relation(fields: [tenantId, documentId], references: [tenantId, id], onDelete: Cascade)
 
-  /// The two retrieval indexes. Declared here so `migrate diff` sees them, and
-  /// created by the migration's raw SQL because a `USING GIN` build with an
-  /// operator class is not something `migrate dev` should be trusted to
-  /// reconstruct from this line alone.
-  @@index([searchVector], type: Gin, map: "knowledge_chunks_search_idx")
-  @@index([content(ops: raw("gin_trgm_ops"))], type: Gin, map: "knowledge_chunks_content_trgm_idx")
   @@unique([tenantId, id])
   /// Reindexing is delete-and-insert in one transaction, keyed on the document.
   /// This is what makes a half-written chunk set impossible — a retrieval running
   /// alongside an edit sees the old set or the new one, never a mixture, and a
   /// partially reindexed document is exactly a confidently wrong answer.
   @@unique([tenantId, documentId, ordinal])
+  /// The two retrieval indexes. Declared here so `migrate diff` sees them, and
+  /// created by the migration's raw SQL because a `USING GIN` build with an
+  /// operator class is not something `migrate dev` should be trusted to
+  /// reconstruct from this line alone.
+  @@index([searchVector], type: Gin, map: "knowledge_chunks_search_idx")
+  @@index([content(ops: raw("gin_trgm_ops"))], type: Gin, map: "knowledge_chunks_content_trgm_idx")
   @@index([tenantId, documentId])
   @@map("knowledge_chunks")
 }
@@ -2569,13 +2946,13 @@ model BotTurn {
   error             String?
   createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  conversation   Conversation @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: Cascade)
-  inboundMessage Message      @relation("BotTurnInboundMessage", fields: [tenantId, inboundMessageId], references: [tenantId, id], onDelete: Cascade)
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation   Conversation   @relation(fields: [tenantId, conversationId], references: [tenantId, id], onDelete: Cascade)
+  inboundMessage Message        @relation("BotTurnInboundMessage", fields: [tenantId, inboundMessageId], references: [tenantId, id], onDelete: Cascade)
   /// `NoAction`, per conventions rule 4 for an optional reference: a cascade here
   /// would delete the idempotency guard and the audit of why the bot answered,
   /// because the reply it produced was removed.
-  replyMessage   Message?     @relation("BotTurnReplyMessage", fields: [tenantId, replyMessageId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  replyMessage   Message?       @relation("BotTurnReplyMessage", fields: [tenantId, replyMessageId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
   handoffEvents  HandoffEvent[]
 
   /// **The guard that makes a double reply impossible.**

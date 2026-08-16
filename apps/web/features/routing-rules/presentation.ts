@@ -14,6 +14,7 @@ import {
 } from '@whatsappcrm/contracts';
 import type { SelectOption } from '@/components/ui/Select';
 import type { Content } from '@/lib/content';
+import { LIST_MOVE_DIRECTIONS, movedIds, type ListMoveDirection } from '@/lib/list-order';
 
 /**
  * Turns a rule's grammar into the sentence a supervisor reads, and back into the
@@ -112,8 +113,8 @@ export function describeTarget(
   return copy.routeToUser(user?.displayName ?? copy.unknownUser);
 }
 
-export const RULE_MOVE_DIRECTIONS = ['up', 'down'] as const;
-export type RuleMoveDirection = (typeof RULE_MOVE_DIRECTIONS)[number];
+export const RULE_MOVE_DIRECTIONS = LIST_MOVE_DIRECTIONS;
+export type RuleMoveDirection = ListMoveDirection;
 
 /**
  * The rule set with one rule swapped past its neighbour, or `null` when it is
@@ -123,25 +124,16 @@ export type RuleMoveDirection = (typeof RULE_MOVE_DIRECTIONS)[number];
  * The whole set comes back because that is what the reorder endpoint takes: a
  * delta would lose to a concurrent edit, and the whole set is also this call's
  * optimistic concurrency.
+ *
+ * The move itself is `lib/list-order.ts`, shared with the workflow list, which
+ * reorders on exactly the same terms (ADR 0009 decision 4).
  */
 export function movedRuleIds(
   ruleIds: readonly string[],
   ruleId: string,
   direction: RuleMoveDirection,
 ): readonly string[] | null {
-  const from = ruleIds.indexOf(ruleId);
-  const to = direction === 'up' ? from - 1 : from + 1;
-
-  if (from === -1 || to < 0 || to >= ruleIds.length) {
-    return null;
-  }
-
-  const moved = [...ruleIds];
-
-  moved[from] = ruleIds[to] as string;
-  moved[to] = ruleId;
-
-  return moved;
+  return movedIds(ruleIds, ruleId, direction);
 }
 
 /**

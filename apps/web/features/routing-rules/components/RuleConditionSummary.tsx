@@ -1,15 +1,16 @@
 import type { RoutingCondition } from '@whatsappcrm/contracts';
+import { ClauseList } from '@/components/ui/ClauseList';
 import { useContent } from '@/lib/content';
 import { describeCondition, type RoutingRuleVocabulary } from '../presentation';
-import styles from './RuleConditionSummary.module.css';
 
 /**
  * A rule's conditions as the sentence they add up to. Usage:
  * `<RuleConditionSummary conditions={rule.conditions} vocabulary={vocabulary} />`.
  *
- * A list rather than one joined sentence, because the conditions combine with AND
- * and a bulleted list says that without a word — and stays readable at 320px,
- * where a four-clause sentence would not.
+ * The list shape is `ClauseList`, shared with the workflow card, which says the
+ * same thing about its own conditions and actions. This module keeps only the
+ * part that is routing's: turning one condition into the clause a supervisor
+ * reads.
  */
 export function RuleConditionSummary({
   conditions,
@@ -21,14 +22,8 @@ export function RuleConditionSummary({
   const content = useContent();
 
   return (
-    <ul className={styles.list}>
-      {conditions.map((condition, index) => (
-        // Conditions carry no id of their own, and this list is read-only — it is
-        // never reordered or filtered, so an index names the same clause every render.
-        <li key={index} className={styles.item}>
-          {describeCondition(condition, vocabulary, content)}
-        </li>
-      ))}
-    </ul>
+    <ClauseList
+      clauses={conditions.map((condition) => describeCondition(condition, vocabulary, content))}
+    />
   );
 }

@@ -8,6 +8,7 @@ import {
   ConversationListQuerySchema,
   ConversationStatusUpdateInputSchema,
   CursorPageQuerySchema,
+  DashboardMetricsQuerySchema,
   IdSchema,
   InternalNoteCreateInputSchema,
   InviteCreateInputSchema,
@@ -32,13 +33,19 @@ import {
   TicketUpdateInputSchema,
   UserListQuerySchema,
   UserUpdateInputSchema,
+  WORKFLOW_LIMITS,
   WhatsAppEmbeddedSignupInputSchema,
+  WorkflowCreateInputSchema,
+  WorkflowReorderInputSchema,
+  WorkflowTestInputSchema,
+  WorkflowUpdateInputSchema,
   canAgentTransition,
   isRoleWithin,
   isSlaBreached,
   renderTemplateBody,
   roleHasPermission,
   whatsAppSignupFailureDetails,
+  workflowCatalog,
   type ApiError,
   type AssignmentRuleListResponse,
   type AssignmentRuleResponse,
@@ -46,6 +53,7 @@ import {
   type ConversationResponse,
   type CursorPage,
   type CustomFieldDefinition,
+  type DashboardMetricsResponse,
   type InternalNoteResponse,
   type MessageResponse,
   type MessageTemplateResponse,
@@ -65,8 +73,18 @@ import {
   type TicketListQuery,
   type TicketResponse,
   type UserResponse,
+  type WorkflowAction,
+  type WorkflowCatalogResponse,
+  type WorkflowCondition,
+  type WorkflowListResponse,
+  type WorkflowReference,
+  type WorkflowResponse,
+  type WorkflowRunResponse,
+  type WorkflowTaxonomyKind,
+  type WorkflowTestResponse,
 } from '@whatsappcrm/contracts';
 import { ApiRequestError, type ApiRequest } from '@/lib/api/http';
+import { dashboardMetrics } from '@/lib/api/mock/reporting';
 import { mockState, nextMockId } from '@/lib/api/mock/store';
 import { MOCK_IDS } from '@/lib/api/mock/fixtures';
 import type {
@@ -82,6 +100,8 @@ import type {
   MockTeam,
   MockTicket,
   MockUser,
+  MockWorkflow,
+  MockWorkflowRun,
   TenantScoped,
 } from '@/lib/api/mock/fixtures';
 import { resolveStubPrincipal } from '@/lib/session/stub-principal';
@@ -257,6 +277,63 @@ const ROUTES: readonly Route[] = [
   },
   {
     method: 'GET',
+    pattern: /^\/v1\/workflows$/,
+    permission: 'workflow:read',
+    handle: listWorkflows,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/workflows$/,
+    permission: 'workflow:write',
+    handle: createWorkflow,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/workflows\/reorder$/,
+    permission: 'workflow:write',
+    handle: reorderWorkflows,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/workflows/${UUID_SEGMENT}$`),
+    permission: 'workflow:read',
+    handle: getWorkflow,
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/v1/workflows/${UUID_SEGMENT}$`),
+    permission: 'workflow:write',
+    handle: updateWorkflow,
+  },
+  {
+    method: 'DELETE',
+    pattern: new RegExp(`^/v1/workflows/${UUID_SEGMENT}$`),
+    permission: 'workflow:write',
+    handle: deleteWorkflow,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/workflows/${UUID_SEGMENT}/test$`),
+    // `workflow:write`, not `workflow:read`: the dry run reports facts about one
+    // ticket, and reporting them to somebody whose ticket scope does not reach it
+    // would be a read-scope bypass (ADR 0009 — `POST /test`).
+    permission: 'workflow:write',
+    handle: testWorkflow,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/workflows/${UUID_SEGMENT}/runs$`),
+    permission: 'workflow:read',
+    handle: listWorkflowRuns,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/workflow-catalog$/,
+    permission: 'workflow:read',
+    handle: getWorkflowCatalog,
+  },
+  {
+    method: 'GET',
     pattern: /^\/v1\/tags$/,
     permission: 'contact:read',
     handle: listTags,
@@ -375,6 +452,16 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}/assign$`),
     permission: 'ticket:assign',
     handle: assignTicket,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/reports\/dashboard$/,
+    // `report:read`, which every role holds. What a supervisor holds on top is
+    // `report:read_all`, and that widens the aggregate rather than deciding
+    // whether the call is allowed — so it is checked inside the aggregation,
+    // never here (ADR 0009 decision 6).
+    permission: 'report:read',
+    handle: reportDashboard,
   },
   {
     method: 'GET',
@@ -873,6 +960,399 @@ function deleteAssignmentRule({ principal, params }: RouteContext): null {
   }
 
   return null;
+}
+
+// --- Workflows (TAR-27, ADR 0009) ------------------------------------------
+
+/**
+ * The automation surface ADR 0009 publishes, standing in until TAR-395 ships it.
+ *
+ * Deliberately not a permissive stub. It enforces the refusals the console has
+ * to render — duplicate name, the two per-tenant caps, a reference that names
+ * another tenant's row, arming a workflow whose references no longer resolve,
+ * and a reorder that lost a race — because a fixture layer that said yes to all
+ * of those would let every one of them through review.
+ *
+ * The one behaviour worth reading twice is `workflowReferences`: it is computed
+ * from the definition's ids against live rows on **every read**, never stored.
+ * That is TAR-27's second acceptance criterion made structural rather than
+ * asserted — renaming a tag here changes the workflow's rendering with no write
+ * to the workflow at all, and deleting one shows as `exists: false`.
+ */
+
+function listWorkflows({ principal }: RouteContext): WorkflowListResponse {
+  return workflowList(principal);
+}
+
+/** `ORDER BY position ASC, id ASC` — 0009 decision 4's execution order. */
+function workflowList(principal: SessionPrincipal): WorkflowListResponse {
+  return {
+    items: orderedTenantWorkflows(principal).map((workflow) =>
+      toWorkflowResponse(principal, workflow),
+    ),
+    nextCursor: null,
+  };
+}
+
+function getWorkflow({ principal, params }: RouteContext): WorkflowResponse {
+  return toWorkflowResponse(principal, findWorkflowInTenant(principal, params[0]));
+}
+
+/**
+ * Derived from the contract's own constants rather than transcribed, so the mock
+ * and TAR-395's implementation cannot disagree about what the builder may offer
+ * — 0009's "the mock and the implementation are generated from the same source".
+ */
+function getWorkflowCatalog(): WorkflowCatalogResponse {
+  return workflowCatalog();
+}
+
+function createWorkflow({ principal, body }: RouteContext): WorkflowResponse {
+  const parsed = WorkflowCreateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { name, trigger, conditions, actions, position, isActive } = parsed.data;
+  const existing = orderedTenantWorkflows(principal);
+
+  if (existing.length >= WORKFLOW_LIMITS.workflowsPerTenant) {
+    // `conflict`, not `plan_limit_exceeded`: the cap is a property of the engine,
+    // not of the tenant's plan, and money cannot fix it.
+    throw workflowLimitReached();
+  }
+
+  assertWorkflowNameFree(existing, name, null);
+  assertElapsedTriggerRoom(existing, trigger, null);
+  assertWorkflowReferencesInTenant(principal, conditions, actions);
+
+  const created: MockWorkflow = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    name: name.trim(),
+    position: position ?? nextWorkflowPosition(existing),
+    isActive,
+    brokenReason: null,
+    version: 1,
+    trigger,
+    conditions: [...conditions],
+    actions: [...actions],
+    createdAt: MOCK_CREATED_AT,
+    updatedAt: MOCK_CREATED_AT,
+  };
+
+  assertArmable(principal, created, isActive);
+  mockState().workflows.set(created.id, created);
+
+  return toWorkflowResponse(principal, created);
+}
+
+function updateWorkflow({ principal, params, body }: RouteContext): WorkflowResponse {
+  const workflow = findWorkflowInTenant(principal, params[0]);
+  const parsed = WorkflowUpdateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { name, trigger, conditions, actions, position, isActive } = parsed.data;
+
+  if (name !== undefined) {
+    assertWorkflowNameFree(orderedTenantWorkflows(principal), name, workflow.id);
+  }
+
+  if (trigger !== undefined) {
+    assertElapsedTriggerRoom(orderedTenantWorkflows(principal), trigger, workflow.id);
+  }
+
+  assertWorkflowReferencesInTenant(principal, conditions ?? [], actions ?? []);
+
+  // `version` tracks what *runs*: renaming or reordering changes nothing about
+  // execution, so it does not bump (ADR 0009 — `PATCH /workflows/{id}`).
+  const changesDefinition =
+    trigger !== undefined || conditions !== undefined || actions !== undefined;
+
+  const updated: MockWorkflow = {
+    ...workflow,
+    name: name?.trim() ?? workflow.name,
+    trigger: trigger ?? workflow.trigger,
+    conditions: conditions === undefined ? workflow.conditions : [...conditions],
+    actions: actions === undefined ? workflow.actions : [...actions],
+    position: position ?? workflow.position,
+    isActive: isActive ?? workflow.isActive,
+    version: changesDefinition ? workflow.version + 1 : workflow.version,
+    updatedAt: MOCK_UPDATED_AT,
+  };
+
+  assertArmable(principal, updated, isActive);
+
+  // A workflow whose references all resolve again is no longer broken. Clearing
+  // this is what lets the supervisor arm it after replacing the missing target —
+  // the CHECK `NOT is_active OR broken_reason IS NULL` depends on it.
+  const stored: MockWorkflow = {
+    ...updated,
+    brokenReason: workflowReferences(principal, updated).every((reference) => reference.exists)
+      ? null
+      : updated.brokenReason,
+  };
+
+  mockState().workflows.set(stored.id, stored);
+
+  if (position !== undefined) {
+    renumberTenantWorkflows(principal);
+  }
+
+  return toWorkflowResponse(principal, findWorkflowInTenant(principal, stored.id));
+}
+
+/**
+ * Takes the tenant's **complete** workflow set in execution order and rewrites
+ * `position` to the array index. A submitted set that is not exactly the current
+ * one means somebody else created or deleted a workflow since this client
+ * loaded, so it answers `conflict` rather than performing a partial reorder.
+ */
+function reorderWorkflows({ principal, body }: RouteContext): WorkflowListResponse {
+  const parsed = WorkflowReorderInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { workflowIds } = parsed.data;
+  const submitted = new Set(workflowIds);
+
+  if (submitted.size !== workflowIds.length) {
+    throw refused('validation_failed', 'A workflow was listed twice.', HTTP_UNPROCESSABLE);
+  }
+
+  const current = orderedTenantWorkflows(principal);
+
+  if (current.length !== workflowIds.length || !current.every((item) => submitted.has(item.id))) {
+    throw refused(
+      'conflict',
+      'The workflow list changed while you were reordering it. Reload and try again.',
+      HTTP_CONFLICT,
+    );
+  }
+
+  const state = mockState();
+
+  workflowIds.forEach((id, index) => {
+    const workflow = findWorkflowInTenant(principal, id);
+
+    state.workflows.set(id, { ...workflow, position: index, updatedAt: MOCK_UPDATED_AT });
+  });
+
+  return workflowList(principal);
+}
+
+/** 204 either way: deleting an already-deleted workflow is not an error. */
+function deleteWorkflow({ principal, params }: RouteContext): null {
+  const id = params[0];
+  const workflow = orderedTenantWorkflows(principal).find((candidate) => candidate.id === id);
+
+  if (workflow !== undefined) {
+    const state = mockState();
+
+    state.workflows.delete(workflow.id);
+
+    // `workflow_runs` cascade on the workflow's delete.
+    for (const run of state.workflowRuns.values()) {
+      if (run.workflowId === workflow.id) {
+        state.workflowRuns.delete(run.id);
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * `GET /v1/workflows/{id}/runs` — newest first, and it pages: runs grow with
+ * ticket volume, which is the unbounded set the pagination rule exists for.
+ */
+function listWorkflowRuns({
+  principal,
+  params,
+  query,
+}: RouteContext): CursorPage<WorkflowRunResponse> {
+  const workflow = findWorkflowInTenant(principal, params[0]);
+  const parsed = CursorPageQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const matched = tenantWorkflowRuns(principal)
+    .filter((run) => run.workflowId === workflow.id)
+    // `(created_at DESC, id DESC)`, the keyset the API pages on. The id
+    // tie-break is not decoration: two runs claimed in the same millisecond
+    // would otherwise straddle a page boundary and one would be dropped.
+    .sort(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+    );
+
+  const items = matched.slice(0, parsed.data.limit);
+
+  return {
+    items: items.map(toWorkflowRunResponse),
+    nextCursor: matched.length > parsed.data.limit ? (items[items.length - 1]?.id ?? null) : null,
+  };
+}
+
+/**
+ * `POST /v1/workflows/{id}/test` — the dry run. **It writes nothing**: no run
+ * row, no ticket write, no notification. A supervisor testing a workflow that
+ * closes tickets must not close one, and there is no way to un-close it.
+ */
+function testWorkflow({ principal, params, body }: RouteContext): WorkflowTestResponse {
+  const workflow = findWorkflowInTenant(principal, params[0]);
+  const parsed = WorkflowTestInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const ticket = findTicketInTenant(principal, parsed.data.ticketId);
+  const conditions = workflow.conditions.map((condition, index) => ({
+    index,
+    type: condition.type,
+    ...evaluateWorkflowCondition(condition, ticket),
+  }));
+  const matched = conditions.every((condition) => condition.held);
+
+  return {
+    matched,
+    conditions,
+    actions: matched
+      ? workflow.actions.map((action, index) => ({
+          index,
+          type: action.type,
+          outcome: workflowActionOutcome(action, ticket),
+          describes: describeWorkflowAction(principal, action),
+        }))
+      : [],
+  };
+}
+
+/**
+ * One condition against one ticket's facts.
+ *
+ * Two of the seven cannot be answered from the fixture set — no `ticket_tags`
+ * table and no per-contact tags on a mock ticket — and a mock that quietly said
+ * `true` for them would teach the console a behaviour the product does not have.
+ * They answer `false` with the reason, which is also exactly what the real
+ * evaluator does for a ticket with no contact: **every condition with no data to
+ * read is false, and never throws** (ADR 0009).
+ */
+function evaluateWorkflowCondition(
+  condition: WorkflowCondition,
+  ticket: MockTicket,
+): { held: boolean; reason: string | null } {
+  switch (condition.type) {
+    case 'ticket_status':
+      return held(condition.values.includes(ticket.status) === (condition.operator === 'in'));
+
+    case 'ticket_priority':
+      return held(condition.values.includes(ticket.priority) === (condition.operator === 'in'));
+
+    case 'ticket_assignment':
+      return held(matchesAssignmentState(condition, ticket));
+
+    case 'ticket_tag':
+      return { held: false, reason: 'no_ticket_tags' };
+
+    case 'contact_tag':
+      return { held: false, reason: ticket.contactId === null ? 'no_contact' : 'no_contact_tags' };
+
+    case 'ticket_age': {
+      const minutes = minutesSince(ticket.createdAt);
+
+      return held(
+        condition.operator === 'gte' ? minutes >= condition.minutes : minutes <= condition.minutes,
+      );
+    }
+
+    case 'business_hours':
+      // Fail-false when the tenant configured none, whichever way `within` is
+      // set — 0007's rule, carried unchanged.
+      return { held: false, reason: 'business_hours_unconfigured' };
+  }
+}
+
+function matchesAssignmentState(
+  condition: Extract<WorkflowCondition, { type: 'ticket_assignment' }>,
+  ticket: MockTicket,
+): boolean {
+  switch (condition.state) {
+    case 'unassigned':
+      return ticket.assignedUserId === null && ticket.assignedTeamId === null;
+
+    case 'assigned_to_user':
+      return (
+        ticket.assignedUserId !== null &&
+        (condition.userId === null || ticket.assignedUserId === condition.userId)
+      );
+
+    case 'assigned_to_team':
+      return (
+        ticket.assignedTeamId !== null &&
+        (condition.teamId === null || ticket.assignedTeamId === condition.teamId)
+      );
+  }
+}
+
+/** `no_op` where the ticket already holds the value — "it ran and changed nothing". */
+function workflowActionOutcome(
+  action: WorkflowAction,
+  ticket: MockTicket,
+): 'applied' | 'no_op' | 'failed' | 'skipped' {
+  if (action.type === 'set_status') {
+    return action.status === ticket.status ? 'no_op' : 'applied';
+  }
+
+  if (action.type === 'set_priority') {
+    return action.priority === ticket.priority ? 'no_op' : 'applied';
+  }
+
+  return 'applied';
+}
+
+/**
+ * The resolved sentence the API returns in `describes`. English literals here
+ * stand in for the API's own copy, not the console's — the console renders this
+ * string verbatim rather than re-deriving it, so a name that changed since the
+ * workflow was written reads correctly with no second lookup.
+ */
+function describeWorkflowAction(principal: SessionPrincipal, action: WorkflowAction): string {
+  switch (action.type) {
+    case 'add_ticket_tag':
+      return `Tag the ticket "${referenceName(principal, 'tag', action.tagId) ?? 'a deleted tag'}"`;
+
+    case 'reassign':
+      return action.target.kind === 'team'
+        ? `Reassign to team "${referenceName(principal, 'team', action.target.teamId) ?? 'a deleted team'}"`
+        : `Reassign to "${referenceName(principal, 'user', action.target.userId) ?? 'a removed agent'}"`;
+
+    case 'notify':
+      if (action.audience === 'user') {
+        return `Notify "${referenceName(principal, 'user', action.userId ?? '') ?? 'a removed agent'}"`;
+      }
+
+      if (action.audience === 'team') {
+        return `Notify team "${referenceName(principal, 'team', action.teamId ?? '') ?? 'a deleted team'}"`;
+      }
+
+      return 'Notify the supervisors';
+
+    case 'set_status':
+      return `Set the status to ${action.status}`;
+
+    case 'set_priority':
+      return `Set the priority to ${action.priority}`;
+  }
 }
 
 // --- Contact vocabulary (TAR-33's resources, read-only here) ---------------
@@ -1894,6 +2374,35 @@ function findTicketInTenant(principal: SessionPrincipal, id: string | undefined)
   return ticket;
 }
 
+// --- Reporting (TAR-30, ADR 0009) ------------------------------------------
+
+/**
+ * `GET /v1/reports/dashboard` — the four metrics over a date range.
+ *
+ * Validated against the contract's own query schema rather than read key by key,
+ * because two of its rules are refusals the console has to render: `from` after
+ * `to`, and a range over `REPORT_RANGE_MAX_DAYS`. Both answer `validation_failed`
+ * before any aggregation runs, exactly as the real route does.
+ *
+ * The aggregation itself lives in `mock/reporting.ts` — it is the one handler
+ * whose body is arithmetic rather than a filter, and inlining it here would bury
+ * the four rules it mirrors.
+ */
+function reportDashboard({ principal, query }: RouteContext): DashboardMetricsResponse {
+  const parsed = DashboardMetricsQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  return dashboardMetrics({
+    principal,
+    query: parsed.data,
+    tickets: tenantTickets(principal),
+    users: tenantUsers(principal),
+  });
+}
+
 // --- SLA alerts (TAR-26, ADR 0006) -----------------------------------------
 
 /**
@@ -2427,6 +2936,263 @@ function assertUsersInTenant(principal: SessionPrincipal, ids: readonly string[]
   return ids.map((id) => findUserInTenant(principal, id));
 }
 
+// --- Workflow helpers (ADR 0009) -------------------------------------------
+
+function tenantWorkflows(principal: SessionPrincipal): MockWorkflow[] {
+  return [...mockState().workflows.values()].filter(
+    (workflow) => workflow.tenantId === principal.tenantId,
+  );
+}
+
+function tenantWorkflowRuns(principal: SessionPrincipal): MockWorkflowRun[] {
+  return [...mockState().workflowRuns.values()].filter(
+    (run) => run.tenantId === principal.tenantId,
+  );
+}
+
+function findWorkflowInTenant(principal: SessionPrincipal, id: string | undefined): MockWorkflow {
+  const workflow = tenantWorkflows(principal).find((candidate) => candidate.id === id);
+
+  if (workflow === undefined) {
+    throw notFound();
+  }
+
+  return workflow;
+}
+
+function orderedTenantWorkflows(principal: SessionPrincipal): MockWorkflow[] {
+  return tenantWorkflows(principal).sort(
+    (left, right) => left.position - right.position || left.id.localeCompare(right.id),
+  );
+}
+
+function nextWorkflowPosition(existing: readonly MockWorkflow[]): number {
+  return existing.reduce((highest, workflow) => Math.max(highest, workflow.position + 1), 0);
+}
+
+/** Keeps `position` dense after a move, so the next move is never a no-op. */
+function renumberTenantWorkflows(principal: SessionPrincipal): void {
+  const state = mockState();
+
+  orderedTenantWorkflows(principal).forEach((workflow, index) => {
+    state.workflows.set(workflow.id, { ...workflow, position: index });
+  });
+}
+
+/** `UNIQUE (tenant_id, name)` on a citext column, so the comparison folds case. */
+function assertWorkflowNameFree(
+  existing: readonly MockWorkflow[],
+  name: string,
+  ownWorkflowId: string | null,
+): void {
+  const candidate = name.trim().toLowerCase();
+  const taken = existing.some(
+    (workflow) => workflow.id !== ownWorkflowId && workflow.name.toLowerCase() === candidate,
+  );
+
+  if (taken) {
+    throw refused('conflict', 'A workflow with that name already exists.', HTTP_CONFLICT);
+  }
+}
+
+function workflowLimitReached(): ApiRequestError {
+  return refused(
+    'conflict',
+    `A workspace can hold ${String(WORKFLOW_LIMITS.workflowsPerTenant)} workflows.`,
+    HTTP_CONFLICT,
+  );
+}
+
+/**
+ * The second cap, and it is lower for a reason worth keeping visible: each
+ * elapsed-trigger workflow is a threshold the sweep has to consider on every
+ * tick, unlike an event trigger which costs nothing until it fires.
+ */
+function assertElapsedTriggerRoom(
+  existing: readonly MockWorkflow[],
+  trigger: MockWorkflow['trigger'],
+  ownWorkflowId: string | null,
+): void {
+  if (trigger.type !== 'ticket_unresolved_for') {
+    return;
+  }
+
+  const others = existing.filter(
+    (workflow) =>
+      workflow.id !== ownWorkflowId && workflow.trigger.type === 'ticket_unresolved_for',
+  );
+
+  if (others.length >= WORKFLOW_LIMITS.elapsedTriggerWorkflowsPerTenant) {
+    throw refused(
+      'conflict',
+      `A workspace can hold ${String(WORKFLOW_LIMITS.elapsedTriggerWorkflowsPerTenant)} workflows with a time-based trigger.`,
+      HTTP_CONFLICT,
+    );
+  }
+}
+
+/**
+ * Every id a definition names has to resolve inside the caller's tenant.
+ *
+ * `validation_failed`, not `not_found`: row-level security means another
+ * tenant's id is simply not visible, so the server cannot tell it from "no such
+ * team" — and that indistinguishability is the point (ADR 0004). The refusal
+ * names the field without confirming whether the id exists elsewhere.
+ */
+function assertWorkflowReferencesInTenant(
+  principal: SessionPrincipal,
+  conditions: readonly WorkflowCondition[],
+  actions: readonly WorkflowAction[],
+): void {
+  for (const reference of definitionReferences(conditions, actions)) {
+    if (referenceName(principal, reference.kind, reference.id) === null) {
+      throw refused(
+        'validation_failed',
+        'That tag, team or agent is not in this workspace.',
+        HTTP_UNPROCESSABLE,
+      );
+    }
+  }
+}
+
+/**
+ * A workflow may not be armed while any reference is dangling — the one new
+ * error code ADR 0009 adds, and the one refusal the console handles differently:
+ * the body is well-formed and the caller changed nothing, so the next action is
+ * "pick a replacement", not "fix your input".
+ */
+function assertArmable(
+  principal: SessionPrincipal,
+  workflow: MockWorkflow,
+  isActive: boolean | undefined,
+): void {
+  if (isActive !== true) {
+    return;
+  }
+
+  const broken = workflowReferences(principal, workflow).filter((reference) => !reference.exists);
+
+  if (broken.length > 0) {
+    throw refused(
+      'workflow_reference_broken',
+      'This workflow points at something that no longer exists. Choose a replacement before turning it on.',
+      HTTP_BAD_REQUEST,
+    );
+  }
+}
+
+/** Every taxonomy id the definition names, in a stable order, deduplicated. */
+function definitionReferences(
+  conditions: readonly WorkflowCondition[],
+  actions: readonly WorkflowAction[],
+): readonly { kind: WorkflowTaxonomyKind; id: string }[] {
+  const found: { kind: WorkflowTaxonomyKind; id: string }[] = [];
+
+  for (const condition of conditions) {
+    if (condition.type === 'ticket_tag' || condition.type === 'contact_tag') {
+      found.push(...condition.tagIds.map((id) => ({ kind: 'tag' as const, id })));
+    }
+
+    if (condition.type === 'ticket_assignment') {
+      if (condition.teamId !== null) {
+        found.push({ kind: 'team', id: condition.teamId });
+      }
+
+      if (condition.userId !== null) {
+        found.push({ kind: 'user', id: condition.userId });
+      }
+    }
+  }
+
+  for (const action of actions) {
+    if (action.type === 'add_ticket_tag') {
+      found.push({ kind: 'tag', id: action.tagId });
+    }
+
+    if (action.type === 'reassign') {
+      found.push(
+        action.target.kind === 'team'
+          ? { kind: 'team', id: action.target.teamId }
+          : { kind: 'user', id: action.target.userId },
+      );
+    }
+
+    if (action.type === 'notify') {
+      if (action.userId !== null) {
+        found.push({ kind: 'user', id: action.userId });
+      }
+
+      if (action.teamId !== null) {
+        found.push({ kind: 'team', id: action.teamId });
+      }
+    }
+  }
+
+  // A workflow naming the same tag from two actions stores one reference, which
+  // is what `workflow_references`' unique key gives the real implementation.
+  const seen = new Set<string>();
+
+  return found.filter((reference) => {
+    const key = `${reference.kind}:${reference.id}`;
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+
+    return true;
+  });
+}
+
+/**
+ * Resolved **live, on every read, and never stored** — ADR 0009 decision 6's
+ * whole mechanism. A rename therefore needs no write to the workflow, and a
+ * delete shows as `exists: false` rather than as a stale name that looks healthy.
+ */
+function workflowReferences(
+  principal: SessionPrincipal,
+  workflow: MockWorkflow,
+): readonly WorkflowReference[] {
+  return definitionReferences(workflow.conditions, workflow.actions).map((reference) => {
+    const name = referenceName(principal, reference.kind, reference.id);
+
+    return { kind: reference.kind, id: reference.id, name, exists: name !== null };
+  });
+}
+
+/** `null` for an id this tenant has no row for — deleted, or another tenant's. */
+function referenceName(
+  principal: SessionPrincipal,
+  kind: WorkflowTaxonomyKind,
+  id: string,
+): string | null {
+  switch (kind) {
+    case 'tag':
+      return tenantTags(principal).find((tag) => tag.id === id)?.name ?? null;
+
+    case 'team':
+      return tenantTeams(principal).find((team) => team.id === id)?.name ?? null;
+
+    case 'user':
+      // A removed agent is a soft delete and stays in the store, so it is
+      // excluded by name here — a workflow pointing at somebody who can no
+      // longer sign in is exactly the broken reference this reports.
+      return (
+        tenantUsers(principal).find((user) => user.id === id && user.status !== 'removed')
+          ?.displayName ?? null
+      );
+  }
+}
+
+function minutesSince(isoTimestamp: string): number {
+  return (Date.now() - new Date(isoTimestamp).getTime()) / MS_PER_MINUTE;
+}
+
+function held(value: boolean): { held: boolean; reason: null } {
+  return { held: value, reason: null };
+}
+
 // --- Membership is stored twice, so it is synchronised in one place ---------
 
 /** Keeps `team.memberUserIds` consistent after a user's `teamIds` changed. */
@@ -2537,13 +3303,48 @@ function toMessageTemplateResponse(item: MockMessageTemplate): MessageTemplateRe
   return stripTenant(item);
 }
 
+/**
+ * The two attribution columns ADR 0009 adds to `tickets` are internal, exactly
+ * like `tenantId`: the dashboard groups by them and no ticket response carries
+ * them. Stripped here rather than left to the response schema to drop, so the
+ * transport is the boundary rather than the parser at the other end of it.
+ */
 function toTicketResponse(ticket: MockTicket): TicketResponse {
-  return stripTenant(ticket);
+  const { firstResponseUserId, resolvedByUserId, ...scoped } = stripTenant(ticket);
+
+  // The check is not decoration, and it is the same one `stripTenant` makes
+  // about the tenant column: `null` is a recorded fact — "nobody was recorded" —
+  // while `undefined` means a fixture or a write path built a ticket without
+  // ever considering attribution. The first renders as the unattributed row; the
+  // second would silently *become* that row, which is a fixture bug wearing a
+  // valid answer's clothes.
+  if (firstResponseUserId === undefined || resolvedByUserId === undefined) {
+    throw new Error('Mock ticket is missing its reporting attribution.');
+  }
+
+  return scoped;
+}
+
+/**
+ * The one serialiser that *adds* a field rather than only stripping one:
+ * `references` is not stored, so it is joined on here from live rows — which is
+ * why a rename elsewhere reaches the console with nothing republished.
+ */
+function toWorkflowResponse(principal: SessionPrincipal, workflow: MockWorkflow): WorkflowResponse {
+  return {
+    ...stripTenant(workflow),
+    references: [...workflowReferences(principal, workflow)],
+  };
+}
+
+function toWorkflowRunResponse(run: MockWorkflowRun): WorkflowRunResponse {
+  return stripTenant(run);
 }
 
 // --- Helpers ---------------------------------------------------------------
 
 const DEFAULT_PAGE_SIZE = 25;
+const MS_PER_MINUTE = 60_000;
 const MOCK_CREATED_AT = '2026-08-10T12:00:00.000Z';
 /** A literal, like every other timestamp here — `Date.now()` would break hydration. */
 const MOCK_UPDATED_AT = '2026-08-12T12:00:00.000Z';

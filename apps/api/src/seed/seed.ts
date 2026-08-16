@@ -344,10 +344,10 @@ async function writeSlaTimersAndAlerts(
   await tx.slaTimer.createMany({
     data: tenant.slaTimers.map((timer) => ({ ...timer, tenantId, policyId: policy.id })),
   });
-  // After the timers: `sla_alerts.sla_timer_id` is half of a composite foreign
+  // After the timers: `notifications.sla_timer_id` is half of a composite foreign
   // key to one, checked at insert.
-  await tx.slaAlert.createMany({
-    data: tenant.slaAlerts.map((alert) => ({ ...alert, tenantId })),
+  await tx.notification.createMany({
+    data: tenant.slaAlerts.map((alert) => ({ ...alert, tenantId, type: 'sla_breach' as const })),
   });
 }
 
@@ -488,7 +488,7 @@ async function verify(
         tenantPrisma.user.count(),
         tenantPrisma.conversation.count(),
         tenantPrisma.message.count(),
-        tenantPrisma.slaAlert.count(),
+        tenantPrisma.notification.count(),
       ]);
 
       // Counts, not a sample: seeing the tenant's own rows and seeing *only*
@@ -497,12 +497,13 @@ async function verify(
       expectRowCount(users, tenant.slug, 'users', tenant.users.length);
       expectRowCount(conversations, tenant.slug, 'conversations', tenant.conversations.length);
       expectRowCount(messages, tenant.slug, 'messages', tenant.messages.length);
-      // `sla_alerts` is the newest table here and the one whose leak would be
-      // worst: a row names a ticket, a deadline and a supervisor by id, so the
-      // tenant with none must see none (TAR-270). Zero is the assertion that
-      // matters for Southwind, and it is only meaningful because Northwind has
-      // one.
-      expectRowCount(slaAlerts, tenant.slug, 'sla_alerts', tenant.slaAlerts.length);
+      // `notifications` — `sla_alerts` until TAR-394 renamed it — is the table
+      // here whose leak would be worst: a row names a ticket, a deadline and a
+      // supervisor by id, so the tenant with none must see none (TAR-270). Zero is
+      // the assertion that matters for Southwind, and it is only meaningful
+      // because Northwind has one. Every seeded row is a `sla_breach`, so the
+      // count is still the dataset's alert count.
+      expectRowCount(slaAlerts, tenant.slug, 'notifications', tenant.slaAlerts.length);
     });
   }
 

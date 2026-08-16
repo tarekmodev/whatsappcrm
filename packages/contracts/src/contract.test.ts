@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROVISIONED_TENANT_STATUSES, ProvisionTenantInputSchema } from './admin';
+import { ProvisionTenantInputSchema } from './admin';
 import {
   AUTH_POLICY,
   PasswordChangeInputSchema,
@@ -590,32 +590,25 @@ describe('tenant provisioning input', () => {
   });
 });
 
-describe('the two tenant status vocabularies', () => {
-  // Still pinned rather than asserted equal after TAR-403's reconciliation. The
-  // column keeps one label the customer-facing set has no use for, and the point
-  // of this test is that the difference cannot widen again without someone
-  // reading the comment on PROVISIONED_TENANT_STATUSES.
-  it('covers every published status', () => {
-    const shared = PROVISIONED_TENANT_STATUSES.filter((status) =>
-      (TENANT_STATUSES as readonly string[]).includes(status),
-    );
-
-    expect(shared).toEqual([...TENANT_STATUSES]);
-  });
-
-  it('records exactly the statuses each side has and the other does not', () => {
-    const onlyProvisioning = PROVISIONED_TENANT_STATUSES.filter(
-      (status) => !(TENANT_STATUSES as readonly string[]).includes(status),
-    );
-    const onlyCustomerFacing = TENANT_STATUSES.filter(
-      (status) => !(PROVISIONED_TENANT_STATUSES as readonly string[]).includes(status),
-    );
-
-    // `created` is the pre-provisioning state. It exists only between the tenant
-    // row appearing and provisioning finishing, both inside one transaction, so
-    // no customer-facing response can observe it.
-    expect(onlyProvisioning).toEqual(['created']);
-    expect(onlyCustomerFacing).toEqual([]);
+describe('the tenant status vocabulary', () => {
+  // One vocabulary now, where there were two. The value of pinning it literally
+  // rather than asserting a property of it: the `tenant_status` database enum is
+  // this list, in this order, and PostgreSQL sorts an enum by declaration order —
+  // so `ORDER BY status` on an operator's tenant list reads as a funnel. A
+  // reordering here that looked harmless would silently resort that list.
+  //
+  // The database half of this pair cannot be asserted from `packages/contracts`,
+  // which has no Prisma client. `apps/api` owns that assertion.
+  it('is the seven lifecycle states, in lifecycle order', () => {
+    expect([...TENANT_STATUSES]).toEqual([
+      'created',
+      'trialing',
+      'active',
+      'past_due',
+      'suspended',
+      'cancelled',
+      'deleted',
+    ]);
   });
 });
 

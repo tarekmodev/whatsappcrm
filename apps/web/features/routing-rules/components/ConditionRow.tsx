@@ -1,15 +1,12 @@
 'use client';
 
 import type { RoutingCondition, RoutingConditionType } from '@whatsappcrm/contracts';
-import { Cluster } from '@/components/layout/Cluster';
-import { Stack } from '@/components/layout/Stack';
-import { Button } from '@/components/ui/Button';
+import { EditorRow } from '@/components/ui/EditorFieldset';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { useContent } from '@/lib/content';
 import { blankCondition, conditionTypeOptions, type RoutingRuleVocabulary } from '../presentation';
 import { ConditionFields } from './ConditionFields';
-import styles from './ConditionRow.module.css';
 
 /**
  * One condition in the rule form: its type picker, its own controls, and the
@@ -45,43 +42,33 @@ export function ConditionRow({
   const position = index + 1;
 
   return (
-    <li className={styles.row}>
-      <Cluster justify="between" align="center" gap="2">
-        <h4 className={styles.heading}>{copy.conditionNumber(position)}</h4>
-        {isRemovable ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={copy.removeConditionAria(position)}
-            onClick={onRemove}
-          >
-            {copy.removeCondition}
-          </Button>
-        ) : null}
-      </Cluster>
+    <EditorRow
+      heading={copy.conditionNumber(position)}
+      removeLabel={copy.removeCondition}
+      removeAriaLabel={copy.removeConditionAria(position)}
+      isRemovable={isRemovable}
+      onRemove={onRemove}
+    >
+      <Field label={copy.conditionTypeLabel}>
+        {({ controlId, describedBy }) => (
+          <Select
+            id={controlId}
+            aria-describedby={describedBy}
+            value={condition.type}
+            options={conditionTypeOptions(availableTypes, content)}
+            onChange={(event) => {
+              onChange(blankCondition(event.target.value as RoutingConditionType, vocabulary));
+            }}
+          />
+        )}
+      </Field>
 
-      <Stack gap="3">
-        <Field label={copy.conditionTypeLabel}>
-          {({ controlId, describedBy }) => (
-            <Select
-              id={controlId}
-              aria-describedby={describedBy}
-              value={condition.type}
-              options={conditionTypeOptions(availableTypes, content)}
-              onChange={(event) => {
-                onChange(blankCondition(event.target.value as RoutingConditionType, vocabulary));
-              }}
-            />
-          )}
-        </Field>
-
-        <ConditionFields
-          condition={condition}
-          vocabulary={vocabulary}
-          error={error}
-          onChange={onChange}
-        />
-      </Stack>
-    </li>
+      <ConditionFields
+        condition={condition}
+        vocabulary={vocabulary}
+        error={error}
+        onChange={onChange}
+      />
+    </EditorRow>
   );
 }
