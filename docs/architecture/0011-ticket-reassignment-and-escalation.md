@@ -470,6 +470,52 @@ GET /api/v1/tickets/{id}/events?limit=&cursor=   ticket:read   → CursorPage<Ti
 
 ## Decision 5 — Notification: `escalation_alerts`, a durable row per recipient, pushed over the existing socket
 
+> ### ⚠️ Amendment 1 — superseded in storage, unchanged in behaviour (TAR-468)
+>
+> **What this decision specifies below — a new `escalation_alerts` table — was not
+> built. The trigger it named fired first.**
+>
+> This decision accepted two parallel notification tables explicitly as a price rather
+> than a design, and named **the third notification type** as the point to fold them
+> into the generic `notifications` table 0006 predicted. TAR-394 reached that point
+> first, at the _second_ type: `20260816130000_notifications_generalisation` renamed
+> `sla_alerts` to `notifications` and added a `type` column, exactly as 0006 decision 5
+> said should happen.
+>
+> So the premise this decision reasoned from no longer held by the time TAR-468 ran.
+> Escalation was not arriving into a world of one bespoke alerts table; it was arriving
+> into a world where the generic one already existed, and a fourth parallel table would
+> have been the deviation — with precisely the cost this document names below: two
+> unread counts, two acknowledge endpoints, and a supervisor who has to look in two
+> places.
+>
+> **What shipped instead** (`20260816150000` + `20260816160000`):
+>
+> | This decision                                            | What was built                                                                                                                            |
+> | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+> | `escalation_alerts` table                                | `notifications` row with `type = 'escalation'`                                                                                            |
+> | `EscalationAlert` model                                  | `Notification`                                                                                                                            |
+> | Unique `(tenant_id, ticket_event_id, recipient_user_id)` | **unchanged**, on `notifications`                                                                                                         |
+> | Composite FKs to tickets / ticket_events / users         | **unchanged** — `(tenant_id, ticket_event_id)` is a real column, not a `dedupe_key` string, so the structural invariant below still holds |
+> | New RLS policy                                           | Not needed — `notifications` already carries one                                                                                          |
+> | —                                                        | `notifications_escalation_columns` CHECK, new: `ticket_event_id` non-null exactly for this type                                           |
+>
+> **Everything else in this decision stands as written**: the transport, the trigger
+> point, the transaction boundary, the after-commit emit, and the reasoning for
+> `ticket_event_id` as group key and idempotency key at once. The record is still the
+> row and the socket is still the immediacy.
+>
+> **No contract change.** TAR-470 shipped `TicketEscalationResponseSchema` as
+> `{ event, notifiedUserIds }` (#155) and publishes no `escalation-alerts` route, so
+> nothing downstream referenced the table name.
+>
+> The `EscalationAlertService` named in the interfaces table above should be read as a
+> service over `notifications` filtered to this type — the same arrangement
+> `sla-alert.mapper.ts` already uses for `sla_breach`.
+>
+> Raised for the Architect to ratify or overrule; TAR-468 did not have the option of
+> building both.
+
 **Trade-off axis: a purpose-built table now, vs. the generic `notifications` table 0006 predicted.**
 
 **Chosen — `escalation_alerts`, an exact structural mirror of `sla_alerts`.**
