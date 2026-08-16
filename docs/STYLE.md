@@ -27,8 +27,9 @@ Nothing under `docs/reference/` targets a tenant user. Tenant-user documentation
 (TAR-295), once TAR-286 shipped a console surface worth describing;
 [Route new tickets to the right team](guides/route-new-tickets-with-rules.md) (TAR-292) is
 the second, [Clear tickets nobody could take](guides/clear-flagged-tickets.md) (TAR-277) the
-third and [Watch tickets that miss their deadline](guides/track-overdue-tickets.md) (TAR-287)
-the fourth. A guide for a tenant user names its reader in the first line and refers to every
+third, [Watch tickets that miss their deadline](guides/track-overdue-tickets.md) (TAR-287) the
+fourth and [Read the performance dashboard](guides/read-the-performance-dashboard.md) (TAR-434)
+the fifth. A guide for a tenant user names its reader in the first line and refers to every
 control by its **visible label**, taken from `apps/web/content/en.ts` rather than from a
 component name.
 
