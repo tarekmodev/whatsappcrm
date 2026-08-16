@@ -656,7 +656,7 @@ curl -X PATCH https://acme.app.example.com/api/v1/custom-fields/019fee0f-9a33-7d
 
 **`key` and `type` are not in the schema at all**, so sending either is stripped rather than
 refused — unknown keys are stripped per the conventions table, and the schema is what makes
-them unreachable. A body carrying *only* `key` or `type` therefore strips to nothing and is
+them unreachable. A body carrying _only_ `key` or `type` therefore strips to nothing and is
 refused as an empty body, which is the honest answer: nothing you asked for was applied. A
 client that needs a different key or type deletes the field and defines a new one.
 
