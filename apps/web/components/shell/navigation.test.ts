@@ -80,6 +80,17 @@ describe('navigation visibility by role', () => {
     }
   });
 
+  /**
+   * TAR-28: `ai:read` and `ai:write` are admin-only in the contract's table, and
+   * ADR 0010 adds no permission. A supervisor never sees a link to a knowledge
+   * base whose every endpoint the API would refuse.
+   */
+  it('keeps the chatbot surface to the role that may configure one', () => {
+    expect(navIdsFor('admin')).toContain('settings-chatbot');
+    expect(navIdsFor('supervisor')).not.toContain('settings-chatbot');
+    expect(navIdsFor('agent')).not.toContain('settings-chatbot');
+  });
+
   it('gives an admin every entry', () => {
     const ids = navIdsFor('admin');
 
@@ -88,6 +99,7 @@ describe('navigation visibility by role', () => {
         'inbox',
         'settings-people',
         'settings-assignment',
+        'settings-chatbot',
         'settings-whatsapp',
       ]),
     );

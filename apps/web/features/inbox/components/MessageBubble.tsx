@@ -5,6 +5,7 @@ import { RelativeTime } from '@/components/ui/RelativeTime';
 import { SkeletonLine, SkeletonText } from '@/components/ui/Skeleton';
 import { VisuallyHidden } from '@/components/layout/VisuallyHidden';
 import { useContent } from '@/lib/content';
+import { isBotMessage } from '@/features/inbox/bot-state';
 import { MessageAttachmentView } from './MessageAttachment';
 import styles from './MessageBubble.module.css';
 
@@ -102,19 +103,32 @@ function MessageMeta({ message, senderName }: MessageBubbleProps) {
 /**
  * Who sent an outbound message, in the order the answers are trustworthy.
  *
+ * `origin` is asked first, then `sentByAutomation`, then the resolved name.
+ *
+ * `origin` is the narrower answer and the only one that can name *which* system
+ * replied: TAR-27's workflows also send with a null sender, so "sent
+ * automatically" is about to stop distinguishing them from the chatbot, and an
+ * agent deciding whether to take a thread over needs to know which it was (ADR
+ * 0010, decision 14).
+ *
  * `sentByAutomation` is the contract's answer to "was a human involved", and it
- * is asked **first** — because a missing name is not evidence of a bot. The
- * directory that resolves `sentByUserId` is one page of users, so in a tenant
- * with more than a page of them a real agent's reply resolved to no name and was
- * captioned "Sent automatically": a lie about the one thing this product is a
- * record of. An unresolved human is now said to be an unresolved human.
+ * is asked **before the name** — because a missing name is not evidence of a
+ * bot. The directory that resolves `sentByUserId` is one page of users, so in a
+ * tenant with more than a page of them a real agent's reply resolved to no name
+ * and was captioned "Sent automatically": a lie about the one thing this product
+ * is a record of. An unresolved human is now said to be an unresolved human.
  */
 function OutboundAuthor({ message, senderName }: MessageBubbleProps) {
   const content = useContent();
 
+  if (isBotMessage(message.origin)) {
+    return <span>{content.thread.sentByBot}</span>;
+  }
+
   if (message.sentByAutomation) {
-    // The chatbot (TAR-28) or a workflow (TAR-27). Worth saying: an agent should
-    // not have to wonder who replied on their behalf.
+    // A workflow (TAR-27), or a status placeholder the ingest writer created.
+    // Worth saying: an agent should not have to wonder who replied on their
+    // behalf.
     return <span>{content.thread.sentByAutomation}</span>;
   }
 

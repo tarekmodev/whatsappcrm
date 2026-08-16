@@ -1,6 +1,8 @@
 import 'server-only';
 
 import {
+  AI_CONFIG_DEFAULTS,
+  AI_MODEL_CATALOG,
   AssignmentRuleCreateInputSchema,
   AssignmentRuleReorderInputSchema,
   AssignmentRuleUpdateInputSchema,
@@ -11,6 +13,7 @@ import {
   ContactListQuerySchema,
   ContactUpdateInputSchema,
   ConversationAssignInputSchema,
+  CreateKnowledgeDocumentInputSchema,
   ConversationListQuerySchema,
   ConversationStatusUpdateInputSchema,
   CursorPageQuerySchema,
@@ -21,6 +24,9 @@ import {
   IdSchema,
   InternalNoteCreateInputSchema,
   InviteCreateInputSchema,
+  KNOWLEDGE_DOCUMENT_LIMITS,
+  KnowledgeDocumentListItemSchema,
+  KnowledgeDocumentListQuerySchema,
   MAX_CUSTOM_DOMAINS_PER_TENANT,
   MessageListQuerySchema,
   MessageTemplateListQuerySchema,
@@ -30,6 +36,7 @@ import {
   PasswordChangeInputSchema,
   PasswordResetConfirmInputSchema,
   PasswordResetRequestInputSchema,
+  RequestHandoffInputSchema,
   SendMessageInputSchema,
   SlaAlertListQuerySchema,
   TICKET_ACTIVE_STATUSES,
@@ -44,6 +51,8 @@ import {
   TicketEventListQuerySchema,
   TicketListQuerySchema,
   TicketUpdateInputSchema,
+  UpdateAiConfigInputSchema,
+  UpdateKnowledgeDocumentInputSchema,
   UserListQuerySchema,
   UserUpdateInputSchema,
   WORKFLOW_LIMITS,
@@ -62,6 +71,9 @@ import {
   ticketAssignRequiresReason,
   whatsAppSignupFailureDetails,
   workflowCatalog,
+  type AiConfigResponse,
+  type AiReadiness,
+  type AiReadinessBlocker,
   type ApiError,
   type AssignmentRuleListResponse,
   type AssignmentRuleResponse,
@@ -73,7 +85,10 @@ import {
   type CursorPage,
   type CustomFieldDefinition,
   type DashboardMetricsResponse,
+  type HandoffContextResponse,
   type InternalNoteResponse,
+  type KnowledgeDocumentListItem,
+  type KnowledgeDocumentResponse,
   type MessageResponse,
   type MessageTemplateResponse,
   type OnboardingChecklistResponse,
@@ -114,12 +129,15 @@ import { dashboardCsv } from '@/lib/api/mock/report-csv';
 import { mockState, nextMockId } from '@/lib/api/mock/store';
 import { MOCK_IDS } from '@/lib/api/mock/fixtures';
 import type {
+  MockAiConfigRecord,
   MockAssignmentRule,
   MockCannedResponse,
   MockContact,
   MockConversation,
   MockCustomFieldDefinition,
+  MockHandoffRecord,
   MockInternalNote,
+  MockKnowledgeDocument,
   MockMessage,
   MockMessageTemplate,
   MockOnboardingChecklist,
@@ -703,6 +721,73 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/v1/tenant/onboarding/steps/(${ONBOARDING_STEP_IDS.join('|')})$`),
     permission: 'tenant:settings',
     handle: updateOnboardingStep,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/knowledge-documents$/,
+    permission: 'ai:read',
+    handle: listKnowledgeDocuments,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/knowledge-documents$/,
+    permission: 'ai:write',
+    handle: createKnowledgeDocument,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/knowledge-documents/${UUID_SEGMENT}$`),
+    permission: 'ai:read',
+    handle: getKnowledgeDocument,
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/v1/knowledge-documents/${UUID_SEGMENT}$`),
+    permission: 'ai:write',
+    handle: updateKnowledgeDocument,
+  },
+  {
+    method: 'DELETE',
+    pattern: new RegExp(`^/v1/knowledge-documents/${UUID_SEGMENT}$`),
+    permission: 'ai:write',
+    handle: deleteKnowledgeDocument,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/knowledge-documents/${UUID_SEGMENT}/reindex$`),
+    permission: 'ai:write',
+    handle: reindexKnowledgeDocument,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/ai\/config$/,
+    // `ai:read` and **no feature gate**: a tenant whose plan lacks `ai_chatbot`
+    // reads the config so the console can render an upsell rather than a 403
+    // page (ADR 0010). The `PATCH` below is the one that refuses.
+    permission: 'ai:read',
+    handle: getAiConfig,
+  },
+  {
+    method: 'PATCH',
+    pattern: /^\/v1\/ai\/config$/,
+    permission: 'ai:write',
+    handle: updateAiConfig,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/handoff$`),
+    // `conversation:read` plus the same visibility rule the thread uses, so this
+    // cannot expose a conversation the principal could not already open. Not
+    // `ai:read`, which is admin-only — the agent reading the summary is exactly
+    // who it is for.
+    permission: 'conversation:read',
+    handle: getHandoffContext,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/conversations/${UUID_SEGMENT}/handoff$`),
+    permission: 'conversation:claim',
+    handle: requestHandoff,
   },
   {
     method: 'POST',
@@ -3887,6 +3972,401 @@ function findConversationInTenant(
   return conversation;
 }
 
+// --- The AI chatbot (TAR-28) -----------------------------------------------
+//
+// Two rules from ADR 0010 are enforced here rather than assumed, because the
+// console's whole empty-state story rests on them:
+//
+//   1. **Readiness is derived, never stored.** `aiReadiness` recomputes the four
+//      clauses from the plan and the documents in this store on every read, so a
+//      knowledge base emptied in the UI reports `no_indexed_documents` on the
+//      next render instead of a stale `ready: true`.
+//   2. **Indexing is asynchronous.** A create, and a `PATCH` that touches
+//      `content`, come back `pending` with `chunkCount: 0`. Nothing here ever
+//      moves a document to `indexed` by itself — the reindex route is the only
+//      way forward, which is what makes the pending and failed states reachable
+//      in mock mode rather than theoretical.
+
+function listKnowledgeDocuments({
+  principal,
+  query,
+}: RouteContext): CursorPage<KnowledgeDocumentListItem> {
+  const parsed = KnowledgeDocumentListQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { status, q, limit } = parsed.data;
+  const needle = q?.trim().toLowerCase();
+
+  const items = tenantKnowledgeDocuments(principal)
+    .filter((document) => status === undefined || document.status === status)
+    .filter((document) => needle === undefined || document.title.toLowerCase().includes(needle))
+    .sort(byNewestFirst)
+    .slice(0, limit)
+    // `content` is omitted from list items, exactly as the endpoint does: a page
+    // of documents each holding up to 256 KiB is a response nobody wants. Absent
+    // rather than blanked — an empty string reads as "this entry has no text",
+    // and the editor that prefilled from it would save that emptiness back.
+    .map(toKnowledgeDocumentListItem);
+
+  return { items, nextCursor: null };
+}
+
+function getKnowledgeDocument({ principal, params }: RouteContext): KnowledgeDocumentResponse {
+  return toKnowledgeDocumentResponse(findKnowledgeDocumentInTenant(principal, params[0]));
+}
+
+function createKnowledgeDocument({ principal, body }: RouteContext): KnowledgeDocumentResponse {
+  assertAiFeature(principal);
+
+  const parsed = CreateKnowledgeDocumentInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  if (tenantKnowledgeDocuments(principal).length >= KNOWLEDGE_DOCUMENT_LIMITS.documentsPerTenant) {
+    throw refused(
+      'conflict',
+      `This workspace already holds the maximum of ${KNOWLEDGE_DOCUMENT_LIMITS.documentsPerTenant} knowledge base entries.`,
+      HTTP_CONFLICT,
+    );
+  }
+
+  const created: MockKnowledgeDocument = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    title: parsed.data.title,
+    content: parsed.data.content,
+    sourceUrl: parsed.data.sourceUrl ?? null,
+    language: parsed.data.language ?? null,
+    status: 'pending',
+    chunkCount: 0,
+    indexError: null,
+    indexedAt: null,
+    createdAt: MOCK_CREATED_AT,
+    updatedAt: MOCK_CREATED_AT,
+  };
+
+  mockState().knowledgeDocuments.set(created.id, created);
+
+  return toKnowledgeDocumentResponse(created);
+}
+
+function updateKnowledgeDocument({
+  principal,
+  params,
+  body,
+}: RouteContext): KnowledgeDocumentResponse {
+  assertAiFeature(principal);
+
+  const document = findKnowledgeDocumentInTenant(principal, params[0]);
+  const parsed = UpdateKnowledgeDocumentInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { title, content, sourceUrl, language } = parsed.data;
+  // Only a *content* change invalidates the chunks. Renaming a document or
+  // correcting its source URL leaves what the bot retrieves untouched, and
+  // re-queueing an index for it would take a working document out of service
+  // for no reason.
+  const isReindexed = content !== undefined && content !== document.content;
+
+  const updated: MockKnowledgeDocument = {
+    ...document,
+    title: title ?? document.title,
+    content: content ?? document.content,
+    sourceUrl: sourceUrl ?? document.sourceUrl,
+    language: language ?? document.language,
+    status: isReindexed ? 'pending' : document.status,
+    chunkCount: isReindexed ? 0 : document.chunkCount,
+    indexError: isReindexed ? null : document.indexError,
+    indexedAt: isReindexed ? null : document.indexedAt,
+    updatedAt: MOCK_UPDATED_AT,
+  };
+
+  mockState().knowledgeDocuments.set(updated.id, updated);
+
+  return toKnowledgeDocumentResponse(updated);
+}
+
+function deleteKnowledgeDocument({ principal, params }: RouteContext): null {
+  assertAiFeature(principal);
+
+  const document = findKnowledgeDocumentInTenant(principal, params[0]);
+
+  mockState().knowledgeDocuments.delete(document.id);
+
+  return null;
+}
+
+/**
+ * The one recovery path for a document whose indexing failed, and the only way
+ * a `pending` document reaches `indexed` here.
+ *
+ * The real endpoint answers `202` and the worker does the chunking; this
+ * completes it inline, because a mock that left every document pending forever
+ * would make the ready state unreachable. The chunk count is derived from the
+ * paragraph count, which is how the real indexer splits.
+ */
+function reindexKnowledgeDocument({ principal, params }: RouteContext): KnowledgeDocumentResponse {
+  assertAiFeature(principal);
+
+  const document = findKnowledgeDocumentInTenant(principal, params[0]);
+  const chunkCount = countChunks(document.content);
+
+  const reindexed: MockKnowledgeDocument =
+    chunkCount === 0
+      ? {
+          ...document,
+          status: 'failed',
+          chunkCount: 0,
+          indexError: 'The document produced no usable text to index.',
+          indexedAt: null,
+          updatedAt: MOCK_UPDATED_AT,
+        }
+      : {
+          ...document,
+          status: 'indexed',
+          chunkCount,
+          indexError: null,
+          indexedAt: MOCK_UPDATED_AT,
+          updatedAt: MOCK_UPDATED_AT,
+        };
+
+  mockState().knowledgeDocuments.set(reindexed.id, reindexed);
+
+  return toKnowledgeDocumentResponse(reindexed);
+}
+
+function getAiConfig({ principal }: RouteContext): AiConfigResponse {
+  return toAiConfigResponse(principal, currentAiConfig(principal));
+}
+
+function updateAiConfig({ principal, body }: RouteContext): AiConfigResponse {
+  assertAiFeature(principal);
+
+  const parsed = UpdateAiConfigInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const current = currentAiConfig(principal);
+  const updated: MockAiConfigRecord = {
+    ...current,
+    ...parsed.data,
+    handoffKeywords: parsed.data.handoffKeywords ?? current.handoffKeywords,
+    updatedAt: MOCK_UPDATED_AT,
+  };
+
+  mockState().aiConfigs.set(principal.tenantId, updated);
+
+  return toAiConfigResponse(principal, updated);
+}
+
+/**
+ * The handoff summary for one conversation, or `404`.
+ *
+ * `404` covers three different facts on purpose — no such conversation, one this
+ * principal may not see, and one that has never handed off — because the
+ * alternative leaks which conversations exist. `botExchange` is rebuilt from the
+ * thread rather than stored, so it cannot disagree with the messages rendered
+ * beside it.
+ */
+function getHandoffContext({ principal, params }: RouteContext): HandoffContextResponse {
+  const conversation = findConversationInTenant(principal, params[0]);
+  const handoff = tenantHandoffs(principal)
+    .filter((candidate) => candidate.conversationId === conversation.id)
+    .sort((left, right) => right.handedOffAt.localeCompare(left.handedOffAt))[0];
+
+  if (handoff === undefined) {
+    throw notFound();
+  }
+
+  // `botEngagedAt` is null when the chatbot never reached the model — a
+  // `no_match`, or a gate-level refusal before any reply — and there is no
+  // exchange to rebuild in that case rather than one starting at the epoch.
+  const engagedAt = handoff.botEngagedAt;
+  const botExchange = tenantMessages(principal)
+    .filter(
+      (message) =>
+        engagedAt !== null &&
+        message.conversationId === conversation.id &&
+        message.sentAt >= engagedAt &&
+        message.id !== handoff.triggerMessageId,
+    )
+    .sort((left, right) => left.sentAt.localeCompare(right.sentAt))
+    .map(toMessageResponse);
+
+  return {
+    conversationId: handoff.conversationId,
+    ticketId: handoff.ticketId,
+    reason: handoff.reason,
+    triggerMessageId: handoff.triggerMessageId,
+    triggerMessageBody: handoff.triggerMessageBody,
+    botExchange,
+    botEngagedAt: handoff.botEngagedAt,
+    handedOffAt: handoff.handedOffAt,
+    botReplyCount: handoff.botReplyCount,
+    confidence: handoff.confidence,
+    citedDocuments: handoff.citedDocuments,
+  };
+}
+
+/**
+ * An agent taking a bot-active thread from the console.
+ *
+ * Idempotent, and that is the whole design: a conversation already `handed_off`
+ * or `human_active` answers `200` with the current record and writes nothing, so
+ * a double-click is a no-op rather than a `409`.
+ */
+function requestHandoff({ principal, params, body }: RouteContext): ConversationResponse {
+  const conversation = findConversationInTenant(principal, params[0]);
+  const parsed = RequestHandoffInputSchema.safeParse(body ?? {});
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  // Idempotent: only a thread the chatbot still holds has anything to release.
+  // Anything else answers 200 with the current record and writes nothing, so a
+  // double press is a no-op rather than a `409`.
+  if (conversation.botState !== 'bot_active') {
+    return toConversationResponse(conversation);
+  }
+
+  const handedOff: MockConversation = {
+    ...conversation,
+    botHandling: false,
+    botState: 'handed_off',
+    updatedAt: MOCK_UPDATED_AT,
+  };
+
+  mockState().conversations.set(handedOff.id, handedOff);
+
+  const trigger = tenantMessages(principal)
+    .filter((message) => message.conversationId === conversation.id)
+    .sort((left, right) => right.sentAt.localeCompare(left.sentAt))[0];
+
+  if (trigger !== undefined) {
+    const id = nextMockId();
+
+    mockState().handoffs.set(id, {
+      tenantId: principal.tenantId,
+      id,
+      conversationId: conversation.id,
+      ticketId: conversation.ticketId,
+      reason: 'agent_requested',
+      triggerMessageId: trigger.id,
+      triggerMessageBody: trigger.body,
+      botEngagedAt: trigger.sentAt,
+      handedOffAt: MOCK_UPDATED_AT,
+      // The agent stepped in; whatever the bot had said before is already in the
+      // thread, and this transport does not run turns to count them.
+      botReplyCount: 0,
+      confidence: null,
+      citedDocuments: [],
+    });
+  }
+
+  return toConversationResponse(handedOff);
+}
+
+/** The tenant's configuration, or the seeded defaults it reads before its first write. */
+function currentAiConfig(principal: SessionPrincipal): MockAiConfigRecord {
+  return (
+    mockState().aiConfigs.get(principal.tenantId) ?? {
+      tenantId: principal.tenantId,
+      isEnabled: AI_CONFIG_DEFAULTS.isEnabled,
+      model: null,
+      systemPrompt: null,
+      handoffKeywords: [],
+      minConfidence: AI_CONFIG_DEFAULTS.minConfidence,
+      maxBotTurns: AI_CONFIG_DEFAULTS.maxBotTurns,
+      handoffMessage: null,
+      updatedAt: MOCK_CREATED_AT,
+    }
+  );
+}
+
+function toAiConfigResponse(
+  principal: SessionPrincipal,
+  config: MockAiConfigRecord,
+): AiConfigResponse {
+  return {
+    ...stripTenant(config),
+    readiness: aiReadiness(principal, config),
+    availableModels: [...AI_MODEL_CATALOG],
+  };
+}
+
+/**
+ * The four clauses of ADR 0010's KB-ready rule, every failing one reported.
+ *
+ * All four rather than the first: an admin who fixes one of four and still gets
+ * silence has learned nothing, and this array is what lets the console say what
+ * is left.
+ *
+ * `provider_not_configured` never fires here — a fixture layer has no
+ * `ANTHROPIC_API_KEY` to be missing — and that is stated rather than silently
+ * omitted, because it is the one blocker a tenant cannot clear themselves.
+ */
+function aiReadiness(principal: SessionPrincipal, config: MockAiConfigRecord): AiReadiness {
+  const indexedDocumentCount = tenantKnowledgeDocuments(principal).filter(
+    (document) => document.status === 'indexed' && document.chunkCount > 0,
+  ).length;
+
+  const blockers: AiReadinessBlocker[] = [];
+
+  if (!hasAiFeature(principal)) {
+    blockers.push('feature_not_in_plan');
+  }
+
+  if (!config.isEnabled) {
+    blockers.push('disabled');
+  }
+
+  if (indexedDocumentCount === 0) {
+    blockers.push('no_indexed_documents');
+  }
+
+  return { ready: blockers.length === 0, indexedDocumentCount, blockers };
+}
+
+function hasAiFeature(principal: SessionPrincipal): boolean {
+  return (
+    mockState()
+      .tenantLifecycles.get(principal.tenantId)
+      ?.plan.entitlements.features.includes('ai_chatbot') ?? false
+  );
+}
+
+function assertAiFeature(principal: SessionPrincipal): void {
+  if (!hasAiFeature(principal)) {
+    throw refused(
+      'feature_not_in_plan',
+      'The AI chatbot is not included in this workspace’s plan.',
+    );
+  }
+}
+
+/** Paragraph-packed chunking, as ADR 0010 describes it: blank lines are the boundary. */
+function countChunks(content: string): number {
+  return content
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph.length > 0).length;
+}
+
+function byNewestFirst(left: MockKnowledgeDocument, right: MockKnowledgeDocument): number {
+  return right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id);
+}
+
 // --- Tenant-scoped readers -------------------------------------------------
 // Nothing above iterates the store directly; every read goes through one of
 // these three, which is what makes cross-tenant leakage a single-point concern.
@@ -3963,6 +4443,31 @@ function tenantRules(principal: SessionPrincipal): MockAssignmentRule[] {
   return [...mockState().assignmentRules.values()].filter(
     (rule) => rule.tenantId === principal.tenantId,
   );
+}
+
+function tenantKnowledgeDocuments(principal: SessionPrincipal): MockKnowledgeDocument[] {
+  return [...mockState().knowledgeDocuments.values()].filter(
+    (document) => document.tenantId === principal.tenantId,
+  );
+}
+
+function tenantHandoffs(principal: SessionPrincipal): MockHandoffRecord[] {
+  return [...mockState().handoffs.values()].filter(
+    (handoff) => handoff.tenantId === principal.tenantId,
+  );
+}
+
+function findKnowledgeDocumentInTenant(
+  principal: SessionPrincipal,
+  id: string | undefined,
+): MockKnowledgeDocument {
+  const document = tenantKnowledgeDocuments(principal).find((candidate) => candidate.id === id);
+
+  if (document === undefined) {
+    throw notFound();
+  }
+
+  return document;
 }
 
 /**
@@ -4516,6 +5021,21 @@ function toWorkflowResponse(principal: SessionPrincipal, workflow: MockWorkflow)
 
 function toWorkflowRunResponse(run: MockWorkflowRun): WorkflowRunResponse {
   return stripTenant(run);
+}
+
+function toKnowledgeDocumentResponse(document: MockKnowledgeDocument): KnowledgeDocumentResponse {
+  return stripTenant(document);
+}
+
+/**
+ * The response minus `content`, which is what the list endpoint publishes.
+ *
+ * Parsed through the contract's own schema rather than by deleting a key here,
+ * so a field added to the list item reaches the mock without an edit and a field
+ * removed from it stops being published.
+ */
+function toKnowledgeDocumentListItem(document: MockKnowledgeDocument): KnowledgeDocumentListItem {
+  return KnowledgeDocumentListItemSchema.parse(toKnowledgeDocumentResponse(document));
 }
 
 // --- Helpers ---------------------------------------------------------------

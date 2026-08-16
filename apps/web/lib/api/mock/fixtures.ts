@@ -1,11 +1,15 @@
 import {
+  AI_CONFIG_DEFAULTS,
   ONBOARDING_STEP_IDS,
+  type AiConfigResponse,
   type AssignmentRuleResponse,
   type CannedResponseResponse,
   type ContactResponse,
   type ConversationResponse,
   type CustomFieldDefinition,
+  type HandoffContextResponse,
   type InternalNoteResponse,
+  type KnowledgeDocumentResponse,
   type MessageAttachment,
   type MessageResponse,
   type MessageTemplateResponse,
@@ -87,6 +91,13 @@ const CONVERSATION_IDS = {
   billingTeam: '0192f004-0000-7000-8000-000000000402',
   assignedToLiang: '0192f004-0000-7000-8000-000000000403',
   unassigned: '0192f004-0000-7000-8000-000000000404',
+  /**
+   * The bot answered twice and then gave up (TAR-28). Seeded because the handoff
+   * panel, the bot-origin bubbles and the `handed_off` badge are all unreachable
+   * without a thread in that state — and a reviewer cannot get one by clicking,
+   * since only the worker writes it.
+   */
+  handedOff: '0192f004-0000-7000-8000-000000000405',
   otherTenant: '0192f004-0000-7000-8000-000000000499',
 } as const;
 
@@ -633,7 +644,11 @@ export const MOCK_TENANT_LIFECYCLES: readonly MockTenantLifecycle[] = [
       key: 'trial',
       name: 'Trial',
       entitlements: {
-        features: ['assignment_rules', 'sla_policies'],
+        // `ai_chatbot` is on the trial plan here so the chatbot surface is
+        // walkable in mock mode. The other tenant below keeps an empty feature
+        // list, which is what makes the `feature_not_in_plan` upsell path
+        // something the handlers can be tested against rather than assumed.
+        features: ['assignment_rules', 'sla_policies', 'ai_chatbot'],
         limits: {
           seats: 5,
           conversationsPerPeriod: 1000,
@@ -873,6 +888,30 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     updatedAt: '2026-08-10T09:05:00.000Z',
   },
   {
+    tenantId: MOCK_TENANT_ID,
+    id: CONVERSATION_IDS.handedOff,
+    contact: contact(CONTACT_IDS.jonas),
+    whatsappAccountId: WHATSAPP_ACCOUNT_ID,
+    status: 'open',
+    // Unheld on purpose: `HandoffService` re-requests routing only when nobody
+    // placed the ticket, so "the bot gave up and nobody has picked it up yet" is
+    // the state an agent actually walks into.
+    assignedUserId: null,
+    assignedTeamId: null,
+    ticketId: null,
+    unreadCount: 1,
+    serviceWindowExpiresAt: OPEN_SERVICE_WINDOW,
+    // `handed_off` is not `bot_active`, so the boolean is false while the state
+    // still says the bot was here. That difference is the whole reason
+    // `botState` exists.
+    botHandling: false,
+    botState: 'handed_off',
+    lastMessagePreview: 'No, I want to talk to a person about this.',
+    lastMessageAt: '2026-08-10T10:06:00.000Z',
+    createdAt: '2026-08-10T10:00:00.000Z',
+    updatedAt: '2026-08-10T10:06:00.000Z',
+  },
+  {
     // Present only so tenant scoping can be asserted, never rendered.
     tenantId: OTHER_TENANT_ID,
     id: CONVERSATION_IDS.otherTenant,
@@ -914,6 +953,14 @@ const MESSAGE_IDS = {
   billingTeamInbound: '0192f006-0000-7000-8000-000000000611',
   liangInbound: '0192f006-0000-7000-8000-000000000612',
   unassignedInbound: '0192f006-0000-7000-8000-000000000613',
+  // The bot exchange the handoff panel summarises. Two customer questions, two
+  // bot replies, then the message the bot could not take — which is what
+  // `HandoffContextResponse.triggerMessageId` names.
+  handedOffFirstQuestion: '0192f006-0000-7000-8000-000000000621',
+  handedOffFirstBotReply: '0192f006-0000-7000-8000-000000000622',
+  handedOffSecondQuestion: '0192f006-0000-7000-8000-000000000623',
+  handedOffSecondBotReply: '0192f006-0000-7000-8000-000000000624',
+  handedOffTrigger: '0192f006-0000-7000-8000-000000000625',
   otherTenant: '0192f006-0000-7000-8000-000000000699',
 } as const;
 
@@ -1129,6 +1176,54 @@ export const MOCK_MESSAGES: readonly MockMessage[] = [
     type: 'text',
     body: 'Hello, is anyone there?',
     sentAt: '2026-08-10T09:05:00.000Z',
+  }),
+  message({
+    id: MESSAGE_IDS.handedOffFirstQuestion,
+    conversationId: CONVERSATION_IDS.handedOff,
+    direction: 'inbound',
+    type: 'text',
+    body: 'What is your returns window?',
+    sentAt: '2026-08-10T10:00:00.000Z',
+  }),
+  message({
+    id: MESSAGE_IDS.handedOffFirstBotReply,
+    conversationId: CONVERSATION_IDS.handedOff,
+    direction: 'outbound',
+    type: 'text',
+    status: 'delivered',
+    body: 'You can return anything unopened within 30 days of delivery for a full refund.',
+    // A bot reply is an ordinary message row, because it was genuinely sent to
+    // the customer over WhatsApp. `origin` is what lets the thread badge it.
+    sentByAutomation: true,
+    origin: 'bot',
+    sentAt: '2026-08-10T10:00:12.000Z',
+  }),
+  message({
+    id: MESSAGE_IDS.handedOffSecondQuestion,
+    conversationId: CONVERSATION_IDS.handedOff,
+    direction: 'inbound',
+    type: 'text',
+    body: 'And if the box was already opened?',
+    sentAt: '2026-08-10T10:03:00.000Z',
+  }),
+  message({
+    id: MESSAGE_IDS.handedOffSecondBotReply,
+    conversationId: CONVERSATION_IDS.handedOff,
+    direction: 'outbound',
+    type: 'text',
+    status: 'delivered',
+    body: 'Opened items can be returned within 14 days if they are undamaged and complete.',
+    sentByAutomation: true,
+    origin: 'bot',
+    sentAt: '2026-08-10T10:03:15.000Z',
+  }),
+  message({
+    id: MESSAGE_IDS.handedOffTrigger,
+    conversationId: CONVERSATION_IDS.handedOff,
+    direction: 'inbound',
+    type: 'text',
+    body: 'No, I want to talk to a person about this.',
+    sentAt: '2026-08-10T10:06:00.000Z',
   }),
   message({
     // Present only so tenant scoping can be asserted, never rendered.
@@ -2156,6 +2251,178 @@ export const MOCK_WORKFLOW_RUNS: readonly MockWorkflowRun[] = [
   },
 ];
 
+// --- The AI chatbot (TAR-28) -----------------------------------------------
+//
+// One document per indexing state, because the console renders three different
+// things for them and a fixture set that was all `indexed` would leave the
+// pending notice and the failure's `indexError` unreachable in mock mode.
+
+const KNOWLEDGE_DOCUMENT_IDS = {
+  returnsPolicy: '0192f014-0000-7000-8000-000000001401',
+  deliveryTimes: '0192f014-0000-7000-8000-000000001402',
+  /** Written a moment ago; the bot cannot use it until indexing commits. */
+  openingHours: '0192f014-0000-7000-8000-000000001403',
+  /** Chunking failed, so retrieval will never see it. `indexError` says why. */
+  priceList: '0192f014-0000-7000-8000-000000001404',
+  otherTenant: '0192f014-0000-7000-8000-000000001499',
+} as const;
+
+const HANDOFF_IDS = {
+  handedOff: '0192f015-0000-7000-8000-000000001501',
+} as const;
+
+export type MockKnowledgeDocument = KnowledgeDocumentResponse & TenantScoped;
+export type MockAiConfig = AiConfigResponse & TenantScoped;
+export type MockHandoffContext = HandoffContextResponse & TenantScoped & { readonly id: string };
+
+export const MOCK_KNOWLEDGE_DOCUMENTS: readonly MockKnowledgeDocument[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: KNOWLEDGE_DOCUMENT_IDS.returnsPolicy,
+    title: 'Returns and refunds policy',
+    sourceUrl: 'https://northwind.example/help/returns',
+    content:
+      'Unopened items can be returned within 30 days of delivery for a full refund.\n\n' +
+      'Opened items can be returned within 14 days if they are undamaged and complete.\n\n' +
+      'Refunds are issued to the original payment method within five working days of the return arriving.',
+    language: 'en',
+    status: 'indexed',
+    chunkCount: 3,
+    indexError: null,
+    indexedAt: '2026-08-01T09:05:00.000Z',
+    createdAt: '2026-08-01T09:00:00.000Z',
+    updatedAt: '2026-08-01T09:05:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: KNOWLEDGE_DOCUMENT_IDS.deliveryTimes,
+    title: 'Delivery times by region',
+    sourceUrl: null,
+    content:
+      'Orders to addresses inside Saudi Arabia arrive within two to three working days.\n\n' +
+      'Orders to the rest of the Gulf arrive within five working days.\n\n' +
+      'Orders outside the Gulf arrive within ten working days and are tracked from dispatch.',
+    language: 'en',
+    status: 'indexed',
+    chunkCount: 2,
+    indexError: null,
+    indexedAt: '2026-08-02T11:20:00.000Z',
+    createdAt: '2026-08-02T11:15:00.000Z',
+    updatedAt: '2026-08-02T11:20:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: KNOWLEDGE_DOCUMENT_IDS.openingHours,
+    title: 'Opening hours',
+    sourceUrl: null,
+    content:
+      'The support desk is staffed from 09:00 to 18:00 Arabian Standard Time, Sunday to Thursday.',
+    language: 'en',
+    status: 'pending',
+    chunkCount: 0,
+    indexError: null,
+    indexedAt: null,
+    createdAt: '2026-08-10T07:40:00.000Z',
+    updatedAt: '2026-08-10T07:40:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: KNOWLEDGE_DOCUMENT_IDS.priceList,
+    title: 'Wholesale price list',
+    sourceUrl: 'https://northwind.example/help/wholesale',
+    content: '\u0000',
+    language: null,
+    status: 'failed',
+    chunkCount: 0,
+    indexError: 'The document produced no usable text to index.',
+    indexedAt: null,
+    createdAt: '2026-08-09T16:00:00.000Z',
+    updatedAt: '2026-08-09T16:00:30.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: KNOWLEDGE_DOCUMENT_IDS.otherTenant,
+    title: 'This must never appear in another tenant’s console',
+    sourceUrl: null,
+    content: 'Southwind’s own material.',
+    language: 'en',
+    status: 'indexed',
+    chunkCount: 1,
+    indexError: null,
+    indexedAt: '2026-06-02T09:05:00.000Z',
+    createdAt: '2026-06-02T09:00:00.000Z',
+    updatedAt: '2026-06-02T09:05:00.000Z',
+  },
+];
+
+/**
+ * `readiness` and `availableModels` are **not stored here**: the handler derives
+ * both, readiness from the plan and the documents in this same store and the
+ * model list from the contract's allowlist. Storing them would let a fixture
+ * claim the bot was ready while its knowledge base was empty — which is the one
+ * thing ADR 0010's decision 4 exists to make impossible.
+ */
+export type MockAiConfigRecord = Omit<MockAiConfig, 'readiness' | 'availableModels'>;
+
+export const MOCK_AI_CONFIGS: readonly MockAiConfigRecord[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    isEnabled: true,
+    model: null,
+    systemPrompt:
+      'You answer customer questions for Northwind Traders using only the reference material provided. Keep replies short and specific.',
+    handoffKeywords: ['agent', 'human', 'person', 'موظف'],
+    minConfidence: AI_CONFIG_DEFAULTS.minConfidence,
+    maxBotTurns: AI_CONFIG_DEFAULTS.maxBotTurns,
+    handoffMessage: 'Let me pass you to a colleague who can help with that.',
+    updatedAt: '2026-08-05T10:00:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    isEnabled: false,
+    model: 'claude-haiku-4-5',
+    systemPrompt: null,
+    handoffKeywords: [],
+    minConfidence: AI_CONFIG_DEFAULTS.minConfidence,
+    maxBotTurns: AI_CONFIG_DEFAULTS.maxBotTurns,
+    handoffMessage: null,
+    updatedAt: '2026-06-02T09:00:00.000Z',
+  },
+];
+
+/**
+ * The handoff summary for the one handed-off thread.
+ *
+ * `botExchange` is deliberately absent: the handler builds it from the messages
+ * in this store, between `botEngagedAt` and the trigger, exactly as the endpoint
+ * does. A stored copy would drift from the thread it summarises, and a panel
+ * that disagreed with the transcript beside it is worse than no panel.
+ */
+export type MockHandoffRecord = Omit<MockHandoffContext, 'botExchange'>;
+
+export const MOCK_HANDOFFS: readonly MockHandoffRecord[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: HANDOFF_IDS.handedOff,
+    conversationId: CONVERSATION_IDS.handedOff,
+    ticketId: null,
+    // The customer asked for a person by name, so no model call happened on the
+    // turn that ended the run — which is why `confidence` is null.
+    reason: 'customer_requested',
+    triggerMessageId: MESSAGE_IDS.handedOffTrigger,
+    triggerMessageBody: 'No, I want to talk to a person about this.',
+    botEngagedAt: '2026-08-10T10:00:12.000Z',
+    handedOffAt: '2026-08-10T10:06:01.000Z',
+    botReplyCount: 2,
+    confidence: null,
+    citedDocuments: [
+      { id: KNOWLEDGE_DOCUMENT_IDS.returnsPolicy, title: 'Returns and refunds policy' },
+    ],
+  },
+];
+
 export const MOCK_IDS = {
   teams: TEAM_IDS,
   users: USER_IDS,
@@ -2176,5 +2443,7 @@ export const MOCK_IDS = {
   workflowRuns: WORKFLOW_RUN_IDS,
   /** The agent a workflow still names and who no longer exists. */
   removedUser: REMOVED_USER_ID,
+  knowledgeDocuments: KNOWLEDGE_DOCUMENT_IDS,
+  handoffs: HANDOFF_IDS,
   whatsappAccount: WHATSAPP_ACCOUNT_ID,
 } as const;
