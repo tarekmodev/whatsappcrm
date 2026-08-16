@@ -8,6 +8,7 @@ import {
   DashboardMetricsResponseSchema,
   REPORT_RANGE_MAX_DAYS,
   permissionsForRole,
+  type DashboardMetricsQuery,
   type DashboardMetricsResponse,
   type Permission,
   type SessionPrincipal,
@@ -29,7 +30,14 @@ import { ReportsController } from './reports.controller';
 import { ReportTeamNotFoundError } from './reporting.errors';
 
 /**
- * The HTTP contract of `GET /api/v1/reports/dashboard`.
+ * The HTTP contract of `GET /api/v1/reports/dashboard` and its CSV
+ * representation at `/export`.
+ *
+ * One suite for both, against one application: the export is the same answer in
+ * another form, so it has to be refused by the same guards, bound out of the
+ * same query string and translated by the same error mapping. Splitting it into
+ * its own harness would let the two drift apart in exactly the way TAR-30's
+ * second acceptance criterion forbids.
  *
  * Proved with the **real** `PrincipalGuard` and `PermissionGuard` registered as
  * `APP_GUARD`, the way `RequestPipelineModule` registers them (TAR-58) — the
@@ -48,6 +56,9 @@ import { ReportTeamNotFoundError } from './reporting.errors';
 
 const TENANT = '25999999-9999-7999-8999-999999999801';
 const TEAM = '25999999-9999-7999-8999-9999999998b1';
+
+/** The three bytes every exported file opens with. See the serialiser's spec. */
+const BYTE_ORDER_MARK = '\uFEFF';
 
 function principalWith(permissions: readonly Permission[]): SessionPrincipal {
   return {
@@ -119,7 +130,7 @@ const REPORT: DashboardMetricsResponse = {
   series: [{ date: '2026-08-01', created: 12, resolved: 9, firstResponseMedianSeconds: 300 }],
 };
 
-describe('GET /api/v1/reports/dashboard', () => {
+describe('the reporting routes', () => {
   let app: INestApplication;
   let server: Server;
   let signedIn: boolean;
@@ -309,5 +320,133 @@ describe('GET /api/v1/reports/dashboard', () => {
     // only replaces it when `NODE_ENV=production`, and
     // `all-exceptions.filter.spec.ts` is where that switch is proved. Duplicating
     // it here would pass for the wrong reason under a test environment.
+  });
+
+  /**
+   * `GET /api/v1/reports/dashboard/export` (TAR-430).
+   *
+   * The same harness deliberately: the export is the JSON route's answer in
+   * another representation, so it has to be refused by the same guards, bound
+   * out of the same query string and translated by the same error mapping. A
+   * separate suite with its own app would be able to drift from the route it
+   * is a representation of, which is the whole failure mode this story exists
+   * to close.
+   *
+   * What the values in the file are is asserted in
+   * `dashboard-csv.serialiser.spec.ts` and, against the JSON route,
+   * `dashboard-export-parity.spec.ts`. This block is the HTTP contract: who is
+   * let in, what is asked of the query layer, and what comes back on the wire.
+   */
+  describe('the CSV export', () => {
+    const exportUrl = '/api/v1/reports/dashboard/export?from=2026-08-01&to=2026-08-07';
+
+    it('refuses an unauthenticated caller before reaching the service', async () => {
+      signedIn = false;
+
+      const response = await request(server).get(exportUrl).expect(401);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('unauthenticated');
+      expect(dashboard).not.toHaveBeenCalled();
+    });
+
+    it('refuses a caller without report:read', async () => {
+      principal = principalWith(
+        permissionsForRole('supervisor').filter((permission) => permission !== 'report:read'),
+      );
+
+      await request(server).get(exportUrl).expect(403);
+      expect(dashboard).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Every header here is load-bearing. Without the attachment disposition and
+     * `nosniff` a browser may decide a CSV is a page and run it on the API
+     * origin; without `no-store` a tenant's numbers can sit in a shared cache.
+     */
+    it('serves the bytes as a private, non-sniffable attachment', async () => {
+      const response = await request(server).get(exportUrl).expect(200);
+
+      expect(response.headers['content-type']).toBe('text/csv; charset=utf-8');
+      expect(response.headers['content-disposition']).toBe(
+        'attachment; filename="report-agents-2026-08-01-2026-08-07.csv"',
+      );
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['cache-control']).toBe('private, no-store');
+      expect(Number(response.headers['content-length'])).toBe(Buffer.byteLength(response.text));
+    });
+
+    it('names the file after the section that was asked for', async () => {
+      const response = await request(server).get(`${exportUrl}&section=series`).expect(200);
+
+      expect(response.headers['content-disposition']).toContain(
+        'report-series-2026-08-01-2026-08-07.csv',
+      );
+    });
+
+    /**
+     * The mechanism behind TAR-30's second acceptance criterion, asserted at
+     * the seam where it could break: whatever section the export was asked for,
+     * the query layer sees the dashboard's parameters and nothing else.
+     *
+     * `section` chooses a serialiser. An export that passed it through to the
+     * aggregation would be making a query the dashboard never makes, which is
+     * the first step towards two code paths.
+     */
+    it.each(['summary', 'agents', 'series'])(
+      'asks the query layer for exactly what the dashboard would, for %s',
+      async (section) => {
+        await request(server).get(`${url}&scope=assigned&assignedTeamId=${TEAM}`).expect(200);
+        await request(server)
+          .get(`${exportUrl}&scope=assigned&assignedTeamId=${TEAM}&section=${section}`)
+          .expect(200);
+
+        const asked = dashboard.mock.calls as [DashboardMetricsQuery][];
+        const [fromDashboard, fromExport] = asked.map(([sent]) => sent);
+
+        expect(fromExport).toEqual(fromDashboard);
+        expect(fromExport).not.toHaveProperty('section');
+      },
+    );
+
+    it('defaults to the agents section, the one that carries the summary too', async () => {
+      const response = await request(server).get(exportUrl).expect(200);
+
+      expect(response.text.replace(BYTE_ORDER_MARK, '').startsWith('row,user_id,name')).toBe(true);
+    });
+
+    it('refuses a section the contract does not publish, before any query runs', async () => {
+      await request(server).get(`${exportUrl}&section=pdf`).expect(400);
+
+      expect(dashboard).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Both routes parse against schemas built from one object shape, so a range
+     * the screen refuses and the export accepts cannot happen. Asserted through
+     * Express for the reason this file's header gives.
+     */
+    it.each([
+      ['a missing range', ''],
+      ['a reversed range', '?from=2026-08-07&to=2026-08-01'],
+      ['a range over the cap', '?from=2026-01-01&to=2027-01-02'],
+      ['an instant where a tenant-local date belongs', '?from=2026-08-01T00:00:00Z&to=2026-08-07'],
+    ])('refuses %s, the same as the JSON route', async (_case, query) => {
+      const [json, csv] = await Promise.all([
+        request(server).get(`/api/v1/reports/dashboard${query}`),
+        request(server).get(`/api/v1/reports/dashboard/export${query}`),
+      ]);
+
+      expect([json.status, csv.status]).toEqual([400, 400]);
+      expect(ApiErrorSchema.parse(csv.body).error.code).toBe('validation_failed');
+      expect(dashboard).not.toHaveBeenCalled();
+    });
+
+    it('answers not_found for a team this tenant does not have', async () => {
+      dashboard.mockRejectedValue(new ReportTeamNotFoundError(TEAM));
+
+      const response = await request(server).get(`${exportUrl}&assignedTeamId=${TEAM}`).expect(404);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('not_found');
+    });
   });
 });
