@@ -29,20 +29,27 @@ const TENANT: TenantResponse = {
   slug: 'northwind',
   status: 'trialing',
   branding: {
-    logoUrl: null,
-    faviconUrl: null,
+    productName: 'Northwind Support',
     primaryColor: '#16a34a',
     accentColor: '#15803d',
-    productName: 'Northwind Support',
     supportEmail: 'support@northwind.example',
+    logo: null,
+    favicon: null,
   },
   domains: [
     {
       id: '0192f00e-0000-7000-8000-000000000e01',
       hostname: 'northwind.app.example.com',
-      kind: 'platform_subdomain',
-      verifiedAt: '2026-07-01T09:00:00.000Z',
+      // `platform`, not `platform_subdomain`: the wire value is the database
+      // enum value, corrected when TAR-416's contract landed.
+      kind: 'platform',
+      status: 'live',
       isPrimary: true,
+      verifiedAt: '2026-07-01T09:00:00.000Z',
+      activatedAt: '2026-07-01T09:05:00.000Z',
+      verification: null,
+      routing: null,
+      createdAt: '2026-07-01T09:00:00.000Z',
     },
   ],
   trialEndsAt: null,

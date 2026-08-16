@@ -1,0 +1,70 @@
+/*
+ * Two colour fields side by side where there is room, stacked below it. An
+ * auto-fit grid rather than a breakpoint: the fields wrap when the *container*
+ * runs out of width, so the same rule holds inside a full-width settings page and
+ * inside a narrower one later.
+ */
+.colours {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--size-container-sm)), 1fr));
+  gap: var(--space-5);
+}
+
+.colourField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.contrast {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-tight);
+  color: var(--color-on-surface-muted);
+}
+
+/*
+ * Never colour alone — the readout says in words which of the two states it is
+ * in, and the tone only reinforces it.
+ */
+.contrast[data-tone='pass'] {
+  color: var(--color-on-surface-muted);
+}
+
+.contrast[data-tone='adjusted'] {
+  color: var(--color-warning);
+}
+
+.previewHeading {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-strong);
+  color: var(--color-on-surface);
+}
+
+.previewDescription {
+  margin: 0 0 var(--space-3);
+  max-inline-size: var(--measure-body);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+  color: var(--color-on-surface-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/* Full width where the screen is narrow enough that a hugging button is a small
+   target, and content width from there up. */
+.actions > * {
+  flex: 1 1 auto;
+}
+
+@media (min-width: 30rem) {
+  .actions > * {
+    flex: 0 0 auto;
+  }
+}

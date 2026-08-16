@@ -1,0 +1,23 @@
+/*
+ * Both axes fixed, and that is the whole point: the API does not publish a
+ * logo's dimensions, so a box sized from the image is zero until it decodes and
+ * shifts everything beside it when it lands. `contain` letterboxes whatever the
+ * tenant uploaded inside the space that was already reserved for it.
+ */
+.logo {
+  display: block;
+  block-size: var(--size-brand-block);
+  inline-size: var(--size-brand-inline);
+  /* Never wider than the rail it sits in once that rail is collapsed. */
+  max-inline-size: 100%;
+  object-fit: contain;
+  /* Aligned to the start, so a narrow logo does not float in the middle of the
+     reserved box beside the navigation. The sign-in screen centres it below. */
+  object-position: inline-start center;
+}
+
+.logo[data-size='lg'] {
+  block-size: var(--size-brand-block-lg);
+  inline-size: var(--size-brand-inline-lg);
+  object-position: center;
+}

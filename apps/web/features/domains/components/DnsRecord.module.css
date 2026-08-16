@@ -1,0 +1,61 @@
+.record {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+
+/*
+ * Label above value below the layout breakpoint, side by side above it. A grid
+ * rather than a table so the value can wrap under its own label on a phone
+ * instead of squeezing into a column two characters wide.
+ */
+.row {
+  display: grid;
+  gap: var(--space-1);
+}
+
+@media (min-width: 40rem) {
+  .row {
+    grid-template-columns: minmax(0, 8rem) minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-3);
+  }
+}
+
+.term {
+  margin: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.value {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  min-inline-size: 0;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+}
+
+/*
+ * `user-select: all` so one click selects the whole token — the audience is
+ * copying this into a registrar, and a half-selected verification value is a
+ * domain that never verifies for a reason nobody can see.
+ *
+ * `anywhere`, not `break-word`: a 32-character token has no break opportunity,
+ * and without this it overflows the card on a 320px screen.
+ */
+.code {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  user-select: all;
+}

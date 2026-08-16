@@ -10,6 +10,7 @@ import { PageShell } from '@/components/shell/PageShell';
 import { PageHeader } from '@/components/shell/PageHeader';
 import { ForbiddenState } from '@/components/ui/ForbiddenState';
 import { SectionErrorBoundary } from '@/components/ui/SectionErrorBoundary';
+import { ExportReportButton } from '@/features/reports/components/ExportReportButton';
 import { ReportRangeFilters } from '@/features/reports/components/ReportRangeFilters';
 import {
   DashboardSections,
@@ -66,7 +67,13 @@ export default async function ReportsPage({
   return (
     <PageShell>
       <Stack gap="5">
-        <PageHeader title={content.reports.title} subtitle={content.reports.subtitle} />
+        <PageHeader
+          title={content.reports.title}
+          subtitle={content.reports.subtitle}
+          // Given the same applied query the sections below are rendered from,
+          // which is what makes the file and the screen the same range (TAR-431).
+          action={<ExportReportButton params={query} />}
+        />
 
         <ReportRangeFilters params={query} today={today} />
 

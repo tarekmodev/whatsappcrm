@@ -2,6 +2,7 @@ import { Suspense, type ReactNode } from 'react';
 import { webEnv } from '@/lib/config/env';
 import { verifySession } from '@/lib/session/session';
 import { readTheme } from '@/lib/theme/read-theme';
+import { readBranding } from '@/lib/branding/read-branding';
 import { readRailState } from '@/lib/shell/read-rail';
 import { AppShell } from '@/components/shell/AppShell';
 import { AppSidebar } from '@/components/shell/AppSidebar';
@@ -40,6 +41,9 @@ import {
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const theme = await readTheme();
   const railState = await readRailState();
+  // Request-scoped and already resolved by the root layout, so this is the same
+  // value rather than a second round-trip (`lib/branding/read-branding.ts`).
+  const branding = await readBranding();
   const { principal, checker, isStubbed } = await verifySession();
   const navItems = visibleNavItems(NAV_ITEMS, checker);
   const quickCreateItems = visibleQuickCreateItems(QUICK_CREATE_ITEMS, checker);
@@ -79,11 +83,12 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       <SkipLink />
       <AppShell
         initialRailState={railState}
-        rail={<AppSidebar items={navItems} />}
+        rail={<AppSidebar items={navItems} branding={branding} />}
         bar={
           <AppTopBar
             items={navItems}
             principal={principal}
+            branding={branding}
             quickCreateItems={quickCreateItems}
             alerts={alerts}
             utilities={utilities}

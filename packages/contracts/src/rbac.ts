@@ -92,6 +92,16 @@ export const PERMISSIONS = [
   'report:read_all',
 
   'branding:write',
+  /**
+   * Claim, verify, re-point and remove the tenant's custom domains (TAR-29).
+   *
+   * Kept separate from `branding:write` because control of DNS and choosing a
+   * logo colour are not the same authority: a supervisor may plausibly be
+   * granted the second one day, and a domain is how every invite and
+   * password-reset link in the tenant is addressed. Admin-only today, with no
+   * table edit — `ROLE_PERMISSIONS.admin` is `PERMISSIONS`.
+   */
+  'domain:write',
   'channel:manage',
   'tenant:settings',
 

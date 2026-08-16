@@ -243,6 +243,13 @@
   --size-rail-collapsed: var(--scale-size-rail-collapsed);
   --size-bar: var(--scale-size-bar);
   --size-marker: var(--scale-size-marker);
+  /* The tenant logo's reserved box: chrome-sized in the shell, larger above the
+     sign-in form. See `BrandLogo` for why both axes are fixed. */
+  --size-brand-block: var(--scale-size-brand-block-sm);
+  --size-brand-inline: var(--scale-size-brand-inline-sm);
+  --size-brand-block-lg: var(--scale-size-brand-block-md);
+  --size-brand-inline-lg: var(--scale-size-brand-inline-md);
+  --size-swatch: var(--scale-size-swatch);
 }
 
 /*

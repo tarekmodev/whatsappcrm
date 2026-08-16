@@ -19,7 +19,7 @@ import { WhatsAppSections } from '@/features/whatsapp/components/WhatsAppSection
  */
 
 export const metadata: Metadata = {
-  title: `${content.whatsapp.title} · ${content.app.name}`,
+  title: content.whatsapp.title,
   description: content.whatsapp.subtitle,
 };
 

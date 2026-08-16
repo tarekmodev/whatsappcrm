@@ -1,0 +1,13 @@
+/*
+ * The skeleton's stand-in for a button: the same minimum target, inline padding
+ * and radius as `Button`, with the real label measured invisibly inside — so the
+ * swap from placeholder to button moves nothing at any width.
+ */
+.actionPlaceholder {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-4);
+  border-radius: var(--radius-md);
+  background-color: var(--color-skeleton-base);
+}

@@ -1,4 +1,5 @@
 import type { TenantBranding } from '@whatsappcrm/contracts';
+import { BrandLogo } from '@/components/brand/BrandLogo';
 import { DetailList, type DetailListItem } from '@/components/ui/DetailList';
 import { Notice } from '@/components/ui/Notice';
 import { Stack } from '@/components/layout/Stack';
@@ -49,10 +50,18 @@ function brandingDetails(branding: TenantBranding, content: Content): readonly D
     {
       id: 'logo',
       term: content.workspace.brandingLogo,
-      // `next/image` needs intrinsic dimensions the contract does not carry, and
-      // a logo of unknown aspect ratio in a reserved box is TAR-29's problem to
-      // solve properly. The URL is the honest thing to show until then.
-      value: branding.logoUrl ?? content.workspace.brandingLogoEmpty,
+      /*
+       * The reserved box this asked TAR-29 for now exists: `BrandLogo` draws the
+       * asset into a fixed box with `object-fit: contain`, because the contract
+       * publishes a logo's bytes and type but not its dimensions. It returns
+       * `null` when nothing is uploaded, so the empty copy still covers that.
+       */
+      value:
+        branding.logo === null ? (
+          content.workspace.brandingLogoEmpty
+        ) : (
+          <BrandLogo branding={branding} />
+        ),
     },
   ];
 }

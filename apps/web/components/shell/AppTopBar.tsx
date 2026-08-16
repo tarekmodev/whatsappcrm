@@ -1,8 +1,8 @@
 import { Suspense, type ReactNode } from 'react';
 import Link from 'next/link';
-import type { SessionPrincipal } from '@whatsappcrm/contracts';
-import { content } from '@/content/en';
+import type { SessionPrincipal, TenantBranding } from '@whatsappcrm/contracts';
 import { routes } from '@/lib/routes';
+import { BrandLogo } from '@/components/brand/BrandLogo';
 import { MobileMenu } from './MobileMenu';
 import { PrincipalIdentity } from './PrincipalIdentity';
 import { PrincipalMenu } from './PrincipalMenu';
@@ -39,12 +39,15 @@ import styles from './AppTopBar.module.css';
 export function AppTopBar({
   items,
   principal,
+  branding,
   quickCreateItems,
   alerts,
   utilities,
 }: {
   items: readonly NavItem[];
   principal: SessionPrincipal;
+  /** The resolved tenant's branding; the small-screen wordmark comes from it. */
+  branding: TenantBranding;
   /** Already filtered by permission; an empty list renders no `+`. */
   quickCreateItems: readonly QuickCreateItem[];
   /**
@@ -66,8 +69,8 @@ export function AppTopBar({
           <PrincipalIdentity principal={principal} />
           {utilities}
         </MobileMenu>
-        <Link href={routes.inbox()} className={styles.brand}>
-          {content.app.name}
+        <Link href={routes.inbox()} className={styles.brand} aria-label={branding.productName}>
+          {branding.logo === null ? branding.productName : <BrandLogo branding={branding} />}
         </Link>
       </div>
 

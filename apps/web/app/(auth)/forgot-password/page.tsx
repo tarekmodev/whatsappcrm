@@ -11,7 +11,7 @@ import { ForgotPasswordForm } from '@/features/auth/components/ForgotPasswordFor
  */
 
 export const metadata: Metadata = {
-  title: `${content.auth.forgotTitle} · ${content.app.name}`,
+  title: content.auth.forgotTitle,
   description: content.auth.forgotDescription,
 };
 
