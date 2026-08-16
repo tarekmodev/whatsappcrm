@@ -18,6 +18,7 @@ export * from './pagination';
 export * from './auth';
 export * from './onboarding';
 export * from './rbac';
+export * from './signup';
 export * from './tenant';
 export * from './branding-theme';
 export * from './users';

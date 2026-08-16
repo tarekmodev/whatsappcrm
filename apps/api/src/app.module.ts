@@ -21,6 +21,7 @@ import { RbacModule } from './rbac/rbac.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ReportingModule } from './reporting/reporting.module';
 import { REPOSITORY_ENV_FILE } from './repository-env-file';
+import { SignupModule } from './signup/signup.module';
 import { SlaModule } from './sla/sla.module';
 import { TagsModule } from './tags/tags.module';
 import { TenancyModule } from './tenancy/tenancy.module';
@@ -66,6 +67,9 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     // producers whose events it relays without a cycle.
     RealtimeModule,
     TenancyModule,
+    // After `TenancyModule`, whose provisioning it drives. Public self-signup is
+    // the one surface that runs before a tenant exists (TAR-405).
+    SignupModule,
     PeopleModule,
     // The contact taxonomy, before the module whose contacts wear it. Neither
     // imports the other — `ContactsService` reaches tags through `TenantPrisma`

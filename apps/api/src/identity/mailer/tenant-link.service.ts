@@ -26,12 +26,15 @@ import { TENANT_PRISMA, type TenantPrisma } from '../../prisma/prisma.tokens';
 @Injectable()
 export class TenantLinkService {
   private readonly scheme: string;
+  /** Where a message that belongs to no tenant points. See `platformLink`. */
+  private readonly platformDomain: string;
 
   constructor(
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     config: ConfigService,
   ) {
     this.scheme = config.getOrThrow<string>('APP_LINK_SCHEME');
+    this.platformDomain = config.getOrThrow<string>('PLATFORM_DOMAIN');
   }
 
   /**
@@ -46,6 +49,30 @@ export class TenantLinkService {
       return null;
     }
 
+    return this.linkTo(hostname, linkPath, token);
+  }
+
+  /**
+   * The same link on the **platform** host, for a message that belongs to no
+   * tenant — today only self-signup's verification mail (TAR-405).
+   *
+   * There is no tenant to look a hostname up for: the whole point of the message
+   * is that clicking it is what creates one. So the host comes from configuration
+   * rather than from the control plane, which keeps the rule that matters intact
+   * — the host is never taken from the request, where an attacker could set it
+   * and aim a live token at a server they own.
+   *
+   * Not `async`, unlike its sibling, because there is nothing to read.
+   */
+  platformLink(linkPath: string, token: string): string {
+    return this.linkTo(this.platformDomain, linkPath, token);
+  }
+
+  /**
+   * The token travels in the fragment, and `encodeURIComponent` is what keeps a
+   * token containing a `#` or `&` from truncating the link.
+   */
+  private linkTo(hostname: string, linkPath: string, token: string): string {
     return `${this.scheme}://${hostname}${linkPath}#token=${encodeURIComponent(token)}`;
   }
 

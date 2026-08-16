@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PLAN_FEATURES, SLA_DEFAULTS } from '@whatsappcrm/contracts';
+import { LIFECYCLE_POLICY, PLAN_FEATURES, SLA_DEFAULTS } from '@whatsappcrm/contracts';
 import { type $Enums, type Prisma } from '../generated/prisma/client';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 import { isUniqueViolationOn } from '../prisma/unique-violation';
@@ -14,6 +14,21 @@ import { PlatformHostnameTakenError, TenantSlugTakenError } from './tenant-provi
  */
 const DEFAULT_TIMEZONE = 'UTC';
 const DEFAULT_LOCALE = 'en';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The plan a self-signup tenant starts on. A `tenant_entitlements.plan_key`, not
+ * a `plans.key`: the entitlements enforcement reads live in a per-tenant table
+ * rather than in the platform catalogue, which belongs to TAR-37 and has no row
+ * for this yet. When it does, its plan sync becomes the table's writer and this
+ * key starts naming a real plan.
+ *
+ * The name travels with it because `TenantLifecycleResponse.plan` is served from
+ * this one row with no join (ADR 0009 Amendment 1 ruling 3).
+ */
+const TRIAL_PLAN_KEY = 'trial';
+const TRIAL_PLAN_NAME = 'Trial';
 
 /**
  * The tenant's SLA configuration (0006, decision 6). One `sla_policies` row per
@@ -55,11 +70,28 @@ export interface ProvisionedTenant {
   createdAt: Date;
 }
 
+/**
+ * Which of the two ways a tenant can come into existence, and therefore what
+ * status and caps it starts on.
+ *
+ * A discriminator rather than a `status` field the caller sets: the two differ
+ * on three things at once — status, plan key and whether `trial_ends_at` is
+ * stamped — and letting a caller pick them independently is how a tenant ends up
+ * `trialing` with no trial end, or `active` on trial caps.
+ */
+export type TenantOnboardingPath =
+  /** `POST /api/v1/admin/tenants`. Straight to `active`, no caps, no trial. */
+  | 'operator'
+  /** `POST /api/v1/signup/verify`. Starts `trialing` on the trial caps. */
+  | 'self_signup';
+
 export interface ProvisionTenantCommand {
   slug: string;
   name: string;
   timezone?: string;
   locale?: string;
+  /** Defaults to `operator`, which is what every existing caller is. */
+  path?: TenantOnboardingPath;
 }
 
 export interface ProvisionTenantResult {
@@ -139,41 +171,61 @@ export class TenantProvisioningService {
     private readonly config: ConfigService,
   ) {}
 
-  async provision(command: ProvisionTenantCommand): Promise<ProvisionTenantResult> {
+  /**
+   * Provisions a tenant, in its own transaction or in one the caller is already
+   * holding.
+   *
+   * **Pass `tx` when provisioning is one step of something larger.** Self-signup
+   * does: it consumes the signup row, provisions, creates the first admin and
+   * issues a session, and those four have to commit or roll back together. Prisma
+   * has no nested interactive transactions — calling `$transaction` on the client
+   * from inside one opens a *second, independent* transaction on a second
+   * connection — so without this parameter a failure after provisioning would
+   * leave a committed tenant behind while the signup that produced it rolled
+   * back: an orphan workspace, and a verification token that still works.
+   *
+   * The advisory lock and the unique index behave identically either way; what
+   * changes is only whose commit releases them.
+   */
+  async provision(
+    command: ProvisionTenantCommand,
+    tx?: Prisma.TransactionClient,
+  ): Promise<ProvisionTenantResult> {
     const hostname = this.platformHostnameFor(command.slug);
 
-    const result = await this.systemPrisma
-      .$transaction(
-        async (tx) => {
-          // Serialises concurrent provisioning of the same slug. Held to the end
-          // of the transaction and released by commit or rollback, so a crashed
-          // provisioner cannot leave it held. The unique index on `tenants.slug`
-          // remains the actual guarantee; this turns a lost race into a wait
-          // rather than into an error the operator has to interpret.
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${PROVISIONING_LOCK_PREFIX + command.slug}))`;
+    const work = async (client: Prisma.TransactionClient): Promise<ProvisionTenantResult> => {
+      // Serialises concurrent provisioning of the same slug. Held to the end of
+      // the transaction and released by commit or rollback, so a crashed
+      // provisioner cannot leave it held. The unique index on `tenants.slug`
+      // remains the actual guarantee; this turns a lost race into a wait rather
+      // than into an error the operator has to interpret.
+      await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${PROVISIONING_LOCK_PREFIX + command.slug}))`;
 
-          const existing = await findProvisionedTenant(tx, command.slug);
+      const existing = await findProvisionedTenant(client, command.slug);
 
-          return existing === null
-            ? { tenant: await createTenant(tx, command, hostname), created: true }
-            : { tenant: await completeTenant(tx, existing, command, hostname), created: false };
-        },
-        { timeout: TRANSACTION_TIMEOUT_MS },
-      )
-      .catch((error: unknown) => {
-        // The two collisions an operator can act on. Anything else is a fault and
-        // stays untranslated, so it is logged as one rather than reported to the
-        // operator as their mistake.
-        if (isUniqueViolationOn(error, 'hostname')) {
-          throw new PlatformHostnameTakenError(hostname);
-        }
+      return existing === null
+        ? { tenant: await createTenant(client, command, hostname), created: true }
+        : { tenant: await completeTenant(client, existing, command, hostname), created: false };
+    };
 
-        if (isUniqueViolationOn(error, 'slug')) {
-          throw new TenantSlugTakenError(command.slug);
-        }
+    const result = await (
+      tx === undefined
+        ? this.systemPrisma.$transaction(work, { timeout: TRANSACTION_TIMEOUT_MS })
+        : work(tx)
+    ).catch((error: unknown) => {
+      // The two collisions an operator can act on. Anything else is a fault and
+      // stays untranslated, so it is logged as one rather than reported to the
+      // operator as their mistake.
+      if (isUniqueViolationOn(error, 'hostname')) {
+        throw new PlatformHostnameTakenError(hostname);
+      }
 
-        throw error;
-      });
+      if (isUniqueViolationOn(error, 'slug')) {
+        throw new TenantSlugTakenError(command.slug);
+      }
+
+      throw error;
+    });
 
     this.logger.log(
       result.created
@@ -246,6 +298,8 @@ async function createTenant(
   const timezone = command.timezone ?? DEFAULT_TIMEZONE;
   const locale = command.locale ?? DEFAULT_LOCALE;
 
+  const start = startingState(command.path ?? 'operator');
+
   const tenant = await tx.tenant.create({
     data: {
       slug: command.slug,
@@ -253,11 +307,8 @@ async function createTenant(
       // Provisioning completes inside this transaction, so the tenant is never
       // observable in the `created` state the column defaults to — a tenant row
       // exists only once everything it needs exists with it.
-      //
-      // Operator-provisioned tenants go straight to `active` and skip the trial:
-      // self-signup is TAR-405's path, and it is what starts a tenant in
-      // `trialing` against the `tenant_entitlements` row (TAR-403).
-      status: 'active',
+      status: start.status,
+      trialEndsAt: start.trialEndsAt,
       settings: { create: { timezone, locale } },
       domains: {
         create: {
@@ -270,7 +321,7 @@ async function createTenant(
         },
       },
       slaPolicies: { create: defaultSlaPolicy() },
-      entitlements: { create: operatorEntitlements() },
+      entitlements: { create: start.entitlements },
     },
     select: { id: true, slug: true, name: true, status: true, createdAt: true },
   });
@@ -408,5 +459,40 @@ function operatorEntitlements() {
         knowledgeDocuments: null,
       },
     },
+  };
+}
+
+/**
+ * The status, the trial clock and the entitlements a tenant starts on, decided
+ * together because they only make sense together.
+ *
+ * **`self_signup` restates no limit.** `tenant_entitlements.entitlements`
+ * defaults to 0009's published trial shape precisely so provisioning can insert
+ * the row without repeating it, and repeating the figures here would put the
+ * trial's real numbers in two places — one of which is not the one TAR-397 will
+ * edit. Only `planKey` and `planName` are stated, because those are the parts the
+ * column default cannot know for a plan it is not the default of.
+ *
+ * The operator path is the mirror image and states everything, for the reason
+ * `operatorEntitlements` gives: a tenant nobody sold a cap must not inherit the
+ * trial's.
+ *
+ * `trial_ends_at` is stamped from `LIFECYCLE_POLICY.trialDays` rather than
+ * stored as a length, so revising the trial does not silently re-date a clock
+ * already running for a live tenant (0009, decision 4).
+ */
+function startingState(path: TenantOnboardingPath): {
+  status: $Enums.TenantStatus;
+  trialEndsAt: Date | null;
+  entitlements: Prisma.TenantEntitlementsCreateWithoutTenantInput;
+} {
+  if (path === 'operator') {
+    return { status: 'active', trialEndsAt: null, entitlements: operatorEntitlements() };
+  }
+
+  return {
+    status: 'trialing',
+    trialEndsAt: new Date(Date.now() + LIFECYCLE_POLICY.trialDays * DAY_MS),
+    entitlements: { planKey: TRIAL_PLAN_KEY, planName: TRIAL_PLAN_NAME },
   };
 }

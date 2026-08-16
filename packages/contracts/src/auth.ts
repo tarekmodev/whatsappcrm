@@ -372,8 +372,20 @@ export interface OutboundEmail {
    * threshold — once per lockout, not once per failed attempt, which is what
    * bounds it as an unauthenticated caller's ability to send mail.
    */
-  template: 'invite' | 'password_reset' | 'password_changed' | 'account_locked';
-  tenantId: string;
+  template:
+    'invite' | 'password_reset' | 'password_changed' | 'account_locked' | 'signup_verification';
+  /**
+   * **Null only for `signup_verification`**, where there is no tenant yet — that
+   * is the entire premise of self-signup (TAR-405, ADR 0009 decision 3). The
+   * adapter reads null as "put the link on the platform host", which is where the
+   * verify page has to live: the tenant's own subdomain does not resolve until
+   * provisioning runs, and provisioning is what the link triggers.
+   *
+   * Nullable rather than a second interface, so one `MailerPort` still sends
+   * every message the product produces and a provider adapter has one method to
+   * implement.
+   */
+  tenantId: string | null;
   /**
    * Template variables. The rendered link is assembled by the adapter from the
    * tenant's **primary** hostname — never from the request `Host`, which an

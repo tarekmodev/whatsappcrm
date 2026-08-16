@@ -126,6 +126,21 @@ const envShape = z.object({
   APP_LINK_SCHEME: z.enum(['http', 'https']).default('https'),
 
   /**
+   * Whether the four public self-signup routes are served at all (TAR-405,
+   * TAR-36's stated assumption that a deployment can turn self-serve off and fall
+   * back to the operator-provisioned path from TAR-19).
+   *
+   * On by default, because self-signup is the product. When off, every signup
+   * route answers `404` rather than `403`: a disabled feature that advertises
+   * itself by refusing differently is a feature somebody probes, and a reseller
+   * who has turned self-serve off does not want the endpoint confirming it exists.
+   *
+   * `z.stringbool` rather than `z.coerce.boolean`, which reads the string
+   * `"false"` as `true` — the classic way an off switch ships stuck on.
+   */
+  SIGNUP_ENABLED: z.stringbool().default(true),
+
+  /**
    * Named bearer credentials for `/api/v1/admin/*`, as comma-separated
    * `label:secret` entries (TAR-166):
    *
