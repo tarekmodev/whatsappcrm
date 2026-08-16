@@ -60,6 +60,19 @@ export const AUDIT_ACTIONS = {
   customFieldUpdated: 'custom_field.updated',
   customFieldDeleted: 'custom_field.deleted',
   customFieldReordered: 'custom_field.reordered',
+  /**
+   * Canned-response writes (TAR-31, 0011). A canned response is standing text an
+   * agent sends to a customer under the tenant's name, which is the same class
+   * of change as a routing rule — and 0007 audits those.
+   *
+   * The metadata carries `shortcut` and `title`, never `body`: the body is
+   * free-form copy that can carry customer-specific detail, and this table is
+   * exported for compliance review rather than being a place to discover it.
+   * Same reasoning as `assignment_rule.*` and its conditions.
+   */
+  cannedResponseCreated: 'canned_response.created',
+  cannedResponseUpdated: 'canned_response.updated',
+  cannedResponseDeleted: 'canned_response.deleted',
   sessionRevoked: 'session.revoked',
   /**
    * An account crossing `AUTH_POLICY.loginFailureThreshold` (TAR-53,

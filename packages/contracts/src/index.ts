@@ -32,6 +32,7 @@ export * from './assignment';
 export * from './workflows';
 
 // --- CRM, inbox and helpdesk ------------------------------------------------
+export * from './canned-responses';
 export * from './contacts';
 export * from './conversations';
 export * from './media';
