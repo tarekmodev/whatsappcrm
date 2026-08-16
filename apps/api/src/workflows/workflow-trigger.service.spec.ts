@@ -321,9 +321,11 @@ describe('loop protection', () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  it('fails the run rather than dropping it when the ticket is over budget', async () => {
+  it('fails the run rather than dropping it when an event trigger is over budget', async () => {
     // A failed run rather than a silent drop, because it is the tenant's rule
-    // that is wrong and a supervisor needs to find it in the run list.
+    // that is wrong and a supervisor needs to find it in the run list. Safe for
+    // an event trigger because its key is per-occurrence: spending it costs that
+    // one occurrence and nothing after it.
     const { service, store, execute } = harness([
       { id: WORKFLOW, version: 1, definition: statusDefinition() },
     ]);
@@ -337,6 +339,48 @@ describe('loop protection', () => {
     expect(store.finished).toEqual([
       { runId: 'run-1', status: 'failed', failureReason: 'run_budget_exceeded' },
     ]);
+  });
+
+  it('leaves an elapsed trigger unclaimed when over budget, so it is late and not lost', async () => {
+    // The regression the review caught. `ticket_unresolved_for` dedupes on
+    // `ticket:{id}` — once per ticket, ever — so claiming and then recording
+    // `run_budget_exceeded` would spend the key permanently: a ticket that
+    // happened to be busy in the hour its four-hour escalation came due would
+    // never escalate, even after it went quiet. The budget is a rate limit and
+    // must not become a permanent one.
+    const elapsed = trigger({ triggerType: 'ticket_unresolved_for', occurrenceId: null });
+    const { service, store, execute } = harness(
+      [{ id: WORKFLOW, version: 1, definition: elapsedDefinition(240) }],
+      { facts: facts({ ageMinutes: 300 }) },
+    );
+
+    store.runCount.mockResolvedValue(WORKFLOW_LIMITS.runsPerTicketPerHour + 1);
+
+    const report = await service.evaluate(elapsed);
+
+    expect(report.claimed).toBe(0);
+    expect(execute).not.toHaveBeenCalled();
+    // Nothing claimed and nothing written, so the key is still free.
+    expect(store.claim).not.toHaveBeenCalled();
+    expect(store.finished).toEqual([]);
+  });
+
+  it('still escalates once the ticket goes quiet, because the key was never spent', async () => {
+    const elapsed = trigger({ triggerType: 'ticket_unresolved_for', occurrenceId: null });
+    const { service, store, execute } = harness(
+      [{ id: WORKFLOW, version: 1, definition: elapsedDefinition(240) }],
+      { facts: facts({ ageMinutes: 300 }) },
+    );
+
+    store.runCount.mockResolvedValue(WORKFLOW_LIMITS.runsPerTicketPerHour + 1);
+    await service.evaluate(elapsed);
+
+    // The hour rolls over and the next sweep re-offers the same ticket.
+    store.runCount.mockResolvedValue(0);
+    const report = await service.evaluate(elapsed);
+
+    expect(report.claimed).toBe(1);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it('raises a chained trigger carrying depth + 1 and the causing run', async () => {

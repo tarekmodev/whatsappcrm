@@ -60,10 +60,6 @@ export const WORKFLOW_SWEEP_BATCH = 200;
 export const WORKFLOW_SWEEP_TENANT_BATCH = 50;
 
 /**
- * How many `workflow_runs` rows the executor writes per action list, at most —
- * one, plus the row itself. Named only so the run-budget read below has a
- * companion the reader can size against.
- *
  * The window the run budget counts over. One hour, matching
  * `WORKFLOW_LIMITS.runsPerTicketPerHour`'s own wording, expressed here in
  * milliseconds because that is what the query needs.
@@ -71,11 +67,23 @@ export const WORKFLOW_SWEEP_TENANT_BATCH = 50;
 export const WORKFLOW_RUN_BUDGET_WINDOW_MS = 60 * 60 * 1000;
 
 /**
- * How long the executor's per-action work may take before Prisma cancels it.
+ * ## There is deliberately no per-action timeout constant
  *
- * Each action is its own transaction (0009, decision 5), so this bounds one
- * action rather than a list. Generous enough for a `notify` that resolves a
- * tenant's whole supervisor set, short enough that a stuck action frees its
- * worker slot well inside a sweep interval.
+ * One was declared here and never read, with a docblock claiming Prisma enforced
+ * it — a guard that does not exist is worse than no guard, because the next
+ * reader budgets against it.
+ *
+ * There is also nothing here for it to bound. The executor opens no interactive
+ * transaction of its own: the three ticket actions go through
+ * `TicketCommandService`, which owns its transactions, and `add_ticket_tag` and
+ * `notify` are each a single `createMany`. A timeout belongs on the
+ * `$tenantTransaction` that would overrun, which is how
+ * `SLA_SWEEP_CHUNK_TIMEOUT_MS` is used — so if a bound is ever wanted here, it
+ * goes on that call and not on a constant nothing passes.
+ *
+ * The real exposure the removed constant gestured at is a `notify` resolving a
+ * very large supervisor set holding one of `WORKFLOW_WORKER_CONCURRENCY` slots.
+ * That is bounded by the tenant's user count rather than by anything a workflow
+ * can say, and it is a query to make cheaper if it ever shows up — not a
+ * deadline to invent.
  */
-export const WORKFLOW_ACTION_TIMEOUT_MS = 10_000;

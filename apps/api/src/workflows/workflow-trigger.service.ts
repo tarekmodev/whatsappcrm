@@ -3,6 +3,7 @@ import {
   WORKFLOWS_QUEUE,
   WORKFLOW_EVALUATE_TICKET_JOB,
   WORKFLOW_LIMITS,
+  triggerIsTicketScoped,
   workflowDedupeKey,
   type WorkflowActionResult,
   type WorkflowDefinition,
@@ -206,6 +207,10 @@ export class WorkflowTriggerService {
     let skipped = 0;
     let failed = 0;
 
+    // A ticket-scoped key — `ticket:{id}` — is spendable exactly once, ever, so
+    // anything that consumes it without doing the work is permanent.
+    const keyIsSpendableOnce = triggerIsTicketScoped(trigger.triggerType);
+
     for (const candidate of candidates) {
       // Before the claim, and only for the elapsed trigger — see the class
       // docblock for why the order matters more than it looks.
@@ -217,6 +222,25 @@ export class WorkflowTriggerService {
         }
       }
 
+      // Bound 3, and it has to be asked **before** the claim for a ticket-scoped
+      // trigger, for the same reason the threshold above does. Claiming and then
+      // recording `run_budget_exceeded` spends `ticket:{id}` — so a ticket that
+      // happened to be busy in the hour its four-hour escalation came due would
+      // record the refusal once and never escalate again, even after it went
+      // quiet. The budget is a *rate* limit; it must not become a permanent one.
+      if (keyIsSpendableOnce && (await budgetExceeded())) {
+        // Nothing is claimed and nothing is written, so the next sweep re-offers
+        // the ticket and the escalation happens late rather than never. Logged
+        // rather than silent: the run list cannot carry this one, and a tenant
+        // hitting it repeatedly is the support conversation the bound exists for.
+        this.logger.warn(
+          `Deferred ${trigger.triggerType} for ticket ${trigger.ticketId}: over ` +
+            `${WORKFLOW_LIMITS.runsPerTicketPerHour} runs this hour. Its claim is left unspent, ` +
+            'so it will be retried rather than lost.',
+        );
+        continue;
+      }
+
       const runId = await this.claim(trigger, candidate, dedupeKey);
 
       if (runId === null) {
@@ -226,9 +250,11 @@ export class WorkflowTriggerService {
       claimed += 1;
 
       if (await budgetExceeded()) {
-        // Bound 3, and a **failed run rather than a silent drop**: it is the
-        // tenant's rule that is wrong, and a supervisor with a runaway workflow
-        // needs to find it in the run list rather than in our logs.
+        // The event triggers land here, and for them a **failed run rather than
+        // a silent drop** is right: their key is per-occurrence, so spending it
+        // costs that one occurrence and nothing after it — and a supervisor with
+        // a runaway workflow needs to find it in the run list rather than in our
+        // logs.
         await this.finish(runId, 'failed', [], 'run_budget_exceeded', null);
         failed += 1;
         continue;
@@ -326,6 +352,7 @@ export class WorkflowTriggerService {
         ticketId: trigger.ticketId,
         workflowId: candidate.id,
         workflowRunId: runId,
+        actionIndex: index,
       });
 
       results.push({

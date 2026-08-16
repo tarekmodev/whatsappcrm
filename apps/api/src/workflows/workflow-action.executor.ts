@@ -69,6 +69,14 @@ export interface ActionContext {
   readonly ticketId: string;
   readonly workflowId: string;
   readonly workflowRunId: string;
+  /**
+   * This action's index in the definition's list.
+   *
+   * Carried because a run may execute several `notify` actions and each needs
+   * its **own** notification reservation — see `notify` below. It is also what
+   * a result maps back to, so the value is the same one the run row records.
+   */
+  readonly actionIndex: number;
 }
 
 /**
@@ -266,7 +274,7 @@ export class WorkflowActionExecutor {
           workflowRunId: context.workflowRunId,
           ...(action.message === null ? {} : { message: action.message }),
         },
-        dedupeKey: context.workflowRunId,
+        dedupeKey: notifyDedupeKey(context),
       })),
       skipDuplicates: true,
     });
@@ -358,6 +366,27 @@ export class WorkflowActionExecutor {
 
     return memberships.map((membership) => membership.teamId);
   }
+}
+
+/**
+ * One notification reservation per **action**, not per run.
+ *
+ * `UNIQUE (tenant_id, recipient_user_id, dedupe_key)` is the second idempotency
+ * layer, and the schema comment on it reads "one `notify` per recipient per
+ * occurrence". The run id alone does not express that: `actionsPerWorkflow` is
+ * 5, so one run can execute several `notify` actions, and keying them all the
+ * same way means the second insert for an overlapping recipient is swallowed by
+ * `skipDuplicates` and reported `no_op` — which in this vocabulary means "the
+ * ticket was already in that state", not "we dropped your message".
+ *
+ * A workflow that notifies the supervisors and then notifies one of them
+ * directly is the ordinary case, not a contrived one.
+ *
+ * Retry idempotency is unaffected: the index is stable within a run, so a second
+ * delivery of the same job re-derives the same key and still inserts nothing.
+ */
+function notifyDedupeKey(context: ActionContext): string {
+  return `${context.workflowRunId}:${context.actionIndex}`;
 }
 
 /**

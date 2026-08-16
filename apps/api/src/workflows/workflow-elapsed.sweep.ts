@@ -181,6 +181,33 @@ export class WorkflowElapsedSweep {
    * at the fiftieth row. The predicate below is written to match that partial
    * index exactly — **changing the status list here without changing the index
    * silently turns this into a sequential scan per tenant.**
+   *
+   * ## A ticket leaves the candidate set once every elapsed workflow has fired
+   *
+   * This is the `NOT EXISTS` inside the inner query, and it is **load-bearing
+   * rather than an optimisation**. Nothing else takes a ticket out of this set:
+   * the sweep writes nothing, an unresolved ticket only gets *older*, and the
+   * per-tenant `LIMIT` is ordered oldest-first — so without it, a tenant holding
+   * `WORKFLOW_SWEEP_TENANT_BATCH` long-open tickets would return the same fifty
+   * rows on every tick for ever, and the fifty-first ticket to cross its
+   * threshold would never be enqueued at all. Its escalation would simply never
+   * happen, with nothing anywhere reporting it.
+   *
+   * That is the exact hazard `SlaSweepService`'s docblock says a per-tenant bound
+   * does **not** close. The SLA sweep survives it because phase 2 settles each
+   * timer out of `state = 'running'`; this sweep has no such write, so the
+   * candidate set has to be narrowed by the claim itself.
+   *
+   * A ticket therefore qualifies only while **some** armed elapsed workflow still
+   * has an unspent `ticket:{id}` claim on it. Once every one of them has run, the
+   * ticket drops out — which is also what stops the fifty ahead of it costing a
+   * fact-sheet read per tick for the rest of their lives.
+   *
+   * The correlated `NOT EXISTS` is served by
+   * `workflow_runs (tenant_id, workflow_id, dedupe_key)` — the same unique index
+   * that is the claim — so it is an index probe per (armed workflow, candidate
+   * ticket), bounded by `elapsedTriggerWorkflowsPerTenant` × the row cap. The
+   * statement still returns two uuid columns and still reaches no caller.
    */
   private async findOverdueTickets(thresholdMinutes: number): Promise<OverdueTicketRow[]> {
     return await this.systemPrisma.$queryRaw<OverdueTicketRow[]>`
@@ -192,6 +219,20 @@ export class WorkflowElapsedSweep {
            WHERE t.tenant_id = n.id
              AND t.status IN ('open', 'pending')
              AND t.created_at <= now() - make_interval(mins => ${thresholdMinutes})
+             AND EXISTS (
+               SELECT 1
+                 FROM workflows aw
+                WHERE aw.tenant_id = n.id
+                  AND aw.is_active
+                  AND aw.trigger_type = 'ticket_unresolved_for'
+                  AND NOT EXISTS (
+                    SELECT 1
+                      FROM workflow_runs r
+                     WHERE r.tenant_id = n.id
+                       AND r.workflow_id = aw.id
+                       AND r.dedupe_key = 'ticket:' || t.id
+                  )
+             )
            ORDER BY t.created_at
            LIMIT ${WORKFLOW_SWEEP_TENANT_BATCH}
         ) d
