@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import {
   conversationAudienceRooms,
+  tenantCannedResponseRoom,
   userRoom,
   type ConversationResponse,
   type MessageResponse,
@@ -11,11 +12,13 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'socket.io';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import {
+  CANNED_RESPONSE_CHANGED_EVENT,
   CONVERSATION_ASSIGNED_EVENT,
   MESSAGE_CREATED_EVENT,
   MESSAGE_STATUS_CHANGED_EVENT,
   SESSIONS_REVOKED_EVENT,
   SLA_BREACHED_EVENT,
+  type CannedResponseChangedEvent,
   type ConversationAssignedEvent,
   type MessageCreatedEvent,
   type MessageStatusChangedEvent,
@@ -23,6 +26,7 @@ import {
   type SlaBreachedEvent,
 } from '../events/domain-events';
 import { SessionService } from '../identity/session.service';
+import { CannedResponseResourceService } from './canned-response-resource.service';
 import { ConversationResourceService } from './conversation-resource.service';
 import { MessageResourceService } from './message-resource.service';
 import type { RealtimeSocketData } from './realtime-socket';
@@ -50,6 +54,13 @@ import { TenantHostnameService } from './tenant-hostname.service';
  * up on the next unrelated message or on a reconnect-refetch. See
  * `handoverRooms` below for why this one event is addressed to two audiences
  * rather than one.
+ *
+ * `canned_response.changed` from TAR-477's CRUD service, published as
+ * `canned_response.saved` or `canned_response.deleted` (TAR-485). It is the one
+ * relay whose audience is not a conversation's: a canned response is tenant
+ * *configuration* that everyone holding `canned_response:read` may read, so it
+ * goes to a room derived from that permission rather than to the audience of a
+ * thread. See `onCannedResponseChanged`.
  *
  * `message.attachment_settled` and `ticket.created` are emitted today and
  * deliberately not relayed here: neither has a server event in TAR-39's fixed
@@ -106,6 +117,7 @@ export class RealtimeRelayService {
     private readonly messages: MessageResourceService,
     private readonly conversations: ConversationResourceService,
     private readonly breaches: SlaBreachResourceService,
+    private readonly cannedResponses: CannedResponseResourceService,
     private readonly hostnames: TenantHostnameService,
     private readonly sessions: SessionService,
     private readonly tenantContext: TenantContextService,
@@ -258,6 +270,56 @@ export class RealtimeRelayService {
   }
 
   /**
+   * Puts an edit to the tenant's canned-response library in front of every agent
+   * on it (TAR-31's second acceptance criterion, TAR-485).
+   *
+   * **The audience is a permission, not a tenant.** `tenantCannedResponseRoom`
+   * holds the sockets whose principal carried `canned_response:read` at the
+   * handshake — the same rule `GET /canned-responses` enforces, expressed as a
+   * room. Every role holds that permission today, so the room currently contains
+   * what `tenantRoom` does; addressing `tenantRoom` instead would make this file
+   * depend on that staying true, and a fan-out wider than the read rule is an
+   * authorization bypass rather than an untidiness.
+   *
+   * **A save reads the row back; a delete cannot and does not.** The read is
+   * what makes the payload the committed row rather than the writer's view of
+   * it, and it runs in a scope opened from the event's own tenant id, so an id
+   * that named another tenant's row publishes nothing. A `saved` whose row is
+   * already gone — a delete landed in between — publishes nothing either, and
+   * the `deleted` event that delete emitted is what makes the console converge.
+   *
+   * A delete has nothing to read, so it skips the query and publishes the id
+   * alone. That is also why this handler cannot leak on the race: the id is not
+   * a resource, and the room it goes to is derived from the subscriber's own
+   * permission.
+   */
+  @OnEvent(CANNED_RESPONSE_CHANGED_EVENT)
+  async onCannedResponseChanged(event: CannedResponseChangedEvent): Promise<void> {
+    const server = this.server;
+
+    if (server === null) {
+      this.logger.warn(
+        `No Socket.IO server attached; dropping an event for canned response ${event.cannedResponseId}.`,
+      );
+      return;
+    }
+
+    try {
+      const payload = await this.cannedResponsePayload(event);
+
+      if (payload === null) {
+        return;
+      }
+
+      server.to(tenantCannedResponseRoom(event.tenantId)).emit(payload.event, payload);
+    } catch (error: unknown) {
+      this.logger.error(
+        `Could not relay canned response ${event.cannedResponseId} to tenant ${event.tenantId}: ${describe(error)}`,
+      );
+    }
+  }
+
+  /**
    * Drops the sockets of a user whose sessions may just have died.
    *
    * The gap this closes: authentication happens once, at the handshake, and a
@@ -334,6 +396,28 @@ export class RealtimeRelayService {
     } catch (error: unknown) {
       this.logger.error(`Could not re-check sockets for user ${event.userId}: ${describe(error)}`);
     }
+  }
+
+  /**
+   * What a canned-response change puts on the wire, or `null` when there is
+   * nothing to say.
+   *
+   * Split out so the two branches of `change` read as the two shapes they are —
+   * a whole resource that has to be fetched, and a terminal id that must not be.
+   */
+  private async cannedResponsePayload(
+    event: CannedResponseChangedEvent,
+  ): Promise<ServerEvent | null> {
+    if (event.change === 'deleted') {
+      return { event: 'canned_response.deleted', cannedResponseId: event.cannedResponseId };
+    }
+
+    const cannedResponse = await this.tenantContext.run(
+      { requestId: randomUUID(), tenantId: event.tenantId, userId: null, principal: null },
+      async () => await this.cannedResponses.findForRelay(event.cannedResponseId),
+    );
+
+    return cannedResponse === null ? null : { event: 'canned_response.saved', cannedResponse };
   }
 
   /**

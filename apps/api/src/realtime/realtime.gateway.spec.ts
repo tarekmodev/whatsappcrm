@@ -3,18 +3,26 @@ import { Test } from '@nestjs/testing';
 import {
   conversationRoom,
   permissionsForRole,
+  tenantCannedResponseRoom,
   tenantRoom,
   userRoom,
+  type CannedResponseResponse,
   type ConversationAudience,
   type ConversationResponse,
   type MessageResponse,
+  type Permission,
   type SessionPrincipal,
   type TenantRole,
 } from '@whatsappcrm/contracts';
 import { io, type Socket as ClientSocket } from 'socket.io-client';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
-import type { ConversationAssignedEvent, MessageCreatedEvent } from '../events/domain-events';
+import type {
+  CannedResponseChangedEvent,
+  ConversationAssignedEvent,
+  MessageCreatedEvent,
+} from '../events/domain-events';
 import { SessionService } from '../identity/session.service';
+import { CannedResponseResourceService } from './canned-response-resource.service';
 import { ConversationAccessService } from './conversation-access.service';
 import { ConversationResourceService } from './conversation-resource.service';
 import { MessageResourceService, type RelayableMessage } from './message-resource.service';
@@ -55,9 +63,12 @@ const USER_A = '80111111-1111-7111-8111-1111111111a1';
 const USER_B = '80111111-1111-7111-8111-1111111111a2';
 const BYSTANDER = '80111111-1111-7111-8111-1111111111a3';
 const SUPERVISOR = '80111111-1111-7111-8111-1111111111a4';
+/** An agent in tenant A whose permissions no longer include the library. */
+const LIBRARY_LESS = '80111111-1111-7111-8111-1111111111a5';
 const CONVERSATION_A = '80111111-1111-7111-8111-1111111111c1';
 const CONVERSATION_B = '80111111-1111-7111-8111-1111111111c2';
 const MESSAGE = '80111111-1111-7111-8111-1111111111d1';
+const CANNED_RESPONSE = '80111111-1111-7111-8111-1111111111e9';
 
 /** Which ticket string stands for which principal, so a test can hand one out. */
 const TICKETS: Readonly<Record<string, SessionPrincipal>> = {
@@ -66,6 +77,22 @@ const TICKETS: Readonly<Record<string, SessionPrincipal>> = {
   /** A second agent in tenant A, in no team and holding no `conversation:read_all`. */
   'ticket-bystander': principal(TENANT_A, BYSTANDER),
   'ticket-supervisor': principal(TENANT_A, SUPERVISOR, 'supervisor'),
+  /**
+   * An agent in tenant A whose principal does **not** carry
+   * `canned_response:read`.
+   *
+   * No role produces this under today's `ROLE_PERMISSIONS` — which is precisely
+   * why it is written by hand. The canned-response room is joined from the
+   * permission rather than from the tenant so that the fan-out stays equal to
+   * the read rule if TAR-22 ever makes the role table tenant-configurable, and a
+   * guard nothing exercises is a guard nobody knows is there.
+   */
+  'ticket-no-library': principal(
+    TENANT_A,
+    LIBRARY_LESS,
+    'agent',
+    permissionsForRole('agent').filter((permission) => permission !== 'canned_response:read'),
+  ),
 };
 
 /** Conversations a principal may subscribe to, keyed by tenant. */
@@ -90,18 +117,41 @@ const PUBLISHED: MessageResponse = {
   createdAt: '2026-08-11T09:00:01.000Z',
 };
 
-function principal(tenantId: string, userId: string, role: TenantRole = 'agent'): SessionPrincipal {
+function principal(
+  tenantId: string,
+  userId: string,
+  role: TenantRole = 'agent',
+  permissions: readonly Permission[] = permissionsForRole(role),
+): SessionPrincipal {
   return {
     userId,
     tenantId,
     email: `${userId}@acme.invalid`,
     displayName: 'Ada Agent',
     role,
-    permissions: [...permissionsForRole(role)],
+    permissions: [...permissions],
     teamIds: [],
     sessionId: '80111111-1111-7111-8111-1111111111f1',
     expiresAt: '2036-12-31T23:59:59.000Z',
   };
+}
+
+/** The canned response the relay reads back, as the API publishes it. */
+const LIBRARY_ENTRY: CannedResponseResponse = {
+  id: CANNED_RESPONSE,
+  shortcut: '/hours',
+  title: 'Opening hours',
+  body: 'We are open 09:00–17:00, Sunday to Thursday.',
+  createdByUserId: SUPERVISOR,
+  createdAt: '2026-08-11T08:00:00.000Z',
+  updatedAt: '2026-08-11T09:00:00.000Z',
+};
+
+function cannedResponseChanged(
+  change: CannedResponseChangedEvent['change'] = 'saved',
+  tenantId = TENANT_A,
+): CannedResponseChangedEvent {
+  return { tenantId, cannedResponseId: CANNED_RESPONSE, change };
 }
 
 /** The port Node bound, once `listen(0)` has chosen one. */
@@ -253,6 +303,15 @@ describe('the realtime gateway', () => {
         ),
     } as unknown as ConversationResourceService;
 
+    const cannedResponses = {
+      findForRelay: (): Promise<CannedResponseResponse | null> =>
+        // Same discipline as the conversation reader: the real service runs
+        // under the scope the relay opened, so a row only ever resolves inside
+        // its own tenant. Tenant B's library is empty here, which is what makes
+        // the cross-tenant case below a genuine assertion.
+        Promise.resolve(tenantContext.requireTenantId() === TENANT_A ? LIBRARY_ENTRY : null),
+    } as unknown as CannedResponseResourceService;
+
     const hostnames = {
       publish: (): Promise<boolean> => Promise.resolve(true),
     } as unknown as TenantHostnameService;
@@ -270,6 +329,7 @@ describe('the realtime gateway', () => {
         { provide: ConversationAccessService, useValue: conversations },
         { provide: MessageResourceService, useValue: messages },
         { provide: ConversationResourceService, useValue: conversationResources },
+        { provide: CannedResponseResourceService, useValue: cannedResponses },
         // Nothing in this file emits an SLA breach; that relay has its own spec.
         { provide: SlaBreachResourceService, useValue: {} },
         { provide: TenantHostnameService, useValue: hostnames },
@@ -696,6 +756,109 @@ describe('the realtime gateway', () => {
       const seenByB = nextEvent(b, 'conversation.updated');
       await relay.onConversationAssigned(conversationAssigned(null));
 
+      expect(await seenByB).toBeNull();
+    });
+  });
+
+  /**
+   * An admin's edit reaching the agents who can use it (TAR-31's second
+   * acceptance criterion, backend half — TAR-485).
+   *
+   * Real sockets rather than a room-name assertion, because the claim is about
+   * what an agent's connection *receives*: one client edits nothing and asks for
+   * nothing, and the payload arrives whole enough to update its own copy.
+   */
+  describe('an edit to the canned-response library', () => {
+    it('joins a socket to the room its principal’s permission earns it', async () => {
+      const client = connect({ ticket: 'ticket-a' });
+      await connected(client);
+
+      expect(roomMembers(tenantCannedResponseRoom(TENANT_A))).toBe(1);
+      expect(roomMembers(tenantCannedResponseRoom(TENANT_B))).toBe(0);
+    });
+
+    it('leaves out a socket whose principal does not hold canned_response:read', async () => {
+      const client = connect({ ticket: 'ticket-no-library' });
+      await connected(client);
+
+      // Still in the tenant room, which is the point: the two are separate
+      // audiences, and only one of them follows the read rule for this resource.
+      expect(roomMembers(tenantRoom(TENANT_A))).toBe(1);
+      expect(roomMembers(tenantCannedResponseRoom(TENANT_A))).toBe(0);
+    });
+
+    it('reaches a connected agent as a whole resource, without them asking', async () => {
+      const agent = connect({ ticket: 'ticket-a' });
+      await connected(agent);
+
+      const received = nextEvent(agent, 'canned_response.saved', 2_000);
+      await relay.onCannedResponseChanged(cannedResponseChanged());
+
+      expect(await received).toEqual({
+        event: 'canned_response.saved',
+        cannedResponse: LIBRARY_ENTRY,
+      });
+    });
+
+    it('reaches every agent on the tenant, not only the one who made it', async () => {
+      const supervisor = connect({ ticket: 'ticket-supervisor' });
+      const agent = connect({ ticket: 'ticket-bystander' });
+      await Promise.all([connected(supervisor), connected(agent)]);
+
+      const seenByAgent = nextEvent(agent, 'canned_response.saved', 2_000);
+      await relay.onCannedResponseChanged(cannedResponseChanged());
+
+      expect(await seenByAgent).toMatchObject({ cannedResponse: { shortcut: '/hours' } });
+    });
+
+    it('carries a delete as the id alone', async () => {
+      const agent = connect({ ticket: 'ticket-a' });
+      await connected(agent);
+
+      const received = nextEvent(agent, 'canned_response.deleted', 2_000);
+      await relay.onCannedResponseChanged(cannedResponseChanged('deleted'));
+
+      expect(await received).toEqual({
+        event: 'canned_response.deleted',
+        cannedResponseId: CANNED_RESPONSE,
+      });
+    });
+
+    it('does not reach an agent whose principal lost the permission', async () => {
+      const excluded = connect({ ticket: 'ticket-no-library' });
+      await connected(excluded);
+
+      const seen = nextEvent(excluded, 'canned_response.saved');
+      await relay.onCannedResponseChanged(cannedResponseChanged());
+
+      expect(await seen).toBeNull();
+    });
+
+    it('never crosses tenants', async () => {
+      // Tenant B's socket is in tenant B's canned-response room, which nothing in
+      // this emit names. The room is built from the event's tenant id, so there
+      // is no value a client could supply that would put it in the other one.
+      const b = connect({ ticket: 'ticket-b' });
+      await connected(b);
+
+      const seenByB = nextEvent(b, 'canned_response.saved');
+      await relay.onCannedResponseChanged(cannedResponseChanged());
+
+      expect(await seenByB).toBeNull();
+    });
+
+    it('publishes nothing at all for a tenant whose library the read cannot see', async () => {
+      // The relay opened tenant B's scope, where the id resolves to nothing —
+      // the shape a forged or stale `tenantId` takes once RLS has answered.
+      const a = connect({ ticket: 'ticket-a' });
+      const b = connect({ ticket: 'ticket-b' });
+      await Promise.all([connected(a), connected(b)]);
+
+      const seenByA = nextEvent(a, 'canned_response.saved');
+      const seenByB = nextEvent(b, 'canned_response.saved');
+      await relay.onCannedResponseChanged(cannedResponseChanged('saved', TENANT_B));
+
+      expect(await seenByA).toBeNull();
       expect(await seenByB).toBeNull();
     });
   });

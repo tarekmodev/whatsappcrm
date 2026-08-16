@@ -3,9 +3,11 @@ import {
   conversationAudienceRooms,
   conversationRoom,
   teamRoom,
+  tenantCannedResponseRoom,
   tenantReadersRoom,
   tenantRoom,
   userRoom,
+  type CannedResponseResponse,
   type ConversationAudience,
   type ConversationResponse,
   type MessageResponse,
@@ -13,11 +15,13 @@ import {
 import type { Server } from 'socket.io';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type {
+  CannedResponseChangedEvent,
   ConversationAssignedEvent,
   MessageCreatedEvent,
   MessageStatusChangedEvent,
 } from '../events/domain-events';
 import type { SessionService } from '../identity/session.service';
+import type { CannedResponseResourceService } from './canned-response-resource.service';
 import type { ConversationResourceService } from './conversation-resource.service';
 import type { MessageResourceService, RelayableMessage } from './message-resource.service';
 import { RealtimeRelayService } from './realtime-relay.service';
@@ -42,6 +46,7 @@ const TEAM = '80111111-1111-7111-8111-1111111111b1';
 const CONVERSATION = '80111111-1111-7111-8111-1111111111c1';
 const MESSAGE = '80111111-1111-7111-8111-1111111111d1';
 const CONTACT = '80111111-1111-7111-8111-1111111111b9';
+const CANNED_RESPONSE = '80111111-1111-7111-8111-1111111111e9';
 
 const PUBLISHED: MessageResponse = {
   id: MESSAGE,
@@ -121,6 +126,32 @@ function conversation(overrides: Partial<ConversationResponse> = {}): Conversati
   };
 }
 
+/** The canned response as `GET /canned-responses` publishes it. */
+function cannedResponse(overrides: Partial<CannedResponseResponse> = {}): CannedResponseResponse {
+  return {
+    id: CANNED_RESPONSE,
+    shortcut: '/hours',
+    title: 'Opening hours',
+    body: 'We are open 09:00–17:00, Sunday to Thursday.',
+    createdByUserId: ASSIGNEE,
+    createdAt: '2026-08-11T08:00:00.000Z',
+    updatedAt: '2026-08-11T09:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/** A save, which is what a create and an update both emit. */
+function cannedResponseChanged(
+  overrides: Partial<CannedResponseChangedEvent> = {},
+): CannedResponseChangedEvent {
+  return {
+    tenantId: TENANT,
+    cannedResponseId: CANNED_RESPONSE,
+    change: 'saved',
+    ...overrides,
+  };
+}
+
 /** A hand-over from nobody — the claim of an unclaimed thread — by default. */
 function assigned(overrides: Partial<ConversationAssignedEvent> = {}): ConversationAssignedEvent {
   return {
@@ -149,6 +180,7 @@ function harnessFor(
   options: {
     message?: MessageResponse | null;
     conversation?: ConversationResponse | null;
+    cannedResponse?: CannedResponseResponse | null;
     audience?: Partial<ConversationAudience>;
     readFails?: boolean;
     attach?: boolean;
@@ -199,6 +231,20 @@ function harnessFor(
     },
   } as unknown as ConversationResourceService;
 
+  const cannedResponses = {
+    findForRelay: (): Promise<CannedResponseResponse | null> => {
+      scopes.push(tenantContext.tenantId);
+
+      if (options.readFails === true) {
+        return Promise.reject(new Error('the database is unreachable'));
+      }
+
+      return Promise.resolve(
+        options.cannedResponse === undefined ? cannedResponse() : options.cannedResponse,
+      );
+    },
+  } as unknown as CannedResponseResourceService;
+
   const hostnames = {
     publish: (): Promise<boolean> => {
       if (options.hostname === false) {
@@ -220,6 +266,7 @@ function harnessFor(
     conversations,
     // TAR-280's breach relay has its own spec; nothing in this file emits one.
     {} as unknown as SlaBreachResourceService,
+    cannedResponses,
     hostnames,
     sessions,
     tenantContext,
@@ -237,12 +284,17 @@ function harnessFor(
  * records what was addressed to it. Socket.IO's own de-duplication of a socket
  * in two of those rooms is its concern, not this file's — what is under test is
  * *which rooms are named*, because that set is the authorization boundary.
+ *
+ * `to()` genuinely takes a room or a list of them, and the relay uses both — a
+ * conversation is addressed to an audience, a canned response to one room. The
+ * single room is normalised to a list here so every assertion below reads the
+ * same shape.
  */
 function fakeServer(emissions: Emission[]): Server {
   return {
-    to: (rooms: string[]) => ({
+    to: (rooms: string | string[]) => ({
       emit: (event: string, payload: unknown) => {
-        emissions.push({ rooms, event, payload });
+        emissions.push({ rooms: typeof rooms === 'string' ? [rooms] : rooms, event, payload });
         return true;
       },
     }),
@@ -623,6 +675,121 @@ describe('relaying a conversation hand-over', () => {
     const { relay, emissions } = harnessFor({ hostname: false });
 
     await relay.onConversationAssigned(assigned());
+
+    expect(emissions).toHaveLength(1);
+  });
+});
+
+/**
+ * Relaying an edit to the tenant's canned-response library (TAR-485).
+ *
+ * The one relay whose audience is a *permission* rather than a conversation's
+ * assignment, so the properties under test are different in kind: that the room
+ * is the permission-derived one and never the tenant-wide one; that a save
+ * publishes the row the relay read back rather than anything the writer sent;
+ * and that a delete publishes an id without reading at all.
+ */
+describe('relaying a canned-response change', () => {
+  it('publishes a save to the tenant’s canned-response readers, and nowhere else', async () => {
+    const { relay, emissions } = harnessFor();
+
+    await relay.onCannedResponseChanged(cannedResponseChanged());
+
+    expect(emissions[0]?.rooms).toEqual([tenantCannedResponseRoom(TENANT)]);
+  });
+
+  it('never addresses the tenant-wide room, even though it holds the same sockets today', async () => {
+    // The equality is a fact about `ROLE_PERMISSIONS`, which TAR-22 may replace
+    // with tenant-configurable rows. This is the test that would fail the day
+    // somebody "simplified" the room away, rather than the day a tenant revoked
+    // `canned_response:read` from a role and found the edits still arriving.
+    const { relay, emissions } = harnessFor();
+
+    await relay.onCannedResponseChanged(cannedResponseChanged());
+
+    expect(emissions[0]?.rooms).not.toContain(tenantRoom(TENANT));
+    expect(emissions[0]?.rooms).not.toContain(tenantReadersRoom(TENANT));
+  });
+
+  it('publishes the whole row it read back, so a client needs no refetch', async () => {
+    const published = cannedResponse({ body: 'We are open 09:00–17:00.' });
+    const { relay, emissions } = harnessFor({ cannedResponse: published });
+
+    await relay.onCannedResponseChanged(cannedResponseChanged());
+
+    expect(emissions[0]?.event).toBe('canned_response.saved');
+    expect(emissions[0]?.payload).toEqual({
+      event: 'canned_response.saved',
+      cannedResponse: published,
+    });
+    expect(ServerEventSchema.safeParse(emissions[0]?.payload).success).toBe(true);
+  });
+
+  it('reads the row back inside the event’s own tenant scope', async () => {
+    const { relay, scopes } = harnessFor();
+
+    await relay.onCannedResponseChanged(cannedResponseChanged());
+
+    expect(scopes).toEqual([TENANT]);
+  });
+
+  it('publishes a delete as the id alone, without reading anything', async () => {
+    const { relay, emissions, scopes } = harnessFor();
+
+    await relay.onCannedResponseChanged(cannedResponseChanged({ change: 'deleted' }));
+
+    expect(emissions[0]).toEqual({
+      rooms: [tenantCannedResponseRoom(TENANT)],
+      event: 'canned_response.deleted',
+      payload: { event: 'canned_response.deleted', cannedResponseId: CANNED_RESPONSE },
+    });
+    expect(ServerEventSchema.safeParse(emissions[0]?.payload).success).toBe(true);
+    // There is no row left to read, so a query would be a guaranteed miss.
+    expect(scopes).toEqual([]);
+  });
+
+  it('relays nothing when a delete landed between the commit and the read', async () => {
+    // The `deleted` event that delete emitted is what makes the console
+    // converge, so publishing a half-read `saved` here would be the wrong fix.
+    const { relay, emissions } = harnessFor({ cannedResponse: null });
+
+    await relay.onCannedResponseChanged(cannedResponseChanged());
+
+    expect(emissions).toEqual([]);
+  });
+
+  it('keeps two tenants’ edits in their own rooms', async () => {
+    const other = '80111111-1111-7111-8111-111111111102';
+    const mine = harnessFor();
+    const theirs = harnessFor();
+
+    await mine.relay.onCannedResponseChanged(cannedResponseChanged());
+    await theirs.relay.onCannedResponseChanged(cannedResponseChanged({ tenantId: other }));
+
+    // The room name is built from the event's own tenant id and nothing else, so
+    // the two sets cannot overlap — no id a client sent reaches this.
+    expect(mine.emissions[0]?.rooms).toEqual([tenantCannedResponseRoom(TENANT)]);
+    expect(theirs.emissions[0]?.rooms).toEqual([tenantCannedResponseRoom(other)]);
+    expect(theirs.scopes).toEqual([other]);
+  });
+
+  it('swallows a failed read rather than rejecting into the emitter', async () => {
+    const { relay, emissions } = harnessFor({ readFails: true });
+
+    await expect(relay.onCannedResponseChanged(cannedResponseChanged())).resolves.toBeUndefined();
+    expect(emissions).toEqual([]);
+  });
+
+  it('does nothing at all before a server is attached', async () => {
+    const { relay } = harnessFor({ attach: false });
+
+    await expect(relay.onCannedResponseChanged(cannedResponseChanged())).resolves.toBeUndefined();
+  });
+
+  it('needs no hostname, because a canned response carries no absolute URL', async () => {
+    const { relay, emissions } = harnessFor({ hostname: false });
+
+    await relay.onCannedResponseChanged(cannedResponseChanged());
 
     expect(emissions).toHaveLength(1);
   });

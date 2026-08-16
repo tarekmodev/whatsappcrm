@@ -8,6 +8,7 @@ import { SessionCacheService } from '../identity/session-cache.service';
 import { SessionService } from '../identity/session.service';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
+import { CannedResponseResourceService } from './canned-response-resource.service';
 import { ConversationAccessService } from './conversation-access.service';
 
 /**
@@ -55,6 +56,8 @@ const CONVERSATION_A = '69555555-5555-7555-8555-5555555555e1';
 const CONVERSATION_B = '69555555-5555-7555-8555-5555555555e2';
 const UNASSIGNED_A = '69555555-5555-7555-8555-5555555555e3';
 const TEAM_ROUTED_A = '69555555-5555-7555-8555-5555555555e4';
+const CANNED_RESPONSE_A = '69555555-5555-7555-8555-5555555555f5';
+const CANNED_RESPONSE_B = '69555555-5555-7555-8555-5555555555f6';
 
 const REQUEST_ID = 'tar69-int-spec';
 const FIXTURE_PREFIX = 'tar69-fixture';
@@ -67,6 +70,7 @@ describe('the realtime gateway cannot be pointed at another tenant', () => {
   let tenantPrisma: TenantPrisma;
   let access: ConversationAccessService;
   let sessions: SessionService;
+  let cannedResponses: CannedResponseResourceService;
 
   function asTenant<T>(tenantId: string, work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
@@ -133,6 +137,7 @@ describe('the realtime gateway cannot be pointed at another tenant', () => {
     tenantPrisma = withTenantScope(tenantBase, tenantContext);
 
     access = new ConversationAccessService(tenantPrisma);
+    cannedResponses = new CannedResponseResourceService(tenantPrisma);
     // `resolveBySessionId` reads Postgres and nothing else — it does not consult
     // or write the principal cache, because both are keyed by a token hash it
     // does not have. A Redis client that always degrades makes that explicit.
@@ -242,6 +247,29 @@ describe('the realtime gateway cannot be pointed at another tenant', () => {
           whatsappAccountId: ACCOUNT_B,
           contactId: CONTACT_B,
           assignedUserId: USER_B,
+        },
+      ],
+    });
+
+    // Both tenants hold `/hours`, with different text. `UNIQUE (tenant_id,
+    // shortcut)` allows it, and it is what makes the read-back assertions below
+    // fail loudly on a leak: the wrong tenant's row is a different body rather
+    // than an absence that could also mean "the fixture did not load".
+    await systemPrisma.cannedResponse.createMany({
+      data: [
+        {
+          id: CANNED_RESPONSE_A,
+          tenantId: TENANT_A,
+          shortcut: '/hours',
+          title: 'Opening hours',
+          body: 'Tenant A is open 09:00–17:00.',
+        },
+        {
+          id: CANNED_RESPONSE_B,
+          tenantId: TENANT_B,
+          shortcut: '/hours',
+          title: 'Opening hours',
+          body: 'Tenant B is open 08:00–20:00.',
         },
       ],
     });
@@ -372,6 +400,41 @@ describe('the realtime gateway cannot be pointed at another tenant', () => {
           select: { expiresAt: true, lastSeenAt: true },
         }),
       ).resolves.toEqual(before);
+    });
+  });
+
+  /**
+   * The row a canned-response relay publishes (TAR-485).
+   *
+   * The relay opens a scope from the event's own `tenantId` and reads the row
+   * back under it, so the isolation claim is not "the relay compares tenant ids"
+   * — it does not, and there is nothing in the handler to compare. It is that
+   * `canned_responses` carries TAR-48's policy and that the app role's grants go
+   * through it, which only a real database can answer.
+   */
+  describe('the canned response a relay reads back', () => {
+    it('resolves inside its own tenant, with that tenant’s text', async () => {
+      await expect(
+        asTenant(TENANT_A, async () => cannedResponses.findForRelay(CANNED_RESPONSE_A)),
+      ).resolves.toMatchObject({ shortcut: '/hours', body: 'Tenant A is open 09:00–17:00.' });
+    });
+
+    it('resolves to nothing when the event names another tenant’s row', async () => {
+      // The scenario a forged or stale `tenantId` takes: the id is real and live
+      // for its owner, so this is a refusal rather than an empty table. Nothing
+      // is published, which is exactly what the handler does with `null`.
+      await expect(
+        asTenant(TENANT_A, async () => cannedResponses.findForRelay(CANNED_RESPONSE_B)),
+      ).resolves.toBeNull();
+      await expect(
+        asTenant(TENANT_B, async () => cannedResponses.findForRelay(CANNED_RESPONSE_A)),
+      ).resolves.toBeNull();
+    });
+
+    it('gives each tenant its own row for a shortcut they both hold', async () => {
+      await expect(
+        asTenant(TENANT_B, async () => cannedResponses.findForRelay(CANNED_RESPONSE_B)),
+      ).resolves.toMatchObject({ body: 'Tenant B is open 08:00–20:00.' });
     });
   });
 });
