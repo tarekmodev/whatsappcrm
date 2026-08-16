@@ -908,14 +908,54 @@ should set `updated_at = now()` itself — PostgreSQL does not refresh a default
 
 #### `ticket_events`
 
-Append-only audit trail for a single ticket.
+Append-only audit trail for a single ticket, and — per ADR 0011 decision 4 — the audit
+record for **both** manual reassignment and escalation. `audit_logs` is deliberately not
+touched by either: it carries security-relevant events, and reassignment is ordinary
+operational activity that happens hundreds of times a day per tenant.
 
+- **Unique:** `(tenant_id, id)`
 - **Indexes:** `(tenant_id, ticket_id, created_at DESC, id DESC)`,
   `(tenant_id, actor_user_id)`
 - **Owned by:** TAR-32
 
 `type` is text rather than an enum: every later story adds event types, and an enum would
-make each of them a migration. `actor_user_id` is null when the actor is the system.
+make each of them a migration. TAR-32 is the worked example — it adds `escalated` as a
+TypeScript constant with no DDL at all, and reuses `assigned`/`unassigned` for
+reassignment rather than inventing a third type meaning "the assignment moved".
+
+`actor_user_id` is null when the actor is the system — the router and the SLA sweep write
+through it. **Reassignment and escalation events are always attributed**, because neither
+route is reachable without a principal and an event claiming a system actor on a human
+decision is a lie the trail cannot recover from.
+
+Both actions fit one shape without a convention to remember: tenant, ticket, actor and
+timestamp are columns; `reason` and `cause` live in `data`, alongside the assignment's
+`from`/`to` pair on the two assignment types.
+
+`(tenant_id, id)` exists for exactly one reason and adds no new guarantee about events —
+`id` is already the primary key. It is the target that `notifications`' composite foreign
+key on `(tenant_id, ticket_event_id)` needs; `tickets`, `sla_timers` and `workflows` carry
+the same constraint for the same reason.
+
+#### Where an escalation is stored
+
+**There is no `escalation_alerts` table**, and the absence is a decision rather than an
+omission. ADR 0011 decision 5 specified one, mirroring `sla_alerts` — but it accepted two
+parallel tables explicitly as a price, not a design, and named **the third notification
+type as the trigger** to fold them into one. TAR-394 reached that point first, at the
+second type, so `20260816130000_notifications_generalisation` performed the fold before
+escalation arrived.
+
+That voids the premise 0011 reasoned from. Escalation is not landing in a world with one
+bespoke alerts table; it is landing in a world where the generic one already exists. So
+TAR-468 added `notification_type.escalation` and one column, and the fourth table would
+have been the deviation — with exactly the cost both ADRs name: two unread counts, two
+acknowledge endpoints, and a supervisor who has to look in two places.
+
+**The published API contract is unaffected.** `GET /api/v1/escalation-alerts` and its
+acknowledge are a `type = 'escalation'` view over `notifications`, which is the same
+arrangement TAR-394 kept for `sla-alerts`. See [`notifications`](#notifications) for the
+columns, and 0011 for the flow.
 
 ### Assignment — TAR-23 / TAR-24
 
@@ -1036,12 +1076,15 @@ once timer volume makes the size matter; the query does not have to change.
 #### `notifications` — `sla_alerts` until TAR-394
 
 - **Unique:** `(tenant_id, sla_timer_id, recipient_user_id)`;
-  `(tenant_id, recipient_user_id, dedupe_key)`
+  `(tenant_id, recipient_user_id, dedupe_key)`;
+  `(tenant_id, ticket_event_id, recipient_user_id)`
 - **Indexes:** `(tenant_id, recipient_user_id, created_at DESC, id DESC)`;
   `(tenant_id, ticket_id)`
 - **CHECK:** `notifications_sla_breach_columns` — `sla_timer_id`, `kind` and `due_at` are
-  non-null for `type = 'sla_breach'` and null for every other type
-- **Owned by:** TAR-26, generalised by TAR-27
+  non-null for `type = 'sla_breach'` and null for every other type;
+  `notifications_escalation_columns` — `ticket_event_id` is non-null for
+  `type = 'escalation'` and null for every other type
+- **Owned by:** TAR-26, generalised by TAR-27, third type by TAR-468
 
 One row per recipient per thing worth telling them about, and three things at once (0006,
 decision 5): the delivery record that survives an offline supervisor, the read model behind
@@ -1067,12 +1110,28 @@ wider notification list its sort order.
 
 Each unique key is the second idempotency layer for one writer —
 `(tenant_id, sla_timer_id, recipient_user_id)` for the breach sweep,
-`(tenant_id, recipient_user_id, dedupe_key)` for a workflow's `notify`. The load-bearing
+`(tenant_id, recipient_user_id, dedupe_key)` for a workflow's `notify`, and
+`(tenant_id, ticket_event_id, recipient_user_id)` for a manual escalation. The load-bearing
 layer on the SLA side is the conditional `UPDATE ... WHERE state = 'running'` that flips the
-timer in the same transaction; on the workflow side it is the run's own claim. Neither unique
-index is partial, where 0009 proposed a predicate: PostgreSQL does not collide NULLs, so the
-predicate would change nothing and would cost the describer trap that partial indexes carry
-in this schema.
+timer in the same transaction; on the workflow side it is the run's own claim; on the
+escalation side it is the transaction that writes the `escalated` event and its
+notifications together. No unique index is partial, where 0009 proposed a predicate:
+PostgreSQL does not collide NULLs, so the predicate would change nothing and would cost the
+describer trap that partial indexes carry in this schema.
+
+**`ticket_event_id` is TAR-468's group key and idempotency key at once**, and a real column
+with a composite foreign key rather than a `dedupe_key` string. N recipient rows point at
+one `escalated` event, so the console renders one escalation rather than three; there is no
+natural uniqueness on `(ticket, recipient)` — a second escalation an hour later must notify
+again — but a _retry_ of one escalation must not, and the event row is already unique. The
+foreign key is what makes the invariant structural: a notification cannot reference an
+escalation that is absent from the audit trail, so a notification nobody can explain is not
+a reachable state. A `dedupe_key` would have keyed on a string and guaranteed nothing about
+the event's existence.
+
+Escalation does **not** move the assignment (0011, decision 3), so nothing about it writes
+`tickets` and there is no `is_escalated` flag or `escalated_at` column. An escalation that
+un-assigned the agent would leave the customer with nobody until a supervisor woke up.
 
 For a breach, recipients are derived rather than configured — the tenant's active supervisors
 and admins, narrowed to those sharing a team with whoever holds the ticket, falling back to
@@ -1391,6 +1450,8 @@ Applied in this order. Every directory carries a hand-written `down.sql` beside 
 | `20260816120000_workflow_run_status_skipped`                              | `ALTER TYPE workflow_run_status ADD VALUE 'skipped'`, alone in its own migration                                                                                                                                                                                                                                                                                                                                                                                | TAR-394 |
 | `20260816130000_notifications_generalisation`                             | Renames `sla_alerts` to `notifications` with its pkey, three indexes and four foreign keys; adds `type`, `data` and `dedupe_key` with the dedupe unique; makes `sla_timer_id`, `kind` and `due_at` nullable behind `notifications_sla_breach_columns`. No data migration, no new table, no new policy                                                                                                                                                           | TAR-394 |
 | `20260816140000_workflow_rule_schema`                                     | `workflows.name` to `citext` plus `position`, `trigger_type`, `broken_reason` and the evaluation index; the `workflow_runs` claim columns, its unique dedupe key and two CHECKs; adds `workflow_references` and `ticket_tags` and the 45th and 46th policies; `tickets_active_created_at_idx`                                                                                                                                                                   | TAR-394 |
+| `20260816150000_notification_type_escalation`                             | `ALTER TYPE notification_type ADD VALUE 'escalation'`, alone in its own migration                                                                                                                                                                                                                                                                                                                                                                               | TAR-468 |
+| `20260816160000_ticket_escalation_notifications`                          | `ticket_events (tenant_id, id)` UNIQUE; `notifications.ticket_event_id` with its composite FK, its unique and `notifications_escalation_columns`. No new table, no new policy, no `ALTER TABLE tickets`, no backfill. The UNIQUE is the one statement that scales — `ticket_events` is populated and append-only, so the migration asserts its size and refuses above 250 000 rows with the `CONCURRENTLY` statement to run instead                             | TAR-468 |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's
@@ -1405,14 +1466,22 @@ policy with it, because a policy is attached to the table's OID rather than to i
 
 The count goes back down by one at the end: `20260815180000` drops the `tenant_isolation` policy
 on `lifecycle_audit_log` along with its foreign keys and renames it `lifecycle_events`, which
-leaves 45 policies rather than 46.
+leaves 45 policies rather than 46. TAR-468 adds no table, so it does not move the count either
+way.
 
-`20260813120000_sla_timer_state_paused` and
-`20260816120000_workflow_run_status_skipped` are each one statement in a directory of their own
+`20260813120000_sla_timer_state_paused`,
+`20260816120000_workflow_run_status_skipped` and
+`20260816150000_notification_type_escalation` are each one statement in a directory of their own
 because PostgreSQL refuses to _use_ an enum label in the transaction that added it, and Prisma
 runs each migration in one transaction. Splitting them costs a directory and removes a class of
 deploy failure that only shows up on a fresh database. Creating a _new_ enum type and using it
 in the same migration is fine, which is why TAR-394's four other types are not split out.
+
+TAR-468's split is the one where the cost is visible: `20260816160000` writes a CHECK naming
+`'escalation'`, so the two genuinely cannot share a file. All three use
+`ADD VALUE IF NOT EXISTS`, because the bare form errors on a label that is already present —
+which is the state a re-apply finds, given that no `down.sql` in this repository can remove an
+enum label.
 
 `20260810180000_message_content_type_unsupported` shares the `180000` slot with the
 template-list index and is absent from the table above only because it was added on a

@@ -17,7 +17,13 @@ import { ReportsController } from './reports.controller';
  * | ---------------------- | --------------------------------------------------------------------- |
  * | `ReportRangeResolver`  | Tenant-local `from`/`to` → a half-open instant interval               |
  * | `ReportingQueryService`| **The only place aggregation SQL lives.** Returns one dashboard       |
- * | `ReportsController`    | `GET /api/v1/reports/dashboard`                                      |
+ * | `ReportsController`    | `GET /reports/dashboard` and `GET /reports/dashboard/export`         |
+ *
+ * `serialiseDashboardCsv` is a function rather than a provider, and that is the
+ * design showing through the wiring: it takes the object the query service
+ * already returns, touches no database and holds no state, so there is nothing
+ * for the container to inject into it. The day it needs a dependency is the day
+ * the export has grown a second source of numbers.
  *
  * ## Its operational surface is the whole of "it is a read"
  *
@@ -40,12 +46,11 @@ import { ReportsController } from './reports.controller';
  * satisfies TAR-426's "confirms the tenant-scoping mechanism established in
  * TAR-39/TAR-19" for this story.
  *
- * ## What is not here yet
+ * ## What is not here
  *
- * `DashboardCsvSerialiser` and the export route (TAR-430). Both are additive:
- * the serialiser takes the object `ReportingQueryService` already returns and
- * touches no database, which is the mechanism behind TAR-30's export/on-screen
- * parity criterion.
+ * A row-level (per-ticket) export, and scheduled or emailed reports. 0010 names
+ * both as the triggers for revisiting the synchronous shape, and both would
+ * call this same query layer rather than growing one of their own.
  */
 @Module({
   controllers: [ReportsController],

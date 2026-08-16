@@ -71,6 +71,15 @@
 -- be legal, and identically named rows on both sides are what stop a
 -- "saw 1 row of my own" assertion passing on a query that ignored the tenant.
 --
+-- TAR-468 adds a row to `ticket_events` and an `escalation` row to
+-- `notifications` in each tenant — a manual escalation and the supervisor it
+-- named. They earn their own for a third reason again: those two are the only
+-- fixture rows carrying text a person typed about a named colleague, and the
+-- composite foreign key between them is a second enforcement mechanism that RLS
+-- does not cover. Phase 3d exercises it directly, because a foreign-key
+-- violation and a policy rejection are different failures and only one of them
+-- is what that key exists for.
+--
 -- The *constraints* those tables exist for are separate properties, proven
 -- elsewhere: `src/prisma/ticket-active-uniqueness.int-spec.ts` for TAR-74's
 -- index, and TAR-55/56/57's own tests for single-use redemption and lockout.
@@ -352,6 +361,8 @@ DELETE FROM "public"."ticket_tags" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."notifications" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_a';
+-- TAR-468's events, after the notifications above that reference them.
+DELETE FROM "public"."ticket_events" WHERE "tenant_id" = :'tenant_a';
 -- Before the conversation and contact they reference: those foreign keys are
 -- NoAction, so the parents cannot go first.
 DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_a';
@@ -383,6 +394,7 @@ DELETE FROM "public"."ticket_tags" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."notifications" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."ticket_events" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
@@ -489,6 +501,20 @@ INSERT INTO "public"."workflow_runs" ("id", "tenant_id", "workflow_id", "ticket_
             '11111111-1111-7111-8111-1111111111a6', 1,
             'ticket:11111111-1111-7111-8111-1111111111a6', 'succeeded',
             '[{"index":0,"type":"add_ticket_tag","outcome":"applied","reason":null}]'::jsonb);
+-- TAR-468's pair: a manual escalation and the supervisor it named. The event row
+-- is the audit trail TAR-32 asks for, and the `escalation` notification is the
+-- record that the supervisor was told. `data.reason` is the agent's free text —
+-- the one value in this fixture that carries something a person typed about a
+-- named colleague, which is why both are named in the assertions below rather
+-- than left to the catalog-driven loop.
+INSERT INTO "public"."ticket_events" ("id", "tenant_id", "ticket_id", "type", "actor_user_id", "data")
+    VALUES ('11111111-1111-7111-8111-1111111111ae', :'tenant_a', '11111111-1111-7111-8111-1111111111a6',
+            'escalated', '11111111-1111-7111-8111-1111111111a1',
+            '{"reason": "fixture A escalation reason", "cause": "agent"}'::jsonb);
+INSERT INTO "public"."notifications" ("id", "tenant_id", "type", "ticket_event_id", "ticket_id", "recipient_user_id")
+    VALUES ('11111111-1111-7111-8111-1111111111af', :'tenant_a', 'escalation',
+            '11111111-1111-7111-8111-1111111111ae', '11111111-1111-7111-8111-1111111111a6',
+            '11111111-1111-7111-8111-1111111111a1');
 
 SET LOCAL app.tenant_id = :'tenant_b';
 
@@ -571,10 +597,20 @@ INSERT INTO "public"."workflow_runs" ("id", "tenant_id", "workflow_id", "ticket_
             '22222222-2222-7222-8222-2222222222b6', 1,
             'ticket:22222222-2222-7222-8222-2222222222b6', 'succeeded',
             '[{"index":0,"type":"add_ticket_tag","outcome":"applied","reason":null}]'::jsonb);
+-- Tenant B's escalation, mirroring tenant A's, for the reason above: with rows
+-- on only one side, "saw 0 of the other's" is trivially true.
+INSERT INTO "public"."ticket_events" ("id", "tenant_id", "ticket_id", "type", "actor_user_id", "data")
+    VALUES ('22222222-2222-7222-8222-2222222222be', :'tenant_b', '22222222-2222-7222-8222-2222222222b6',
+            'escalated', '22222222-2222-7222-8222-2222222222b1',
+            '{"reason": "fixture B escalation reason", "cause": "agent"}'::jsonb);
+INSERT INTO "public"."notifications" ("id", "tenant_id", "type", "ticket_event_id", "ticket_id", "recipient_user_id")
+    VALUES ('22222222-2222-7222-8222-2222222222bf', :'tenant_b', 'escalation',
+            '22222222-2222-7222-8222-2222222222be', '22222222-2222-7222-8222-2222222222b6',
+            '22222222-2222-7222-8222-2222222222b1');
 
 COMMIT;
 
-\echo 'fixture committed: 2 tenants, 21 rows each'
+\echo 'fixture committed: 2 tenants, 23 rows each'
 
 -- ---------------------------------------------------------------------------
 -- Phase 3 — behaviour, on a connection that has never set the GUC.
@@ -755,8 +791,18 @@ BEGIN
         WHERE "state" = 'breached' AND "due_at" <= now();
     IF n <> 1 THEN RAISE EXCEPTION 'the unscoped sweep predicate returned % rows to a scoped role', n; END IF;
 
+    -- Two now: the SLA breach above and TAR-468's escalation below. Counted by
+    -- type as well as in total, because "2 notifications" would still pass if the
+    -- escalation had silently been written as a breach — and the two are read by
+    -- different endpoints.
     SELECT count(*) INTO n FROM "public"."notifications";
-    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 notification, saw %', n; END IF;
+    IF n <> 2 THEN RAISE EXCEPTION 'tenant A: expected 2 notifications, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."notifications" WHERE "type" = 'sla_breach';
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 sla_breach notification, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."notifications" WHERE "type" = 'escalation';
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 escalation notification, saw %', n; END IF;
 
     SELECT count(*) INTO n FROM "public"."notifications" WHERE "tenant_id" = tenant_b;
     IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of notifications returned % rows', n; END IF;
@@ -825,7 +871,42 @@ BEGIN
     SELECT count(*) INTO n FROM "public"."ticket_tags" WHERE "tenant_id" = tenant_b;
     IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of ticket_tags returned % rows', n; END IF;
 
-    RAISE NOTICE 'ok: tenant A sees its own 21 rows and none of tenant B''s';
+    -- TAR-468's audit trail. `ticket_events` carries the reason an agent typed
+    -- when they escalated or handed off — free text about a named colleague, and
+    -- the most sensitive thing TAR-32 adds to the schema.
+    SELECT count(*) INTO n FROM "public"."ticket_events";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 ticket event, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."ticket_events" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of ticket_events returned % rows', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."ticket_events"
+        WHERE "data"->>'reason' = 'fixture B escalation reason';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s escalation reason was readable'; END IF;
+
+    -- The escalation notification, by id — the read
+    -- `GET /api/v1/escalation-alerts/{id}` and its acknowledge make. It must find
+    -- nothing, so the endpoint answers 404 on the policy rather than on an
+    -- application check that could be forgotten.
+    SELECT count(*) INTO n FROM "public"."notifications"
+        WHERE "id" = '22222222-2222-7222-8222-2222222222bf';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s escalation notification was reachable by id'; END IF;
+
+    -- The recipient's own list query, unqualified by tenant exactly as the
+    -- keyset-paged handler will issue it. Both fixture recipients are the *first*
+    -- user in their tenant, so a policy that stopped filtering would show a
+    -- supervisor another org's escalations under their own name.
+    SELECT count(*) INTO n FROM "public"."notifications"
+        WHERE "recipient_user_id" = '22222222-2222-7222-8222-2222222222b1';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s notification was reachable by recipient'; END IF;
+
+    -- By the escalation's group key. This is the read that renders one escalation
+    -- rather than three, and tenant B's event id must not resolve it.
+    SELECT count(*) INTO n FROM "public"."notifications"
+        WHERE "ticket_event_id" = '22222222-2222-7222-8222-2222222222be';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s escalation was reachable by ticket event id'; END IF;
+
+    RAISE NOTICE 'ok: tenant A sees its own 23 rows and none of tenant B''s';
 
     -- 3c. Tenant B, symmetrically. Same connection, same role — only the GUC
     -- changed, which is exactly what the client extension will do per request.
@@ -870,6 +951,26 @@ BEGIN
             RAISE NOTICE 'ok: session forged into another tenant rejected (SQLSTATE 42501)';
     END;
 
+    -- TAR-468's composite foreign key, which is a *different* mechanism from the
+    -- two above and is what the story's "enforced at the data layer, not left to
+    -- application code alone" means. The row below is entirely legal as far as
+    -- the policy is concerned: `tenant_id` is tenant A's own, so `WITH CHECK`
+    -- passes. What refuses it is `(tenant_id, ticket_event_id)` finding no such
+    -- pair in `ticket_events` — the path a handler that took an event id from a
+    -- request body and forgot to scope the lookup would take. A foreign key
+    -- violation, not an insufficient-privilege one, and the distinction is the
+    -- point.
+    BEGIN
+        INSERT INTO "public"."notifications" ("id", "tenant_id", "type", "ticket_event_id", "ticket_id", "recipient_user_id")
+        VALUES ('11111111-1111-7111-8111-1111111111fd', tenant_a, 'escalation',
+                '22222222-2222-7222-8222-2222222222be', '11111111-1111-7111-8111-1111111111a6',
+                '11111111-1111-7111-8111-1111111111a1');
+        RAISE EXCEPTION 'notification referencing another tenant''s ticket event succeeded — the composite FK is not enforcing';
+    EXCEPTION
+        WHEN foreign_key_violation THEN
+            RAISE NOTICE 'ok: escalation naming another tenant''s ticket event rejected (SQLSTATE 23503)';
+    END;
+
     -- 3e. Update and delete of another tenant's rows match nothing. No error —
     -- the rows are simply not there to be touched, which is the correct shape:
     -- an attacker learns nothing from the response.
@@ -910,6 +1011,23 @@ BEGIN
     DELETE FROM "public"."workflow_references" WHERE "tenant_id" = tenant_b;
     GET DIAGNOSTICS n = ROW_COUNT;
     IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant DELETE of workflow_references removed % rows', n; END IF;
+
+    -- The same shape on TAR-468's alert, and the same consequence: acknowledging
+    -- another tenant's escalation would tell their supervisor a colleague had
+    -- picked it up when nobody had.
+    UPDATE "public"."notifications" SET "acknowledged_at" = now()
+        WHERE "id" = '22222222-2222-7222-8222-2222222222bf';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant acknowledge of an escalation modified % rows', n; END IF;
+
+    -- `ticket_events` is append-only by intent rather than by trigger, so the
+    -- thing worth asserting is that the trail cannot be *edited* across the
+    -- boundary. Rewriting the reason on somebody else's escalation would be an
+    -- undetectable change to an audit record.
+    UPDATE "public"."ticket_events" SET "data" = '{"reason": "rewritten"}'::jsonb
+        WHERE "tenant_id" = tenant_b;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant UPDATE of ticket_events modified % rows', n; END IF;
 
     RAISE NOTICE 'ok: cross-tenant UPDATE and DELETE match 0 rows';
 
@@ -1008,6 +1126,8 @@ DELETE FROM "public"."ticket_tags" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."notifications" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_a';
+-- TAR-468's events, after the notifications above that reference them.
+DELETE FROM "public"."ticket_events" WHERE "tenant_id" = :'tenant_a';
 -- Before the conversation and contact they reference: those foreign keys are
 -- NoAction, so the parents cannot go first.
 DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_a';
@@ -1039,6 +1159,7 @@ DELETE FROM "public"."ticket_tags" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."notifications" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."sla_timers" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."sla_policies" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."ticket_events" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."tickets" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."ticket_counters" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."conversations" WHERE "tenant_id" = :'tenant_b';
@@ -1093,6 +1214,13 @@ BEGIN
 
     SELECT count(*) INTO n FROM "public"."tags" WHERE "tenant_id" IN (tenant_a, tenant_b);
     IF n <> 0 THEN RAISE EXCEPTION 'fixture tags survived cleanup: %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."notifications"
+        WHERE "tenant_id" IN (tenant_a, tenant_b) AND "type" = 'escalation';
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture escalation notifications survived cleanup: %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."ticket_events" WHERE "tenant_id" IN (tenant_a, tenant_b);
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture ticket events survived cleanup: %', n; END IF;
 
     SELECT count(*) INTO n FROM "public"."tenants" WHERE "id" IN (tenant_a, tenant_b);
     IF n <> 0 THEN RAISE EXCEPTION 'fixture tenants survived cleanup: %', n; END IF;
