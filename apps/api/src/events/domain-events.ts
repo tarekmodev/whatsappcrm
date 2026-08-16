@@ -242,7 +242,7 @@ export interface ConversationAssignedEvent {
  * committed (TAR-26, 0006 decision 5).
  *
  * Emitted by the breach sweep **after** its per-tenant transaction commits, once
- * per breached timer, and only when at least one `sla_alerts` row was actually
+ * per breached timer, and only when at least one `notifications` row was actually
  * inserted. A breach in a tenant with nobody to tell emits nothing — there is no
  * audience to address, and the ticket's overdue badge is served by the queue.
  *

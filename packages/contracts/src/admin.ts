@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { IanaTimezoneSchema, IdSchema, LocaleSchema, TimestampSchema } from './common';
-import { TenantNameSchema, TenantSlugSchema } from './tenant';
+import { TenantNameSchema, TenantSlugSchema, TenantStatusSchema } from './tenant';
 
 /**
  * The **platform-admin** surface: operations performed by us on the platform,
@@ -14,40 +14,20 @@ import { TenantNameSchema, TenantSlugSchema } from './tenant';
  */
 
 /**
- * The vocabulary of the `tenants.status` column, which is what the platform's
- * own view of a tenant reports.
+ * There is no separate provisioning status vocabulary any more.
  *
- * **Reconciled with `TENANT_STATUSES` by TAR-403**, which is TAR-36 doing what
- * the previous version of this comment said it would. The two were authored by
- * different stories against different concerns: `TENANT_STATUSES` in `tenant.ts`
- * is the billing-driven lifecycle a customer sees, while the column TAR-47
- * shipped modelled provisioning state and spelled the pre-provisioning state
- * `pending`. The migration renamed that label to `created` — one state, two
- * spellings — and added the three the column was missing, so this set is now the
- * published set plus exactly one label.
+ * `PROVISIONED_TENANT_STATUSES` lived here because the `tenants.status` column
+ * and `TENANT_STATUSES` were authored by different stories against different
+ * concerns, and spelled the pre-provisioning state `pending` and `created`
+ * respectively. TAR-403 renamed the column's label and added the three it was
+ * missing; TAR-404 adds `created` to the published set. The two are now the same
+ * seven values in the same order, so a second name for one of them is a place
+ * for drift to reappear rather than a distinction worth keeping (0009,
+ * decision 1).
  *
- * That one label is the whole remaining difference, and it is not drift: a
- * tenant is only ever `created` between its row appearing and provisioning
- * finishing, both inside one transaction, so no customer-facing response can
- * observe it. Widening it back out would mean a lossy mapper reporting a
- * half-provisioned tenant as something it is not.
- *
- * `contract.test.ts` pins the overlap so the difference cannot widen unnoticed.
+ * The platform-admin surface therefore reports `TenantStatusSchema`, and
+ * `contract.test.ts` pins the set so the reconciliation cannot come apart.
  */
-export const PROVISIONED_TENANT_STATUSES = [
-  /** Row exists, provisioning has not finished. Never returned by a successful provision. */
-  'created',
-  'trialing',
-  'active',
-  'past_due',
-  'suspended',
-  'cancelled',
-  'deleted',
-] as const;
-
-export const ProvisionedTenantStatusSchema = z.enum(PROVISIONED_TENANT_STATUSES);
-
-export type ProvisionedTenantStatus = (typeof PROVISIONED_TENANT_STATUSES)[number];
 
 /**
  * `POST /api/v1/admin/tenants` — admin-triggered tenant provisioning (TAR-19).
@@ -84,7 +64,7 @@ export const ProvisionedTenantResponseSchema = z.object({
   id: IdSchema,
   slug: TenantSlugSchema,
   name: TenantNameSchema,
-  status: ProvisionedTenantStatusSchema,
+  status: TenantStatusSchema,
   /** Where the tenant is reachable: the platform subdomain issued for its slug. */
   primaryHostname: z.string().min(1).max(253),
   settings: z.object({
@@ -138,7 +118,7 @@ export const DeactivatedTenantResponseSchema = z.object({
   id: IdSchema,
   slug: TenantSlugSchema,
   name: TenantNameSchema,
-  status: ProvisionedTenantStatusSchema,
+  status: TenantStatusSchema,
   suspendedAt: TimestampSchema.nullable(),
 });
 

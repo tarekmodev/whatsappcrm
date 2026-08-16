@@ -159,8 +159,11 @@ export interface DemoTenant {
    * One row per recipient per breached timer, exactly as the sweep would have
    * written them. Seeded so TAR-281 has a supervisor alert to render before
    * TAR-280's sweep runs anywhere.
+   *
+   * The table is `notifications` since TAR-394 (0009, decision 7); every row here
+   * is a `type = 'sla_breach'` one, which the writer sets explicitly.
    */
-  readonly slaAlerts: readonly Scoped<Prisma.SlaAlertCreateManyInput>[];
+  readonly slaAlerts: readonly Scoped<Prisma.NotificationCreateManyInput>[];
   /**
    * What `ticket_counters` is left holding. It must be one past the highest
    * seeded `tickets.number`, or TAR-73's allocator hands out a number that
