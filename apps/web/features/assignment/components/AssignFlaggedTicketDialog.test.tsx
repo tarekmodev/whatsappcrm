@@ -96,6 +96,18 @@ function renderDialog(users: readonly UserResponse[] = USERS, onClose = vi.fn())
   return { onClose };
 }
 
+/**
+ * A reason is required since TAR-32: a flagged ticket routed to a team counts
+ * as held by `ticketAssignRequiresReason`, so the API refuses a reasonless
+ * placement. Filled by default here so the existing cases keep testing what they
+ * were written for; the requirement itself has its own case below.
+ */
+function typeReason(value = 'Amina has room and knows the account.'): void {
+  fireEvent.change(fieldByLabel(content.assignment.assignTicketReasonLabel), {
+    target: { value },
+  });
+}
+
 function submit(): void {
   fireEvent.click(screen.getByRole('button', { name: content.assignment.assignTicketSubmit }));
 }
@@ -109,22 +121,38 @@ describe('AssignFlaggedTicketDialog', () => {
     });
   });
 
-  it('assigns to the picked agent under the contract’s field name', async () => {
+  it('assigns to the picked agent under the contract’s field names', async () => {
     renderDialog();
 
     fireEvent.change(fieldByLabel(content.assignment.assignTicketAgentLabel), {
       target: { value: LIANG_ID },
     });
+    typeReason('Liang has room this afternoon.');
     submit();
 
     await waitFor(() => {
-      expect(assignFlaggedTicketAction).toHaveBeenCalledWith(TICKET_ID, { userId: LIANG_ID });
+      expect(assignFlaggedTicketAction).toHaveBeenCalledWith(TICKET_ID, {
+        userId: LIANG_ID,
+        reason: 'Liang has room this afternoon.',
+      });
     });
+  });
+
+  it('will not submit without a reason, because the API requires one here', async () => {
+    renderDialog();
+
+    submit();
+
+    await waitFor(() => {
+      expect(screen.getByText(content.tickets.reasonRequiredError)).toBeInTheDocument();
+    });
+    expect(assignFlaggedTicketAction).not.toHaveBeenCalled();
   });
 
   it('names the ticket and the agent in the confirmation rather than saying "Done"', async () => {
     renderDialog();
 
+    typeReason();
     submit();
 
     await waitFor(() => {
@@ -142,6 +170,7 @@ describe('AssignFlaggedTicketDialog', () => {
   it('closes only after the assignment succeeded', async () => {
     const { onClose } = renderDialog();
 
+    typeReason();
     submit();
 
     await waitFor(() => {
@@ -158,6 +187,7 @@ describe('AssignFlaggedTicketDialog', () => {
 
     const { onClose } = renderDialog();
 
+    typeReason();
     submit();
 
     await waitFor(() => {

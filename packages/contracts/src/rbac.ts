@@ -47,6 +47,35 @@ export const PERMISSIONS = [
   'ticket:read_all',
   'ticket:update',
   'ticket:assign',
+  /**
+   * Hand a ticket **you hold** to a teammate (TAR-32, ADR 0011 decision 2).
+   * Granted to every role, and deliberately not folded into `ticket:assign`,
+   * which is the wider right to move any ticket — including off the colleague
+   * working it.
+   *
+   * This is invariant 7 of ADR 0004 applied to tickets, one word for one word:
+   * `conversation:claim` takes what nobody holds, `conversation:assign` moves
+   * what somebody holds, and this gives away what *you* hold. None of the three
+   * lets an agent take work off a colleague.
+   *
+   * Bounded by the route rather than by the permission, because a permission
+   * cannot express "only the ticket you are on": `TicketCommandService.assign`
+   * additionally requires, of a caller without `ticket:assign`, that they hold
+   * the ticket, that the target is a teammate, and that somebody still holds it
+   * afterwards. Releasing a ticket back to unassigned is abandonment rather than
+   * a handoff and stays supervisor-and-above.
+   */
+  'ticket:handoff',
+  /**
+   * Ask a supervisor to look at a ticket (TAR-32, ADR 0011 decision 3). Granted
+   * to every role, and bounded only by the ticket's own visibility rule — a
+   * colleague spotting a problem on a team ticket should be able to raise it.
+   *
+   * Separate from `ticket:handoff` because escalation does **not** move the
+   * assignment: the agent keeps the ticket, so the customer is never left with
+   * nobody while the supervisor sleeps.
+   */
+  'ticket:escalate',
   'ticket:close',
 
   'contact:read',
@@ -119,6 +148,8 @@ const AGENT_PERMISSIONS = [
   'conversation:note',
   'ticket:read',
   'ticket:update',
+  'ticket:handoff',
+  'ticket:escalate',
   'ticket:close',
   'contact:read',
   'contact:write',

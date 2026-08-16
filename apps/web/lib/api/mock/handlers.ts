@@ -35,6 +35,8 @@ import {
   TenantDomainCreateInputSchema,
   TenantUpdateInputSchema,
   TicketAssignInputSchema,
+  TicketEscalateInputSchema,
+  TicketEventListQuerySchema,
   TicketListQuerySchema,
   TicketUpdateInputSchema,
   UserListQuerySchema,
@@ -51,6 +53,7 @@ import {
   isSlaBreached,
   renderTemplateBody,
   roleHasPermission,
+  ticketAssignRequiresReason,
   whatsAppSignupFailureDetails,
   workflowCatalog,
   type ApiError,
@@ -81,6 +84,8 @@ import {
   type TenantLifecycleResponse,
   type TenantPublicResponse,
   type TenantResponse,
+  type TicketEscalationResponse,
+  type TicketEvent,
   type TicketListQuery,
   type TicketResponse,
   type UserResponse,
@@ -112,6 +117,7 @@ import type {
   MockTeam,
   MockTenantDomain,
   MockTicket,
+  MockTicketEvent,
   MockUser,
   MockWorkflow,
   MockWorkflowRun,
@@ -461,10 +467,30 @@ const ROUTES: readonly Route[] = [
     handle: updateTicket,
   },
   {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}/events$`),
+    // `ticket:read`, and the ticket goes through the same visibility rule the
+    // GET does — the event log inherits the ticket's rule exactly rather than
+    // becoming a side channel onto one the principal may not open.
+    permission: 'ticket:read',
+    handle: listTicketEvents,
+  },
+  {
     method: 'POST',
     pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}/assign$`),
-    permission: 'ticket:assign',
+    // The **weaker** of the two, per ADR 0011 decision 2: every role may hand
+    // off a ticket they hold, and `assertTicketHandoffAllowed` applies the bound
+    // that `ticket:assign` skips. A route whose declared permission is weaker
+    // than one of its behaviours is where authorization bugs live, so the bound
+    // is modelled here rather than assumed of the API.
+    permission: 'ticket:handoff',
     handle: assignTicket,
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}/escalate$`),
+    permission: 'ticket:escalate',
+    handle: escalateTicket,
   },
   {
     method: 'GET',
@@ -2568,13 +2594,20 @@ function updateTicket({ principal, params, body }: RouteContext): TicketResponse
 }
 
 /**
- * `POST /v1/tickets/{id}/assign` — the manual placement TAR-274 offers.
+ * `POST /v1/tickets/{id}/assign` — the manual placement TAR-274 offers, and the
+ * reassignment TAR-32 adds on top of it (ADR 0011 decision 1).
  *
  * Two writes, not one, and the second is the point: naming an assignee also moves
  * `routing.state` to `manual` and clears the deferred columns, which is what stops
  * a later routing pass overruling the supervisor. Modelled here rather than
  * assumed, because the row vanishing from the flagged queue afterwards is exactly
  * the behaviour that view is claiming.
+ *
+ * The ordering below is the contract's, and it is fixed: `require` (visibility,
+ * done by `findTicketInTenant`) → handoff bound → reason rule → assignee
+ * existence → the no-op check → the write. The reason rule runs **before** the
+ * assignee lookup so a caller missing a reason is told that, rather than being
+ * sent to check a user id that was fine.
  */
 function assignTicket({ principal, params, body }: RouteContext): TicketResponse {
   const ticket = findTicketInTenant(principal, params[0]);
@@ -2584,7 +2617,25 @@ function assignTicket({ principal, params, body }: RouteContext): TicketResponse
     throw validationFailed();
   }
 
-  const { userId, teamId } = parsed.data;
+  const { userId, teamId, reason } = parsed.data;
+  const after = {
+    assignedUserId: userId === undefined ? ticket.assignedUserId : userId,
+    assignedTeamId: teamId === undefined ? ticket.assignedTeamId : teamId,
+  };
+
+  assertTicketHandoffAllowed(principal, ticket, after);
+
+  // The conditional half of decision 1, raised here rather than by the schema:
+  // Zod sees the body and the rule is about the row. It is checked even when the
+  // request moves nothing — silently accepting a reasonless no-op would train a
+  // console to omit the field.
+  if (reason === undefined && ticketAssignRequiresReason(ticket)) {
+    throw refused(
+      'validation_failed',
+      'A reason is required when reassigning a ticket somebody already holds.',
+      HTTP_UNPROCESSABLE,
+    );
+  }
 
   if (typeof userId === 'string') {
     const user = findUserInTenant(principal, userId);
@@ -2598,16 +2649,252 @@ function assignTicket({ principal, params, body }: RouteContext): TicketResponse
     findTeamInTenant(principal, teamId);
   }
 
+  const movesAnything =
+    after.assignedUserId !== ticket.assignedUserId ||
+    after.assignedTeamId !== ticket.assignedTeamId;
+
+  if (!movesAnything) {
+    return toTicketResponse(ticket);
+  }
+
   const assigned: MockTicket = {
     ...ticket,
-    ...(userId === undefined ? {} : { assignedUserId: userId }),
-    ...(teamId === undefined ? {} : { assignedTeamId: teamId }),
+    ...after,
     routing: { state: 'manual', deferredReason: null, deferredSince: null },
   };
 
   mockState().tickets.set(assigned.id, assigned);
+  // `assigned` when somebody still holds it, `unassigned` when the write
+  // released it — the pair TAR-32 reuses rather than adding a third type meaning
+  // "the assignment moved".
+  appendTicketEvent(principal, {
+    ticketId: assigned.id,
+    type:
+      after.assignedUserId === null && after.assignedTeamId === null ? 'unassigned' : 'assigned',
+    actorUserId: principal.userId,
+    cause: 'agent',
+    assignment: {
+      fromUserId: ticket.assignedUserId,
+      fromTeamId: ticket.assignedTeamId,
+      toUserId: after.assignedUserId,
+      toTeamId: after.assignedTeamId,
+    },
+    reason: reason ?? null,
+  });
 
   return toTicketResponse(assigned);
+}
+
+/**
+ * The bound ADR 0011 decision 2 puts on `ticket:handoff`, so the console's
+ * refusals are exercised against a real 403 rather than only described.
+ *
+ * A caller holding `ticket:assign` skips all of it — their write is what TAR-23
+ * shipped. A caller who does not may write only when all three hold:
+ *
+ *   1. **They hold the ticket.** Not "their team holds it": a ticket routed to a
+ *      team is nobody's to give away, and every member could otherwise reassign
+ *      it out from under whoever is working it.
+ *   2. **The target is a teammate**, sharing at least one team with the caller —
+ *      or one of the caller's own teams.
+ *   3. **They are not releasing it.** Dropping a ticket back to unassigned is
+ *      abandonment, and puts it in a state only `ticket:assign` can create.
+ *
+ * `forbidden`, not `not_found`: the caller has already passed the visibility
+ * rule and is looking at the ticket, so what is refused is the act.
+ */
+function assertTicketHandoffAllowed(
+  principal: SessionPrincipal,
+  before: MockTicket,
+  after: { assignedUserId: string | null; assignedTeamId: string | null },
+): void {
+  if (roleHasPermission(principal.role, 'ticket:assign')) {
+    return;
+  }
+
+  if (before.assignedUserId !== principal.userId) {
+    throw refused('forbidden', 'You can only hand on a ticket you are holding.');
+  }
+
+  if (after.assignedUserId === null && after.assignedTeamId === null) {
+    throw refused('forbidden', 'Releasing a ticket needs ticket:assign. Hand it to somebody.');
+  }
+
+  if (after.assignedUserId !== null && after.assignedUserId !== principal.userId) {
+    const target = findUserInTenant(principal, after.assignedUserId);
+    const sharesATeam = target.teamIds.some((teamId) => principal.teamIds.includes(teamId));
+
+    if (!sharesATeam) {
+      throw refused('forbidden', 'You can only hand a ticket to a teammate.');
+    }
+  }
+
+  if (after.assignedTeamId !== null && !principal.teamIds.includes(after.assignedTeamId)) {
+    throw refused('forbidden', 'You can only hand a ticket to one of your own teams.');
+  }
+}
+
+/**
+ * `POST /v1/tickets/{id}/escalate` — raise attention without moving the
+ * assignment (ADR 0011 decision 3).
+ *
+ * The three things the console is built around, all reachable here:
+ *
+ *   * a **named** supervisor, who must exist in this tenant, be active, and hold
+ *     `ticket:read_all` — anything else is `validation_failed` on `toUserId`,
+ *     which is what makes the notification safe to send at all;
+ *   * an **unnamed** escalation, whose recipients are derived the way ADR 0006
+ *     derives them for a breach — supervisors and admins sharing a team with the
+ *     holder, falling back to every candidate;
+ *   * **nobody at all.** A tenant with no active supervisor still gets the event
+ *     written and an empty `notifiedUserIds`. Not an error: the agent did
+ *     nothing wrong and has no way to fix it.
+ *
+ * The ticket itself is never touched, and that is asserted by omission here.
+ */
+function escalateTicket({ principal, params, body }: RouteContext): TicketEscalationResponse {
+  const ticket = findTicketInTenant(principal, params[0]);
+  const parsed = TicketEscalateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { reason, toUserId } = parsed.data;
+  const recipients = escalationRecipients(principal, ticket, toUserId);
+
+  const event = appendTicketEvent(principal, {
+    ticketId: ticket.id,
+    type: 'escalated',
+    actorUserId: principal.userId,
+    cause: 'agent',
+    // Null when the escalation was addressed to whoever supervises this ticket
+    // rather than to a person. Meaningful, not missing.
+    toValue: toUserId ?? null,
+    reason,
+  });
+
+  return { event, notifiedUserIds: recipients.map((user) => user.id) };
+}
+
+/**
+ * Who an escalation is delivered to, mirroring `resolveAlertRecipients`
+ * (ADR 0006 decision 4) rather than inventing a second rule.
+ *
+ * Candidates are active users holding `ticket:read_all` — the population that
+ * can already read the ticket, which is what makes telling them about it
+ * disclose nothing new. They are narrowed to those sharing a team with whoever
+ * holds the ticket, and the narrowing falls back to every candidate when it
+ * yields nobody: an unstaffed team must not swallow the escalation.
+ */
+function escalationRecipients(
+  principal: SessionPrincipal,
+  ticket: MockTicket,
+  toUserId: string | undefined,
+): MockUser[] {
+  const candidates = tenantUsers(principal).filter(
+    (user) => user.status === 'active' && roleHasPermission(user.role, 'ticket:read_all'),
+  );
+
+  if (toUserId !== undefined) {
+    const named = candidates.find((user) => user.id === toUserId);
+
+    if (named === undefined) {
+      // `validation_failed` on the field, mirroring an unknown assignee — never
+      // a 404, which would confirm the id names somebody real elsewhere.
+      throw refused(
+        'validation_failed',
+        'That person cannot receive an escalation for this ticket.',
+        HTTP_UNPROCESSABLE,
+      );
+    }
+
+    return [named];
+  }
+
+  const holderTeamIds =
+    ticket.assignedTeamId === null
+      ? (tenantUsers(principal).find((user) => user.id === ticket.assignedUserId)?.teamIds ?? [])
+      : [ticket.assignedTeamId];
+
+  const shared = candidates.filter((user) =>
+    user.teamIds.some((teamId) => holderTeamIds.includes(teamId)),
+  );
+
+  return shared.length > 0 ? shared : candidates;
+}
+
+/**
+ * `GET /v1/tickets/{id}/events` — newest first, which is the keyset order the
+ * index in ADR 0011 serves.
+ *
+ * The ticket is resolved through `findTicketInTenant` first, so a ticket outside
+ * this reader's scope answers `not_found` here exactly as it does on the GET.
+ */
+function listTicketEvents({ principal, params, query }: RouteContext): CursorPage<TicketEvent> {
+  const ticket = findTicketInTenant(principal, params[0]);
+  const parsed = TicketEventListQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { limit } = parsed.data;
+  const matched = tenantTicketEvents(principal)
+    .filter((event) => event.ticketId === ticket.id)
+    // `created_at DESC, id DESC`. The id tie-break is not decoration: the API
+    // pages this on a keyset, and two events written in the same millisecond
+    // would otherwise straddle a page boundary and lose one.
+    .sort(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+    );
+
+  const items = matched.slice(0, limit);
+  const nextCursor = matched.length > limit ? (items[items.length - 1]?.id ?? null) : null;
+
+  return { items: items.map(toTicketEventResponse), nextCursor };
+}
+
+/**
+ * Writes one row onto the ticket's trail and returns it as the wire shape.
+ *
+ * Every field the caller does not name defaults to null, so a new event type
+ * cannot accidentally inherit another's `fromValue` — and both of TAR-32's
+ * events are always attributed, because neither route is reachable without a
+ * principal and an event claiming a system actor on a human decision would be a
+ * lie the trail cannot recover from.
+ */
+function appendTicketEvent(
+  principal: SessionPrincipal,
+  event: Pick<MockTicketEvent, 'ticketId' | 'type'> & Partial<MockTicketEvent>,
+): TicketEvent {
+  const created: MockTicketEvent = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    actorUserId: null,
+    fromValue: null,
+    toValue: null,
+    assignment: null,
+    reason: null,
+    cause: null,
+    createdAt: new Date().toISOString(),
+    ...event,
+  };
+
+  mockState().ticketEvents.set(created.id, created);
+
+  return toTicketEventResponse(created);
+}
+
+function tenantTicketEvents(principal: SessionPrincipal): MockTicketEvent[] {
+  return [...mockState().ticketEvents.values()].filter(
+    (event) => event.tenantId === principal.tenantId,
+  );
+}
+
+function toTicketEventResponse(event: MockTicketEvent): TicketEvent {
+  return stripTenant(event);
 }
 
 /**

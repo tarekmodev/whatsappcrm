@@ -1387,7 +1387,10 @@ describe('flagged ticket queue', () => {
     const assigned = (await handleMockRequest({
       method: 'POST',
       path: `/v1/tickets/${MOCK_IDS.tickets.deferredAtCapacity}/assign`,
-      body: { userId: MOCK_IDS.users.amina },
+      // A reason, because this ticket is routed to Billing and
+      // `ticketAssignRequiresReason` counts a team hold as held (TAR-32,
+      // ADR 0011 decision 1).
+      body: { userId: MOCK_IDS.users.amina, reason: 'Amina has room and knows the account.' },
     })) as TicketResponse;
 
     expect(assigned.assignedUserId).toBe(MOCK_IDS.users.amina);
@@ -1410,7 +1413,10 @@ describe('flagged ticket queue', () => {
       handleMockRequest({
         method: 'POST',
         path: `/v1/tickets/${MOCK_IDS.tickets.deferredAtCapacity}/assign`,
-        body: { userId: MOCK_IDS.users.otherTenant },
+        // The reason is present so the assignee check is what refuses this: the
+        // reason rule runs first by design (ADR 0011 decision 1), and without
+        // one this would be `validation_failed` about the reason instead.
+        body: { userId: MOCK_IDS.users.otherTenant, reason: 'Cross-tenant assignment attempt.' },
       }),
     ).rejects.toMatchObject({ code: 'not_found' });
   });
@@ -1421,7 +1427,7 @@ describe('flagged ticket queue', () => {
         method: 'POST',
         path: `/v1/tickets/${MOCK_IDS.tickets.deferredAtCapacity}/assign`,
         // Invited, never accepted.
-        body: { userId: MOCK_IDS.users.noor },
+        body: { userId: MOCK_IDS.users.noor, reason: 'Trying Noor while Billing is full.' },
       }),
     ).rejects.toMatchObject({ code: 'validation_failed' });
   });
