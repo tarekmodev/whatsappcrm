@@ -766,8 +766,10 @@ model Tenant {
   webhookEvents            WebhookEvent[]
   idempotencyKeys          IdempotencyKey[]
   auditLogs                AuditLog[]
-  lifecycleAuditLog        LifecycleAuditLog[]
-  planLimits               TenantPlanLimits?
+  /// No `lifecycleEvents` relation, and that is ADR 0009 Amendment 1 ruling 2:
+  /// the trail carries `tenant_id` as a recorded identifier with no foreign key,
+  /// so it survives the purge that empties everything else on this list.
+  entitlements             TenantEntitlements?
 
   @@index([status])
   /// Two indexes are missing from this block on purpose. The retention sweeper's
@@ -791,19 +793,31 @@ model Tenant {
 /// enforced rather than assumed; and the retention rule differs — this table
 /// outlives the tenant's data.
 ///
-/// **Append-only is enforced twice.** `prisma/sql/app-roles.sql` grants
-/// `SELECT, INSERT` and withholds `UPDATE, DELETE` from both application roles,
-/// which constrains the application. The
-/// `lifecycle_audit_log_append_only` trigger raises `TN002` on any UPDATE
-/// including the table owner's, which constrains us. DELETE is deliberately not
-/// blocked: it is reachable only through the `ON DELETE CASCADE` from `tenants`,
-/// and a row trigger cannot tell that apart from a hand-written statement —
-/// blocking it would make the tenant row undeletable and break every fixture.
+/// **Platform-level, not tenant-scoped** (ADR 0009 decision 5, confirmed by
+/// Amendment 1 ruling 2). No foreign keys and no `tenant_isolation` policy:
+/// `tenantId` and `actorUserId` are recorded identifiers that outlive the rows
+/// they name. The composite FK to `users` that TAR-403 shipped made the purge
+/// impossible to finish — the purge deletes every `users` row and keeps the
+/// `tenants` row as the slug tombstone, so a retained event carrying
+/// `actorUserId` blocked that delete with SQLSTATE 23503, and it could not be
+/// repaired on the way past because the append-only trigger refuses the UPDATE
+/// and neither role holds DELETE.
 ///
-/// The lifecycle's own hard-delete never takes this path. It leaves the
-/// `tenants` row standing as a tombstone in `status = deleted`, so these rows
-/// stand with it.
-model LifecycleAuditLog {
+/// It is `system-only` in `tenant-scope.extension.ts` and the app role holds
+/// **no grant at all** — the third table where the grant rather than RLS is the
+/// enforcement, alongside `webhook_events` and `tenant_signups`. That is not
+/// optional: the table still carries `tenant_id`, so a grant without the policy
+/// would expose every tenant's history to the tenant connection.
+/// `verify-tenant-isolation.sql` asserts the absent grant by name.
+///
+/// **Append-only is enforced twice.** `prisma/sql/app-roles.sql` grants
+/// `SELECT, INSERT` to `whatsappcrm_system` only and withholds `UPDATE, DELETE`
+/// from it too, which constrains the application. The
+/// `lifecycle_events_append_only` trigger raises `TN002` on any UPDATE including
+/// the table owner's, which constrains us. DELETE is not blocked by the trigger
+/// and no longer needs to be: with both foreign keys gone there is no cascade
+/// left that could reach these rows.
+model LifecycleEvent {
   id         String   @id @default(uuid(7)) @db.Uuid
   tenantId   String   @map("tenant_id") @db.Uuid
   occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
@@ -813,16 +827,20 @@ model LifecycleAuditLog {
   /// is **no default**: a table that starts empty has no rollout window, so every
   /// writer states who acted or the insert fails.
   ///
-  /// `lifecycle_audit_log_actor_attribution` makes the three agree — a `user`
+  /// `lifecycle_events_actor_attribution` makes the three agree — a `user`
   /// row names a user and carries no label, a `platform_operator` row carries a
   /// label and names no user, `system` and `unattributed` carry neither.
+  ///
+  /// `actorUserId` is **not** a relation. It records who acted and keeps
+  /// recording it after that user is purged, which is the whole point of a trail
+  /// that outlives the tenant.
   actorType   AuditActorType @map("actor_type")
   actorUserId String?        @map("actor_user_id") @db.Uuid
   actorLabel  String?        @map("actor_label")
 
   /// Null only for the first row of a tenant's history — its creation, and the
   /// rows the migration backfilled for tenants that predate this table.
-  /// `lifecycle_audit_log_transition_changes_state` refuses any other row whose
+  /// `lifecycle_events_transition_changes_state` refuses any other row whose
   /// two states are equal: that is not a transition.
   fromState TenantStatus? @map("from_state")
   toState   TenantStatus  @map("to_state")
@@ -846,9 +864,9 @@ model LifecycleAuditLog {
   /// The single column on this append-only table that may ever be `UPDATE`d, and
   /// only null → value, once. Two things hold that: a **column-level** `GRANT
   /// UPDATE ("notified_at")` to `whatsappcrm_system` alone in
-  /// `prisma/sql/app-roles.sql` — table-level UPDATE stays withheld from both
-  /// roles — and the `lifecycle_audit_log_append_only` trigger, which refuses the
-  /// stamp unless the old value was null and every other column is identical.
+  /// `prisma/sql/app-roles.sql` — table-level UPDATE stays withheld — and the
+  /// `lifecycle_events_append_only` trigger, which refuses the stamp unless the
+  /// old value was null and every other column is identical.
   ///
   /// Its sweep index is **partial** (`WHERE notified_at IS NULL`) and keyed on
   /// `occurredAt`, which Prisma can express neither half of, so it lives in raw
@@ -861,19 +879,17 @@ model LifecycleAuditLog {
   /// A redacted before/after at most — never PII, never a secret value.
   metadata Json?
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  actor  User?  @relation(fields: [tenantId, actorUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
-
   /// The read endpoint: this tenant's history, newest first, keyset-paginated.
   /// The only index on the table — a tenant accumulates a handful of these over
   /// its whole life, so a second one would cost a write per transition and never
   /// beat the scan it replaced.
   @@index([tenantId, occurredAt(sort: Desc), id(sort: Desc)])
-  @@map("lifecycle_audit_log")
+  @@map("lifecycle_events")
 }
 
-/// The tenant's **effective** plan limits — the only thing write-time
-/// enforcement reads (TAR-403, for TAR-405).
+/// The tenant's **effective** entitlements — the only thing write-time
+/// enforcement reads, and the only thing the console displays (TAR-403, widened
+/// and renamed by ADR 0009 Amendment 1 ruling 3).
 ///
 /// **Why per tenant rather than per plan.** `plans.entitlements` is the
 /// catalogue and it belongs to TAR-37, which is still in `backlog` and whose
@@ -883,48 +899,58 @@ model LifecycleAuditLog {
 /// platform-wide and so carries no RLS policy, while the enforcement TAR-405
 /// needs runs on the tenant connection.
 ///
-/// When TAR-37 lands, its plan sync becomes this table's writer and `planKey`
-/// starts naming a real plan. The shape enforcement reads does not change, which
-/// is the swap TAR-397 asks for.
+/// **Why the whole shape rather than two caps.** `TenantLifecycleResponse.plan`
+/// publishes `PlanEntitlements`, so a table holding two of the five limits and
+/// no `features` could not populate the response at all. Widening it here means
+/// enforcement and display read the same row — the failure that prevents is a
+/// console showing "3 of 3" from one store while the refusal the admin just got
+/// came from another.
+///
+/// The row is a **snapshot** of the catalogue, not a pointer to it: a tenant
+/// keeps what it was sold when the catalogue moves under it. When TAR-37 lands,
+/// its plan sync becomes this table's writer.
 ///
 /// **Why not columns on `TenantSettings`**, whose comment invites exactly that:
 /// settings are edited by the tenant's own admins, and a seat cap the capped
 /// party can raise is not a cap. A separate table is a separate grant.
-model TenantPlanLimits {
+model TenantEntitlements {
   id       String @id @default(uuid(7)) @db.Uuid
   tenantId String @unique @map("tenant_id") @db.Uuid
 
-  /// Which plan these limits came from. `trial` for a self-signup tenant;
-  /// `unlimited` on the rows the migration backfilled for tenants provisioned by
-  /// an operator before self-signup existed, which were never sold a cap.
-  /// Bounded to `PlanSchema.key`'s shape by
-  /// `tenant_plan_limits_plan_key_format`.
+  /// Which plan these entitlements were taken from. `trial` for a self-signup
+  /// tenant; `unlimited` on the rows the migration backfilled for tenants
+  /// provisioned by an operator before self-signup existed, which were never
+  /// sold a cap. Bounded to `PlanSchema.key`'s shape by
+  /// `tenant_entitlements_plan_key_format`.
   planKey String @default("trial") @map("plan_key")
 
-  /// Billable agent seats — `PlanLimitsSchema.seats`. **Null means unlimited**,
-  /// deliberately not `-1` or a sentinel maximum, both of which invite
-  /// arithmetic bugs at the comparison site. Zero is refused by
-  /// `tenant_plan_limits_caps_positive`: a cap of zero is a lockout reached by
-  /// accident rather than a limit anyone decided.
-  ///
-  /// Three is a defensible starting value, **not a measured one**, and TAR-397
-  /// fixes the real trial figure. It is a column default so provisioning can
-  /// insert the row without restating it, and so changing it is one `ALTER
-  /// TABLE` rather than a hunt through application code.
-  seatCap Int? @default(3) @map("seat_cap")
+  /// Display name for `planKey`, so `TenantLifecycleResponse.plan` maps from
+  /// this one row with no join.
+  planName String @default("Trial") @map("plan_name")
 
-  /// Conversations opened per billing period —
-  /// `PlanLimitsSchema.conversationsPerPeriod`, metered by the
-  /// `conversations_opened` usage counter. Null means unlimited. Same
-  /// provenance as `seatCap`: a placeholder until TAR-397 fixes it.
-  conversationCap Int? @default(1000) @map("conversation_cap")
+  /// `PlanEntitlementsSchema`: `{ features: PlanFeature[], limits: { seats,
+  /// conversationsPerPeriod, whatsappNumbers, teams, knowledgeDocuments } }`.
+  /// **A null limit means unlimited**, deliberately not `-1` or a sentinel
+  /// maximum, both of which invite arithmetic bugs at the comparison site.
+  ///
+  /// `tenant_entitlements_shape` is the database backstop — it asserts the five
+  /// limit keys are present and each is null or a positive integer, and that
+  /// `features` is an array. It cannot check the feature *values*, so
+  /// `PlanEntitlementsSchema` at every write site is the actual contract. A
+  /// CHECK on jsonb is not expressible in Prisma, so it lives in
+  /// `20260815180000_lifecycle_events_and_tenant_entitlements`.
+  ///
+  /// The default is 0009's published trial shape — defensible rather than
+  /// measured, and a column default so provisioning inserts a row without
+  /// restating it. TAR-397 owns the real figures.
+  entitlements Json @default("{\"features\":[\"assignment_rules\",\"sla_policies\"],\"limits\":{\"seats\":3,\"conversationsPerPeriod\":1000,\"whatsappNumbers\":1,\"teams\":2,\"knowledgeDocuments\":10}}")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@map("tenant_plan_limits")
+  @@map("tenant_entitlements")
 }
 
 /// A self-signup between the form and the tenant existing (TAR-440, ADR 0009
@@ -1277,7 +1303,10 @@ model User {
   workflowReferences    WorkflowReference[]
   cannedResponses       CannedResponse[]
   auditLogs             AuditLog[]
-  lifecycleAuditLog     LifecycleAuditLog[]
+  /// No `lifecycleEvents` relation. `lifecycle_events.actor_user_id` records who
+  /// acted and keeps recording it after the purge deletes this row — the
+  /// composite foreign key it used to carry is what made that purge impossible
+  /// to finish (ADR 0009 Amendment 1 ruling 2).
 
   @@unique([tenantId, email])
   @@unique([tenantId, id])

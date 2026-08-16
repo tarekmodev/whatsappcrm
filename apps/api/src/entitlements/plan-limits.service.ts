@@ -8,7 +8,7 @@ import { PlanLimitExceededError } from './entitlements.errors';
  *
  * ## Where the numbers come from, and why that matters
  *
- * `tenant_plan_limits` — one row per tenant, RLS-scoped, written by provisioning
+ * `tenant_entitlements` — one row per tenant, RLS-scoped, written by provisioning
  * and by TAR-37's plan sync when it lands. **Nothing here is hardcoded**, which
  * is the acceptance criterion: swapping the trial placeholder for real Polar.sh
  * plan data is an update to that row, not a code change and not an API change.
@@ -51,7 +51,7 @@ import { PlanLimitExceededError } from './entitlements.errors';
  *
  * ## What is not here
  *
- * `tenant_plan_limits.conversation_cap` has no check yet. 0009 puts its
+ * `entitlements.limits.conversationsPerPeriod` has no check yet. 0009 puts its
  * enforcement at the outbound send, "once the counter is over", against a
  * `conversations_opened` usage counter — and nothing on `main` writes
  * `usage_counters` outside the demo seed, so the comparison would be against a
@@ -70,8 +70,8 @@ export class PlanLimitsService {
    * of a number that can change before the write lands.
    */
   async assertSeatAvailable(tx: Prisma.TransactionClient, tenantId: string): Promise<void> {
-    const limits = await tx.tenantPlanLimits.findFirst({ select: { seatCap: true } });
-    const cap = limits?.seatCap ?? null;
+    const row = await tx.tenantEntitlements.findFirst({ select: { entitlements: true } });
+    const cap = seatCapOf(row?.entitlements);
 
     if (cap === null) {
       return;
@@ -94,6 +94,36 @@ export class PlanLimitsService {
  * the same tenant id.
  */
 const SEAT_LOCK_PREFIX = 'plan-limits:seats:';
+
+/**
+ * The seat ceiling out of `tenant_entitlements.entitlements`, which is
+ * `PlanEntitlementsSchema`'s shape (ADR 0009 Amendment 1 ruling 3 — the column
+ * replaced `seat_cap`, so enforcement and display read one row).
+ *
+ * **Null means unlimited, and so does anything unreadable.** A missing row, a
+ * missing key or a value that is not a positive integer all return null, which
+ * is the fail-open branch `assertSeatAvailable` documents: a billing ceiling
+ * that refuses work because a JSON blob surprised it is worse than one that
+ * lets a tenant over the line until somebody notices. The database is not
+ * relying on this to be careful — `tenant_entitlements_shape` refuses every one
+ * of those shapes at write time — so in practice this narrowing is unreachable
+ * and exists so that a hand-edited row cannot lock a tenant out.
+ */
+function seatCapOf(entitlements: unknown): number | null {
+  if (typeof entitlements !== 'object' || entitlements === null) {
+    return null;
+  }
+
+  const { limits } = entitlements as { limits?: unknown };
+
+  if (typeof limits !== 'object' || limits === null) {
+    return null;
+  }
+
+  const { seats } = limits as { seats?: unknown };
+
+  return typeof seats === 'number' && Number.isInteger(seats) && seats > 0 ? seats : null;
+}
 
 /**
  * A seat is held by a member who occupies one, plus every invitation still
