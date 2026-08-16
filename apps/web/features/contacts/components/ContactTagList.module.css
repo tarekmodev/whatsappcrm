@@ -1,0 +1,4 @@
+.empty {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}

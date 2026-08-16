@@ -1,6 +1,7 @@
 import type {
   AgentAvailability,
   ConversationStatus,
+  CustomFieldType,
   DomainVerificationFailureReason,
   FallbackAssignmentReason,
   MessageStatus,
@@ -67,10 +68,12 @@ export const content = {
     collapseNav: 'Collapse navigation',
     expandNav: 'Expand navigation',
     inbox: 'Inbox',
+    contacts: 'Contacts',
     tickets: 'Tickets',
     reports: 'Reports',
     settings: 'Settings',
     workspace: 'Workspace',
+    customFields: 'Custom fields',
     people: 'People',
     assignment: 'Assignment',
     workflows: 'Workflows',
@@ -897,6 +900,184 @@ export const content = {
     addSuccess: 'Note added',
     bodyRequiredError: 'Write something before adding the note',
     bodyTooLongError: (maxLength: number) => `Use at most ${String(maxLength)} characters`,
+  },
+
+  /** The five types `CUSTOM_FIELD_TYPES` publishes, named for a person. */
+  customFieldTypes: {
+    text: 'Text',
+    number: 'Number',
+    boolean: 'Yes or no',
+    date: 'Date',
+    select: 'Choice',
+  } satisfies Record<CustomFieldType, string>,
+
+  contacts: {
+    title: 'Contacts',
+    subtitle: 'Everyone who has written in to this workspace.',
+
+    listHeading: 'Contacts',
+    listLoading: 'Loading contacts',
+    listCountDescription: (count: number) =>
+      count === 1 ? '1 contact' : `${String(count)} contacts`,
+    /**
+     * Replaces the count when the read was capped. Names search, because search
+     * is the way through: `q` re-queries the whole workspace rather than
+     * filtering this page.
+     */
+    showingFirst: (count: number) =>
+      `Showing the first ${String(count)} contacts. Search to find someone further down the list.`,
+    emptyHeading: 'No contacts yet',
+    emptyBody: 'A contact is created the first time someone messages this workspace.',
+    filteredEmptyHeading: 'No contacts match this filter',
+    filteredEmptyBody: 'Clear the search or the tag to see everyone again.',
+    clearFilters: 'Clear filters',
+
+    columnName: 'Name',
+    columnPhone: 'Phone',
+    columnEmail: 'Email',
+    columnTags: 'Tags',
+    columnLastContacted: 'Last contacted',
+    noEmail: 'No email',
+    noTags: 'No tags',
+    neverContacted: 'Never',
+    optedOut: 'Opted out',
+    optedOutHint:
+      'This contact has opted out. Outbound messages, including templates, are blocked.',
+
+    searchLabel: 'Search contacts',
+    searchPlaceholder: 'Name, phone or email',
+    filterTagLabel: 'Filter by tag',
+    allTags: 'All tags',
+    /** The tag in the URL no longer exists, or belongs to nobody visible here. */
+    unknownTagOption: 'Unknown tag',
+
+    openProfileAria: (name: string) => `Open ${name}`,
+    backToContacts: 'Back to contacts',
+
+    profileHeading: 'Contact',
+    profileLoading: 'Loading contact',
+    unavailableHeading: 'That contact is not available',
+    unavailableBody: 'The link may be out of date, or the contact may belong to another workspace.',
+
+    identityHeading: 'Identity',
+    identityLoading: 'Loading contact details',
+    phoneTerm: 'Phone',
+    phoneHint: 'The WhatsApp identity. It cannot be changed from here.',
+    emailTerm: 'Email',
+    waProfileNameTerm: 'WhatsApp profile name',
+    lastContactedTerm: 'Last contacted',
+    createdTerm: 'First seen',
+
+    tagsHeading: 'Tags',
+    tagsLoading: 'Loading tags',
+    tagsDescription: 'Tags are shared across the workspace and drive routing rules.',
+    tagsFieldLabel: 'Tags on this contact',
+    tagsEmptyLabel: 'No tags have been created in this workspace yet.',
+    tagsUnknownHint: 'No longer available in this workspace',
+    /**
+     * The same row when the vocabulary read was capped. The tag is almost
+     * certainly fine — it just sorted past the first 100 — and claiming it was
+     * removed would be a lie about a tag in daily use.
+     */
+    tagsBeyondVocabularyHint: 'Not in the first 100 tags in this workspace',
+    /** Says the filter itself is short, so an absent tag is not read as deleted. */
+    tagFilterTruncatedHint: 'Showing the first 100 tags. Not every tag is listed.',
+    saveTags: 'Save tags',
+    tagsSaved: (name: string) => `Tags updated for ${name}`,
+
+    customFieldsHeading: 'Custom fields',
+    customFieldsLoading: 'Loading custom fields',
+    customFieldsDescription: 'Defined by an admin under Settings, and shared by every contact.',
+    customFieldsEmptyHeading: 'No custom fields yet',
+    customFieldsEmptyBody:
+      'An admin can define fields such as “Plan tier” or “Account manager” under Settings.',
+    customFieldsEmptyAction: 'Define a custom field',
+    /** Shown to a role that cannot reach the definition screen. */
+    customFieldsEmptyBodyReadOnly:
+      'Ask a workspace admin to define the fields your team needs on a contact.',
+    saveCustomFields: 'Save fields',
+    customFieldsSaved: (name: string) => `Custom fields updated for ${name}`,
+    customFieldsUnchanged: 'Nothing has changed yet',
+    clearFieldLabel: (label: string) => `Clear ${label}`,
+    /**
+     * A stored `select` value that is no longer one of the definition's options.
+     * Amendment 10 keeps it rather than rewriting the contact, so the form has to
+     * offer it back or saving anything else would silently drop it.
+     */
+    staleOptionHint: 'No longer an option. Saving keeps it unless you pick another.',
+    booleanTrue: 'Yes',
+    booleanFalse: 'No',
+    booleanUnset: 'Not set',
+    selectUnset: 'Not set',
+    notSet: 'Not set',
+    readOnlyHint: 'You do not have permission to change this contact.',
+  },
+
+  customFields: {
+    title: 'Custom fields',
+    subtitle: 'The extra fields every contact in this workspace carries.',
+
+    listHeading: 'Custom fields',
+    listLoading: 'Loading custom fields',
+    listDescription: (count: number, limit: number) =>
+      `${count === 1 ? '1 field' : `${String(count)} fields`} of ${String(limit)}. They appear on every contact profile, in this order.`,
+    emptyHeading: 'No custom fields yet',
+    emptyBody:
+      'Define a field such as “Plan tier” and every contact profile gains it, ready for an agent to fill in.',
+
+    columnLabel: 'Label',
+    columnKey: 'Key',
+    columnType: 'Type',
+    columnOptions: 'Options',
+    columnActions: 'Actions',
+    noOptions: '—',
+
+    create: 'Define field',
+    createTitle: 'Define a custom field',
+    createDescription: 'It appears on every contact profile as soon as you save it.',
+    createSubmit: 'Define field',
+    createSuccess: (label: string) => `${label} added to every contact profile`,
+
+    edit: 'Edit',
+    editAria: (label: string) => `Edit ${label}`,
+    editTitle: (label: string) => `Edit ${label}`,
+    editSuccess: (label: string) => `${label} updated`,
+
+    remove: 'Delete',
+    removeAria: (label: string) => `Delete ${label}`,
+    removeTitle: 'Delete custom field',
+    removeBody: (label: string) =>
+      `${label} disappears from every contact profile, and the values already stored against it are deleted. This cannot be undone.`,
+    removeConfirm: 'Delete field',
+    removeSuccess: (label: string) => `${label} deleted`,
+
+    labelLabel: 'Label',
+    labelHint: 'What agents see on the contact profile. You can rename it at any time.',
+    labelPlaceholder: 'Plan tier',
+
+    keyLabel: 'Key',
+    keyHint: 'Lowercase letters, numbers and underscores. Fixed once the field exists.',
+    keyPlaceholder: 'plan_tier',
+    keyInvalidError: 'Use lowercase letters, numbers and underscores, starting with a letter',
+    keyReservedError: 'That key would shadow a built-in contact field. Pick another.',
+    keyImmutableHint: 'The key cannot be changed — delete the field and define a new one.',
+
+    typeLabel: 'Type',
+    typeHint:
+      'Fixed once the field exists, because the values already stored were checked against it.',
+    typeImmutableHint: 'The type cannot be changed — delete the field and define a new one.',
+
+    optionsLabel: 'Options',
+    optionsHint: 'One per line. Removing one leaves it on any contact already holding it.',
+    optionsPlaceholder: 'bronze\nsilver\ngold',
+    optionsRequiredError: 'A choice field needs at least one option',
+    optionsDuplicateError: 'Each option must be different',
+    optionsTooManyError: (limit: number) => `At most ${String(limit)} options`,
+    optionsTooLongError: (limit: number) =>
+      `Each option must be at most ${String(limit)} characters`,
+
+    limitReachedNotice: (limit: number) =>
+      `This workspace has all ${String(limit)} custom fields it may define. Delete one to add another.`,
   },
 
   people: {

@@ -1,0 +1,18 @@
+.identity {
+  min-inline-size: 0;
+}
+
+.name {
+  margin: 0;
+  font-size: var(--font-size-heading-sm);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-heading);
+  overflow-wrap: anywhere;
+}
+
+.phone {
+  margin: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-variant-numeric: tabular-nums;
+}

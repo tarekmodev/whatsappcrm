@@ -57,6 +57,20 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     requiresAny: ['tenant:settings', 'branding:write'],
   },
   {
+    id: 'settings-custom-fields',
+    label: content.nav.customFields,
+    href: routes.settingsCustomFields(),
+    icon: 'contact',
+    /**
+     * `tenant:settings`, matching what 0002 amendment 10 requires to mutate a
+     * definition — admin-only under today's table. Deliberately *not*
+     * `contact:read`, which every agent holds: they read the definitions on a
+     * profile, and an entry to a screen whose every button the API refuses is
+     * worse than no entry.
+     */
+    requiresAny: ['tenant:settings'],
+  },
+  {
     id: 'settings-people',
     label: content.nav.people,
     href: routes.settingsPeople(),
@@ -134,6 +148,15 @@ export const NAV_ITEMS: readonly NavItem[] = [
     requiresAny: ['conversation:read'],
   },
   {
+    id: 'contacts',
+    label: content.nav.contacts,
+    href: routes.contacts(),
+    icon: 'contact',
+    // Every role: an agent needs the directory to find who they are talking to,
+    // and `contact:read` is what the list endpoint requires (TAR-33).
+    requiresAny: ['contact:read'],
+  },
+  {
     id: 'tickets',
     label: content.nav.tickets,
     href: routes.tickets(),
@@ -186,10 +209,13 @@ export const NAV_ITEMS: readonly NavItem[] = [
  * Five, because 0001 rules the rail's destinations to be exactly Inbox,
  * Contacts, Tickets, Reports and Settings. Anything a later story adds beyond
  * that set is a destination somebody asked for rather than one everybody needs,
- * and belongs behind the disclosure. `NavLinkList` renders no boundary while
- * nothing sorts past this, so today — Inbox, Tickets, Reports, Settings and the
- * onboarding checklist — the rail still shows whole, and the next entry after
- * them is the first one the disclosure hides.
+ * and belongs behind the disclosure.
+ *
+ * TAR-33's Contacts entry completes that set, so the rail now holds exactly the
+ * five 0001 named and the onboarding checklist — the sixth, and the first entry
+ * the disclosure hides — sits behind it. That is the design working rather than
+ * a regression: the checklist is a destination a new admin returns to for a
+ * week, not one everybody needs every day.
  */
 export const RAIL_PRIMARY_COUNT = 5;
 

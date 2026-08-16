@@ -27,6 +27,35 @@ describe('routes', () => {
   });
 });
 
+describe('routes.contacts', () => {
+  const TAG_ID = '0192f00b-0000-7000-8000-000000000b01';
+
+  it('is a bare path for the unfiltered directory', () => {
+    expect(routes.contacts()).toBe('/contacts');
+  });
+
+  /**
+   * The two filters are what makes "everyone tagged VIP" a link rather than a
+   * sequence of clicks somebody has to describe. `tag`, not `tagId`: a shared
+   * link is read by people, and the value being an id is the API's business.
+   */
+  it('carries both filters, spelled as the URL spells them', () => {
+    expect(routes.contacts({ q: 'fatima', tagId: TAG_ID })).toBe(
+      `/contacts?q=fatima&tag=${TAG_ID}`,
+    );
+  });
+
+  it('drops an empty search rather than writing a filter that says nothing', () => {
+    expect(routes.contacts({ q: '', tagId: TAG_ID })).toBe(`/contacts?tag=${TAG_ID}`);
+  });
+
+  it('points at one contact', () => {
+    expect(routes.contact('0192f003-0000-7000-8000-000000000301')).toBe(
+      '/contacts/0192f003-0000-7000-8000-000000000301',
+    );
+  });
+});
+
 describe('routes.login', () => {
   it('is a bare path when there is nowhere in particular to return to', () => {
     expect(routes.login()).toBe('/login');

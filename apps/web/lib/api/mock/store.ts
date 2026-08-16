@@ -2,6 +2,7 @@ import 'server-only';
 
 import {
   MOCK_ASSIGNMENT_RULES,
+  MOCK_CONTACTS,
   MOCK_CONVERSATIONS,
   MOCK_CUSTOM_FIELD_DEFINITIONS,
   MOCK_INTERNAL_NOTES,
@@ -20,6 +21,7 @@ import {
   MOCK_WORKFLOWS,
   MOCK_WORKFLOW_RUNS,
   type MockAssignmentRule,
+  type MockContact,
   type MockConversation,
   type MockCustomFieldDefinition,
   type MockInternalNote,
@@ -59,6 +61,7 @@ interface MockState {
   tenantLifecycles: Map<string, MockTenantLifecycle>;
   users: Map<string, MockUser>;
   teams: Map<string, MockTeam>;
+  contacts: Map<string, MockContact>;
   conversations: Map<string, MockConversation>;
   messages: Map<string, MockMessage>;
   internalNotes: Map<string, MockInternalNote>;
@@ -131,6 +134,15 @@ function seed(): MockState {
     users: new Map(MOCK_USERS.map((user) => [user.id, { ...user, teamIds: [...user.teamIds] }])),
     teams: new Map(
       MOCK_TEAMS.map((team) => [team.id, { ...team, memberUserIds: [...team.memberUserIds] }]),
+    ),
+    contacts: new Map(
+      // `tags` and `customFields` are both replaced wholesale by the update
+      // handler, but copying them here is what stops one reset leaking a
+      // mutation into the next.
+      MOCK_CONTACTS.map((contact) => [
+        contact.id,
+        { ...contact, tags: [...contact.tags], customFields: { ...contact.customFields } },
+      ]),
     ),
     conversations: new Map(
       MOCK_CONVERSATIONS.map((conversation) => [conversation.id, conversation]),

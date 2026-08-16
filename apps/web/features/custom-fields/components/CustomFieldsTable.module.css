@@ -1,0 +1,20 @@
+.label {
+  font-weight: var(--font-weight-medium);
+}
+
+.key {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+  color: var(--color-on-surface-muted);
+  overflow-wrap: anywhere;
+}
+
+.muted {
+  color: var(--color-on-surface-muted);
+}
+
+.actions {
+  /* Keeps the pair on one line until the table stacks, where the cell is full
+     width and they wrap naturally. */
+  flex-wrap: wrap;
+}

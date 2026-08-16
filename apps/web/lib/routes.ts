@@ -14,6 +14,18 @@ export const routes = {
   home: () => '/',
   inbox: (query?: InboxQuery) => withQuery('/inbox', inboxSearchParams(query)),
   /**
+   * The contact directory (TAR-33). The search term and the tag filter both ride
+   * in the URL, because "everyone tagged VIP" is a link a supervisor sends, not a
+   * sequence of clicks they describe.
+   *
+   * One `tagId`, not a set: `ContactListQuerySchema` takes a single optional
+   * `tagId`, and offering a multi-select the API answers by ignoring all but one
+   * would be a filter that silently lies.
+   */
+  contacts: (query?: ContactsQuery) => withQuery('/contacts', contactsSearchParams(query)),
+  /** One contact: their identity, their tags and the tenant's custom fields. */
+  contact: (contactId: string) => `/contacts/${contactId}`,
+  /**
    * The ticket queue. Scope, status and priority all ride in the URL, so a
    * refresh, a copied link and the back button reproduce the same view.
    *
@@ -61,6 +73,16 @@ export const routes = {
    * path is read by a customer, so it takes the on-screen word.
    */
   settingsWorkspace: () => '/settings/workspace',
+  /**
+   * Where an admin defines the tenant's contact schema — 0002 amendment 10's
+   * `custom_field_defs` surface (TAR-33, TAR-476).
+   *
+   * Under Settings rather than beside the directory: it is tenant configuration
+   * gated on `tenant:settings`, and every agent who *reads* those fields on a
+   * profile holds only `contact:read`. Putting it on `/contacts` would mean a
+   * tab most of the workspace is refused.
+   */
+  settingsCustomFields: () => '/settings/custom-fields',
   /**
    * The automation builder (TAR-27). Its own settings section rather than a
    * fourth panel on Assignment: a routing rule decides where a *conversation*
@@ -157,6 +179,17 @@ export const searchParamKeys = {
   peopleTab: 'tab',
   peopleRole: 'role',
   peopleQuery: 'q',
+  /**
+   * The directory's search term. Spelled `q` like every other search in the app,
+   * and passed straight through to `GET /contacts?q=`.
+   */
+  contactsQuery: 'q',
+  /**
+   * Which tag the directory is narrowed to. `tag` in the URL rather than
+   * `tagId`: a shared link is read by people, and the value being an id is the
+   * API's business. The query it becomes is `ContactListQuery.tagId`.
+   */
+  contactsTag: 'tag',
   /**
    * Which deferral reason the supervisor's flagged-ticket queue is narrowed to.
    * In the URL rather than component state because it is the thing a supervisor
@@ -324,6 +357,13 @@ export interface PeopleQuery {
   q?: string;
 }
 
+export interface ContactsQuery {
+  /** Free text, matched by the API against name, phone and email. */
+  q?: string;
+  /** A single `TagSchema` id; omitted means every contact. */
+  tagId?: string;
+}
+
 export interface AssignmentQuery {
   /** A `FallbackAssignmentReason`; omitted means every flagged ticket. */
   deferredReason?: string;
@@ -358,6 +398,15 @@ function reportSearchParams(query: ReportQuery | undefined): Record<string, stri
     // `withQuery` drops an `undefined`, which is what keeps the default view's
     // URL to the two dates it is actually about.
     [searchParamKeys.reportScope]: query?.scope === 'assigned' ? 'assigned' : undefined,
+  };
+}
+
+function contactsSearchParams(
+  query: ContactsQuery | undefined,
+): Record<string, string | undefined> {
+  return {
+    [searchParamKeys.contactsQuery]: query?.q,
+    [searchParamKeys.contactsTag]: query?.tagId,
   };
 }
 
