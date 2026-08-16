@@ -46,6 +46,7 @@ function snapshot(overrides: Partial<BotGateSnapshot> = {}): BotGateSnapshot {
       botEngagedAt: null,
       serviceWindowExpiresAt: OPEN_WINDOW,
     },
+    optedOut: false,
     botReplyCount: 0,
     ...overrides,
   };
@@ -109,6 +110,33 @@ describe('decideEligibility', () => {
           }),
         ),
       ).toEqual({ outcome: 'suppress', reason: 'provider_not_configured' });
+    });
+  });
+
+  describe('the opt-out, which is the one clause about a person', () => {
+    it('sends nothing to a contact who has opted out', () => {
+      expect(decideEligibility(snapshot({ optedOut: true }))).toEqual({
+        outcome: 'suppress',
+        reason: 'opted_out',
+      });
+    });
+
+    it('suppresses rather than hands off, because a handoff may still send a message', () => {
+      // The tenant's `handoffMessage` is an outbound WhatsApp message like any
+      // other. Silence is the only outcome that honours the opt-out, and the
+      // customer's message is in the inbox with a ticket either way.
+      expect(decideEligibility(snapshot({ optedOut: true })).outcome).toBe('suppress');
+    });
+
+    it('outranks the turn cap, so no handoff message reaches an opted-out contact', () => {
+      // The ordering that matters: `max_turns` alone is a handoff, and a handoff
+      // that fires first would be the one path on which someone who asked us to
+      // stop still hears from us.
+      expect(
+        decideEligibility(
+          snapshot({ optedOut: true, settings: settings({ maxBotTurns: 2 }), botReplyCount: 2 }),
+        ),
+      ).toEqual({ outcome: 'suppress', reason: 'opted_out' });
     });
   });
 

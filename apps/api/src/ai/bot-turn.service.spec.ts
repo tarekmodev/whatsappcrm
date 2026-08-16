@@ -234,6 +234,7 @@ describe('BotTurnService', () => {
             botEngagedAt: conversationBotEngagedAt,
             serviceWindowExpiresAt: new Date('2026-08-16T20:00:00.000Z'),
           },
+          optedOut: false,
           botReplyCount: 0,
         }),
     } as unknown as BotEligibilityService;

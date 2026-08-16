@@ -60,7 +60,16 @@ export class BotEligibilityService {
       }),
       this.prisma.conversation.findUnique({
         where: { id: trigger.conversationId },
-        select: { id: true, botState: true, botEngagedAt: true, serviceWindowExpiresAt: true },
+        select: {
+          id: true,
+          botState: true,
+          botEngagedAt: true,
+          serviceWindowExpiresAt: true,
+          // One extra column on a read already being made, rather than a sixth
+          // query: an opt-out is a fact about the contact this thread belongs
+          // to, and the gate must not send to them.
+          contact: { select: { optedOutAt: true } },
+        },
       }),
       this.prisma.knowledgeDocument.findFirst({
         where: { status: KnowledgeDocumentStatus.indexed },
@@ -87,6 +96,10 @@ export class BotEligibilityService {
               botEngagedAt: conversation.botEngagedAt,
               serviceWindowExpiresAt: conversation.serviceWindowExpiresAt,
             },
+      // A conversation this scope cannot read is refused as `unreadable` before
+      // the opt-out clause is reached, so `false` here is never the answer to
+      // "may we message them" — it is "there is nobody to ask about".
+      optedOut: conversation !== null && conversation.contact.optedOutAt !== null,
       botReplyCount: replies,
     };
   }
@@ -123,6 +136,12 @@ export interface BotGateSnapshot {
     readonly botEngagedAt: Date | null;
     readonly serviceWindowExpiresAt: Date | null;
   } | null;
+  /**
+   * The contact asked us to stop messaging them. A regulatory obligation the
+   * agent send path already enforces, and the one refusal here that is about a
+   * person rather than about configuration.
+   */
+  readonly optedOut: boolean;
   /** Replies the bot has already made in this conversation. */
   readonly botReplyCount: number;
 }
@@ -137,6 +156,8 @@ export type BotSuppressionReason =
   | 'feature_not_in_plan'
   | 'disabled'
   | 'no_knowledge_base'
+  /** The contact has opted out of messages; nothing may be sent to them. */
+  | 'opted_out'
   | 'not_inbound'
   | 'empty_message'
   /** The conversation is already `handed_off` or `human_active`. */
@@ -184,6 +205,23 @@ export function decideEligibility(snapshot: BotGateSnapshot): BotGateDecision {
     // has already opened the tenant scope, so this is a correct state that no
     // number of attempts changes.
     return { outcome: 'suppress', reason: 'unreadable' };
+  }
+
+  // Honouring an opt-out is a regulatory obligation, not a preference, and the
+  // agent send path has always refused one (`ContactOptedOutError`). This is the
+  // same rule for the path that has no human in it.
+  //
+  // **Before the turn cap on purpose.** `max_turns` is a *handoff*, and a
+  // handoff may send the tenant's `handoffMessage` — which is an outbound
+  // WhatsApp message like any other. Placing the opt-out check after it would
+  // leave one path on which a contact who asked us to stop still hears from us.
+  //
+  // Suppressed rather than handed off: the customer's message is already in the
+  // inbox and already has a ticket, so a human can still answer it deliberately.
+  // What must not happen is this process sending anything, and silence is
+  // exactly that.
+  if (snapshot.optedOut) {
+    return { outcome: 'suppress', reason: 'opted_out' };
   }
 
   if (snapshot.message.direction !== MessageDirection.inbound) {
