@@ -602,10 +602,17 @@ component tree verbatim and is deliberately unvalidated — its shape is Meta's 
 - **Unique:** `(tenant_id, phone_e164)` — the natural key every inbound webhook resolves a
   contact through; `(tenant_id, id)`
 - **Indexes:** `(tenant_id, created_at DESC, id DESC)`
+- **Check:** `custom_fields` is null or a JSON **object**
 - **Owned by:** TAR-33
 
 `custom_fields` is JSONB keyed by `custom_field_defs.key`, so a tenant adding a field is a
 row insert rather than a migration. A non-null `opted_out_at` blocks outbound sends.
+
+The object check is what makes 0002 amendment 10's delete path total. `jsonb - text` is
+defined only for objects: against an array it silently removes an _element_, and against a
+scalar it raises `cannot delete from scalar` — which would take down the transaction that
+deletes a custom field, on account of one unrelated contact row. Merge-on-write and a
+`contact_attribute` condition's `custom_fields ? key` assume the same shape.
 
 #### `tags`, `contact_tags`
 
@@ -624,6 +631,7 @@ a `conflict` naming the workflows.
 #### `custom_field_defs`
 
 - **Unique:** `(tenant_id, key)` — also what answers `conflict` on a duplicate key
+- **Check:** `options` is null or a JSON **array**; `position >= 0`
 - **Owned by:** TAR-33
 
 `key` and `type` are immutable once a row exists (0002 amendment 10): `key` is the JSONB key
@@ -636,6 +644,17 @@ the same key cannot resurrect the old values.
 
 `custom_field_type` carries `multi_select`, and the API deliberately never writes it — the
 published `CUSTOM_FIELD_TYPES` is the other five. Reasoning in 0002 amendment 10.
+
+The checks are the storage-level half of `CustomFieldOptionsSchema` and
+`CustomFieldDefinitionSchema.position`. They stop at shape: which option strings are legal —
+non-empty, distinct, bounded, present exactly when `type = 'select'` — stays in
+`packages/contracts/src/contacts.ts`, so a refusal arrives as `validation_failed` with a field
+path rather than as a constraint violation with none.
+
+There is deliberately **no** `UNIQUE (tenant_id, position)`. Ties are part of the contract:
+ordering is `position ASC, id ASC` (0002 amendment 10), every row scaffolded before that
+amendment sits at the column default of `0`, and a reorder rewriting a whole set through a
+unique index would need the constraint deferred or a two-pass shuffle.
 
 ### Inbox — TAR-20
 
