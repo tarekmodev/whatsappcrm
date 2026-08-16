@@ -97,6 +97,17 @@ const TICKET_IDS = {
   fatimaResolved: '0192f00a-0000-7000-8000-000000000a04',
   /** Closed without a resolution: `closedAt` set, `resolvedAt` deliberately null. */
   meiClosed: '0192f00a-0000-7000-8000-000000000a05',
+  /**
+   * Resolved in July and closed days later, by an agent on the other team.
+   *
+   * It exists for the dashboard (TAR-30): a single resolved ticket gives a
+   * median that is also the mean and the p90, so nothing about how the durations
+   * are computed would be visible, and one agent's row would be the whole table.
+   * It is `closed` rather than `resolved` on purpose — volume is anchored on
+   * `resolvedAt`, not on status (ADR 0009 decision 2), so this ticket counts as
+   * resolved work while being absent from every queue.
+   */
+  jonasResolvedThenClosed: '0192f00a-0000-7000-8000-000000000a09',
   // The supervisor's deferred queue (TAR-23): one per reason in ADR 0008's
   // vocabulary, because a set holding only `all_at_capacity` would leave two
   // thirds of the copy that tells a supervisor *who* must act unreachable.
@@ -196,7 +207,22 @@ export type MockAssignmentRule = AssignmentRuleResponse & TenantScoped;
 export type MockConversation = ConversationResponse & TenantScoped;
 export type MockMessage = MessageResponse & TenantScoped;
 export type MockInternalNote = InternalNoteResponse & TenantScoped;
-export type MockTicket = TicketResponse & TenantScoped;
+/**
+ * `TicketResponse` names no responder or resolver — ADR 0009 decision 4 records
+ * both as columns on `tickets`, and neither is published: the dashboard groups by
+ * them, and no client has any use for them on a ticket. The fixture keeps them
+ * for the reason `MockSlaAlert` keeps its recipient — a transport that could not
+ * tell whose work a resolution was could not exercise the per-agent breakdown at
+ * all — and `toTicketResponse` strips them on the way out.
+ *
+ * `null` is "not recorded", which the report renders as its unattributed row
+ * rather than redistributing.
+ */
+export type MockTicket = TicketResponse &
+  TenantScoped & {
+    readonly firstResponseUserId: string | null;
+    readonly resolvedByUserId: string | null;
+  };
 
 /**
  * `SlaAlertResponse` names no recipient — the API narrows to the caller, so the
@@ -1015,8 +1041,12 @@ function ticket(
     assignedTeamId: null,
     routing: NOT_ROUTED,
     sla: NO_SLA,
-    // Nothing writes this column yet; TAR-26 owns the first-response timer.
     firstRespondedAt: null,
+    // Both null by default: a ticket nobody has answered has nobody to credit,
+    // and a fixture that guessed would teach the dashboard an attribution the
+    // product does not have.
+    firstResponseUserId: null,
+    resolvedByUserId: null,
     resolvedAt: null,
     closedAt: null,
     updatedAt: overrides.createdAt,
@@ -1040,6 +1070,11 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     // is drawn beside, and what the supervisor's alert below points at.
     sla: firstResponseSla('breached', SLA_DEADLINE_MISSED),
     createdAt: '2026-08-09T14:05:00.000Z',
+    // Answered, but an hour and a half past the deadline — which is what a
+    // breached timer with a response against it looks like, and gives the
+    // dashboard its slowest first response.
+    firstRespondedAt: '2026-08-09T16:40:00.000Z',
+    firstResponseUserId: USER_IDS.amina,
     updatedAt: '2026-08-10T08:45:00.000Z',
   }),
   ticket({
@@ -1086,7 +1121,13 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     // `?status=resolved` so the success case is not only inferable from absence.
     sla: firstResponseSla('met', SLA_DEADLINE_MET),
     createdAt: '2026-08-01T09:00:00.000Z',
+    firstRespondedAt: '2026-08-01T09:35:00.000Z',
+    firstResponseUserId: USER_IDS.amina,
     resolvedAt: '2026-08-05T15:20:00.000Z',
+    // Answered by Amina and finished by the supervisor: attribution follows the
+    // work rather than the assignment, which is the property ADR 0009 decision 4
+    // exists for and the one a per-agent table gets wrong by default.
+    resolvedByUserId: USER_IDS.priya,
     updatedAt: '2026-08-05T15:20:00.000Z',
   }),
   ticket({
@@ -1100,11 +1141,38 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     assignedUserId: USER_IDS.liang,
     assignedTeamId: TEAM_IDS.onboarding,
     createdAt: '2026-07-20T08:00:00.000Z',
+    // Somebody replied, and who is not recorded — a ticket that predates the
+    // attribution column, which is what the backfill leaves behind when the
+    // evidence is missing. It lands in the report's unattributed row rather than
+    // being redistributed, and it is the fixture that makes that row reachable.
+    firstRespondedAt: '2026-07-20T08:45:00.000Z',
+    firstResponseUserId: null,
     // `resolvedAt` stays null on purpose: closing a wrong number is not a
     // resolution, and back-filling one would manufacture a cycle time that never
     // happened (ADR 0006 §3).
     closedAt: '2026-07-25T10:30:00.000Z',
     updatedAt: '2026-07-25T10:30:00.000Z',
+  }),
+  ticket({
+    id: TICKET_IDS.jonasResolvedThenClosed,
+    number: 1021,
+    conversationId: CONVERSATION_IDS.billingTeam,
+    contactId: CONTACT_IDS.jonas,
+    subject: 'Duplicate subscription charge',
+    // Terminal, and terminal twice over: resolved on the 30th, closed on the
+    // 2nd. Absent from every queue, present in the dashboard's resolved volume.
+    status: 'closed',
+    priority: 'normal',
+    assignedUserId: USER_IDS.liang,
+    assignedTeamId: TEAM_IDS.onboarding,
+    sla: firstResponseSla('met', '2026-07-28T10:00:00.000Z'),
+    createdAt: '2026-07-28T09:00:00.000Z',
+    firstRespondedAt: '2026-07-28T09:12:00.000Z',
+    firstResponseUserId: USER_IDS.liang,
+    resolvedAt: '2026-07-30T11:00:00.000Z',
+    resolvedByUserId: USER_IDS.liang,
+    closedAt: '2026-08-02T09:00:00.000Z',
+    updatedAt: '2026-08-02T09:00:00.000Z',
   }),
   ticket({
     // Present only so tenant scoping can be asserted, never rendered.
@@ -1120,6 +1188,11 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     // Breached, so `?overdue=true` has something to leak if the scoping is wrong.
     sla: firstResponseSla('breached', SLA_DEADLINE_MISSED),
     createdAt: '2026-06-02T09:05:00.000Z',
+    // Answered a fortnight late, so the dashboard has something to leak too: a
+    // reporting query that lost its tenant scope would move this tenant's
+    // first-response numbers by days rather than by minutes.
+    firstRespondedAt: '2026-06-16T09:05:00.000Z',
+    firstResponseUserId: USER_IDS.otherTenant,
   }),
 
   // The deferred queue. Each hangs off a contact of its own so the five tickets

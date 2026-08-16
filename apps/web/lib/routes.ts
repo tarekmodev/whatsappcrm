@@ -2,6 +2,7 @@ import {
   ONBOARDING_STEP_IDS,
   type ConversationListQuery,
   type OnboardingStepId,
+  type ReportScope,
   type TicketListQuery,
 } from '@whatsappcrm/contracts';
 
@@ -23,6 +24,15 @@ export const routes = {
   tickets: (query?: TicketQueueQuery) => withQuery('/tickets', ticketSearchParams(query)),
   /** One ticket, where its status and priority are changed. */
   ticket: (ticketId: string) => `/tickets/${ticketId}`,
+  /**
+   * The supervisor's performance dashboard (TAR-30, ADR 0009).
+   *
+   * The applied range rides in the URL, and that is load-bearing rather than
+   * tidy: the metrics request and — once TAR-431 lands — the export URL are both
+   * derived from this one value, so the export cannot hold its own copy of the
+   * filters because it has nowhere to hold it.
+   */
+  reports: (query?: ReportQuery) => withQuery('/reports', reportSearchParams(query)),
   /**
    * The guided onboarding checklist a new tenant admin lands in after signup, and
    * returns to afterwards (TAR-36, TAR-407).
@@ -126,6 +136,16 @@ export const searchParamKeys = {
    * this becomes is `TicketListQuery.breachedOnly`.
    */
   ticketOverdue: 'overdue',
+  /**
+   * The dashboard's applied range, spelled exactly as
+   * `DashboardMetricsQuerySchema` names them so a URL parameter and the query it
+   * becomes cannot drift. Both are tenant-local `YYYY-MM-DD` dates, never
+   * instants: the tenant's timezone is the server's to apply (ADR 0009
+   * decision 5), and a console that sent instants would be deciding it here.
+   */
+  reportFrom: 'from',
+  reportTo: 'to',
+  reportScope: 'scope',
   peopleTab: 'tab',
   peopleRole: 'role',
   peopleQuery: 'q',
@@ -265,6 +285,19 @@ export interface TicketQueueQuery {
   isOverdueOnly?: boolean;
 }
 
+export interface ReportQuery {
+  /** Tenant-local `YYYY-MM-DD`, inclusive at both ends. */
+  from?: string;
+  to?: string;
+  /**
+   * Which tickets the aggregate covers. `all` is the contract's default and is
+   * narrowed rather than refused for a caller without `report:read_all`, so it
+   * is omitted from the URL — a parameter that names the default says nothing
+   * and makes a shared link look filtered when it is not.
+   */
+  scope?: ReportScope;
+}
+
 export const PEOPLE_TABS = ['agents', 'teams'] as const;
 export type PeopleTab = (typeof PEOPLE_TABS)[number];
 
@@ -307,6 +340,16 @@ function ticketSearchParams(
     // Only ever `'true'`. `withQuery` drops an `undefined`, which is what keeps
     // the default view's URL clean.
     [searchParamKeys.ticketOverdue]: query?.isOverdueOnly === true ? 'true' : undefined,
+  };
+}
+
+function reportSearchParams(query: ReportQuery | undefined): Record<string, string | undefined> {
+  return {
+    [searchParamKeys.reportFrom]: query?.from,
+    [searchParamKeys.reportTo]: query?.to,
+    // `withQuery` drops an `undefined`, which is what keeps the default view's
+    // URL to the two dates it is actually about.
+    [searchParamKeys.reportScope]: query?.scope === 'assigned' ? 'assigned' : undefined,
   };
 }
 

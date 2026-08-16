@@ -45,6 +45,9 @@ export * from './whatsapp';
 // --- Channel ingestion ------------------------------------------------------
 export * from './webhooks';
 
+// --- Reporting --------------------------------------------------------------
+export * from './reporting';
+
 // --- Realtime ---------------------------------------------------------------
 export * from './realtime';
 

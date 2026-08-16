@@ -76,3 +76,19 @@ export function isConversationScopeNarrowed(
 export function isTicketScopeNarrowed(checker: PermissionChecker, scope: TicketScope): boolean {
   return scope !== 'assigned' && !checker.can('ticket:read_all');
 }
+
+/**
+ * The same question for the performance dashboard — and, unlike the two above,
+ * it does not depend on the scope that was asked for.
+ *
+ * `report:read` aggregates over exactly what the caller can see, which `all`
+ * narrows to for an agent the same way the ticket queue does. But ADR 0009
+ * decision 6 narrows something the other two surfaces have no equivalent of: the
+ * **per-agent breakdown** is one row — the caller's own — whatever scope they
+ * chose, because a table of colleagues is a performance comparison no acceptance
+ * criterion asks for on an agent's behalf. So `assigned` is narrowed too, and the
+ * notice is owed either way.
+ */
+export function isReportScopeNarrowed(checker: PermissionChecker): boolean {
+  return !checker.can('report:read_all');
+}
