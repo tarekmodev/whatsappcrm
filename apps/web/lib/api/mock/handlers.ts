@@ -1368,8 +1368,10 @@ function listTags({ principal }: RouteContext): CursorPage<Tag> {
 function listCustomFieldDefinitions({
   principal,
 }: RouteContext): CursorPage<CustomFieldDefinition> {
+  // `position` ascending, `id` as the tie-break — 0002 amendment 10's ordering,
+  // not alphabetical: the admin chose this order and the profile form renders it.
   const items = tenantCustomFieldDefinitions(principal)
-    .sort((left, right) => left.label.localeCompare(right.label))
+    .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id))
     .map(toCustomFieldDefinitionResponse);
 
   return { items, nextCursor: null };
