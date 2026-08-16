@@ -205,6 +205,59 @@ change.
   found while verifying and reported rather than fixed: `validation_failed` on these routes
   says "The request body failed validation." on two routes that read only the query string.
 
+- **A tenant can put its own name, logo and colours on the product, and serve it from its own
+  web address** (TAR-29) — the white-label surface. `tenant_branding` and `tenant_domains`
+  now exist and are written; `PATCH /api/v1/tenant`, `PUT`/`DELETE /tenant/branding/{kind}`
+  and the five routes under `/tenant/domains` are the tenant-facing half, and
+  `GET /tenant/public` plus `GET /tenant/branding/{kind}` are the unauthenticated pair that
+  makes the **sign-in screen themeable before anybody has a session** — TAR-35's requirement,
+  and the reason a tenant identifier appears nowhere in any of these contracts. The console
+  gets two settings screens behind two permissions: `branding:write` for the editor, and a
+  separate `domain:write` for hostnames, because DNS control decides where every invitation
+  and password-reset link in the tenant is addressed and choosing a colour does not. Both are
+  admin-only today. `settings/workspace` stops apologising for a branding editor that did not
+  exist.
+  Four decisions are worth reading before building on this. **The tenant is the host and is
+  never in the request** — every route above is the same URL for every tenant, so the two
+  public ones send `Vary: x-edge-host` and any cache in front of them that keys on the URL
+  alone is a direct cross-tenant leak, which is the highest-severity mistake this feature
+  makes available. **Branding defaults live in `@whatsappcrm/contracts`, not as column
+  defaults**, so the response is always fully populated and "has this tenant customised
+  anything" stays answerable. **Uploads are sniffed, never trusted**: the declared
+  `Content-Type` is not consulted, the sniffed value is what the serve route later sets, and
+  `image/svg+xml` is refused outright rather than sanitised — an SVG served same-origin
+  executes script, and a sanitiser is a security dependency to own forever. And **a domain's
+  status is derived from its timestamps rather than stored**, because a stored status
+  disagrees with its own columns after one failed write.
+  Isolation rests on two things the integration suite asserts against a real database rather
+  than on either alone: `hostname citext UNIQUE` is global and enforced **below** row-level
+  security, so the loser of a race for one hostname gets `conflict` and cannot read, or learn
+  anything about, the holder; and a verified-but-unattached domain receives no traffic while
+  an attached-but-unverified one answers `tenant_not_found` on every route — two halves held
+  by different parties, neither able to forge the other.
+  The cost is a wait, and it is the honest headline. **`verified` and `live` are separate
+  states because attaching a hostname at the edge is a manual operator step**: the platform
+  proves ownership automatically, then the domain sits on `GET /api/v1/admin/domains` until
+  somebody attaches it and posts the activate route. Promoting a verified-but-unattached
+  domain to primary is refused for that reason — the mail would send and nobody could accept
+  an invitation. Custom domains are also billed per domain beyond each plan's allowance, which
+  grows linearly with exactly the customers this is sold to. Documented in
+  [the custom domains runbook](docs/runbooks/custom-domains.md),
+  [the API reference](docs/reference/branding-domains-api.md) and the two admin guides
+  ([branding](docs/guides/brand-your-workspace.md),
+  [custom domains](docs/guides/set-up-a-custom-domain.md)).
+  ⚠️ Four things shipped knowingly incomplete, each named rather than left to be discovered.
+  **Apex domains are refused** — a root domain cannot take the `CNAME` the routing record
+  hands back — and the check counts labels rather than consulting a Public Suffix List, so
+  `acme.co.uk` is accepted and will never route; raised against TAR-416. **TAR-416's second
+  verification throttle, 20 checks per hour per tenant, is not built**: it needs a shared
+  sliding-window counter, and the durable 10-second per-domain floor is the only control
+  today. **Periodic re-verification is deliberately absent** — a tenant that repoints DNS
+  after verification leaves a stale verified row, which is better than letting one DNS blip
+  un-verify a live domain. And **the activation queue has no alerting**: "verified more than
+  24 hours ago with no activation" is the failure mode this feature actually has, and it is a
+  daily digest somebody has to build.
+
 - **An admin can now define the tenant's custom contact fields, and the contract says what a
   value means** (TAR-33, TAR-476) — `custom_field_defs` has existed since the initial
   migration and `CustomFieldDefinitionSchema` has been published since TAR-39, but nothing
