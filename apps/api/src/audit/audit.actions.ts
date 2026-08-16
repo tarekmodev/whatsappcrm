@@ -73,6 +73,28 @@ export const AUDIT_ACTIONS = {
   cannedResponseCreated: 'canned_response.created',
   cannedResponseUpdated: 'canned_response.updated',
   cannedResponseDeleted: 'canned_response.deleted',
+  /**
+   * Workflow writes (TAR-27, 0009 security). A workflow is a standing
+   * instruction that writes to tickets and messages supervisors without anybody
+   * watching, which is the same class of change as a routing rule — and 0007
+   * audits those.
+   *
+   * The metadata carries the workflow's name, its trigger type and its action
+   * types, **never its conditions**: a condition can carry tenant data, and this
+   * table is exported for compliance review rather than being a place to
+   * discover it.
+   */
+  workflowCreated: 'workflow.created',
+  workflowUpdated: 'workflow.updated',
+  workflowDeleted: 'workflow.deleted',
+  workflowReordered: 'workflow.reordered',
+  /**
+   * The **automatic** deactivation, written with a null actor: a reference the
+   * definition names went missing, so the engine disarmed the workflow rather
+   * than failing silently on every ticket (0009, decision 6). A supervisor
+   * turning a workflow off by hand is a `workflow.updated`.
+   */
+  workflowDeactivated: 'workflow.deactivated',
   sessionRevoked: 'session.revoked',
   /**
    * An account crossing `AUTH_POLICY.loginFailureThreshold` (TAR-53,

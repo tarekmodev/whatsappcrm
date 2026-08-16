@@ -4,6 +4,8 @@ import {
   SLA_EVALUATE_TICKET_JOB,
   SLA_QUEUE,
   TICKET_STATUS_REQUIRES_CLOSE,
+  WORKFLOWS_QUEUE,
+  WORKFLOW_EVALUATE_TICKET_JOB,
   canAgentTransition,
   ticketAssignRequiresReason,
   type SessionPrincipal,
@@ -16,6 +18,8 @@ import {
   type TicketRoutingState,
   type TicketStatus,
   type TicketUpdateInput,
+  type WorkflowEvaluateTicketTrigger,
+  type WorkflowTriggerType,
 } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import {
@@ -50,6 +54,27 @@ import {
 /** Everything an agent-driven change writes, recorded as `agent` on the event log. */
 const AGENT_CAUSE = 'agent';
 
+/**
+ * What a workflow-driven change writes instead (TAR-27).
+ *
+ * `TICKET_EVENT_TYPES` needs no new member: a workflow's status change is a
+ * `status_changed` with a null actor and `{ workflowId, workflowRunId }` in
+ * `data`, and its assignment is an `assigned`. A `workflow_ran` event type was
+ * considered and rejected — `workflow_runs` is the automation log and it is
+ * queryable, whereas a second copy in an append-only ticket log would be two
+ * records of one fact with no way to reconcile them.
+ */
+const WORKFLOW_CAUSE = 'workflow';
+
+/** No field moving. Spread with exactly one override by the automation path. */
+const EMPTY_CHANGE: TicketChange = { status: null, priority: null, subject: null };
+
+/** An automation result that raised no triggering occurrence — every non-`applied` one. */
+const NO_OCCURRENCE = (outcome: TicketAutomationOutcome): TicketAutomationResult => ({
+  outcome,
+  occurrence: null,
+});
+
 /** What a request actually moves, after the current row has been read. */
 interface TicketChange {
   readonly status: TicketStatus | null;
@@ -61,6 +86,64 @@ interface TicketChange {
 interface TicketAssignment {
   readonly assignedUserId: string | null;
   readonly assignedTeamId: string | null;
+}
+
+/**
+ * What one workflow action asks this service to change (TAR-27, 0009 decision 5,
+ * delta 1).
+ *
+ * A discriminated union rather than a partial `TicketUpdateInput`, because an
+ * action list applies its members **one at a time, each in its own
+ * transaction**: an action that succeeded stays done when a later one fails, and
+ * the run records the outcome of each. A shape that could carry two changes at
+ * once would invite a caller to collapse two actions into one write and lose
+ * that per-action result.
+ */
+export type TicketAutomationChange =
+  | { readonly kind: 'status'; readonly status: TicketStatus }
+  | { readonly kind: 'priority'; readonly priority: TicketPriority }
+  | {
+      readonly kind: 'assignment';
+      readonly assignedUserId: string | null;
+      readonly assignedTeamId: string | null;
+    };
+
+/** Which workflow run is asking. Recorded on the ticket event, never on a log line. */
+export interface TicketAutomationContext {
+  readonly workflowId: string;
+  readonly workflowRunId: string;
+}
+
+/**
+ * What an automation write did.
+ *
+ * `no_op` is not `applied`: setting a status the ticket already holds changed
+ * nothing, and the run should say so rather than claim a write. `ticket_gone`
+ * and `transition_refused` are the two refusals that are **returned rather than
+ * thrown** — a tenant's own rule attempting something the transition table
+ * forbids is a fact about that rule, not a fault, and must not fill the failed
+ * job set that is monitored for infrastructure problems.
+ */
+export type TicketAutomationOutcome = 'applied' | 'no_op' | 'transition_refused' | 'ticket_gone';
+
+/**
+ * The outcome, plus the `ticket_events` row the write appended when it applied
+ * one.
+ *
+ * The event id is returned rather than acted on here because **this service must
+ * not raise the chained trigger itself**: a workflow's own write is a triggering
+ * occurrence like any other, but the job it produces has to carry `depth + 1`
+ * and the id of the run that caused it, and neither of those is knowable from
+ * inside a ticket write. `WorkflowTriggerService` owns the chain and its bound
+ * (0009, loop protection); this hands it the occurrence and stays out of it.
+ */
+export interface TicketAutomationResult {
+  readonly outcome: TicketAutomationOutcome;
+  /** Null unless `outcome` is `applied` **and** the write raised a trigger type. */
+  readonly occurrence: {
+    readonly triggerType: WorkflowTriggerType;
+    readonly ticketEventId: string;
+  } | null;
 }
 
 /**
@@ -160,10 +243,11 @@ export class TicketCommandService {
       return toTicketResponse(before);
     }
 
-    const after = await this.write(before, change);
+    const { after, statusEventId } = await this.write(before, change);
 
     this.announceUpdate(before, after);
     await this.triggerSlaEvaluation(before, after);
+    await this.triggerWorkflowEvaluation(after.id, 'ticket_status_changed', statusEventId);
 
     return toTicketResponse(after);
   }
@@ -249,7 +333,77 @@ export class TicketCommandService {
       return toTicketResponse(before);
     }
 
-    return toTicketResponse(await this.writeAssignment(before, assignment, input.reason));
+    const { after, eventId } = await this.writeAssignment(before, assignment, input.reason);
+
+    await this.triggerWorkflowEvaluation(after.id, 'ticket_assigned', eventId);
+
+    return toTicketResponse(after);
+  }
+
+  /**
+   * 0009 delta 2: a triggering occurrence, enqueued **after the transaction that
+   * caused it commits**.
+   *
+   * The same shape TAR-24 and TAR-26 already added — an enqueue, never a call.
+   * `WorkflowsModule` is L4 and this is L3, so what crosses the line is the
+   * payload in `@whatsappcrm/contracts/workflows` and a queue name.
+   *
+   * `occurrenceId` is the `ticket_events` row this occurrence **is**, which is
+   * what makes the dedupe key say "once per recorded change" rather than "once
+   * per ticket". The id already exists, is already unique, and is already the
+   * audit record of the thing that fired — so a run can be joined back to its
+   * cause with no new identifier.
+   *
+   * `depth: 0` and `causedByRunId: null` because a person did this. A trigger
+   * raised by a workflow *action* carries its cause's depth plus one, and that
+   * path goes through `applyAutomation` below.
+   *
+   * Failure to enqueue is logged rather than thrown, per `QueueService`'s
+   * contract: the ticket change is committed and the caller is owed their 200.
+   * **This is a real gap, not a shrug** — 0009 risk 3 records it: event triggers
+   * have no reconciler, so a `ticket_status_changed` workflow can miss a ticket
+   * during a Redis outage and never learn. Elapsed triggers self-heal because
+   * the sweep re-derives from `tickets.created_at`; these do not.
+   */
+  private async triggerWorkflowEvaluation(
+    ticketId: string,
+    triggerType: WorkflowTriggerType,
+    occurrenceId: string | null,
+  ): Promise<void> {
+    if (occurrenceId === null) {
+      return;
+    }
+
+    const trigger: WorkflowEvaluateTicketTrigger = {
+      tenantId: this.tenantContext.requireTenantId(),
+      ticketId,
+      triggerType,
+      occurrenceId,
+      depth: 0,
+      causedByRunId: null,
+    };
+
+    const outcome = await this.queue.enqueue<WorkflowEvaluateTicketTrigger>(
+      WORKFLOWS_QUEUE,
+      WORKFLOW_EVALUATE_TICKET_JOB,
+      trigger,
+      {
+        // No custom `jobId` — see the note in `@whatsappcrm/contracts/workflows`.
+        // A ticket-keyed id would collapse this occurrence into the completed
+        // key of the previous one.
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1_000 },
+        removeOnComplete: 1_000,
+        removeOnFail: 5_000,
+      },
+    );
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      this.logger.warn(
+        `Ticket ${ticketId} raised ${triggerType} but its workflow evaluation was not queued ` +
+          `(${outcome}); no automation will run for this occurrence.`,
+      );
+    }
   }
 
   /**
@@ -410,7 +564,10 @@ export class TicketCommandService {
    * and `ticket_events.tenant_id` is a `NOT NULL` column that has to be written
    * regardless.
    */
-  private async write(before: TicketRow, change: TicketChange): Promise<TicketRow> {
+  private async write(
+    before: TicketRow,
+    change: TicketChange,
+  ): Promise<{ after: TicketRow; statusEventId: string | null }> {
     const tenantId = this.tenantContext.requireTenantId();
     const actorUserId = this.tenantContext.requirePrincipal().userId;
 
@@ -424,8 +581,12 @@ export class TicketCommandService {
         throw new TicketStatusChangedConcurrentlyError(before.id, before.status);
       }
 
+      let statusEventId: string | null = null;
+
       if (change.status !== null) {
-        await tx.ticketEvent.create({
+        // The id is selected because it *is* the triggering occurrence a
+        // workflow dedupes on (0009, decision 2). Nothing else reads it.
+        const event = await tx.ticketEvent.create({
           data: {
             tenantId,
             ticketId: before.id,
@@ -433,7 +594,10 @@ export class TicketCommandService {
             actorUserId,
             data: { from: before.status, to: change.status, cause: AGENT_CAUSE },
           },
+          select: { id: true },
         });
+
+        statusEventId = event.id;
       }
 
       if (change.priority !== null) {
@@ -450,8 +614,252 @@ export class TicketCommandService {
 
       // `subject` writes no event, per 0006 §1: it is a label with no
       // transition rules and no consumer in the escalation history.
-      return tx.ticket.findUniqueOrThrow({ where: { id: before.id }, select: TICKET_PROJECTION });
+      const after = await tx.ticket.findUniqueOrThrow({
+        where: { id: before.id },
+        select: TICKET_PROJECTION,
+      });
+
+      return { after, statusEventId };
     });
+  }
+
+  /**
+   * The system-actor entry point onto **this same write path** (0009 decision 5,
+   * delta 1) — the one thing `WorkflowsModule` requires of `TicketsModule`.
+   *
+   * ## Why this exists rather than a second implementation inside the executor
+   *
+   * A ticket status write carries five behaviours that live here today:
+   * `TICKET_STATUS_TRANSITIONS`, `resolved_at`/`closed_at` stamping, the
+   * `status_changed` ticket event, the `sla.evaluate-ticket` enqueue that pauses
+   * or stops a timer, and the realtime announcement. A second implementation
+   * inside `WorkflowActionExecutor` would drift, and the first symptom would be a
+   * workflow closing a ticket whose SLA timer never stopped.
+   *
+   * ## Three differences from the principal path, and only three
+   *
+   *   * **No principal.** The ticket is read straight off `TenantPrisma` rather
+   *     than through `TicketQueryService.require`, which applies the
+   *     assigned-to-me visibility rule against a caller that does not exist here.
+   *     Tenant isolation is unaffected — RLS is what holds it, and the worker set
+   *     its scope from `job.data.tenantId` before its first statement.
+   *   * **`ticket_events.actor_user_id` is null**, which the column is already
+   *     documented as meaning "the system", and `data` carries
+   *     `{ workflowId, workflowRunId }` so a supervisor reading the history can
+   *     find the rule that did it.
+   *   * **No permission check.** A workflow has no principal to check; the
+   *     permission that mattered was `workflow:write`, checked when a supervisor
+   *     armed it. This is why 0009 puts any future customer-facing action behind
+   *     a *write-time* permission rather than an execution-time one.
+   *
+   * **`TICKET_STATUS_TRANSITIONS` still applies**, and that is deliberate: a
+   * workflow may not reopen a `closed` ticket, because
+   * `tickets_one_active_per_contact` is a partial unique index and re-activating
+   * a resolved ticket for a contact who now holds another one raises a
+   * constraint violation. A workflow attempting it gets `transition_refused`
+   * back and **nothing is thrown** — the run records it and the job succeeds.
+   */
+  async applyAutomation(
+    ticketId: string,
+    change: TicketAutomationChange,
+    context: TicketAutomationContext,
+  ): Promise<TicketAutomationResult> {
+    const tenantId = this.tenantContext.requireTenantId();
+    const before = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      select: TICKET_PROJECTION,
+    });
+
+    if (before === null) {
+      return NO_OCCURRENCE('ticket_gone');
+    }
+
+    if (change.kind === 'assignment') {
+      return await this.applyAutomationAssignment(tenantId, before, change, context);
+    }
+
+    if (change.kind === 'priority') {
+      // A re-prioritisation raises no trigger: `WORKFLOW_TRIGGER_TYPES` has no
+      // priority member, so this write is a ticket change with no automation
+      // consequence and cannot start a chain.
+      return change.priority === before.priority
+        ? NO_OCCURRENCE('no_op')
+        : await this.applyAutomationField(
+            tenantId,
+            before,
+            { ...EMPTY_CHANGE, priority: change.priority },
+            context,
+            null,
+          );
+    }
+
+    if (change.status === before.status) {
+      return NO_OCCURRENCE('no_op');
+    }
+
+    if (!canAgentTransition(before.status, change.status)) {
+      return NO_OCCURRENCE('transition_refused');
+    }
+
+    return await this.applyAutomationField(
+      tenantId,
+      before,
+      { ...EMPTY_CHANGE, status: change.status },
+      context,
+      'ticket_status_changed',
+    );
+  }
+
+  /**
+   * The status or priority half, in one transaction, then the same after-commit
+   * fan-out the agent path performs.
+   *
+   * The compare-and-set on `status` is kept exactly as the agent path states it:
+   * `TicketLinkerService` writes the same column off the inbound-message queue,
+   * and a workflow is a third writer that must lose the same race the same way.
+   * A lost compare-and-set here is `no_op`, not a retry — re-applying "resolve"
+   * from a status that just moved would resolve a ticket the customer has just
+   * replied on, which is precisely what the guard exists to prevent.
+   */
+  private async applyAutomationField(
+    tenantId: string,
+    before: TicketRow,
+    change: TicketChange,
+    context: TicketAutomationContext,
+    raises: WorkflowTriggerType | null,
+  ): Promise<TicketAutomationResult> {
+    const written = await this.prisma.$tenantTransaction(async (tx) => {
+      const { count } = await tx.ticket.updateMany({
+        where: { tenantId, id: before.id, status: before.status },
+        // Null actor: a workflow resolved this, not a person, so
+        // `resolved_by_user_id` stays null rather than crediting somebody.
+        data: toUpdateData(change, null),
+      });
+
+      if (count === 0) {
+        return null;
+      }
+
+      const event = await tx.ticketEvent.create({
+        data: {
+          tenantId,
+          ticketId: before.id,
+          type: change.status !== null ? 'status_changed' : 'priority_changed',
+          // Null actor: a workflow did this, not a person. The column is already
+          // documented as null for the system.
+          actorUserId: null,
+          data:
+            change.status !== null
+              ? { from: before.status, to: change.status, cause: WORKFLOW_CAUSE, ...context }
+              : { from: before.priority, to: change.priority, cause: WORKFLOW_CAUSE, ...context },
+        },
+        select: { id: true },
+      });
+
+      const after = await tx.ticket.findUniqueOrThrow({
+        where: { id: before.id },
+        select: TICKET_PROJECTION,
+      });
+
+      return { after, eventId: event.id };
+    });
+
+    if (written === null) {
+      return NO_OCCURRENCE('no_op');
+    }
+
+    this.announceAutomation(before, written.after);
+    await this.triggerSlaEvaluation(before, written.after);
+
+    return {
+      outcome: 'applied',
+      occurrence: raises === null ? null : { triggerType: raises, ticketEventId: written.eventId },
+    };
+  }
+
+  /** The assignment half. Last writer wins, exactly as the supervisor's route does. */
+  private async applyAutomationAssignment(
+    tenantId: string,
+    before: TicketRow,
+    change: Extract<TicketAutomationChange, { kind: 'assignment' }>,
+    context: TicketAutomationContext,
+  ): Promise<TicketAutomationResult> {
+    const assignment: TicketAssignment = {
+      assignedUserId: change.assignedUserId,
+      assignedTeamId: change.assignedTeamId,
+    };
+
+    if (!movesAnything(before, assignment)) {
+      return NO_OCCURRENCE('no_op');
+    }
+
+    const eventId = await this.prisma.$tenantTransaction(async (tx) => {
+      const { count } = await tx.ticket.updateMany({
+        where: { tenantId, id: before.id },
+        data: {
+          ...assignment,
+          routingState: routingStateFor(assignment),
+          routingDeferredReason: null,
+          routingDeferredSince: null,
+        },
+      });
+
+      if (count === 0) {
+        return null;
+      }
+
+      const event = await tx.ticketEvent.create({
+        data: {
+          tenantId,
+          ticketId: before.id,
+          type: hasAssignee(assignment) ? 'assigned' : 'unassigned',
+          actorUserId: null,
+          data: {
+            ...assignment,
+            previousAssignedUserId: before.assignedUserId,
+            previousAssignedTeamId: before.assignedTeamId,
+            cause: WORKFLOW_CAUSE,
+            ...context,
+          } satisfies Prisma.InputJsonObject,
+        },
+        select: { id: true },
+      });
+
+      return event.id;
+    });
+
+    // Zero rows matched means the ticket was deleted underneath the action —
+    // `not_found` on the agent's route, and here the run's own `ticket_gone`.
+    if (eventId === null) {
+      return NO_OCCURRENCE('ticket_gone');
+    }
+
+    return {
+      outcome: 'applied',
+      occurrence: { triggerType: 'ticket_assigned', ticketEventId: eventId },
+    };
+  }
+
+  /**
+   * The same `ticket.updated` the agent path emits, with a null actor.
+   *
+   * Separate from `announceUpdate` for one reason: that method reads
+   * `requirePrincipal()`, and a worker has none. The event's `actorUserId` is
+   * already nullable and already documented as "null when the writer was the
+   * system", so the payload shape does not change.
+   */
+  private announceAutomation(before: TicketRow, after: TicketRow): void {
+    const event: TicketUpdatedEvent = {
+      tenantId: this.tenantContext.requireTenantId(),
+      ticketId: after.id,
+      previousStatus: before.status,
+      status: after.status,
+      previousPriority: before.priority,
+      priority: after.priority,
+      actorUserId: null,
+    };
+
+    this.events.emit(TICKET_UPDATED_EVENT, event);
   }
 
   /**
@@ -475,7 +883,7 @@ export class TicketCommandService {
     before: TicketRow,
     assignment: TicketAssignment,
     reason: string | undefined,
-  ): Promise<TicketRow> {
+  ): Promise<{ after: TicketRow; eventId: string }> {
     const tenantId = this.tenantContext.requireTenantId();
     const actorUserId = this.tenantContext.requirePrincipal().userId;
 
@@ -494,7 +902,7 @@ export class TicketCommandService {
         throw new TicketNotFoundError(before.id);
       }
 
-      await tx.ticketEvent.create({
+      const event = await tx.ticketEvent.create({
         data: {
           tenantId,
           ticketId: before.id,
@@ -509,9 +917,15 @@ export class TicketCommandService {
             ...(reason === undefined ? {} : { reason }),
           } satisfies Prisma.InputJsonObject,
         },
+        select: { id: true },
       });
 
-      return tx.ticket.findUniqueOrThrow({ where: { id: before.id }, select: TICKET_PROJECTION });
+      const after = await tx.ticket.findUniqueOrThrow({
+        where: { id: before.id },
+        select: TICKET_PROJECTION,
+      });
+
+      return { after, eventId: event.id };
     });
   }
 
@@ -906,10 +1320,20 @@ function routingStateFor(assignment: TicketAssignment): TicketRoutingState {
  * `closedAt` and neither of these — closing spam is not a resolution, and
  * `closed_at IS NOT NULL AND resolved_at IS NULL` is the "closed unworked"
  * signal the dashboard carries as its own count.
+ *
+ * **`actorUserId` is null when a workflow did it** (TAR-27). A `set_status`
+ * action runs with no principal, so there is nobody to attribute the resolution
+ * to — and `resolved_by_user_id` is nullable precisely so that "resolved, by no
+ * agent" is representable. Writing the tenant's first admin, or the assignee,
+ * would put a resolution on a person's per-agent row that they did not do, which
+ * is the same history-rewriting this docblock refuses one paragraph up. A
+ * dashboard counting resolutions per agent should not count automation as
+ * anybody's work, and `resolved_at IS NOT NULL AND resolved_by_user_id IS NULL`
+ * is the signal for the tenant that wants to see how much of it there is.
  */
 function toUpdateData(
   change: TicketChange,
-  actorUserId: string,
+  actorUserId: string | null,
 ): Prisma.TicketUncheckedUpdateInput {
   const now = new Date();
 

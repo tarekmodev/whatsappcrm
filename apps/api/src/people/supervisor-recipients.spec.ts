@@ -1,4 +1,4 @@
-import { resolveAlertRecipients, type AlertCandidate } from './sla-recipients';
+import { resolveAlertRecipients, type AlertCandidate } from './supervisor-recipients';
 
 /**
  * 0006 decision 4: who a breach is reported to.

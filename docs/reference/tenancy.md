@@ -115,11 +115,11 @@ connection string. Both clients are process singletons rather than request-scope
 scope would rebuild the provider subtree per request and still would not exist for queue
 workers or WebSocket handlers.
 
-### `SystemPrisma` is confined to six call sites
+### `SystemPrisma` is confined to seven call sites
 
 `SystemPrisma` reads and writes across tenants, which makes it the widest hole in the
 isolation model and the first place a review should look. The architecture document permits
-exactly five uses, and ADR 0006 adds a sixth with its justification:
+exactly five uses; ADR 0006 adds a sixth with its justification and ADR 0009 a seventh:
 
 1. Tenant provisioning
 2. Login, before a tenant is known
@@ -127,8 +127,9 @@ exactly five uses, and ADR 0006 adds a sixth with its justification:
 4. The sweeper
 5. Platform reporting
 6. **Phase 1 of the SLA breach sweep** (`SlaSweepService.findDueTimers`, TAR-280) — see below
+7. **Phase 1 of the workflow elapsed sweep** (`WorkflowElapsedSweep`, TAR-395) — see below
 
-A seventh needs a justification in review. It is a **separate client, not a flag** on the tenant
+An eighth needs a justification in review. It is a **separate client, not a flag** on the tenant
 one, precisely so that this is reviewable: a flag is one typo away from being set, invisible
 at the injection site, and impossible to find by search. `SYSTEM_PRISMA` appears in the
 constructor of every class allowed to use it, and nowhere else.
@@ -164,6 +165,39 @@ The rejected alternative was iterating every tenant and running a scoped query f
 `SystemPrisma` at all, which is the cleanest possible story. It costs one transaction per
 tenant per interval, almost all returning nothing, growing linearly with tenants that have no
 due work.
+
+#### Why the workflow elapsed sweep is the seventh
+
+"This ticket has been open for four hours" is the same class of fact as a breach — a time
+becoming true — so `WorkflowElapsedSweep` needs the same cross-tenant discovery pass, and ADR
+0009 decision 3 grants it on the same terms.
+
+It is **narrower than the sixth in the one way that matters: it writes nothing at all.** Its
+entire output is `workflow.evaluate-ticket` jobs, each naming the tenant it is for, and each
+worker opens its own scope from that payload before its first statement. There is no phase-2
+write to get wrong, which is why this sweep needs none of the per-tenant chunking TAR-381 had
+to add to the SLA one.
+
+Two statements run on `SystemPrisma`, and both are read-only:
+
+```sql
+-- The smallest threshold any armed elapsed workflow asks for. One integer,
+-- naming no tenant.
+SELECT MIN((definition -> 'trigger' ->> 'minutes')::int)
+  FROM workflows w JOIN tenants n ON n.id = w.tenant_id AND n.status = 'active'
+ WHERE w.is_active AND w.trigger_type = 'ticket_unresolved_for';
+
+-- The overdue tickets, capped per tenant so no tenant can starve the others.
+SELECT d.tenant_id, d.id
+  FROM tenants n
+  CROSS JOIN LATERAL (…LIMIT 50) d
+ WHERE n.status = 'active' AND EXISTS (…armed elapsed workflow…)
+ ORDER BY d.created_at LIMIT 200;
+```
+
+**Read-only, two uuid columns and one aggregate, and nothing reaches a caller.** No subject,
+no contact, nothing that is a tenant's data. The `EXISTS` term is what keeps a platform where
+three tenants use the feature from probing every tenant's ticket table on every tick.
 
 ## Using `TenantPrisma`
 

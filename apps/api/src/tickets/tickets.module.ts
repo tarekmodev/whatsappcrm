@@ -72,6 +72,12 @@ import { TicketsController } from './tickets.controller';
     EscalationAlertService,
     ApiExceptionFilter,
   ],
-  exports: [TICKET_LINKER],
+  // `TICKET_LINKER` is the seam `ConversationsModule` reaches over a queue.
+  // `TicketCommandService` is exported for exactly one consumer —
+  // `WorkflowsModule` (L4), whose action executor writes ticket status, priority
+  // and assignment through `applyAutomation` rather than reimplementing five
+  // behaviours that live in that class (0009, decision 5). L4 importing L3 is
+  // what 0002's layering rule permits; the reverse would not be.
+  exports: [TICKET_LINKER, TicketCommandService],
 })
 export class TicketsModule {}

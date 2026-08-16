@@ -15,7 +15,8 @@ export interface AuditEntry {
     | 'assignment_rule'
     | 'custom_field'
     | 'canned_response'
-    | 'tenant_domain';
+    | 'tenant_domain'
+    | 'workflow';
   targetId: string;
   /**
    * A redacted before/after at most. **Never a secret, a password hash, a token

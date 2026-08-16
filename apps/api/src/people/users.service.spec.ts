@@ -149,6 +149,15 @@ function buildService(state: FakeState): {
     ticket: { updateMany: () => Promise.resolve({ count: 0 }) },
     assignmentState: { updateMany: () => Promise.resolve({ count: 0 }) },
     assignmentRule: { updateMany: () => Promise.resolve({ count: 0 }) },
+    // The same cleanup for workflows (TAR-27, 0009 delta 5). Empty here, so the
+    // transaction body runs to the end without the deactivation branch; the
+    // branch itself is asserted in `people-rbac.int-spec.ts` against real rows,
+    // where the `NoAction` foreign key can actually refuse.
+    workflowReference: {
+      findMany: () => Promise.resolve([]),
+      deleteMany: () => Promise.resolve({ count: 0 }),
+    },
+    workflow: { updateMany: () => Promise.resolve({ count: 0 }) },
     session: { deleteMany: () => Promise.resolve({ count: 1 }) },
     auditLog: { create: () => Promise.resolve({}) },
     $queryRaw: () => Promise.resolve(state.activeAdminIds.map((id) => ({ id }))),

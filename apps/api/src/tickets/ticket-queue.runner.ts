@@ -8,6 +8,8 @@ import {
   TICKET_ENSURE_JOB,
   TICKET_LINKER,
   TICKET_QUEUE,
+  WORKFLOWS_QUEUE,
+  WORKFLOW_EVALUATE_TICKET_JOB,
   assignmentRouteJobId,
   type InboundMessageTicketTrigger,
   type SlaEvaluateReason,
@@ -15,6 +17,7 @@ import {
   type TicketLinkResult,
   type TicketLinker,
   type TicketRoutingTrigger,
+  type WorkflowEvaluateTicketTrigger,
 } from '@whatsappcrm/contracts';
 import { UnrecoverableError } from 'bullmq';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
@@ -107,12 +110,14 @@ export class TicketQueueRunner implements OnApplicationBootstrap {
           (result.ticketNumber === null ? '' : ` ticket #${result.ticketNumber}`),
       );
 
-      // Two independent consequences of the same linked message, and both are
-      // enqueues rather than in-process calls: SLA timers (TAR-26) and routing
-      // (TAR-24). Neither can fail the message — each logs and moves on — so the
-      // order between them carries no meaning beyond reading order.
+      // Three independent consequences of the same linked message, and all three
+      // are enqueues rather than in-process calls: SLA timers (TAR-26), routing
+      // (TAR-24) and workflow automation (TAR-27). None can fail the message —
+      // each logs and moves on — so the order between them carries no meaning
+      // beyond reading order.
       await this.triggerSlaEvaluation(trigger.tenantId, result);
       await this.requestRouting(trigger, result);
+      await this.triggerWorkflowEvaluation(trigger.tenantId, result);
     } catch (error: unknown) {
       if (error instanceof TenantNotActiveError) {
         // 0003's error table: non-retryable, and discarded rather than failed.
@@ -195,6 +200,67 @@ export class TicketQueueRunner implements OnApplicationBootstrap {
       this.logger.warn(
         `Ticket ${result.ticketId} was linked but its SLA evaluation was not queued (${outcome}); ` +
           'no timer will be started until it is evaluated again.',
+      );
+    }
+  }
+
+  /**
+   * A ticket that was just **created** is a `ticket_created` occurrence
+   * (TAR-27, 0009 delta 2).
+   *
+   * Only `created`. An inbound message attaching to an existing ticket is not a
+   * new ticket, and the dedupe key for this trigger is `ticket:{id}` — once per
+   * ticket, ever — so an `attached` outcome could only ever produce a claim that
+   * conflicts.
+   *
+   * `occurrenceId` is null for the same reason: the ticket *is* the occurrence.
+   * There is no `ticket_events` row to name, and inventing one would make the
+   * key say "once per creation event" about a thing that happens once.
+   *
+   * A refused enqueue is logged, never thrown — the ticket is committed, and
+   * throwing would have BullMQ re-run the linker to fix an automation job, which
+   * is the wrong repair. **This trigger has no reconciler** (0009, risk 3): a
+   * ticket whose `ticket_created` job was lost during a Redis outage gets no
+   * automation for its creation, ever. Elapsed triggers self-heal; this does
+   * not, and the named fix is a backstop sweep the unique key already makes safe
+   * to run.
+   */
+  private async triggerWorkflowEvaluation(
+    tenantId: string,
+    result: TicketLinkResult,
+  ): Promise<void> {
+    if (result.outcome !== 'created' || result.ticketId === null) {
+      return;
+    }
+
+    const trigger: WorkflowEvaluateTicketTrigger = {
+      tenantId,
+      ticketId: result.ticketId,
+      triggerType: 'ticket_created',
+      occurrenceId: null,
+      depth: 0,
+      causedByRunId: null,
+    };
+
+    const outcome = await this.queue.enqueue<WorkflowEvaluateTicketTrigger>(
+      WORKFLOWS_QUEUE,
+      WORKFLOW_EVALUATE_TICKET_JOB,
+      trigger,
+      {
+        // No custom `jobId` — see the note in `@whatsappcrm/contracts/workflows`,
+        // and the identical one in `sla.ts` that this repo has already been
+        // bitten by once.
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1_000 },
+        removeOnComplete: 1_000,
+        removeOnFail: 5_000,
+      },
+    );
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      this.logger.warn(
+        `Ticket ${result.ticketId} was created but its workflow evaluation was not queued ` +
+          `(${outcome}); no ticket_created automation will run for it.`,
       );
     }
   }
