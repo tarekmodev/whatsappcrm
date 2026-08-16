@@ -1,40 +1,81 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
+import { MediaStorageModule } from '../media/storage/media-storage.module';
+import { AdminDomainsController } from './admin/admin-domains.controller';
+import { AdminDomainsService } from './admin/admin-domains.service';
 import { AdminTenantScopeService } from './admin/admin-tenant-scope.service';
 import { AdminTenantsController } from './admin/admin-tenants.controller';
 import { PlatformAdminGuard } from './admin/platform-admin.guard';
+import { TenantBrandingService } from './branding/tenant-branding.service';
+import { DNS_CHALLENGE_RESOLVER, NodeDnsChallengeResolver } from './domains/dns-challenge.resolver';
+import { DomainOwnershipChecker } from './domains/domain-ownership.checker';
+import { DomainVerificationSweeper } from './domains/domain-verification.sweeper';
+import { TenancyQueueRunner } from './domains/tenancy-queue.runner';
+import { TenantDomainsController } from './domains/tenant-domains.controller';
+import { TenantDomainsService } from './domains/tenant-domains.service';
+import { TenantController } from './tenant.controller';
 import { TenantDeactivationService } from './tenant-deactivation.service';
+import { TenantProfileService } from './tenant-profile.service';
 import { TenantProvisioningService } from './tenant-provisioning.service';
 
 /**
- * Tenant identity, domains and lifecycle (TAR-39, module map). TAR-19 puts
- * provisioning and deactivation here; TAR-36 adds the rest of the lifecycle
- * state machine — reactivation, cancellation — alongside them.
+ * Tenant identity, branding, domains and lifecycle (TAR-39, module map). TAR-19
+ * puts provisioning and deactivation here; TAR-29 adds the white-label surface —
+ * the tenant's own record, its branding, and the custom domains it answers on.
  *
  * Three services are exported because other flows drive them rather than
  * reimplementing their transactions: TAR-36's graduation path and any future
  * signup provision through the first, dunning and account closure deactivate
  * through the second, and every other module's platform-admin routes enter a
  * tenant's scope through the third (TAR-20a's WhatsApp connection endpoints are
- * the first). The filter is private: it is wiring for this module's own
- * controller.
+ * the first). Everything TAR-29 adds stays private: a second caller of the
+ * branding service would be a second place a tenant's storage keys are reached.
+ *
+ * `MediaStorageModule` is the one import, and it is deliberately not
+ * `MediaModule`: what branding reuses is the blob **port**, not the
+ * `media_objects` table, whose kinds and retention sweep are Meta's vocabulary.
+ * Importing the whole media module would drag `WhatsAppModule` and the
+ * credential boundary behind it into tenant settings.
  *
  * `PlatformAdminGuard` is deliberately **not** exported. A guard is cheap to
  * construct and carries no state, so another module declaring its own instance
  * costs nothing and keeps the authentication decision visible in that module's
  * own provider list rather than inherited from an import.
  *
- * `SystemPrisma` and `TenantContextService` are not imported here — both come
- * from global modules (`PrismaModule`, `TenantContextModule`).
+ * `SystemPrisma`, `TenantPrisma`, `TenantContextService`, `AuditService` and
+ * `QueueService` all come from global modules and are not imported here.
  */
 @Module({
-  controllers: [AdminTenantsController],
+  imports: [MediaStorageModule],
+  controllers: [
+    TenantController,
+    TenantDomainsController,
+    AdminTenantsController,
+    AdminDomainsController,
+  ],
   providers: [
     TenantProvisioningService,
     TenantDeactivationService,
+    TenantProfileService,
+    TenantBrandingService,
+    TenantDomainsService,
+    DomainOwnershipChecker,
+    DomainVerificationSweeper,
+    TenancyQueueRunner,
     AdminTenantScopeService,
+    AdminDomainsService,
     PlatformAdminGuard,
     ApiExceptionFilter,
+    {
+      // The timeout is configuration, and a decorator is evaluated before
+      // `ConfigService` exists — the same reason `MediaModule` registers multer
+      // asynchronously rather than passing options to `FileInterceptor`.
+      provide: DNS_CHALLENGE_RESOLVER,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) =>
+        new NodeDnsChallengeResolver(config.getOrThrow<number>('DOMAIN_VERIFICATION_TIMEOUT_MS')),
+    },
   ],
   exports: [TenantProvisioningService, TenantDeactivationService, AdminTenantScopeService],
 })

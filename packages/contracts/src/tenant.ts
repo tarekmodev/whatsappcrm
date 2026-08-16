@@ -377,6 +377,35 @@ export const TenantDomainSchema = z.object({
 /** How many custom domains one tenant may hold before `plan_limit_exceeded`. */
 export const MAX_CUSTOM_DOMAINS_PER_TENANT = 5;
 
+/**
+ * The DNS ownership challenge, spelled once (TAR-420).
+ *
+ * The console renders these for the tenant to paste and the API compares the
+ * resolved TXT record against them, so the two have to agree byte for byte — a
+ * label or prefix that drifted on one side is a verification that can never pass
+ * and a support ticket nobody can diagnose from either half alone.
+ *
+ * `DomainVerificationSchema` already carries the rendered strings on the wire;
+ * these are what *builds* them, and what the verifier compares against.
+ */
+export const DOMAIN_CHALLENGE_LABEL = '_whatsappcrm-challenge';
+
+/**
+ * The value prefix. Compared in full rather than looking for a bare token, so a
+ * hex string somebody happened to publish at the same name cannot satisfy the
+ * challenge, and another vendor's token cannot either.
+ */
+export const DOMAIN_CHALLENGE_VALUE_PREFIX = 'whatsappcrm-domain-verification=';
+
+/** `support.acme.com` → `_whatsappcrm-challenge.support.acme.com`. */
+export function domainChallengeRecordName(hostname: string): string {
+  return `${DOMAIN_CHALLENGE_LABEL}.${hostname}`;
+}
+
+export function domainChallengeRecordValue(token: string): string {
+  return `${DOMAIN_CHALLENGE_VALUE_PREFIX}${token}`;
+}
+
 /** Labels are 1–63 chars, ASCII letters-digits-hyphen, no leading or trailing hyphen. */
 const HOSTNAME_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
@@ -417,6 +446,18 @@ export const CustomHostnameInputSchema = z
 
 export const TenantDomainCreateInputSchema = z.object({
   hostname: CustomHostnameInputSchema,
+});
+
+/**
+ * `{id}` on the domain sub-resources — `POST /verify`, `POST /primary`,
+ * `DELETE`.
+ *
+ * It names a **row**, never a tenant. The lookup behind it is scoped by RLS to
+ * the tenant the host resolved, so an id belonging to another tenant answers
+ * `not_found` — the same answer an id belonging to nobody gets.
+ */
+export const TenantDomainParamsSchema = z.object({
+  id: IdSchema,
 });
 
 /**
@@ -734,6 +775,7 @@ export type DomainVerification = z.infer<typeof DomainVerificationSchema>;
 export type DomainRouting = z.infer<typeof DomainRoutingSchema>;
 export type TenantDomain = z.infer<typeof TenantDomainSchema>;
 export type TenantDomainCreateInput = z.infer<typeof TenantDomainCreateInputSchema>;
+export type TenantDomainParams = z.infer<typeof TenantDomainParamsSchema>;
 export type TenantDomainListResponse = z.infer<typeof TenantDomainListResponseSchema>;
 export type TenantResponse = z.infer<typeof TenantResponseSchema>;
 export type TenantLifecycleResponse = z.infer<typeof TenantLifecycleResponseSchema>;

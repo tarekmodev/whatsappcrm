@@ -122,7 +122,65 @@ export const DeactivatedTenantResponseSchema = z.object({
   suspendedAt: TimestampSchema.nullable(),
 });
 
+// ---------------------------------------------------------------------------
+// Custom-domain activation — TAR-29 / TAR-419
+// ---------------------------------------------------------------------------
+
+/**
+ * The operator's queue: domains a tenant has proved it owns, waiting to be
+ * attached at the edge (`docs/runbooks/custom-domains.md`).
+ *
+ * Attaching a domain is deliberately an operator step rather than something the
+ * verification service does — TAR-416 declined to invent a contract against
+ * Render's API nobody here has read. The cost of that decision is that a
+ * verified domain sits waiting until somebody looks, so the queue is a first-
+ * class endpoint rather than a database query an operator has to be told.
+ *
+ * It names the tenant, because an operator has to attach the hostname to the
+ * right environment's web service and needs to know whose it is. Nothing else
+ * about the tenant is exposed.
+ */
+export const AdminPendingDomainSchema = z.object({
+  tenantSlug: TenantSlugSchema,
+  tenantName: TenantNameSchema,
+  hostname: z.string().min(4).max(253),
+  verifiedAt: TimestampSchema,
+  activatedAt: TimestampSchema.nullable(),
+});
+
+export const AdminPendingDomainListResponseSchema = z.object({
+  items: z.array(AdminPendingDomainSchema),
+});
+
+/**
+ * `?status=` on the queue. `verified` is a verified domain that has not been
+ * attached — the thing an operator acts on — and `live` is one that has, so the
+ * same endpoint answers "what is waiting" and "what did I attach".
+ */
+export const ADMIN_DOMAIN_QUERY_STATUSES = ['verified', 'live'] as const;
+
+export const AdminDomainQuerySchema = z.object({
+  status: z.enum(ADMIN_DOMAIN_QUERY_STATUSES).default('verified'),
+});
+
+/**
+ * `POST /api/v1/admin/tenants/{slug}/domains/{hostname}/activate` and its
+ * inverse.
+ *
+ * The hostname rather than the domain's id, because an operator has the
+ * hostname in front of them — in the Render dashboard, in the support ticket —
+ * and an id they have to look up first is an id they can get wrong.
+ */
+export const AdminDomainParamsSchema = z.object({
+  slug: TenantSlugSchema,
+  hostname: z.string().min(4).max(253),
+});
+
 export type ProvisionTenantInput = z.infer<typeof ProvisionTenantInputSchema>;
+export type AdminPendingDomain = z.infer<typeof AdminPendingDomainSchema>;
+export type AdminPendingDomainListResponse = z.infer<typeof AdminPendingDomainListResponseSchema>;
+export type AdminDomainQuery = z.infer<typeof AdminDomainQuerySchema>;
+export type AdminDomainParams = z.infer<typeof AdminDomainParamsSchema>;
 export type ProvisionedTenantResponse = z.infer<typeof ProvisionedTenantResponseSchema>;
 export type DeactivateTenantParams = z.infer<typeof DeactivateTenantParamsSchema>;
 export type DeactivateTenantInput = z.infer<typeof DeactivateTenantInputSchema>;

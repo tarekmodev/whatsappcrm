@@ -1983,3 +1983,68 @@ nothing, and `CustomFieldTypeSchema` is what refuses it at the edge.
 every refusal here. Contract changes land in `contacts.ts` only, and are additive except for
 `CustomFieldDefinitionSchema`, which gains `position`, `createdAt` and `updatedAt` — a
 response-only widening no existing caller reads.
+
+### Amendment 11 — branding and custom domains (TAR-29)
+
+The tenant singleton was specified here and never built: `GET`/`PATCH /api/v1/tenant`
+appear in the endpoint table above with no controller behind them, and
+`TenantBrandingSchema` shipped with a `logoUrl` nothing has ever written. TAR-416 ruled on
+the whole white-label surface. TAR-418 landed the contract half of it with the console; this
+amendment records the **endpoints**, and the shape changes that arrived with them.
+
+```
+GET    /api/v1/tenant/public              → TenantPublicResponse       @Public
+GET    /api/v1/tenant/branding/{kind}     → image bytes                @Public
+GET    /api/v1/tenant                     → TenantResponse             any principal
+PATCH  /api/v1/tenant                     → TenantResponse             branding:write
+PUT    /api/v1/tenant/branding/{kind}     → TenantBranding             branding:write   multipart
+DELETE /api/v1/tenant/branding/{kind}     → 204                        branding:write
+
+GET    /api/v1/tenant/domains             → { items: TenantDomain[] }  domain:write
+POST   /api/v1/tenant/domains             → TenantDomain (201 | 200)   domain:write
+POST   /api/v1/tenant/domains/{id}/verify → TenantDomain (200)         domain:write
+POST   /api/v1/tenant/domains/{id}/primary→ TenantDomain (200)         domain:write
+DELETE /api/v1/tenant/domains/{id}        → 204                        domain:write
+
+GET    /api/v1/admin/domains?status=…                              PlatformAdminGuard
+POST   /api/v1/admin/tenants/{slug}/domains/{hostname}/activate    PlatformAdminGuard
+POST   /api/v1/admin/tenants/{slug}/domains/{hostname}/deactivate  PlatformAdminGuard
+```
+
+**`GET /tenant/public` takes no parameters of any kind.** The host is the only input.
+Adding a tenant identifier to an unauthenticated endpoint would hand an anonymous caller a
+tenant-enumeration oracle, and there is nothing it could buy: `HostTenantGuard` has already
+decided which tenant the request is for.
+
+**One new permission, `domain:write`.** Kept separate from `branding:write` because DNS
+control and choosing a logo colour are not the same authority — a verified domain is where
+`TenantLinkService` mails invite and password-reset tokens, so pointing one at a host the
+tenant does not own is credential delivery, not decoration. `ROLE_PERMISSIONS.admin` is
+`PERMISSIONS`, so this is admin-only with no table edit. The domain **list** uses the write
+permission rather than a new read permission: the settings screen is its only reader, and
+`PermissionGuard` refuses a route that declares no posture.
+
+**No new error codes.** Verification-not-yet-passing is a _state on the resource_, so
+`POST /verify` answers `200` with the domain and a `verification.lastFailureReason` rather
+than an error envelope — DNS not having propagated is the ordinary case, and an error there
+would make a settings screen render a failure banner for it. A hostname another tenant holds
+is `conflict`; a hostname under `PLATFORM_DOMAIN` is `validation_failed`; an environment
+with no `PLATFORM_EDGE_HOSTNAME` is `feature_not_in_plan`.
+
+**Three breaking shape changes, all before any consumer shipped against them.**
+`TenantBrandingSchema` loses `logoUrl`/`faviconUrl` and gains `logo`/`favicon` as
+`BrandingAsset` objects carrying a **relative** path — the same row is served under a
+platform subdomain and under a custom domain, so a stored absolute URL names whichever host
+existed at write time and makes the browser fetch cross-origin under the other, which drops
+the session cookie (decision 3 above). `TenantDomainSchema.kind` becomes `platform` rather
+than `platform_subdomain`, which is the value the database enum can actually hold.
+`TenantUpdateInputSchema.branding` becomes `BrandingUpdateInputSchema` rather than a partial
+of the response, so the contract does not publish a JSON path to a field the endpoint
+refuses to write.
+
+**Caching is the highest-severity risk in this surface, and it is stated here rather than
+in a comment.** All three public routes are the _same path for every tenant_ — the tenant is
+the host. Any cache in front of them, at the edge or in the web tier's `fetch`, must carry
+the hostname in its key. A cache keyed on the URL alone is a direct cross-tenant leak. v1
+does not cache: `HostTenantGuard`'s own "not cached, deliberately" rule applies for the same
+reason, and TAR-41's Redis is where a keyed cache with an invalidation path can be added.
