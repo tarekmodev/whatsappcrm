@@ -39,8 +39,28 @@ function clientFor({ seatCap, members, pendingInvites }: Counts): {
   const recorded: Recorded = { userCounts: [], inviteCounts: [], locks: 0, sequence: [] };
 
   const tx = {
-    tenantPlanLimits: {
-      findFirst: () => Promise.resolve(seatCap === 'no-row' ? null : { seatCap }),
+    tenantEntitlements: {
+      // `PlanEntitlementsSchema`'s shape, because that is what the column holds
+      // since ADR 0009 Amendment 1 ruling 3 — a fake that answered with a bare
+      // `seatCap` would keep passing while the service read `null` from the real
+      // column and every cap silently failed open.
+      findFirst: () =>
+        Promise.resolve(
+          seatCap === 'no-row'
+            ? null
+            : {
+                entitlements: {
+                  features: [],
+                  limits: {
+                    seats: seatCap,
+                    conversationsPerPeriod: null,
+                    whatsappNumbers: null,
+                    teams: null,
+                    knowledgeDocuments: null,
+                  },
+                },
+              },
+        ),
     },
     user: {
       count: ({ where }: { where: Prisma.UserWhereInput }) => {
