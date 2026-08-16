@@ -919,6 +919,13 @@ export const content = {
     listLoading: 'Loading contacts',
     listCountDescription: (count: number) =>
       count === 1 ? '1 contact' : `${String(count)} contacts`,
+    /**
+     * Replaces the count when the read was capped. Names search, because search
+     * is the way through: `q` re-queries the whole workspace rather than
+     * filtering this page.
+     */
+    showingFirst: (count: number) =>
+      `Showing the first ${String(count)} contacts. Search to find someone further down the list.`,
     emptyHeading: 'No contacts yet',
     emptyBody: 'A contact is created the first time someone messages this workspace.',
     filteredEmptyHeading: 'No contacts match this filter',
@@ -967,6 +974,14 @@ export const content = {
     tagsFieldLabel: 'Tags on this contact',
     tagsEmptyLabel: 'No tags have been created in this workspace yet.',
     tagsUnknownHint: 'No longer available in this workspace',
+    /**
+     * The same row when the vocabulary read was capped. The tag is almost
+     * certainly fine — it just sorted past the first 100 — and claiming it was
+     * removed would be a lie about a tag in daily use.
+     */
+    tagsBeyondVocabularyHint: 'Not in the first 100 tags in this workspace',
+    /** Says the filter itself is short, so an absent tag is not read as deleted. */
+    tagFilterTruncatedHint: 'Showing the first 100 tags. Not every tag is listed.',
     saveTags: 'Save tags',
     tagsSaved: (name: string) => `Tags updated for ${name}`,
 

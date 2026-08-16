@@ -1,6 +1,7 @@
 import { SectionCard } from '@/components/ui/SectionCard';
 import { content } from '@/content/en';
 import { loadContacts } from '../contacts.data';
+import { contactsDirectorySummary } from '../directory-summary';
 import type { ContactListParams } from '../contact-params';
 import { ContactsTable } from './ContactsTable';
 import { ContactsTableSkeleton } from './ContactsTable.Skeleton';
@@ -14,14 +15,17 @@ import { ContactsTableSkeleton } from './ContactsTable.Skeleton';
  * server and the client bundle carries neither.
  */
 export async function ContactsSection({ filters }: { filters: ContactListParams }) {
-  const contacts = await loadContacts(filters);
+  const { contacts, hasMore } = await loadContacts(filters);
   const isFiltered = filters.q !== undefined || filters.tagId !== undefined;
 
   return (
     <SectionCard
       id="contacts"
       title={content.contacts.listHeading}
-      description={content.contacts.listCountDescription(contacts.length)}
+      // `?? undefined`, because `SectionCard` renders no description line at all
+      // for `undefined` — and an untruncated empty directory has nothing to say
+      // that the table's own empty state does not already say better.
+      description={contactsDirectorySummary(contacts.length, hasMore, content) ?? undefined}
     >
       <ContactsTable contacts={contacts} isFiltered={isFiltered} />
     </SectionCard>

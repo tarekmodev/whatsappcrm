@@ -41,13 +41,31 @@ export function parseOptionsText(optionsText: string): string[] {
     .filter((line) => line.length > 0);
 }
 
-/** Suggests `plan_tier` from "Plan tier", so an admin rarely types the key at all. */
+/**
+ * Suggests `plan_tier` from "Plan tier", so an admin rarely types the key at all.
+ *
+ * The suggestion is always one `CustomFieldKeySchema` accepts, or empty. That
+ * matters because the box is filled in *for* the admin: a label of "2FA enabled"
+ * suggesting `2fa_enabled` and then reporting `keyInvalidError` would be the form
+ * refusing a value nobody typed. `^[a-z]` is the rule, so a leading run of
+ * digits or underscores is dropped rather than offered.
+ *
+ * An empty result — "2024", say — leaves the box untouched for the admin to fill
+ * in, which is the honest answer when there is no legal key to derive.
+ */
 export function suggestKeyFromLabel(label: string): string {
-  return label
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, CUSTOM_FIELD_LIMITS.keyLength);
+  return (
+    label
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      // Leading non-letters, not just underscores: the schema requires the first
+      // character to be `a`–`z`.
+      .replace(/^[^a-z]+/, '')
+      .replace(/_+$/, '')
+      .slice(0, CUSTOM_FIELD_LIMITS.keyLength)
+      // The slice can re-expose a trailing underscore that was mid-string before.
+      .replace(/_+$/, '')
+  );
 }
 
 /**

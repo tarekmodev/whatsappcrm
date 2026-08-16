@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CUSTOM_FIELD_LIMITS } from '@whatsappcrm/contracts';
+import { CUSTOM_FIELD_LIMITS, CustomFieldKeySchema } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import {
   clearIssue,
@@ -48,6 +48,38 @@ describe('suggestKeyFromLabel', () => {
 
   it('never exceeds the key length the contract allows', () => {
     expect(suggestKeyFromLabel('a'.repeat(200))).toHaveLength(CUSTOM_FIELD_LIMITS.keyLength);
+  });
+
+  /**
+   * The box is filled in *for* the admin, so a suggestion the form then rejects
+   * is the form refusing a value nobody typed. `CustomFieldKeySchema` requires
+   * `^[a-z]`.
+   */
+  it('drops a leading digit run rather than suggesting a key its own validator rejects', () => {
+    expect(suggestKeyFromLabel('2FA enabled')).toBe('fa_enabled');
+  });
+
+  it('suggests nothing when no legal key can be derived', () => {
+    // Better an empty box the admin fills in than a suggestion that cannot save.
+    expect(suggestKeyFromLabel('2024')).toBe('');
+  });
+
+  it('only ever suggests a key the contract accepts', () => {
+    for (const label of [
+      'Plan tier',
+      '2FA enabled',
+      '  Account manager (EMEA)!  ',
+      '99 problems',
+      '_leading underscore',
+      'a'.repeat(200),
+      'Ünïcödé label',
+    ]) {
+      const suggestion = suggestKeyFromLabel(label);
+
+      if (suggestion !== '') {
+        expect(CustomFieldKeySchema.safeParse(suggestion).success).toBe(true);
+      }
+    }
   });
 });
 

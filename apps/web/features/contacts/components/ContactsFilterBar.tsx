@@ -28,7 +28,17 @@ import styles from './ContactsFilterBar.module.css';
 
 const SEARCH_DEBOUNCE_MS = 300;
 
-export function ContactsFilterBar({ tags }: { tags: readonly Tag[] }) {
+export function ContactsFilterBar({
+  tags,
+  isTruncated = false,
+}: {
+  tags: readonly Tag[];
+  /**
+   * The vocabulary read hit its cap. Said out loud rather than swallowed: a tag
+   * missing from this dropdown otherwise reads as a tag that does not exist.
+   */
+  isTruncated?: boolean;
+}) {
   const content = useContent();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -81,10 +91,15 @@ export function ContactsFilterBar({ tags }: { tags: readonly Tag[] }) {
         </Field>
       </div>
       <div className={styles.tag}>
-        <Field label={content.contacts.filterTagLabel} isLabelHidden>
-          {({ controlId }) => (
+        <Field
+          label={content.contacts.filterTagLabel}
+          isLabelHidden
+          hint={isTruncated ? content.contacts.tagFilterTruncatedHint : undefined}
+        >
+          {({ controlId, describedBy }) => (
             <Select
               id={controlId}
+              aria-describedby={describedBy}
               name="tag"
               value={tagParam}
               options={tagFilterOptions(tags, tagParam === UNSET_VALUE ? undefined : tagParam)}

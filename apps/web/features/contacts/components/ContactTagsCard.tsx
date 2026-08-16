@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { ContactResponse, Tag } from '@whatsappcrm/contracts';
+import type { TagVocabulary } from '@/lib/api/contact-schema';
 import { Button } from '@/components/ui/Button';
 import { CheckboxGroup, type CheckboxOption } from '@/components/ui/CheckboxGroup';
 import { Cluster } from '@/components/layout/Cluster';
@@ -10,7 +11,7 @@ import { SectionCard } from '@/components/ui/SectionCard';
 import { Stack } from '@/components/layout/Stack';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useActionForm } from '@/lib/hooks/useActionForm';
-import { useContent } from '@/lib/content';
+import { useContent, type Content } from '@/lib/content';
 import { saveContactTagsAction } from '../contacts.actions';
 import { contactTagPatch } from '../custom-field-values';
 import { ContactTagList } from './ContactTagList';
@@ -32,8 +33,8 @@ import { ContactTagList } from './ContactTagList';
 
 export interface ContactTagsCardProps {
   contact: ContactResponse;
-  /** The tenant's whole tag vocabulary. */
-  tags: readonly Tag[];
+  /** The tenant's tag vocabulary, and whether the read reached the end of it. */
+  tags: TagVocabulary;
   canWrite: boolean;
 }
 
@@ -45,7 +46,7 @@ export function ContactTagsCard({ contact, tags, canWrite }: ContactTagsCardProp
   const [selectedTagIds, setSelectedTagIds] = useState<readonly string[]>(initialTagIds);
 
   const options = useMemo(
-    () => tagOptions(tags, contact.tags, content.contacts.tagsUnknownHint),
+    () => tagOptions(tags.items, contact.tags, tags.isTruncated, content),
     [contact.tags, content, tags],
   );
   const hasChanges = contactTagPatch(initialTagIds, selectedTagIds) !== null;
@@ -112,23 +113,33 @@ export function ContactTagsCard({ contact, tags, canWrite }: ContactTagsCardProp
 }
 
 /**
- * The vocabulary, plus any tag this contact holds that is no longer in it.
+ * The vocabulary, plus any tag this contact holds that is not in it.
  *
  * `TagSchema` guarantees a unique id per tag but the two lists can overlap, so
  * the held tags are appended only when the vocabulary does not already carry
  * them — otherwise the same tag would render twice with the same checkbox value.
+ *
+ * **The hint depends on why the tag is missing, and the two reasons are not the
+ * same fact.** With a complete vocabulary, absence means the tag was deleted. With
+ * a truncated one — tags have no server-side cap, so a tenant past 100 gets a
+ * short read — absence means only that it sorted past the cap, and calling that
+ * "no longer available" is a lie about a tag somebody is using today.
  */
 function tagOptions(
   vocabulary: readonly Tag[],
   held: readonly Tag[],
-  unknownHint: string,
+  isVocabularyTruncated: boolean,
+  content: Content,
 ): CheckboxOption[] {
   const known = new Set(vocabulary.map((tag) => tag.id));
+  const hint = isVocabularyTruncated
+    ? content.contacts.tagsBeyondVocabularyHint
+    : content.contacts.tagsUnknownHint;
 
   return [
     ...vocabulary.map((tag) => ({ value: tag.id, label: tag.name })),
     ...held
       .filter((tag) => !known.has(tag.id))
-      .map((tag) => ({ value: tag.id, label: tag.name, hint: unknownHint })),
+      .map((tag) => ({ value: tag.id, label: tag.name, hint })),
   ];
 }

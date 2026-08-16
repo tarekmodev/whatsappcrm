@@ -112,14 +112,58 @@ describe('contact directory', () => {
     ).resolves.toMatchObject({ tags: [] });
   });
 
-  it('refuses a tag from another tenant with a 404', async () => {
+  /**
+   * `validation_failed`, matching `translateTagFailure` in the shipped API
+   * (`apps/api/src/tags/tags.http.ts`) rather than the 404 the mock used to
+   * answer. The difference reaches the user: `validation_failed` is in
+   * `ACTIONABLE_ERROR_CODES` and shows the API's own message, `not_found` falls
+   * back to the generic line.
+   */
+  it('refuses a tag from another tenant as validation_failed, as the API does', async () => {
     await expect(
       handleMockRequest({
         method: 'PATCH',
         path: `/v1/contacts/${MOCK_IDS.contacts.fatima}`,
         body: { tagIds: [MOCK_IDS.tags.otherTenant] },
       }),
-    ).rejects.toMatchObject({ status: 404, code: 'not_found' });
+    ).rejects.toMatchObject({ status: 422, code: 'validation_failed' });
+  });
+
+  it('orders the directory newest first, as the API does', async () => {
+    // `id` descending — not alphabetical. A mock that sorted differently would
+    // show a reviewer a directory production does not have.
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/contacts?limit=100',
+    })) as CursorPage<ContactResponse>;
+
+    const ids = page.items.map((contact) => contact.id);
+
+    expect(ids).toEqual([...ids].sort((left, right) => right.localeCompare(left)));
+  });
+
+  /**
+   * The state behind the directory's "showing the first N" line. The mock used
+   * to answer `nextCursor: null` unconditionally, which is why no test could
+   * have caught the page count being rendered as a total.
+   */
+  it('reports a further page when the tenant holds more than the limit', async () => {
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/contacts?limit=2',
+    })) as CursorPage<ContactResponse>;
+
+    expect(page.items).toHaveLength(2);
+    expect(page.nextCursor).not.toBeNull();
+  });
+
+  it('reports no further page when the last one fits', async () => {
+    const page = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/contacts?limit=100',
+    })) as CursorPage<ContactResponse>;
+
+    expect(page.nextCursor).toBeNull();
   });
 
   it('keeps the snapshot a conversation embeds in step with the contact', async () => {

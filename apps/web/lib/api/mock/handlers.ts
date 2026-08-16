@@ -1526,7 +1526,7 @@ function listContacts({ principal, query }: RouteContext): CursorPage<ContactRes
   const { q, tagId, limit } = parsed.data;
   const needle = q?.trim().toLowerCase();
 
-  const items = tenantContacts(principal)
+  const matches = tenantContacts(principal)
     // The API's single `q`, matched against name, phone and email — the three
     // things somebody has in front of them when they go looking for a contact.
     .filter(
@@ -1537,11 +1537,20 @@ function listContacts({ principal, query }: RouteContext): CursorPage<ContactRes
         (contact.email ?? '').toLowerCase().includes(needle),
     )
     .filter((contact) => tagId === undefined || contact.tags.some((tag) => tag.id === tagId))
-    .sort((left, right) => left.displayName.localeCompare(right.displayName))
-    .slice(0, limit)
-    .map(toContactResponse);
+    // `id` descending, newest first — what the shipped API orders by
+    // (`apps/api/src/contacts/contacts.service.ts`), not alphabetical. A mock
+    // that sorted differently would show a reviewer a directory production does
+    // not have.
+    .sort((left, right) => right.id.localeCompare(left.id));
 
-  return { items, nextCursor: null };
+  // One past the page, so the mock can answer "is there another" the same way
+  // the API does — and so a truncated directory is a state a test can reach.
+  // Answering `nextCursor: null` unconditionally is why no test could have
+  // caught the count this page was reporting as a total.
+  const page = matches.slice(0, limit);
+  const nextCursor = matches.length > limit ? (page.at(-1)?.id ?? null) : null;
+
+  return { items: page.map(toContactResponse), nextCursor };
 }
 
 function getContact({ principal, params }: RouteContext): ContactResponse {
@@ -1651,15 +1660,36 @@ function writeContact(principal: SessionPrincipal, contact: MockContact): MockCo
 }
 
 /** Whole `Tag` records for the ids a write named, refusing any from another tenant. */
+/**
+ * Whole `Tag` records for the ids a write named.
+ *
+ * An id this tenant does not hold is `validation_failed`, matching
+ * `translateTagFailure` in `apps/api/src/tags/tags.http.ts` — **not** the 404
+ * this used to answer. The difference is user-visible rather than cosmetic:
+ * `validation_failed` is in `ACTIONABLE_ERROR_CODES`, so the agent reads which
+ * tag was rejected, while `not_found` falls back to the generic line.
+ *
+ * A tag belonging to *another* tenant lands here too, and answering
+ * `validation_failed` for it enumerates nothing: the message names only the id
+ * the caller already sent, and says it is not in their tenant — which is exactly
+ * what a caller who invented the id learns anyway.
+ */
 function resolveTagsInTenant(principal: SessionPrincipal, tagIds: readonly string[]): Tag[] {
   const vocabulary = tenantTags(principal);
+  const unknown = tagIds.filter((id) => !vocabulary.some((candidate) => candidate.id === id));
+
+  if (unknown.length > 0) {
+    throw refused(
+      'validation_failed',
+      `${unknown.join(', ')} is not in this tenant.`,
+      HTTP_UNPROCESSABLE,
+    );
+  }
 
   return tagIds.map((id) => {
     const tag = vocabulary.find((candidate) => candidate.id === id);
 
     if (tag === undefined) {
-      // 404, not 403 — the two are indistinguishable by design so nothing can be
-      // enumerated across tenants.
       throw notFound();
     }
 

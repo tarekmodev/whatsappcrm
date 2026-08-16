@@ -12,7 +12,7 @@ import { ContactsFilterBar } from './ContactsFilterBar';
  * card where the whole screen was.
  */
 export async function ContactsFilterSection() {
-  const tags = await loadTagVocabulary();
+  const { items, isTruncated } = await loadTagVocabulary();
 
-  return <ContactsFilterBar tags={tags} />;
+  return <ContactsFilterBar tags={items} isTruncated={isTruncated} />;
 }

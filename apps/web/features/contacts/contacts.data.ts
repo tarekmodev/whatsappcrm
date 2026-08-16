@@ -1,8 +1,12 @@
 import 'server-only';
 
-import type { ContactResponse, CustomFieldDefinition, Tag } from '@whatsappcrm/contracts';
+import type { ContactResponse, CustomFieldDefinition } from '@whatsappcrm/contracts';
 import { getContact, listContacts } from '@/lib/api/contacts';
-import { listCustomFieldDefinitions, listTags } from '@/lib/api/contact-schema';
+import {
+  listCustomFieldDefinitions,
+  listTagVocabulary,
+  type TagVocabulary,
+} from '@/lib/api/contact-schema';
 import { ApiRequestError } from '@/lib/api/http';
 import { CONTACTS_PAGE_SIZE } from './constants';
 import type { ContactListParams } from './contact-params';
@@ -20,21 +24,38 @@ import type { ContactListParams } from './contact-params';
  * bar reads the vocabulary in its own boundary — so a slow tag read never holds
  * up the list, and a failing one never blanks it.
  */
-export async function loadContacts(
-  filters: ContactListParams,
-): Promise<readonly ContactResponse[]> {
+export interface ContactDirectory {
+  readonly contacts: readonly ContactResponse[];
+  /**
+   * Whether the tenant holds contacts this page did not reach.
+   *
+   * Carried out rather than dropped, because the alternative is the section
+   * rendering `contacts.length` as a total — "25 contacts" for a tenant with
+   * 200, and at its most wrong exactly when the directory is most useful.
+   * `contactsDirectorySummary` is what turns it into a sentence.
+   */
+  readonly hasMore: boolean;
+}
+
+export async function loadContacts(filters: ContactListParams): Promise<ContactDirectory> {
   const page = await listContacts({
     limit: CONTACTS_PAGE_SIZE,
     q: filters.q,
     tagId: filters.tagId,
   });
 
-  return page.items;
+  return { contacts: page.items, hasMore: page.nextCursor !== null };
 }
 
-/** The tenant's whole tag vocabulary, for the filter dropdown and the tag editor. */
-export async function loadTagVocabulary(): Promise<readonly Tag[]> {
-  return listTags();
+/**
+ * The tenant's tag vocabulary, for the filter dropdown and the tag editor.
+ *
+ * Carries `isTruncated`: tags have no server-side cap, so a tenant past 100 gets
+ * a short list — and a short list is what makes the profile label a live tag
+ * "No longer available in this workspace".
+ */
+export async function loadTagVocabulary(): Promise<TagVocabulary> {
+  return listTagVocabulary();
 }
 
 /**
@@ -51,7 +72,14 @@ export type ContactProfileData =
       readonly contact: ContactResponse;
       /** In `position` order, exactly as the profile form renders them. */
       readonly definitions: readonly CustomFieldDefinition[];
-      readonly tags: readonly Tag[];
+      /**
+       * The vocabulary *and* whether it was truncated. The tag editor needs both:
+       * a tag the contact holds but the vocabulary does not name is either
+       * deleted or simply past the cap, and only `isTruncated` can tell those
+       * apart. Labelling the second one "No longer available" is a lie about a
+       * tag in daily use.
+       */
+      readonly tags: TagVocabulary;
     }
   | { readonly status: 'unavailable' };
 
@@ -61,7 +89,7 @@ export async function loadContactProfile(contactId: string): Promise<ContactProf
     const [contact, definitions, tags] = await Promise.all([
       getContact(contactId),
       listCustomFieldDefinitions(),
-      listTags(),
+      listTagVocabulary(),
     ]);
 
     return { status: 'found', contact, definitions, tags };
