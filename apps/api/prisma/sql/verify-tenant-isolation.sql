@@ -119,6 +119,13 @@ BEGIN
         WHERE n.nspname = 'public'
           AND c.relkind = 'r'
           AND c.relname <> 'webhook_events'   -- TAR-39's deliberate exception
+          -- ADR 0009 Amendment 1 ruling 2. `lifecycle_events` keeps `tenant_id`
+          -- as a recorded identifier rather than a reference, and carries no
+          -- policy on purpose: the trail outlives the tenant, and the composite
+          -- FK to `users` made the purge impossible to finish. The app role
+          -- holds no grant on it — 3g below asserts that by name, which is the
+          -- half that actually protects it.
+          AND c.relname <> 'lifecycle_events'
           AND EXISTS (
               SELECT 1 FROM pg_attribute a
               WHERE a.attrelid = c.oid AND a.attname = 'tenant_id' AND a.attnum > 0 AND NOT a.attisdropped
@@ -916,13 +923,13 @@ BEGIN
 
     RAISE NOTICE 'ok: GUC cleared to the empty string -> 0 rows';
 
-    -- 3g. `webhook_events` and `tenant_signups` carry no policy by design, so on
-    -- both the grant is the enforcement. The app role must not be able to read
-    -- either at all.
+    -- 3g. `webhook_events`, `tenant_signups` and `lifecycle_events` carry no
+    -- policy by design, so on all three the grant is the enforcement. The app
+    -- role must not be able to read any of them at all.
     --
     -- Asserted here rather than left to phase 1b, which only proves the negative
     -- — "no privilege on an unprotected table" also passes for a table that was
-    -- never created. These two are named, so a grant added by hand or an
+    -- never created. These three are named, so a grant added by hand or an
     -- `app-roles.sql` branch dropped in a refactor fails by name.
     BEGIN
         EXECUTE 'SELECT count(*) FROM "public"."webhook_events"';
@@ -941,6 +948,20 @@ BEGIN
     EXCEPTION
         WHEN insufficient_privilege THEN
             RAISE NOTICE 'ok: tenant_signups unreachable by the app role (no grant)';
+    END;
+
+    -- ADR 0009 Amendment 1 ruling 2. This one is the newest and the easiest to
+    -- get wrong, because unlike the two above it *does* carry `tenant_id`: it
+    -- looks scoped and is not. Dropping the policy without dropping the grant
+    -- would have left every tenant's lifecycle history readable on the tenant
+    -- connection, and nothing else in this file would have caught it — 1a skips
+    -- the table by name and 1b only sees a table with no privilege.
+    BEGIN
+        EXECUTE 'SELECT count(*) FROM "public"."lifecycle_events"';
+        RAISE EXCEPTION 'app role can read lifecycle_events — it holds no policy and must hold no grant';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: lifecycle_events unreachable by the app role (no grant)';
     END;
 
     -- 3h. The system role, with no GUC at all, sees both tenants. Proves the
