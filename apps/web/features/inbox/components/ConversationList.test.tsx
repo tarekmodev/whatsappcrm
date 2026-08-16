@@ -48,6 +48,7 @@ function conversation(overrides: Partial<ConversationResponse>): ConversationRes
     unreadCount: 0,
     serviceWindowExpiresAt: null,
     botHandling: false,
+    botState: 'off',
     lastMessagePreview: null,
     lastMessageAt: '2026-08-10T08:45:00.000Z',
     createdAt: '2026-08-09T14:00:00.000Z',
