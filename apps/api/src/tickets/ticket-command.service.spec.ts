@@ -337,6 +337,53 @@ describe('resolvedAt and closedAt', () => {
   });
 });
 
+describe('resolution attribution (TAR-30, ADR 0009 decision 4)', () => {
+  it('records who resolved it, in the same statement as resolvedAt', async () => {
+    // The per-agent breakdown reads this column. Recorded here rather than
+    // derived later, because attributing to `assigned_user_id` at query time
+    // would move a January resolution onto a different agent's row the moment
+    // the ticket was reassigned in March.
+    const { asAgent, written } = harnessFor(ticket({ status: 'open' }));
+
+    await asAgent(async (commands) => commands.update(TICKET, { status: 'resolved' }));
+
+    expect(written[0]?.resolvedByUserId).toBe(AGENT);
+  });
+
+  it('attributes nothing when a ticket is closed without being resolved', async () => {
+    // `closed_at IS NOT NULL AND resolved_at IS NULL` is the dashboard's
+    // "closed unworked" count, and nobody resolved it — so writing a resolver
+    // here would manufacture a resolution that never happened.
+    const { asAgent, written } = harnessFor(ticket({ status: 'open' }));
+
+    await asAgent(async (commands) => commands.update(TICKET, { status: 'closed' }));
+
+    expect(written[0]).not.toHaveProperty('resolvedByUserId');
+  });
+
+  it('leaves an earlier resolver alone when a resolved ticket is closed', async () => {
+    // The property the whole design rests on: a closed period's numbers do not
+    // change after they were reported. `resolved → resolved` is a no-op and
+    // `resolved → open` is refused, so there is no path that rewrites it.
+    const { asAgent, written } = harnessFor(
+      ticket({ status: 'resolved', resolvedAt: new Date('2026-08-12T10:00:00.000Z') }),
+    );
+
+    await asAgent(async (commands) => commands.update(TICKET, { status: 'closed' }));
+
+    expect(written[0]).not.toHaveProperty('resolvedByUserId');
+  });
+
+  it('writes nothing at all when a priority change leaves the status alone', async () => {
+    const { asAgent, written } = harnessFor(ticket({ status: 'open' }));
+
+    await asAgent(async (commands) => commands.update(TICKET, { priority: 'urgent' }));
+
+    expect(written[0]).not.toHaveProperty('resolvedByUserId');
+    expect(written[0]).not.toHaveProperty('resolvedAt');
+  });
+});
+
 describe('the ticket:close permission', () => {
   it.each(['resolved' as const, 'closed' as const])(
     'refuses a move to %s without it',

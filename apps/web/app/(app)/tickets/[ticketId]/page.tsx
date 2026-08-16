@@ -31,7 +31,7 @@ import { parseTicketId } from '@/features/tickets/ticket-params';
  */
 
 export const metadata: Metadata = {
-  title: `${content.tickets.detailHeading} · ${content.app.name}`,
+  title: content.tickets.detailHeading,
   description: content.tickets.subtitle,
 };
 

@@ -313,7 +313,7 @@ export class TicketCommandService {
     return this.prisma.$tenantTransaction(async (tx) => {
       const { count } = await tx.ticket.updateMany({
         where: { tenantId, id: before.id, status: before.status },
-        data: toUpdateData(change),
+        data: toUpdateData(change, actorUserId),
       });
 
       if (count === 0) {
@@ -583,15 +583,36 @@ function routingStateFor(assignment: TicketAssignment): TicketRoutingState {
  * raw `now()` in the linker's create is there because that statement bypasses
  * the client, not because the app clock is unacceptable; a resolution time does
  * not care about a few milliseconds of skew.
+ *
+ * ## `resolvedByUserId` moves with `resolvedAt`, in the same statement
+ *
+ * TAR-30's per-agent breakdown needs to know who resolved a ticket, and ADR 0010
+ * decision 4 records it here rather than deriving it later: this service already
+ * knows `actorUserId` — it puts it on the `status_changed` event — and this is
+ * the transaction that establishes the fact.
+ *
+ * Attributing to `assigned_user_id` at query time instead would rewrite history:
+ * a ticket reassigned in March would move its January resolution onto a
+ * different agent's row, changing a closed period's numbers after they were
+ * reported to a client. The two columns are written together for the same reason
+ * they are read together, and the no-overwrite property above covers both.
+ *
+ * Only on the transition into `resolved`. Closing an unresolved ticket writes
+ * `closedAt` and neither of these — closing spam is not a resolution, and
+ * `closed_at IS NOT NULL AND resolved_at IS NULL` is the "closed unworked"
+ * signal the dashboard carries as its own count.
  */
-function toUpdateData(change: TicketChange): Prisma.TicketUncheckedUpdateInput {
+function toUpdateData(
+  change: TicketChange,
+  actorUserId: string,
+): Prisma.TicketUncheckedUpdateInput {
   const now = new Date();
 
   return {
     ...(change.status === null ? {} : { status: change.status }),
     ...(change.priority === null ? {} : { priority: change.priority }),
     ...(change.subject === null ? {} : { subject: change.subject }),
-    ...(change.status === 'resolved' ? { resolvedAt: now } : {}),
+    ...(change.status === 'resolved' ? { resolvedAt: now, resolvedByUserId: actorUserId } : {}),
     ...(change.status === 'closed' ? { closedAt: now } : {}),
   };
 }

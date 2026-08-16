@@ -26,7 +26,7 @@ import { parseTicketQueueParams } from '@/features/tickets/ticket-params';
  */
 
 export const metadata: Metadata = {
-  title: `${content.tickets.title} · ${content.app.name}`,
+  title: content.tickets.title,
   description: content.tickets.subtitle,
 };
 

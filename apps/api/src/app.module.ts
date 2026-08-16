@@ -18,6 +18,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
 import { RbacModule } from './rbac/rbac.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { ReportingModule } from './reporting/reporting.module';
 import { REPOSITORY_ENV_FILE } from './repository-env-file';
 import { SlaModule } from './sla/sla.module';
 import { TenancyModule } from './tenancy/tenancy.module';
@@ -79,6 +80,10 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     // may import it. Every trigger reaching it is a queue job for exactly that
     // reason, so it needs no `imports` of its own.
     SlaModule,
+    // L4 as well, and after `SlaModule` only for readability — it imports
+    // nothing and nothing imports it. Reporting is a synchronous read over
+    // `tickets` through `TenantPrisma`: no queue, no worker, no event.
+    ReportingModule,
   ],
 })
 export class AppModule implements NestModule {

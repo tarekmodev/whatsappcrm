@@ -12,6 +12,7 @@ import {
   MOCK_TAGS,
   MOCK_TEAMS,
   MOCK_TENANTS,
+  MOCK_TENANT_DOMAINS,
   MOCK_TENANT_LIFECYCLES,
   MOCK_TICKETS,
   MOCK_TICKET_EVENTS,
@@ -28,6 +29,7 @@ import {
   type MockSlaAlert,
   type MockTag,
   type MockTeam,
+  type MockTenantDomain,
   type MockTenantLifecycle,
   type MockTicket,
   type MockTicketEvent,
@@ -80,6 +82,15 @@ interface MockState {
    * something other than the caller's tenant.
    */
   onboarding: Map<string, MockOnboardingChecklist>;
+  /**
+   * Keyed by row id, unlike `tenants` above — a tenant holds several hostnames,
+   * and they are added, verified and removed one at a time (TAR-418).
+   *
+   * This is the mutable source of truth for domains. `tenants[].domains` is a
+   * seed composed from the same fixture, and the tenant handler recomposes it
+   * from this map on every read, so a verify cannot leave the tenant row stale.
+   */
+  tenantDomains: Map<string, MockTenantDomain>;
   /**
    * `Idempotency-Key` → the request it was spent on, and what it produced.
    *
@@ -156,6 +167,7 @@ function seed(): MockState {
         { ...checklist, steps: checklist.steps.map((step) => ({ ...step })) },
       ]),
     ),
+    tenantDomains: new Map(MOCK_TENANT_DOMAINS.map((domain) => [domain.id, domain])),
     sentByIdempotencyKey: new Map(),
     nextId: 1,
   };

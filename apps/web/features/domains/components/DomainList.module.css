@@ -1,0 +1,28 @@
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.actions > * {
+  flex: 1 1 auto;
+}
+
+@media (min-width: 30rem) {
+  .actions > * {
+    flex: 0 0 auto;
+  }
+}
+
+/*
+ * A real list, so a screen reader announces how many hostnames there are before
+ * reading them. The markers are removed; the cards are the visual separation.
+ */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

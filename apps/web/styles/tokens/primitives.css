@@ -156,6 +156,19 @@
   /* The width the accent marker on a current nav entry occupies. */
   --scale-size-marker: 3px;
 
+  /*
+   * The box a tenant's uploaded logo is drawn into (TAR-29). Fixed in both axes
+   * because the API publishes a logo's bytes and type but not its dimensions —
+   * a box sized from the image would be zero until it decodes and would shift
+   * the rail and the sign-in screen when it lands.
+   */
+  --scale-size-brand-block-sm: 1.75rem;
+  --scale-size-brand-block-md: 2.25rem;
+  --scale-size-brand-inline-sm: 7rem;
+  --scale-size-brand-inline-md: 11rem;
+  /* The swatch a colour picker shows beside its hex field. */
+  --scale-size-swatch: 2.75rem;
+
   /* Panes and media, added for the shared inbox's two-column layout. */
   --scale-size-pane-sm: 20rem;
   --scale-size-pane-md: 22rem;

@@ -776,14 +776,16 @@ with the note, and never queried the other way round.
   `WHERE status IN ('open','pending')`; **`tickets_routing_deferred_idx`** —
   `(tenant_id, routing_deferred_since) WHERE routing_state = 'deferred'`;
   **`tickets_active_queue_idx`** — `(tenant_id, priority DESC, created_at DESC, id DESC)`
-  `WHERE status IN ('open','pending')`; `tickets_reporting_metrics_idx` —
+  `WHERE status IN ('open','pending')`; **`tickets_reporting_metrics_idx`** —
   `(tenant_id, created_at, assigned_user_id, status, first_response_at, resolved_at)`;
-  **`tickets_active_created_at_idx`** —
+  `(tenant_id, first_response_at)`, `(tenant_id, resolved_at)`, `(tenant_id, closed_at)` —
+  the reporting range anchors; **`tickets_active_created_at_idx`** —
   `(tenant_id, created_at) WHERE status IN ('open','pending')`
 - **Checks:** `tickets_routing_deferred_consistent`
 - **Owned by:** TAR-21 / TAR-25, sort keys added by TAR-80, the partial unique index by
   TAR-74, the routing columns by TAR-272, the active-queue index by TAR-284, the reporting
-  index by TAR-427, the elapsed-sweep index by TAR-394
+  covering index by TAR-427, the elapsed-sweep index by TAR-394, the attribution columns and
+  range anchors by TAR-428
 
 `tickets_active_created_at_idx` serves phase 1 of the workflow elapsed-trigger sweep: per
 tenant, `status IN ('open','pending') AND created_at <= now() - interval`,
@@ -802,6 +804,36 @@ grows with the tenant's history rather than with its open backlog. The partial i
 only active tickets, so the first fifty entries in `created_at` order are the answer. The
 reporting index would still serve the sweep if the partial one were dropped, so getting this
 wrong costs a slow sweep rather than a broken plan.
+
+The **three range anchors** are a separate question from both of those, and none of them is
+a candidate to serve the sweep: they carry no `status`, so an active-only predicate would be
+a heap recheck on every row they return.
+
+`first_response_user_id` and `resolved_by_user_id` are TAR-30's per-agent breakdown, and
+they are recorded rather than derived (0010, decision 4). `SlaTimerService.stampFirstResponse`
+writes the first in the statement that already stamps `first_response_at`, from the same
+message; `TicketCommandService` writes the second in the update that sets `resolved_at`.
+**Null means "not recorded"** — a ticket predating the columns, or a resolution with no
+actor — and the report renders those as its `unattributed` row rather than redistributing
+them, so the breakdown still adds up to the summary.
+
+Deriving either at query time was rejected: "who answered" has a five-clause definition
+inside `stampFirstResponse`, and a reporting query reproducing four of them drifts silently.
+Attributing to `assigned_user_id` was rejected for a sharper reason — it means "who holds
+this now", so a ticket reassigned in March moves its January response time onto a different
+agent's row, changing a closed period after it was reported to a client.
+
+The four reporting indexes split by anchor, because each metric ranges over a different
+column (0010, decision 2). `tickets_reporting_metrics_idx` leads with
+`(tenant_id, created_at)` and covers the aggregated columns, so it answers created-volume
+and the daily series with an index-only scan — TAR-427 measured 9 608 buffers down to 214
+on 500 000 tickets. It cannot answer the other three: `first_response_at` sits fifth in it
+and `resolved_at` sixth, unreachable as a range start without an equality on everything
+before them, and a report deliberately spans every status and assignee; `closed_at` is not
+in it at all. Hence the three narrow anchors beside it. `(tenant_id, closed_at)` is the
+named lever if write amplification on `tickets` has to be cut — it serves the supplementary
+`closedWithoutResolution` count alone, and dropping that index and that response field
+together is a coherent reduction.
 
 `tickets_active_queue_idx` serves `GET /api/v1/tickets` — the active queue in
 `priority DESC, created_at DESC, id DESC` order, paged by keyset

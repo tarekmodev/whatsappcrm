@@ -1,0 +1,11 @@
+.control {
+  align-items: flex-start;
+  /* Keeps the hint and any failure line readable rather than letting them
+     stretch the page header across an ultrawide screen. */
+  max-inline-size: 34ch;
+}
+
+.hint {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}

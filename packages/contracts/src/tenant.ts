@@ -217,14 +217,141 @@ export const TenantLifecycleEventSchema = z.object({
  * imports the published one.
  */
 
+// ---------------------------------------------------------------------------
+// Branding — TAR-29
+// ---------------------------------------------------------------------------
+
+export const BRANDING_ASSET_KINDS = ['logo', 'favicon'] as const;
+export const BrandingAssetKindSchema = z.enum(BRANDING_ASSET_KINDS);
+export type BrandingAssetKind = (typeof BRANDING_ASSET_KINDS)[number];
+
+/**
+ * Published here rather than kept in the API so the settings UI can refuse a
+ * 4 MB PNG before spending the upload. The server enforces the same numbers, and
+ * sniffs the bytes rather than trusting the declared `Content-Type`.
+ *
+ * No `image/svg+xml`, deliberately: an SVG served same-origin executes script,
+ * and a sanitiser is a security dependency to own forever. PNG, JPEG and WebP
+ * cover the requirement.
+ */
+export const BRANDING_ASSET_LIMITS: Readonly<
+  Record<BrandingAssetKind, { readonly maxBytes: number; readonly mimeTypes: readonly string[] }>
+> = {
+  logo: { maxBytes: 512 * 1024, mimeTypes: ['image/png', 'image/jpeg', 'image/webp'] },
+  favicon: { maxBytes: 64 * 1024, mimeTypes: ['image/png', 'image/x-icon'] },
+};
+
+/** The multipart field both tiers agree on, as `MEDIA_UPLOAD_FIELD` does. */
+export const BRANDING_UPLOAD_FIELD = 'file';
+
+export const BrandingAssetSchema = z.object({
+  /**
+   * Relative, host-agnostic and cache-busted. **Not** an absolute URL: the same
+   * row is served under a platform subdomain *and* under a custom domain, so a
+   * stored absolute URL would name whichever host existed at write time and make
+   * the browser fetch it cross-origin — the exact thing the first-party cookie
+   * rule forbids. Same precedent as `MediaObjectResponse.contentPath`.
+   */
+  path: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.int().nonnegative(),
+  updatedAt: TimestampSchema,
+});
+
+/** The one place these routes are spelled, so the API and the web app agree. */
+export function brandingAssetPath(kind: BrandingAssetKind, updatedAt: Date): string {
+  return `/api/v1/tenant/branding/${kind}?v=${updatedAt.getTime()}`;
+}
+
 /** Per-tenant white-label appearance. TAR-29 owns the editor; the shape is fixed here. */
 export const TenantBrandingSchema = z.object({
-  logoUrl: z.url().nullable(),
-  faviconUrl: z.url().nullable(),
+  productName: z.string().min(1).max(60),
   primaryColor: HexColorSchema,
   accentColor: HexColorSchema,
-  productName: z.string().min(1).max(60),
   supportEmail: z.email().nullable(),
+  logo: BrandingAssetSchema.nullable(),
+  favicon: BrandingAssetSchema.nullable(),
+});
+
+/**
+ * What the API substitutes for an absent row or an unset column, so the response
+ * is **always fully populated** and the frontend renders unconditionally.
+ *
+ * Defaults live here rather than as `NOT NULL DEFAULT` in the database: a column
+ * default would bake the platform's brand into every tenant's row and make "has
+ * this tenant customised anything" unanswerable. `PLATFORM_PRODUCT_NAME`
+ * overrides the product name per deployment.
+ */
+export const BRANDING_DEFAULTS = {
+  productName: 'WhatsApp CRM',
+  primaryColor: '#067a52', // green-600, the platform accent
+  accentColor: '#2e4a63', // navy-700
+} as const;
+
+/** Assets are set by their own routes; `PATCH /tenant` never carries bytes. */
+export const BrandingUpdateInputSchema = z.object({
+  productName: z.string().min(1).max(60).optional(),
+  primaryColor: HexColorSchema.optional(),
+  accentColor: HexColorSchema.optional(),
+  supportEmail: z.email().nullable().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Custom domains — TAR-29
+// ---------------------------------------------------------------------------
+
+/**
+ * `platform`, not `platform_subdomain`: the wire value is the database enum value
+ * (`TenantDomainKind` in `schema.prisma`), so no mapping layer exists to drift.
+ */
+export const TENANT_DOMAIN_KINDS = ['platform', 'custom'] as const;
+export const TenantDomainKindSchema = z.enum(TENANT_DOMAIN_KINDS);
+export type TenantDomainKind = (typeof TENANT_DOMAIN_KINDS)[number];
+
+/**
+ * Derived from the row, never stored — a stored status is a second source of
+ * truth that disagrees with its own columns after one failed write.
+ *
+ *   pending_verification  token issued, TXT not seen yet
+ *   verified              ownership proved; resolves, but the edge may not route it
+ *   live                  attached at the edge with a certificate
+ *   expired               unverified past the window; the sweeper will remove it
+ */
+export const TENANT_DOMAIN_STATUSES = [
+  'pending_verification',
+  'verified',
+  'live',
+  'expired',
+] as const;
+export const TenantDomainStatusSchema = z.enum(TENANT_DOMAIN_STATUSES);
+export type TenantDomainStatus = (typeof TENANT_DOMAIN_STATUSES)[number];
+
+export const DOMAIN_VERIFICATION_FAILURE_REASONS = [
+  'record_not_found',
+  'record_mismatch',
+  'lookup_failed',
+  'lookup_timeout',
+] as const;
+export const DomainVerificationFailureReasonSchema = z.enum(DOMAIN_VERIFICATION_FAILURE_REASONS);
+export type DomainVerificationFailureReason = (typeof DOMAIN_VERIFICATION_FAILURE_REASONS)[number];
+
+export const DomainVerificationSchema = z.object({
+  recordType: z.literal('TXT'),
+  /** `_whatsappcrm-challenge.support.acme.com` */
+  recordName: z.string(),
+  /** `whatsappcrm-domain-verification=<token>` */
+  recordValue: z.string(),
+  lastCheckedAt: TimestampSchema.nullable(),
+  lastFailureReason: DomainVerificationFailureReasonSchema.nullable(),
+  /** When an unverified claim is released for anyone else to take. */
+  expiresAt: TimestampSchema,
+});
+
+export const DomainRoutingSchema = z.object({
+  recordType: z.enum(['CNAME', 'ALIAS', 'A']),
+  recordName: z.string(),
+  /** The web service's edge hostname, from `PLATFORM_EDGE_HOSTNAME`. */
+  recordValue: z.string(),
 });
 
 /**
@@ -234,10 +361,71 @@ export const TenantBrandingSchema = z.object({
  */
 export const TenantDomainSchema = z.object({
   id: IdSchema,
-  hostname: z.string().min(1).max(253).toLowerCase(),
-  kind: z.enum(['platform_subdomain', 'custom']),
-  verifiedAt: TimestampSchema.nullable(),
+  hostname: z.string().min(4).max(253),
+  kind: TenantDomainKindSchema,
+  status: TenantDomainStatusSchema,
   isPrimary: z.boolean(),
+  verifiedAt: TimestampSchema.nullable(),
+  activatedAt: TimestampSchema.nullable(),
+  /** Null for `kind: 'platform'` — ours to issue, nothing to prove. */
+  verification: DomainVerificationSchema.nullable(),
+  /** Null for `kind: 'platform'`, and once the domain is `live`. */
+  routing: DomainRoutingSchema.nullable(),
+  createdAt: TimestampSchema,
+});
+
+/** How many custom domains one tenant may hold before `plan_limit_exceeded`. */
+export const MAX_CUSTOM_DOMAINS_PER_TENANT = 5;
+
+/** Labels are 1–63 chars, ASCII letters-digits-hyphen, no leading or trailing hyphen. */
+const HOSTNAME_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
+/** Names that resolve inside a network rather than on the public internet. */
+const RESERVED_SUFFIXES = ['.local', '.internal', '.localhost'] as const;
+
+/**
+ * A hostname a tenant may claim.
+ *
+ * Punycode (A-label) only, and the refinements are the security half rather than
+ * tidiness: non-ASCII is **refused with an explicit message rather than silently
+ * converted**, because a homograph accepted quietly is a phishing host we would
+ * then issue a certificate for.
+ *
+ * One rule cannot live here: a hostname under `PLATFORM_DOMAIN` is ours to issue
+ * and must never be claimable as custom. That value is server-side configuration
+ * and is not published to the browser, so the API applies it on top of this.
+ */
+export const CustomHostnameInputSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(4)
+  .max(253)
+  .refine((value) => !value.endsWith('.'), 'Leave off the trailing dot')
+  .refine((value) => !value.includes(':'), 'Leave off the port')
+  .refine((value) => !IPV4_LITERAL.test(value), 'Enter a hostname, not an IP address')
+  .refine((value) => value.split('.').length >= 2, 'Enter a full hostname, e.g. support.acme.com')
+  .refine(
+    (value) =>
+      !RESERVED_SUFFIXES.some((suffix) => value === suffix.slice(1) || value.endsWith(suffix)),
+    'That name only resolves inside a private network',
+  )
+  .refine(
+    (value) => value.split('.').every((label) => HOSTNAME_LABEL.test(label)),
+    'Use letters, digits and hyphens only — an internationalised domain must be entered in its punycode form',
+  );
+
+export const TenantDomainCreateInputSchema = z.object({
+  hostname: CustomHostnameInputSchema,
+});
+
+/**
+ * `GET /api/v1/tenant/domains`. A plain `{ items }` envelope rather than a
+ * cursor page: the set is capped at `MAX_CUSTOM_DOMAINS_PER_TENANT` plus the
+ * platform subdomain, so there is nothing to page.
+ */
+export const TenantDomainListResponseSchema = z.object({
+  items: z.array(TenantDomainSchema),
 });
 
 /**
@@ -316,7 +504,7 @@ export const TenantLifecycleResponseSchema = z.object({
 
 export const TenantUpdateInputSchema = z.object({
   name: TenantNameSchema.optional(),
-  branding: TenantBrandingSchema.partial().optional(),
+  branding: BrandingUpdateInputSchema.optional(),
 });
 
 export const TenantCancelInputSchema = z.object({
@@ -539,8 +727,14 @@ export const TENANT_HOST_HEADER = 'x-edge-host';
 /** The shared secret proving `x-edge-host` came from our own web tier. */
 export const EDGE_AUTH_HEADER = 'x-edge-auth';
 
+export type BrandingAsset = z.infer<typeof BrandingAssetSchema>;
 export type TenantBranding = z.infer<typeof TenantBrandingSchema>;
+export type BrandingUpdateInput = z.infer<typeof BrandingUpdateInputSchema>;
+export type DomainVerification = z.infer<typeof DomainVerificationSchema>;
+export type DomainRouting = z.infer<typeof DomainRoutingSchema>;
 export type TenantDomain = z.infer<typeof TenantDomainSchema>;
+export type TenantDomainCreateInput = z.infer<typeof TenantDomainCreateInputSchema>;
+export type TenantDomainListResponse = z.infer<typeof TenantDomainListResponseSchema>;
 export type TenantResponse = z.infer<typeof TenantResponseSchema>;
 export type TenantLifecycleResponse = z.infer<typeof TenantLifecycleResponseSchema>;
 export type TenantPublicResponse = z.infer<typeof TenantPublicResponseSchema>;

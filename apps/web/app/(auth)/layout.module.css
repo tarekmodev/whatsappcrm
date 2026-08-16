@@ -36,3 +36,10 @@
   font-weight: var(--font-weight-strong);
   color: var(--color-accent);
 }
+
+/* The logo takes the wordmark's place and its space, so a tenant with a logo and
+   one without produce the same column height. */
+.mark {
+  display: flex;
+  justify-content: center;
+}

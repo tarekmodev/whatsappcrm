@@ -15,7 +15,7 @@ import { InviteAcceptSection } from '@/features/auth/components/InviteAcceptSect
  */
 
 export const metadata: Metadata = {
-  title: `${content.auth.inviteTitle} · ${content.app.name}`,
+  title: content.auth.inviteTitle,
   description: content.auth.inviteDescription,
 };
 

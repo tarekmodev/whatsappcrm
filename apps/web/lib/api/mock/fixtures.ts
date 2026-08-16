@@ -11,6 +11,7 @@ import {
   type SlaAlertResponse,
   type Tag,
   type TeamResponse,
+  type TenantDomain,
   type TenantLifecycleResponse,
   type TenantResponse,
   type TenantRole,
@@ -157,6 +158,8 @@ const ASSIGNMENT_RULE_IDS = {
 
 const TENANT_DOMAIN_IDS = {
   northwindPlatform: '0192f00e-0000-7000-8000-000000000e01',
+  /** A custom domain mid-verification (TAR-418). */
+  northwindCustom: '0192f00e-0000-7000-8000-000000000e02',
   southwindPlatform: '0192f00e-0000-7000-8000-000000000e99',
 } as const;
 
@@ -253,9 +256,13 @@ export type MockOnboardingChecklist = TenantScoped & {
  * `connect_whatsapp` and `invite_agents` are flipped to `completed` by the
  * handlers that do the real thing (connecting a WABA, sending an invitation), not
  * by a client PATCH: completion is server-derived, per `contracts/onboarding.ts`.
- * `set_branding` therefore stays pending until TAR-29 ships a branding write —
- * which is exactly the case the skip path exists for, and worth being able to
- * walk.
+ *
+ * `set_branding` stays pending, and the reason changed with TAR-418: the branding
+ * write it was waiting for now exists (`PATCH /v1/tenant`), but that handler does
+ * not report to the checklist. Deriving it belongs with whoever owns the two
+ * together — TAR-407 defines what "done" means for a step and TAR-420 owns the
+ * real endpoint — so this is left honest rather than half-wired here. The skip
+ * path still covers it, and remains worth being able to walk.
  */
 export const MOCK_ONBOARDING_CHECKLISTS: readonly MockOnboardingChecklist[] = [
   MOCK_TENANT_ID,
@@ -271,6 +278,103 @@ export const MOCK_ONBOARDING_CHECKLISTS: readonly MockOnboardingChecklist[] = [
   completedAt: null,
   updatedAt: MOCK_ONBOARDING_UPDATED_AT,
 }));
+
+// --- Tenant domains (TAR-29) ------------------------------------------------
+
+/**
+ * A tenant's hostnames, mutable independently of the tenant row.
+ *
+ * They live in their own fixture — and their own store map — rather than only
+ * inline on `MOCK_TENANTS`, because they are added, verified and removed one at
+ * a time. `MOCK_TENANTS[].domains` is composed from this list below, so there is
+ * exactly one source of truth and a verify cannot leave the tenant row stale.
+ */
+export type MockTenantDomain = TenantDomain & TenantScoped;
+
+export const MOCK_TENANT_DOMAINS: readonly MockTenantDomain[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: TENANT_DOMAIN_IDS.northwindPlatform,
+    hostname: 'northwind.app.example.com',
+    kind: 'platform',
+    status: 'live',
+    isPrimary: true,
+    verifiedAt: '2026-07-01T09:00:00.000Z',
+    activatedAt: '2026-07-01T09:05:00.000Z',
+    // Ours to issue; there was never anything to prove or to point.
+    verification: null,
+    routing: null,
+    createdAt: '2026-07-01T09:00:00.000Z',
+  },
+  {
+    /**
+     * A claim mid-verification — the state the domains screen has the most to
+     * say about, and the one a reviewer should meet first.
+     */
+    tenantId: MOCK_TENANT_ID,
+    id: TENANT_DOMAIN_IDS.northwindCustom,
+    hostname: 'support.northwind.example',
+    kind: 'custom',
+    status: 'pending_verification',
+    isPrimary: false,
+    verifiedAt: null,
+    activatedAt: null,
+    verification: {
+      recordType: 'TXT',
+      recordName: '_whatsappcrm-challenge.support.northwind.example',
+      // 32 hex characters, matching what the API's CSPRNG issues. A literal
+      // rather than a generated value: a token that changed per render would
+      // break hydration and make the test that reads it time-dependent.
+      recordValue: 'whatsappcrm-domain-verification=7f3c1a9be25d4867b0a1c4e8d9f2b6a3',
+      lastCheckedAt: '2026-08-14T09:30:00.000Z',
+      lastFailureReason: 'record_not_found',
+      expiresAt: '2026-08-21T09:00:00.000Z',
+    },
+    routing: {
+      recordType: 'CNAME',
+      recordName: 'support.northwind.example',
+      recordValue: 'whatsappcrm-web.onrender.example',
+    },
+    createdAt: '2026-08-14T09:00:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: TENANT_DOMAIN_IDS.southwindPlatform,
+    hostname: 'southwind.app.example.com',
+    kind: 'platform',
+    status: 'live',
+    isPrimary: true,
+    verifiedAt: '2026-06-01T09:00:00.000Z',
+    activatedAt: '2026-06-01T09:05:00.000Z',
+    verification: null,
+    routing: null,
+    createdAt: '2026-06-01T09:00:00.000Z',
+  },
+];
+
+/**
+ * The wire shape: every domain this tenant holds, without the scoping column.
+ *
+ * Field by field rather than by rest-spread, matching `stripTenant` in the
+ * handlers: a column added to `MockTenantDomain` would otherwise be published by
+ * a spread without anyone deciding to, and this row is the one place where
+ * publishing a column by accident is a cross-tenant leak.
+ */
+function domainsOf(tenantId: string): TenantDomain[] {
+  return MOCK_TENANT_DOMAINS.filter((domain) => domain.tenantId === tenantId).map((domain) => ({
+    id: domain.id,
+    hostname: domain.hostname,
+    kind: domain.kind,
+    status: domain.status,
+    isPrimary: domain.isPrimary,
+    verifiedAt: domain.verifiedAt,
+    activatedAt: domain.activatedAt,
+    verification: domain.verification,
+    routing: domain.routing,
+    createdAt: domain.createdAt,
+  }));
+}
 
 function contact(id: string, displayName: string, phone: string): ConversationResponse['contact'] {
   return {
@@ -301,23 +405,25 @@ export const MOCK_TENANTS: readonly TenantResponse[] = [
     name: 'Northwind Traders',
     slug: 'northwind',
     status: 'trialing',
+    /**
+     * Deliberately nothing like the platform's green (TAR-418): the isolation
+     * criterion is that one tenant's branding is never observable under
+     * another's, and two tenants that both looked like the platform could not
+     * tell a working implementation from a broken one.
+     *
+     * `logo` and `favicon` are `null` — the state every tenant starts in, and
+     * the one the wordmark fallback exists for. A seeded logo would hide the
+     * path most tenants actually run.
+     */
     branding: {
-      logoUrl: null,
-      faviconUrl: null,
-      primaryColor: '#16a34a',
-      accentColor: '#15803d',
       productName: 'Northwind Support',
+      primaryColor: '#0f6fde',
+      accentColor: '#7c3aed',
       supportEmail: 'support@northwind.example',
+      logo: null,
+      favicon: null,
     },
-    domains: [
-      {
-        id: TENANT_DOMAIN_IDS.northwindPlatform,
-        hostname: 'northwind.app.example.com',
-        kind: 'platform_subdomain',
-        verifiedAt: '2026-07-01T09:00:00.000Z',
-        isPrimary: true,
-      },
-    ],
+    domains: domainsOf(MOCK_TENANT_ID),
     trialEndsAt: TRIAL_ENDS_AT,
     createdAt: '2026-07-01T09:00:00.000Z',
   },
@@ -328,22 +434,16 @@ export const MOCK_TENANTS: readonly TenantResponse[] = [
     slug: 'southwind',
     status: 'active',
     branding: {
-      logoUrl: null,
-      faviconUrl: null,
-      primaryColor: '#2563eb',
-      accentColor: '#1d4ed8',
       productName: 'Southwind Helpdesk',
+      // Unmistakably not Northwind's, so a leak reads as a wrong colour rather
+      // than as a slightly different shade of the same one.
+      primaryColor: '#b45309',
+      accentColor: '#0f766e',
       supportEmail: null,
+      logo: null,
+      favicon: null,
     },
-    domains: [
-      {
-        id: TENANT_DOMAIN_IDS.southwindPlatform,
-        hostname: 'southwind.app.example.com',
-        kind: 'platform_subdomain',
-        verifiedAt: '2026-06-01T09:00:00.000Z',
-        isPrimary: true,
-      },
-    ],
+    domains: domainsOf(OTHER_TENANT_ID),
     trialEndsAt: null,
     createdAt: '2026-06-01T09:00:00.000Z',
   },

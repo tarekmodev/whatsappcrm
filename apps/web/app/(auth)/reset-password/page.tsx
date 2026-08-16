@@ -13,7 +13,7 @@ import { ResetPasswordForm } from '@/features/auth/components/ResetPasswordForm'
  */
 
 export const metadata: Metadata = {
-  title: `${content.auth.resetTitle} · ${content.app.name}`,
+  title: content.auth.resetTitle,
   description: content.auth.resetDescription,
 };
 
