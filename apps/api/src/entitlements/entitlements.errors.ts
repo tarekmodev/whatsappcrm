@@ -13,7 +13,7 @@
  */
 
 /**
- * Which ceiling refused the write — the two `tenant_plan_limits` stores, named
+ * Which ceiling refused the write — the limits in `tenant_entitlements`, named
  * as `PlanLimitsSchema` names them so the field a client reads matches the
  * published vocabulary.
  *

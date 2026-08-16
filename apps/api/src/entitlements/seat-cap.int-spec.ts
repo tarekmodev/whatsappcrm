@@ -15,9 +15,10 @@ import { PlanLimitsService } from './plan-limits.service';
  *   * **The count is confined to one tenant by RLS**, not by a `WHERE` somebody
  *     could forget to write. Tenant B fills every seat it has and tenant A —
  *     capped at the same number, and empty — is still free to invite.
- *   * **`tenant_plan_limits` is readable on the tenant connection**, which is
+ *   * **`tenant_entitlements` is readable on the tenant connection**, which is
  *     the whole reason TAR-403 put the caps in a tenant-scoped table rather than
- *     in the platform-wide `plans`. A row for another tenant is invisible, so a
+ *     in the platform-wide `plans`, and why ADR 0009 Amendment 1 ruling 3 kept
+ *     that when it widened the row. A row for another tenant is invisible, so a
  *     tenant cannot inherit a neighbour's ceiling.
  *   * **The advisory lock actually serialises**, so two concurrent seat checks
  *     against the last free seat cannot both pass. That is the difference
@@ -39,6 +40,24 @@ const REQUEST_ID = 'tar405-int-spec';
 
 /** A cap small enough that the fixture can sit exactly on it. */
 const SEAT_CAP = 2;
+
+/**
+ * `PlanEntitlementsSchema`'s shape with one seat ceiling set — the whole object
+ * every time, because `tenant_entitlements_shape` refuses a row whose five limit
+ * keys are not all present (ADR 0009 Amendment 1 ruling 3).
+ */
+function entitlementsWithSeats(seats: number | null): Prisma.InputJsonObject {
+  return {
+    features: [],
+    limits: {
+      seats,
+      conversationsPerPeriod: null,
+      whatsappNumbers: null,
+      teams: null,
+      knowledgeDocuments: null,
+    },
+  };
+}
 
 describe('the plan seat cap', () => {
   const tenantContext = new TenantContextService();
@@ -102,7 +121,13 @@ describe('the plan seat cap', () => {
               verifiedAt: new Date(),
             },
           },
-          planLimits: { create: { planKey: 'trial', seatCap: SEAT_CAP } },
+          entitlements: {
+            create: {
+              planKey: 'trial',
+              planName: 'Trial',
+              entitlements: entitlementsWithSeats(SEAT_CAP),
+            },
+          },
         },
       });
     }
@@ -117,9 +142,9 @@ describe('the plan seat cap', () => {
     // Each test starts from "nobody holds a seat in either tenant".
     await systemPrisma.user.deleteMany({ where: { tenantId: { in: [TENANT_A, TENANT_B] } } });
     await systemPrisma.invite.deleteMany({ where: { tenantId: { in: [TENANT_A, TENANT_B] } } });
-    await systemPrisma.tenantPlanLimits.updateMany({
+    await systemPrisma.tenantEntitlements.updateMany({
       where: { tenantId: { in: [TENANT_A, TENANT_B] } },
-      data: { seatCap: SEAT_CAP },
+      data: { entitlements: entitlementsWithSeats(SEAT_CAP) },
     });
   });
 
@@ -153,9 +178,9 @@ describe('the plan seat cap', () => {
    * question rather than a `WHERE tenant_id` somebody remembers to add.
    */
   it('reads its own cap and not a neighbour raised one', async () => {
-    await systemPrisma.tenantPlanLimits.update({
+    await systemPrisma.tenantEntitlements.update({
       where: { tenantId: TENANT_B },
-      data: { seatCap: null },
+      data: { entitlements: entitlementsWithSeats(null) },
     });
     await fillSeats(TENANT_A, SEAT_CAP);
 

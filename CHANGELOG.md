@@ -200,6 +200,29 @@ change.
   out of `CUSTOM_FIELD_TYPES`: a value is a single string, and TAR-33's own assumption is
   "simple key-value, not relational".
 
+- **The two JSONB columns the custom-field surface is built on are now shape-checked in the
+  database** (TAR-33, TAR-478) — TAR-478 checked `contacts`, `tags`, `contact_tags` and
+  `custom_field_defs` against [0002 amendment
+  10](docs/architecture/0002-architecture-and-api-contract.md) and found the schema already
+  carries every column, type, key and index that contract needs, with tenant isolation
+  enforced at the data layer on all four. It found one thing that was assumed and not
+  enforced. `contacts.custom_fields` took any JSONB, and amendment 10's delete path is
+  `custom_fields - $key`, which is defined only for objects: against an array it silently
+  removes an _element_, and against a scalar it raises `cannot delete from scalar` — so one
+  unrelated row written by an import or a backfill would take down the transaction that
+  deletes a custom field. `contacts_custom_fields_is_object` closes it, and
+  `custom_field_defs_options_is_array` and `custom_field_defs_position_non_negative` do the
+  same for the two columns amendment 10 gives a writer. All three are additive CHECK
+  constraints — no column, no index, no data, and nothing in the API changes.
+  Two indexes were **declined on measurement** rather than skipped: amendment 10's optional
+  `custom_field_defs (tenant_id, position, id)` changes no plan at the contract's own ceiling
+  of 50 definitions per tenant (the bitmap scan discards index order, so the 50-row sort
+  survives either way), and a GIN index on `contacts.custom_fields` is never chosen by the
+  planner for the delete-strip's `?` predicate at the selectivity that matters. The indexes
+  behind "filter the contact list by tag" are already sufficient: both plan shapes exist
+  today and the planner picks between them by tag selectivity. Reasoning and numbers are in
+  the migration.
+
 - **A new tenant admin now lands in a guided setup checklist they can skip and come back to**
   (TAR-36, TAR-407) — `/onboarding` walks an admin through connecting a WhatsApp number,
   inviting agents and setting branding, gated on `tenant:settings`. The rule that shapes the

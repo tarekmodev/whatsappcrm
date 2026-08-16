@@ -153,24 +153,35 @@ BEGIN
             CONTINUE;
         END IF;
 
-        IF t.relname = 'lifecycle_audit_log' THEN
-            -- The one append-only table in the schema (TAR-403). Neither role
-            -- gets UPDATE or DELETE — including SystemPrisma, which is otherwise
-            -- unrestricted by design. An audit trail of tenant suspensions and
-            -- purges that the platform itself can rewrite is a record of what
-            -- somebody was willing to leave behind, and SystemPrisma is the
-            -- credential a mistake would run under.
+        IF t.relname = 'lifecycle_events' THEN
+            -- The one append-only table in the schema (TAR-403), and since ADR
+            -- 0009 Amendment 1 ruling 2 the third that carries no RLS policy.
             --
-            -- Withholding DELETE does not make the tenant row undeletable:
-            -- PostgreSQL runs the `ON DELETE CASCADE` from `tenants` as a
-            -- referential-integrity action, which is not checked against the
-            -- deleting role's privileges. The seed and every integration fixture
-            -- keep working.
+            -- **`whatsappcrm_app` is granted nothing at all**, and that is the
+            -- half of ruling 2 the ruling itself does not spell out. The table
+            -- keeps its `tenant_id` column but lost the `tenant_isolation`
+            -- policy that filtered on it, so a grant here would let the tenant
+            -- connection read every tenant's lifecycle history. The grant
+            -- replaces the policy, exactly as it does for `webhook_events` and
+            -- `tenant_signups` below, and `LifecycleEvent` is `system-only` in
+            -- `tenant-scope.extension.ts` so a tenant-side call names the cause
+            -- rather than failing with SQLSTATE 42501.
             --
-            -- The matching trigger, `lifecycle_audit_log_append_only`, closes the
+            -- Neither role gets UPDATE or DELETE — including SystemPrisma, which
+            -- is otherwise unrestricted by design. An audit trail of tenant
+            -- suspensions and purges that the platform itself can rewrite is a
+            -- record of what somebody was willing to leave behind, and
+            -- SystemPrisma is the credential a mistake would run under.
+            --
+            -- Withholding DELETE no longer has a cascade to worry about: ruling
+            -- 2 dropped both foreign keys, so nothing reaches these rows on the
+            -- way past. That is the point — the trail outlives the tenant it
+            -- describes, and a fixture teardown can no longer take it with it.
+            --
+            -- The matching trigger, `lifecycle_events_append_only`, closes the
             -- half these grants cannot: the table owner is bound by neither.
             EXECUTE format(
-                'GRANT SELECT, INSERT ON TABLE "public".%I TO "whatsappcrm_system", "whatsappcrm_app"',
+                'GRANT SELECT, INSERT ON TABLE "public".%I TO "whatsappcrm_system"',
                 t.relname
             );
 
@@ -180,19 +191,15 @@ BEGIN
             -- backstop re-enqueues any row still holding NULL a minute after it
             -- was written, so something has to be able to settle it.
             --
-            -- Three properties are kept by making it this narrow:
+            -- Two properties are kept by making it this narrow:
             --
-            --   * Table-level UPDATE stays withheld from both roles, so
+            --   * Table-level UPDATE stays withheld, so
             --     `has_table_privilege(..., 'UPDATE')` is still false and every
             --     other column is still unwritable after the insert.
-            --   * `whatsappcrm_app` does not get it. The sweep and the mailer
-            --     are cross-tenant workers with no request context, so they run
-            --     on SystemPrisma; the tenant connection has no reason to stamp
-            --     a notification and no way to find the rows owing one.
-            --   * The `lifecycle_audit_log_append_only` trigger refuses the
-            --     stamp anyway unless every other column is byte-identical and
-            --     the old value was NULL. This grant chooses who may try; the
-            --     trigger decides what a try may contain.
+            --   * The `lifecycle_events_append_only` trigger refuses the stamp
+            --     anyway unless every other column is byte-identical and the old
+            --     value was NULL. This grant chooses who may try; the trigger
+            --     decides what a try may contain.
             --
             -- Skipped with a notice when the column is absent, so this file
             -- stays runnable against a database that has not had the follow-up
@@ -200,7 +207,7 @@ BEGIN
             IF EXISTS (
                 SELECT 1
                 FROM pg_attribute a
-                WHERE a.attrelid = 'public.lifecycle_audit_log'::regclass
+                WHERE a.attrelid = 'public.lifecycle_events'::regclass
                   AND a.attname = 'notified_at'
                   AND NOT a.attisdropped
             ) THEN
@@ -210,7 +217,7 @@ BEGIN
                 );
             ELSE
                 RAISE NOTICE
-                    'lifecycle_audit_log.notified_at is not present; re-run this file after applying migrations';
+                    'lifecycle_events.notified_at is not present; re-run this file after applying migrations';
             END IF;
 
             CONTINUE;

@@ -28,7 +28,7 @@ const TENANT_NOT_ACTIVE_MARKER = 'TENANT_NOT_ACTIVE';
  *
  * Anything absent from this map is `tenant-scoped`: it carries a non-null
  * `tenant_id`, RLS filters it, and the extension needs to do nothing beyond
- * setting the GUC. The four entries are the tables deliberately left without a
+ * setting the GUC. The five entries are the tables deliberately left without a
  * policy, which is exactly why they need one here instead.
  */
 const MODEL_POLICIES = {
@@ -62,6 +62,22 @@ const MODEL_POLICIES = {
    * three frames deeper. It runs on `SystemPrisma`.
    */
   TenantSignup: 'system-only',
+  /**
+   * The tenant lifecycle trail (ADR 0009 decision 5, confirmed by Amendment 1
+   * ruling 2). Unlike the two above it *does* carry `tenant_id` — and carries it
+   * as a recorded identifier with no foreign key and no `tenant_isolation`
+   * policy, because the trail outlives the tenant it describes and the composite
+   * key to `users` made the purge impossible to finish.
+   *
+   * That combination is why this entry matters more than the others: the table
+   * looks tenant-scoped to every tool that reads the catalog, and nothing about
+   * its shape would stop a tenant-side read returning every tenant's history.
+   * What stops it is that the app role is granted nothing on it at all, and this
+   * rule, which turns the resulting SQLSTATE 42501 into a message naming the
+   * cause. The tenant-facing event list is an unscoped read through
+   * `SystemPrisma`, confined to one repository method that takes a `tenantId`.
+   */
+  LifecycleEvent: 'system-only',
 } as const satisfies Partial<Record<Prisma.ModelName, string>>;
 
 /**
