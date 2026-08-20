@@ -1,6 +1,13 @@
-import { AI_CONFIG_DEFAULTS } from '@whatsappcrm/contracts';
+import { AI_CONFIG_DEFAULTS, type BotInboundTrigger } from '@whatsappcrm/contracts';
+import type { ConfigService } from '@nestjs/config';
+import type { PlanFeaturesService } from '../entitlements/plan-features.service';
+import type { TenantPrisma } from '../prisma/prisma.tokens';
 import type { AiSettings } from './ai-config.service';
-import { decideEligibility, type BotGateSnapshot } from './bot-eligibility.service';
+import {
+  BotEligibilityService,
+  decideEligibility,
+  type BotGateSnapshot,
+} from './bot-eligibility.service';
 
 /**
  * The gate, which is where TAR-28's third acceptance criterion is actually
@@ -225,5 +232,118 @@ describe('decideEligibility', () => {
         'handoff',
       );
     });
+  });
+});
+
+/**
+ * The one part of the gate that is not a pure function: what `snapshot()`
+ * actually reads.
+ *
+ * Worth its own tests because the two inputs the engagement rules stand on —
+ * `bot_engaged_at` and the reply count — have to describe the *same* span of
+ * time, and nothing in the type system says so.
+ */
+describe('BotEligibilityService.snapshot', () => {
+  const CONVERSATION = '70444444-4444-7444-8444-4444444444c1';
+  const ENGAGED_AT = new Date('2026-08-20T09:00:00.000Z');
+
+  const TRIGGER = {
+    tenantId: '70444444-4444-7444-8444-444444444401',
+    conversationId: CONVERSATION,
+    contactId: '70444444-4444-7444-8444-4444444444d1',
+    messageId: '70444444-4444-7444-8444-4444444444e0',
+    ticketId: null,
+    receivedAt: '2026-08-20T10:00:00.000Z',
+  } satisfies BotInboundTrigger;
+
+  function build(botEngagedAt: Date | null, repliesSinceEngagement = 0) {
+    const count = jest.fn(() => Promise.resolve(repliesSinceEngagement));
+
+    const prisma = {
+      aiConfig: { findFirst: jest.fn(() => Promise.resolve(null)) },
+      message: {
+        findUnique: jest.fn(() => Promise.resolve({ direction: 'inbound', body: 'hi' })),
+      },
+      conversation: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            botState: 'off',
+            botEngagedAt,
+            serviceWindowExpiresAt: new Date('2026-08-20T20:00:00.000Z'),
+            contact: { optedOutAt: null },
+          }),
+        ),
+      },
+      knowledgeDocument: { findFirst: jest.fn(() => Promise.resolve({ id: 'doc' })) },
+      knowledgeChunk: { findFirst: jest.fn(() => Promise.resolve({ id: 'chunk' })) },
+      botTurn: { count },
+    } as unknown as TenantPrisma;
+
+    const service = new BotEligibilityService(
+      prisma,
+      { get: () => 'sk-test' } as unknown as ConfigService,
+      { includes: () => Promise.resolve(true) } as unknown as PlanFeaturesService,
+    );
+
+    return { service, count };
+  }
+
+  it('counts no replies at all for a conversation with no engagement running', async () => {
+    // The returning customer, and the bug this closes: their old turns are still
+    // in `bot_turns` — they are the tuning record and are never deleted — but
+    // `bot_engaged_at` was cleared when the conversation was resolved. Counting
+    // the lifetime made the gate believe the bot had spoken, so a greeting that
+    // missed the knowledge base handed off terminally and the real question that
+    // followed was refused as `already_released`.
+    const { service, count } = build(null, 7);
+
+    const snapshot = await service.snapshot(TRIGGER, new Date('2026-08-20T10:00:00.000Z'));
+
+    expect(snapshot.botReplyCount).toBe(0);
+    // And no query worth making, on the commonest path there is.
+    expect(count).not.toHaveBeenCalled();
+  });
+
+  it('counts only the replies inside the engagement that is running', async () => {
+    const { service, count } = build(ENGAGED_AT, 2);
+
+    const snapshot = await service.snapshot(TRIGGER, new Date('2026-08-20T10:00:00.000Z'));
+
+    // Two after the stamp, plus the one that wrote it.
+    expect(snapshot.botReplyCount).toBe(3);
+    expect(count).toHaveBeenCalledWith({
+      where: {
+        conversationId: CONVERSATION,
+        outcome: 'replied',
+        createdAt: { gte: ENGAGED_AT },
+      },
+    });
+  });
+
+  it('counts the reply that started the engagement, which predates its own stamp', async () => {
+    // A turn is claimed before the model is called and `bot_engaged_at` is
+    // stamped in the transaction that sends the reply, so the first reply of an
+    // engagement always has a `created_at` earlier than the stamp it wrote.
+    // Without counting it, the turn cap fires one reply late.
+    const { service } = build(ENGAGED_AT, 0);
+
+    const snapshot = await service.snapshot(TRIGGER, new Date('2026-08-20T10:00:00.000Z'));
+
+    expect(snapshot.botReplyCount).toBe(1);
+  });
+
+  it('leaves a returning customer eligible, cap and all', async () => {
+    // The end-to-end shape of both defects: a contact the bot helped to the cap
+    // in a conversation since resolved asks something new.
+    const { service } = build(null, 99);
+
+    const snapshot = await service.snapshot(TRIGGER, new Date('2026-08-20T10:00:00.000Z'));
+
+    // Everything else held ready, so the only thing that could refuse this turn
+    // is the count — which, before the fix, was 99 and over any cap a tenant can
+    // set.
+    expect(
+      decideEligibility({ ...snapshot, settings: settings({ maxBotTurns: 5 }) }),
+    ).toMatchObject({ outcome: 'admit' });
   });
 });

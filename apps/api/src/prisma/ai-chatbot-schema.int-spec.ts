@@ -532,6 +532,74 @@ describe('AI chatbot schema', () => {
       expect(turn.citedChunkIds).toEqual([]);
     });
 
+    it('keeps its turns when the engagement stamp is cleared, which is why the gate scopes its count', async () => {
+      // The premise both engagement rules rest on, proved with rows rather than
+      // assumed: resolving a conversation clears `bot_engaged_at` (0010 decision
+      // 5, `ConversationCommandService.setStatus`) but never deletes a
+      // `bot_turns` row — they are the tuning record.
+      //
+      // So a lifetime count and the stamp describe different spans of time, and
+      // a returning customer has a null stamp beside a non-zero count. Reading
+      // that as "the bot has spoken" is what made an opening greeting hand off
+      // terminally, and what kept `max_turns` tripped for ever on a contact who
+      // reached the cap in a conversation long since resolved.
+      // Dated past every other row in this file, which is written at `now()`, so
+      // the window below contains this case's two turns and nothing a sibling
+      // test happened to leave on the same conversation.
+      const engagedAt = new Date('2099-01-01T09:00:00.000Z');
+
+      // `bot_active` with it: `conversations_bot_engaged_at_requires_engagement`
+      // refuses a stamp on an `off` conversation, which is the database saying
+      // the same thing this fix does — the pair moves together.
+      await systemPrisma.conversation.update({
+        where: { tenantId_id: { tenantId: TENANT, id: CONVERSATION } },
+        data: { botState: 'bot_active', botEngagedAt: engagedAt },
+      });
+
+      for (const createdAt of [new Date('2099-01-01T08:59:59.000Z'), engagedAt]) {
+        await systemPrisma.botTurn.create({
+          data: {
+            tenantId: TENANT,
+            conversationId: CONVERSATION,
+            inboundMessageId: await insertLegacyMessage('inbound', null),
+            outcome: 'replied',
+            createdAt,
+          },
+        });
+      }
+
+      const scoped = {
+        conversationId: CONVERSATION,
+        outcome: 'replied',
+        createdAt: { gte: engagedAt },
+      } as const;
+
+      // One of the two is inside the window. The other is the reply that started
+      // the engagement — claimed before the model was called, so its `created_at`
+      // precedes the stamp it went on to write, which is exactly why the gate
+      // counts it separately rather than matching it.
+      expect(await systemPrisma.botTurn.count({ where: scoped })).toBe(1);
+
+      await systemPrisma.conversation.update({
+        where: { tenantId_id: { tenantId: TENANT, id: CONVERSATION } },
+        data: { botState: 'off', botEngagedAt: null },
+      });
+
+      const after = only(
+        await systemPrisma.conversation.findMany({
+          where: { id: CONVERSATION },
+          select: { botEngagedAt: true },
+        }),
+      );
+
+      expect(after.botEngagedAt).toBeNull();
+      expect(
+        await systemPrisma.botTurn.count({
+          where: { conversationId: CONVERSATION, outcome: 'replied' },
+        }),
+      ).toBeGreaterThanOrEqual(2);
+    });
+
     it('accepts a scored turn that ends as a suppression, with no handoff reason', async () => {
       // The shape `BotTurnService.suppressUnanswered` writes when the bot could
       // not answer and had never spoken: the claim is corrected from

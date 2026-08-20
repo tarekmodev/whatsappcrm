@@ -52,7 +52,7 @@ export class BotEligibilityService {
    * reads is a scan nobody needs.
    */
   async snapshot(trigger: BotInboundTrigger, now: Date): Promise<BotGateSnapshot> {
-    const [config, message, conversation, indexedDocument, chunk, replies] = await Promise.all([
+    const [config, message, conversation, indexedDocument, chunk] = await Promise.all([
       this.prisma.aiConfig.findFirst({ select: CONFIG_PROJECTION }),
       this.prisma.message.findUnique({
         where: { id: trigger.messageId },
@@ -76,9 +76,6 @@ export class BotEligibilityService {
         select: { id: true },
       }),
       this.prisma.knowledgeChunk.findFirst({ select: { id: true } }),
-      this.prisma.botTurn.count({
-        where: { conversationId: trigger.conversationId, outcome: BotTurnOutcome.replied },
-      }),
     ]);
 
     return {
@@ -100,8 +97,70 @@ export class BotEligibilityService {
       // the opt-out clause is reached, so `false` here is never the answer to
       // "may we message them" — it is "there is nobody to ask about".
       optedOut: conversation !== null && conversation.contact.optedOutAt !== null,
-      botReplyCount: replies,
+      botReplyCount: await this.countRepliesThisEngagement(
+        trigger.conversationId,
+        conversation?.botEngagedAt ?? null,
+      ),
     };
+  }
+
+  /**
+   * Replies the bot has made **in the engagement that is running now**, not in
+   * the conversation's whole history.
+   *
+   * The distinction is the whole point. `bot_engaged_at` is cleared when a
+   * conversation is resolved or closed (0010 decision 5, `setStatus`), but
+   * `bot_turns` rows are never deleted — they are the tuning record. Counting
+   * them over the conversation's lifetime made the two inputs to the gate mean
+   * different spans of time, and both consumers got it wrong for a returning
+   * customer:
+   *
+   *   * `hasNeverEngaged` saw a null stamp beside a non-zero count and concluded
+   *     the bot *had* spoken, so an opening greeting that missed the knowledge
+   *     base became a terminal handoff again — and the customer's real question,
+   *     one message later, was refused as `already_released`. Precisely the AC1
+   *     defect the narrowing exists to fix, returning by the back door.
+   *   * `max_turns` compared a lifetime total against a per-conversation cap, so
+   *     a contact who had crossed the cap across several separate, long-resolved
+   *     engagements was handed off on every first message for ever — the exact
+   *     opposite of the reset decision 5 promises.
+   *
+   * Scoped, both inputs describe the same span and the two agree by
+   * construction.
+   *
+   * ## The `+ 1`, which is not a fudge
+   *
+   * A turn is claimed on `bot_turns` **before** the model is called, and
+   * `bot_engaged_at` is stamped later, in the transaction that sends the reply.
+   * So the very reply that starts an engagement always has a `created_at`
+   * strictly earlier than the stamp it wrote, and `gte` cannot see it. Every
+   * later reply in that engagement is created after the stamp and is counted
+   * normally.
+   *
+   * A non-null `bot_engaged_at` therefore means exactly one thing — one reply
+   * started this engagement — and it is counted here rather than matched by the
+   * predicate. Without it the cap fires one reply late.
+   */
+  private async countRepliesThisEngagement(
+    conversationId: string,
+    botEngagedAt: Date | null,
+  ): Promise<number> {
+    if (botEngagedAt === null) {
+      // No engagement is running, so there is nothing to count and no query
+      // worth making — the common case, on every conversation the bot has not
+      // yet answered in.
+      return 0;
+    }
+
+    const since = await this.prisma.botTurn.count({
+      where: {
+        conversationId,
+        outcome: BotTurnOutcome.replied,
+        createdAt: { gte: botEngagedAt },
+      },
+    });
+
+    return since + 1;
   }
 
   /** Presence only — the value itself is `ClaudeClient`'s alone. */
@@ -142,7 +201,12 @@ export interface BotGateSnapshot {
    * person rather than about configuration.
    */
   readonly optedOut: boolean;
-  /** Replies the bot has already made in this conversation. */
+  /**
+   * Replies the bot has already made **in the engagement that is running now**
+   * — not over the conversation's lifetime. A resolved conversation starts the
+   * count again, because `bot_engaged_at` starts again with it. See
+   * `countRepliesThisEngagement`.
+   */
   readonly botReplyCount: number;
 }
 
@@ -274,6 +338,11 @@ export function decideEligibility(snapshot: BotGateSnapshot): BotGateDecision {
   // The loop-breaker for a bot and a customer talking past each other. A handoff
   // rather than a suppression: the customer is mid-conversation and silence
   // would strand them.
+  //
+  // Counted per engagement, never per lifetime: the cap is "how long may one
+  // exchange go on", and a contact who crossed it in a conversation resolved
+  // last month must start again — otherwise decision 5's reset on close means
+  // nothing and the bot is disabled for them for ever.
   if (snapshot.botReplyCount >= snapshot.settings.maxBotTurns) {
     return { outcome: 'handoff', reason: 'max_turns' };
   }

@@ -684,12 +684,18 @@ const SUPPRESSED_WHEN_UNENGAGED = new Set<HandoffReason>(['no_match', 'low_confi
 /**
  * Has the bot ever spoken in this conversation?
  *
- * Both columns, not either: `bot_engaged_at` is stamped in the same transaction
- * as the first reply and `bot_reply_count` counts replied turns, so they agree —
- * and reading both means a future path that moves one without the other cannot
- * quietly re-open a terminal handoff. `handoff_events` already carries the pair,
- * which is the tell that "was the bot actually engaged" was always the
- * load-bearing distinction.
+ * **In this engagement**, which is the only reading that is safe. Both inputs
+ * are scoped to the window `bot_engaged_at` opens — see
+ * `BotEligibilityService.countRepliesThisEngagement` — so they agree by
+ * construction. They did not always: counting replied turns over the
+ * conversation's lifetime left a returning customer with a null stamp beside a
+ * non-zero count, and this function read that as "the bot has spoken" for a
+ * conversation the bot had not spoken in since it was resolved.
+ *
+ * Both columns are still read rather than either, so a future path that moves
+ * one without the other cannot quietly re-open a terminal handoff.
+ * `handoff_events` already carries the pair, which is the tell that "was the bot
+ * actually engaged" was always the load-bearing distinction.
  */
 function hasNeverEngaged(snapshot: BotGateSnapshot): boolean {
   return (snapshot.conversation?.botEngagedAt ?? null) === null && snapshot.botReplyCount === 0;
