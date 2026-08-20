@@ -3,6 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import {
+  AdminTenantLifecycleResponseSchema,
   ApiErrorSchema,
   DeactivatedTenantResponseSchema,
   ProvisionedTenantResponseSchema,
@@ -13,6 +14,10 @@ import { ApiExceptionFilter } from '../../common/errors/api-exception.filter';
 import { REQUEST_ID_HEADER } from '../../common/tenant-context/request-id';
 import { TenantContextMiddleware } from '../../common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from '../../common/tenant-context/tenant-context.module';
+import { AdminTenantLifecycleService } from '../lifecycle/admin-tenant-lifecycle.service';
+import { LifecycleEventsRepository } from '../lifecycle/lifecycle-events.repository';
+import { InvalidTenantTransitionError } from '../lifecycle/tenant-lifecycle.errors';
+import type { TenantLifecycleState } from '../lifecycle/tenant-lifecycle.service';
 import { TenantNotFoundError } from '../tenant-deactivation.errors';
 import {
   TenantDeactivationService,
@@ -63,15 +68,38 @@ const DEACTIVATED: DeactivateTenantResult = {
   },
 };
 
+/** What the lifecycle engine hands back for the three operator writes. */
+const LIFECYCLE_STATE: TenantLifecycleState = {
+  id: TENANT_ID,
+  slug: 'acme',
+  name: 'Acme Ltd',
+  status: 'active',
+  trialEndsAt: null,
+  gracePeriodEndsAt: null,
+  suspendedAt: new Date('2026-08-10T10:00:00.000Z'),
+  cancelledAt: null,
+  purgeAt: null,
+  purgeStartedAt: null,
+  deletedAt: null,
+};
+
 describe('the platform-admin tenant routes', () => {
   let app: INestApplication;
   let server: Server;
   let provision: jest.Mock;
   let deactivate: jest.Mock;
+  let transitionBySlug: jest.Mock;
+  let bySlug: jest.Mock;
+  let expedite: jest.Mock;
+  let forOperator: jest.Mock;
 
   beforeAll(async () => {
     provision = jest.fn();
     deactivate = jest.fn();
+    transitionBySlug = jest.fn();
+    bySlug = jest.fn();
+    expedite = jest.fn();
+    forOperator = jest.fn();
 
     const moduleRef = await Test.createTestingModule({
       imports: [TenantContextModule],
@@ -81,6 +109,11 @@ describe('the platform-admin tenant routes', () => {
         ApiExceptionFilter,
         { provide: TenantProvisioningService, useValue: { provision } },
         { provide: TenantDeactivationService, useValue: { deactivate } },
+        {
+          provide: AdminTenantLifecycleService,
+          useValue: { transitionBySlug, bySlug, expedite },
+        },
+        { provide: LifecycleEventsRepository, useValue: { forOperator } },
         {
           provide: ConfigService,
           // Keyed rather than a blanket return: `configureApp` reads
@@ -112,6 +145,10 @@ describe('the platform-admin tenant routes', () => {
   beforeEach(() => {
     provision.mockReset().mockResolvedValue(PROVISIONED);
     deactivate.mockReset().mockResolvedValue(DEACTIVATED);
+    transitionBySlug.mockReset().mockResolvedValue(LIFECYCLE_STATE);
+    bySlug.mockReset().mockResolvedValue(LIFECYCLE_STATE);
+    expedite.mockReset().mockResolvedValue({ ...LIFECYCLE_STATE, status: 'suspended' });
+    forOperator.mockReset().mockResolvedValue({ items: [], nextCursor: null });
   });
 
   describe('POST /api/v1/admin/tenants', () => {
@@ -280,6 +317,97 @@ describe('the platform-admin tenant routes', () => {
 
       expect(ApiErrorSchema.parse(response.body).error.code).toBe('unauthenticated');
       expect(deactivate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the operator lifecycle routes (TAR-404)', () => {
+    function post(path: string, body: object = {}) {
+      return request(server)
+        .post(`/api/v1/admin/tenants/acme/${path}`)
+        .set('authorization', `Bearer ${TOKEN}`)
+        .send(body);
+    }
+
+    it('reactivates on operator_action, and reports every lifecycle instant', async () => {
+      const response = await post('reactivate').expect(200);
+
+      expect(transitionBySlug).toHaveBeenCalledWith('acme', 'active', undefined);
+      // Parsed against the published schema rather than eyeballed: the operator
+      // reads "when does this purge" off this body during an incident.
+      expect(AdminTenantLifecycleResponseSchema.parse(response.body).status).toBe('active');
+    });
+
+    it('cancels with the reason recorded for the trail', async () => {
+      await post('cancel', { reason: 'Fraud, chargeback OPS-88' }).expect(200);
+
+      expect(transitionBySlug).toHaveBeenCalledWith(
+        'acme',
+        'cancelled',
+        'Fraud, chargeback OPS-88',
+      );
+    });
+
+    it('schedules a deletion by cancelling, so the retention window still runs', async () => {
+      await post('delete').expect(200);
+
+      // Not `suspended`, and not a purge: the tenant goes through the same
+      // grace period a self-service deletion does, because TAR-36 asks for the
+      // window and an endpoint that destroyed data synchronously would have none.
+      expect(transitionBySlug).toHaveBeenCalledWith('acme', 'cancelled', undefined);
+      expect(expedite).not.toHaveBeenCalled();
+    });
+
+    it('forces a deletion by suspending and bringing the purge forward', async () => {
+      await post('delete', { force: true, reason: 'Erasure request' }).expect(200);
+
+      expect(transitionBySlug).toHaveBeenCalledWith('acme', 'suspended', 'Erasure request');
+      // One road to `deleted` and one clock on it: `force` moves the clock, and
+      // the purge still runs from the sweep through `TenantPurgeService`.
+      expect(expedite).toHaveBeenCalledWith(TENANT_ID);
+    });
+
+    it('reports an illegal transition as a conflict, not a fault', async () => {
+      transitionBySlug.mockRejectedValue(
+        new InvalidTenantTransitionError(
+          'deleted',
+          'active',
+          'operator_action',
+          'edge_not_allowed',
+        ),
+      );
+
+      const response = await post('reactivate').expect(409);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('conflict');
+    });
+
+    it('reports an unknown tenant as not found', async () => {
+      transitionBySlug.mockRejectedValue(new TenantNotFoundError('globex'));
+
+      const response = await post('reactivate').expect(404);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('not_found');
+    });
+
+    it('serves the trail with `reason`, which the tenant-facing twin withholds', async () => {
+      await request(server)
+        .get('/api/v1/admin/tenants/acme/lifecycle')
+        .set('authorization', `Bearer ${TOKEN}`)
+        .expect(200);
+
+      // The tenant id comes from the slug lookup, never from the query string:
+      // `lifecycle_events` has no row-level security policy to narrow this with.
+      expect(forOperator).toHaveBeenCalledWith(TENANT_ID, { limit: 25 });
+    });
+
+    it('refuses an unauthenticated caller on every one of them', async () => {
+      await request(server).post('/api/v1/admin/tenants/acme/reactivate').send({}).expect(401);
+      await request(server).post('/api/v1/admin/tenants/acme/cancel').send({}).expect(401);
+      await request(server).post('/api/v1/admin/tenants/acme/delete').send({}).expect(401);
+      await request(server).get('/api/v1/admin/tenants/acme/lifecycle').expect(401);
+
+      expect(transitionBySlug).not.toHaveBeenCalled();
+      expect(forOperator).not.toHaveBeenCalled();
     });
   });
 });

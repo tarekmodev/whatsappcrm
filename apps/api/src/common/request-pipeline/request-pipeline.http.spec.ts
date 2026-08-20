@@ -3,7 +3,12 @@ import { Controller, Get, Global, Logger, Module, type INestApplication } from '
 import { ConfigService } from '@nestjs/config';
 import { APP_FILTER } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
-import { ApiErrorSchema, permissionsForRole, type SessionPrincipal } from '@whatsappcrm/contracts';
+import {
+  ApiErrorSchema,
+  permissionsForRole,
+  type SessionPrincipal,
+  type TenantStatus,
+} from '@whatsappcrm/contracts';
 import request from 'supertest';
 import { configureApp } from '../../bootstrap';
 import { SYSTEM_PRISMA } from '../../prisma/prisma.tokens';
@@ -20,7 +25,7 @@ import { TenantContextMiddleware } from '../tenant-context/tenant-context.middle
 import { TenantContextModule } from '../tenant-context/tenant-context.module';
 import { TenantContextService } from '../tenant-context/tenant-context.service';
 import { RequestPipelineModule } from './request-pipeline.module';
-import { PlatformRoute, Public } from './route-access';
+import { AvailableWhileSuspended, PlatformRoute, Public } from './route-access';
 
 /**
  * TAR-58, end to end: the pipeline is installed globally, in the right order,
@@ -41,8 +46,14 @@ import { PlatformRoute, Public } from './route-access';
 
 const TENANT_A = '58111111-1111-7111-8111-111111111101';
 const TENANT_B = '58111111-1111-7111-8111-111111111102';
+/** Suspended throughout: the subject of stage 4 (TAR-36, ADR 0009 decision 2). */
+const TENANT_SUSPENDED = '58111111-1111-7111-8111-111111111103';
+/** Purged. `HostTenantGuard` answers `tenant_not_found` before stage 4 sees it. */
+const TENANT_DELETED = '58111111-1111-7111-8111-111111111104';
 const HOST_A = 'a.app.localhost';
 const HOST_B = 'b.app.localhost';
+const HOST_SUSPENDED = 'suspended.app.localhost';
+const HOST_DELETED = 'gone.app.localhost';
 const UNKNOWN_HOST = 'nobody.app.localhost';
 
 /**
@@ -82,7 +93,17 @@ const REPLAYED = {
 /** What the session cookie resolves to on the next request, set per test. */
 let resolution: PrincipalResolution = ANONYMOUS;
 
-const DOMAINS: Record<string, string> = { [HOST_A]: TENANT_A, [HOST_B]: TENANT_B };
+/**
+ * Hostname → the row `HostTenantGuard` reads, which since TAR-404 carries the
+ * tenant's lifecycle status: the guard publishes it for stage 4 rather than
+ * making stage 4 issue a second query per request.
+ */
+const DOMAINS: Record<string, { tenantId: string; tenant: { status: TenantStatus } }> = {
+  [HOST_A]: { tenantId: TENANT_A, tenant: { status: 'active' } },
+  [HOST_B]: { tenantId: TENANT_B, tenant: { status: 'active' } },
+  [HOST_SUSPENDED]: { tenantId: TENANT_SUSPENDED, tenant: { status: 'suspended' } },
+  [HOST_DELETED]: { tenantId: TENANT_DELETED, tenant: { status: 'deleted' } },
+};
 
 /**
  * `@Global()` so `RequestPipelineModule` — which imports nothing, exactly as it
@@ -97,7 +118,7 @@ const DOMAINS: Record<string, string> = { [HOST_A]: TENANT_A, [HOST_B]: TENANT_B
       useValue: {
         tenantDomain: {
           findFirst: ({ where }: { where: { hostname: string } }) =>
-            Promise.resolve(DOMAINS[where.hostname] ? { tenantId: DOMAINS[where.hostname] } : null),
+            Promise.resolve(DOMAINS[where.hostname] ?? null),
         },
       },
     },
@@ -202,6 +223,30 @@ class MixedPostureProbeController {
   }
 }
 
+/**
+ * Stage 4's two shapes: an ordinary route, and one on the recovery allowlist.
+ *
+ * The allowlisted route declares its permission exactly as the other does —
+ * `@AvailableWhileSuspended()` is not a posture and gives up nothing except
+ * `TenantStatusGuard`'s refusal, which is what makes `route-posture.spec.ts`
+ * still count exactly one posture on it.
+ */
+@Controller({ path: 'probe', version: '1' })
+class LifecycleProbeController {
+  @Get('while-suspended')
+  @AnyPrincipal()
+  @AvailableWhileSuspended()
+  recoverable(): { ok: true } {
+    return { ok: true };
+  }
+
+  @Get('ordinary')
+  @AnyPrincipal()
+  ordinary(): { ok: true } {
+    return { ok: true };
+  }
+}
+
 @Controller({ path: 'probe', version: '1' })
 @PlatformRoute()
 class PlatformProbeController {
@@ -233,6 +278,7 @@ describe('the globally installed request pipeline', () => {
         UndeclaredProbeController,
         PublicProbeController,
         MixedPostureProbeController,
+        LifecycleProbeController,
         PlatformProbeController,
       ],
       providers: [
@@ -559,6 +605,103 @@ describe('the globally installed request pipeline', () => {
       // route that reaches for tenant data fails closed rather than reading
       // whichever tenant happened to be resolved.
       expect(response.body).toEqual({ tenantId: null });
+    });
+  });
+
+  /**
+   * Stage 4, end to end (TAR-36, ADR 0009 decision 2).
+   *
+   * After Amendment 1 ruling 1 the database gate admits a suspended tenant, so
+   * `TenantStatusGuard` is the **only** thing between that tenant's agent and
+   * the API. These assertions are the ones that make the lockout real rather
+   * than inherited from a data layer that no longer refuses.
+   */
+  describe('stage 4 — the tenant’s lifecycle status', () => {
+    it('refuses an agent of a suspended tenant, whatever route they ask for', async () => {
+      resolution = resolved(principalIn(TENANT_SUSPENDED));
+
+      const response = await call(HOST_SUSPENDED).get('/api/v1/probe/ordinary');
+
+      expect(response.status).toBe(402);
+      expect(errorCodeOf(response)).toBe('subscription_inactive');
+    });
+
+    it('refuses an agent even on a route marked available while suspended', async () => {
+      // The decorator alone would open the route to every agent in the tenant,
+      // which is TAR-36's fourth acceptance criterion inverted. Both halves are
+      // required: the route says so, *and* the caller is an admin.
+      resolution = resolved(principalIn(TENANT_SUSPENDED));
+
+      const response = await call(HOST_SUSPENDED).get('/api/v1/probe/while-suspended');
+
+      expect(response.status).toBe(402);
+    });
+
+    it('lets an admin through on the recovery allowlist, so they can pay their way out', async () => {
+      resolution = resolved({ ...principalIn(TENANT_SUSPENDED), role: 'admin' });
+
+      const response = await call(HOST_SUSPENDED).get('/api/v1/probe/while-suspended');
+
+      expect(response.status).toBe(200);
+    });
+
+    it('refuses that same admin everywhere else, so a suspension is still a suspension', async () => {
+      resolution = resolved({ ...principalIn(TENANT_SUSPENDED), role: 'admin' });
+
+      const response = await call(HOST_SUSPENDED).get('/api/v1/probe/ordinary');
+
+      expect(response.status).toBe(402);
+      expect(errorCodeOf(response)).toBe('subscription_inactive');
+    });
+
+    it('leaves an active tenant alone', async () => {
+      resolution = resolved(principalIn(TENANT_A));
+
+      await call(HOST_A).get('/api/v1/probe/ordinary').expect(200);
+    });
+
+    it('answers tenant_not_found for a purged tenant, before stage 4 is reached', async () => {
+      // `deleted` never reaches the status guard: a tombstone must not be
+      // distinguishable from a hostname that never belonged to anybody, or the
+      // 402 itself confirms a tenant once existed here.
+      resolution = ANONYMOUS;
+
+      const response = await call(HOST_DELETED).get('/api/v1/probe/ordinary');
+
+      expect(response.status).toBe(404);
+      expect(errorCodeOf(response)).toBe('tenant_not_found');
+    });
+
+    it('runs after the principal is resolved, so an anonymous caller is still unauthenticated', async () => {
+      // Ordering: `unauthenticated` before `subscription_inactive`. Answering the
+      // lifecycle first would tell an unauthenticated caller the state of a
+      // tenant they have no session for.
+      resolution = ANONYMOUS;
+
+      const response = await call(HOST_SUSPENDED).get('/api/v1/probe/ordinary');
+
+      expect(response.status).toBe(401);
+      expect(errorCodeOf(response)).toBe('unauthenticated');
+    });
+
+    it('runs before the permission check, so the truer answer is the one returned', async () => {
+      // An agent of a suspended tenant asking for an admin-only route gets
+      // `subscription_inactive` rather than `forbidden`: their workspace being
+      // suspended is what they need to know, and it is what they can act on.
+      resolution = resolved(principalIn(TENANT_SUSPENDED));
+
+      const response = await call(HOST_SUSPENDED).get('/api/v1/probe/admin-only');
+
+      expect(errorCodeOf(response)).toBe('subscription_inactive');
+    });
+
+    it('does not run on a @Public() route, because login has to authenticate first', async () => {
+      // ADR 0009 decision 2: checking the status before a password is verified
+      // turns login into a role oracle. The lifecycle check for login lives in
+      // `AuthService`, after the principal is resolved.
+      resolution = ANONYMOUS;
+
+      await call(HOST_SUSPENDED).get('/api/v1/probe/public').expect(200);
     });
   });
 

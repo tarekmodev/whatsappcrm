@@ -1,12 +1,15 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
+  TENANT_STATUS_EFFECTS,
   UPLOADABLE_MEDIA_KINDS,
   type MediaKind,
   type SendTemplateHeader,
+  type TenantStatus,
   type UploadableMediaKind,
 } from '@whatsappcrm/contracts';
 import { describeFailure } from '../common/describe-failure';
+import { TenantOutboundNotAllowedError } from './conversations.errors';
 import {
   MESSAGE_STATUS_CHANGED_EVENT,
   type MessageStatusChangedEvent,
@@ -91,6 +94,17 @@ export class OutboundMessageDispatcher {
       return;
     }
 
+    const refusedBy = await this.statusRefusingOutbound();
+
+    if (refusedBy !== null) {
+      // Stage 4 cannot see this path: it is an HTTP guard and this is a queue
+      // worker. See `TenantOutboundNotAllowedError` for why the check lives here
+      // and why the message is failed rather than held.
+      await this.recordFailed(message, new TenantOutboundNotAllowedError(refusedBy));
+
+      return;
+    }
+
     try {
       const sent = await this.send(message, job.template);
 
@@ -104,6 +118,32 @@ export class OutboundMessageDispatcher {
 
       await this.recordFailed(message, error);
     }
+  }
+
+  /**
+   * The tenant's status when it forbids outbound traffic, or `null` when the
+   * send may proceed.
+   *
+   * Reads `TENANT_STATUS_EFFECTS` rather than restating which states are closed:
+   * that table is the published contract, `contract.test.ts` pins
+   * `suspended.outboundAllowed === false`, and a second copy here is one that
+   * drifts from it. `past_due` deliberately still sends — dunning is a banner,
+   * not an outage.
+   *
+   * One indexed read on the tenant in scope, on a path that already makes
+   * several. `Tenant` is `own-row` in `tenant-scope.extension.ts`, so the query
+   * is narrowed to this worker's tenant by the extension rather than by a filter
+   * written here; a row that has gone missing reads as refused, which is the
+   * fail-closed direction for a send.
+   */
+  private async statusRefusingOutbound(): Promise<TenantStatus | null> {
+    const tenant = await this.prisma.tenant.findFirst({ select: { status: true } });
+
+    if (tenant === null) {
+      return 'deleted';
+    }
+
+    return TENANT_STATUS_EFFECTS[tenant.status].outboundAllowed ? null : tenant.status;
   }
 
   private async send(
@@ -295,6 +335,16 @@ function isWorthRetrying(error: unknown): boolean {
 function describeSendFailure(error: unknown): string {
   if (error instanceof MetaCloudApiError) {
     return error.detail?.message ?? error.message;
+  }
+
+  if (error instanceof TenantOutboundNotAllowedError) {
+    // The second error whose own message is safe to publish, and for the same
+    // reason Meta's is: it is a sentence written for the agent reading it, with
+    // no path, no id and no internal name in it. Without this branch
+    // `describeFailure` would reduce it to the class name, and
+    // `MessageResponse.failureReason` would read "TenantOutboundNotAllowedError"
+    // — which tells the one person who has to act on it nothing at all.
+    return error.message;
   }
 
   return describeFailure(error);

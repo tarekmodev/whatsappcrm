@@ -17,6 +17,7 @@ import type { Reflector } from '@nestjs/core';
 export const PUBLIC_ROUTE = 'pipeline:public-route';
 export const PLATFORM_ROUTE = 'pipeline:platform-route';
 export const PUBLIC_PLATFORM_ROUTE = 'pipeline:public-platform-route';
+export const AVAILABLE_WHILE_SUSPENDED = 'pipeline:available-while-suspended';
 
 /**
  * No session required — but still inside a tenant.
@@ -72,8 +73,39 @@ export const PlatformRoute = (): CustomDecorator<string> => SetMetadata(PLATFORM
 export const PublicPlatformRoute = (): CustomDecorator<string> =>
   SetMetadata(PUBLIC_PLATFORM_ROUTE, true);
 
+/**
+ * The recovery allowlist: a route an **admin** may still reach while their
+ * tenant is `suspended` or `cancelled` (ADR 0009 decision 2).
+ *
+ * It is a fourth thing a route can say, not a fourth posture — a route wearing
+ * it still declares one of the three above, and `route-posture.spec.ts` still
+ * counts exactly one. What it gives up is narrower: not authentication, not
+ * tenant resolution, only `TenantStatusGuard`'s refusal at pipeline stage 4.
+ *
+ * A decorator rather than a path list inside the guard, and that is the whole
+ * argument for the shape: a path list is a place a wildcard eventually opens
+ * something nobody meant, and it is invisible from the route it opens. This is
+ * visible in the diff, on the handler, next to the permission it already
+ * declares.
+ *
+ * ⚠️ **It never opens a route to an agent or a supervisor.** The exemption is
+ * conditional on the caller holding `admin`, because TAR-36's fourth acceptance
+ * criterion is that a suspended tenant's agents cannot get in at all. A route
+ * marked with this is reachable by exactly one role, and only so a suspended
+ * tenant is not a tenant that cannot pay its way out.
+ */
+export const AvailableWhileSuspended = (): CustomDecorator<string> =>
+  SetMetadata(AVAILABLE_WHILE_SUSPENDED, true);
+
 export function isPublicRoute(reflector: Reflector, context: ExecutionContext): boolean {
   return readFlag(reflector, context, PUBLIC_ROUTE);
+}
+
+export function isAvailableWhileSuspended(
+  reflector: Reflector,
+  context: ExecutionContext,
+): boolean {
+  return readFlag(reflector, context, AVAILABLE_WHILE_SUSPENDED);
 }
 
 /**

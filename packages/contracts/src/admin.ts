@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { IanaTimezoneSchema, IdSchema, LocaleSchema, TimestampSchema } from './common';
-import { TenantNameSchema, TenantSlugSchema, TenantStatusSchema } from './tenant';
+import {
+  TenantLifecycleEventSchema,
+  TenantNameSchema,
+  TenantSlugSchema,
+  TenantStatusSchema,
+} from './tenant';
 
 /**
  * The **platform-admin** surface: operations performed by us on the platform,
@@ -123,6 +128,86 @@ export const DeactivatedTenantResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Operator lifecycle — TAR-36 / TAR-404 (ADR 0009, endpoint surface)
+// ---------------------------------------------------------------------------
+
+/**
+ * The slug on the four operator lifecycle routes —
+ * `POST /admin/tenants/{slug}/reactivate`, `/cancel`, `/delete`, and
+ * `GET /admin/tenants/{slug}/lifecycle`.
+ *
+ * The same shape `DeactivateTenantParamsSchema` publishes for the same reason;
+ * kept separate rather than aliased so renaming a route's parameter later is one
+ * edit rather than a shared type two surfaces had grown to depend on.
+ */
+export const AdminTenantParamsSchema = z.object({
+  slug: TenantSlugSchema,
+});
+
+/** Free text for the trail. Never rendered to the tenant. */
+export const AdminTenantCancelInputSchema = z.object({
+  reason: z.string().min(1).max(500).optional(),
+});
+
+/**
+ * `POST /api/v1/admin/tenants/{slug}/delete`.
+ *
+ * Like its tenant-facing twin it **schedules**: the tenant is cancelled with a
+ * grace period, reaches `suspended`, and only then is purged when `purge_at`
+ * elapses. TAR-36's criterion is "when the retention window elapses, then tenant
+ * data is permanently deleted", and an endpoint that destroyed data
+ * synchronously would have no window.
+ *
+ * `force` is the one way to skip the windows, and it exists for a
+ * right-to-erasure request that cannot wait 44 days. It goes straight to
+ * `suspended` with `purge_at` set to now, so the very next sweep purges — and it
+ * is audited with `trigger: operator_action` like everything else here.
+ */
+export const AdminTenantDeleteInputSchema = z.object({
+  force: z.boolean().default(false),
+  reason: z.string().min(1).max(500).optional(),
+});
+
+/**
+ * What the three operator lifecycle actions report.
+ *
+ * Deliberately not `TenantLifecycleResponse`: that one carries the plan and the
+ * seat usage a console renders, which an operator acting on an incident does not
+ * need and which would make the response depend on `tenant_entitlements` being
+ * populated. This is the tenant's identity plus every lifecycle instant, which
+ * is what an operator has to be able to read back — "when does this purge" is
+ * the question the route is answered with.
+ */
+export const AdminTenantLifecycleResponseSchema = z.object({
+  id: IdSchema,
+  slug: TenantSlugSchema,
+  name: TenantNameSchema,
+  status: TenantStatusSchema,
+  trialEndsAt: TimestampSchema.nullable(),
+  /** When a `past_due` or `cancelled` tenant becomes `suspended`. */
+  gracePeriodEndsAt: TimestampSchema.nullable(),
+  suspendedAt: TimestampSchema.nullable(),
+  cancelledAt: TimestampSchema.nullable(),
+  /** When a `suspended` tenant's data is destroyed. */
+  purgeAt: TimestampSchema.nullable(),
+  deletedAt: TimestampSchema.nullable(),
+});
+
+/**
+ * One lifecycle row as the **operator** sees it: `TenantLifecycleEvent` plus
+ * `reason`.
+ *
+ * `reason` is where an operator writes "fraud, card chargeback". ADR 0009's
+ * security section says that is not a sentence to show a customer, so the
+ * tenant-facing schema omits the field and this one carries it. Two schemas
+ * rather than one optional field, because an optional field is one a handler can
+ * populate on the wrong route.
+ */
+export const AdminTenantLifecycleEventSchema = TenantLifecycleEventSchema.extend({
+  reason: z.string().nullable(),
+});
+
+// ---------------------------------------------------------------------------
 // Custom-domain activation — TAR-29 / TAR-419
 // ---------------------------------------------------------------------------
 
@@ -185,3 +270,8 @@ export type ProvisionedTenantResponse = z.infer<typeof ProvisionedTenantResponse
 export type DeactivateTenantParams = z.infer<typeof DeactivateTenantParamsSchema>;
 export type DeactivateTenantInput = z.infer<typeof DeactivateTenantInputSchema>;
 export type DeactivatedTenantResponse = z.infer<typeof DeactivatedTenantResponseSchema>;
+export type AdminTenantParams = z.infer<typeof AdminTenantParamsSchema>;
+export type AdminTenantCancelInput = z.infer<typeof AdminTenantCancelInputSchema>;
+export type AdminTenantDeleteInput = z.infer<typeof AdminTenantDeleteInputSchema>;
+export type AdminTenantLifecycleResponse = z.infer<typeof AdminTenantLifecycleResponseSchema>;
+export type AdminTenantLifecycleEvent = z.infer<typeof AdminTenantLifecycleEventSchema>;

@@ -1,18 +1,31 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
   Post,
+  Query,
   Res,
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
 import {
+  AdminTenantCancelInputSchema,
+  AdminTenantDeleteInputSchema,
+  AdminTenantParamsSchema,
+  CursorPageQuerySchema,
   DeactivateTenantInputSchema,
   DeactivateTenantParamsSchema,
   ProvisionTenantInputSchema,
+  type AdminTenantCancelInput,
+  type AdminTenantDeleteInput,
+  type AdminTenantLifecycleEvent,
+  type AdminTenantLifecycleResponse,
+  type AdminTenantParams,
+  type CursorPage,
+  type CursorPageQuery,
   type DeactivateTenantInput,
   type DeactivateTenantParams,
   type DeactivatedTenantResponse,
@@ -24,6 +37,10 @@ import { ApiExceptionFilter } from '../../common/errors/api-exception.filter';
 import { ApiException } from '../../common/errors/api.exception';
 import { PlatformRoute } from '../../common/request-pipeline/route-access';
 import { ZodValidationPipe } from '../../common/validation/zod-validation.pipe';
+import { AdminTenantLifecycleService } from '../lifecycle/admin-tenant-lifecycle.service';
+import { LifecycleEventsRepository } from '../lifecycle/lifecycle-events.repository';
+import { translateLifecycleFailure } from '../lifecycle/lifecycle.http';
+import type { TenantLifecycleState } from '../lifecycle/tenant-lifecycle.service';
 import { TenantNotFoundError } from '../tenant-deactivation.errors';
 import {
   TenantDeactivationService,
@@ -60,6 +77,8 @@ export class AdminTenantsController {
   constructor(
     private readonly provisioning: TenantProvisioningService,
     private readonly deactivation: TenantDeactivationService,
+    private readonly lifecycleAdmin: AdminTenantLifecycleService,
+    private readonly events: LifecycleEventsRepository,
   ) {}
 
   /**
@@ -119,6 +138,143 @@ export class AdminTenantsController {
 
     return toDeactivatedResponse(result);
   }
+
+  /**
+   * `POST /api/v1/admin/tenants/{slug}/reactivate` — deactivation's inverse
+   * (TAR-36, ADR 0009).
+   *
+   * The operator half of the way back. `suspended → active`, `past_due → active`
+   * and `cancelled → active` are all legal on `operator_action`, so this is the
+   * one route that can restore a tenant from any of the three states an
+   * automated timer put it in — which matters because reactivation at v1 is
+   * otherwise driven by a payment webhook nobody has wired yet.
+   *
+   * **No data is re-provisioned.** The tenant's rows were never deleted; what
+   * this changes is the status the two gates read, so access returns on the very
+   * next statement. That is TAR-36's third acceptance criterion, and it is a
+   * property of suspension having been a status change all along rather than
+   * anything this route does.
+   */
+  @Post(':slug/reactivate')
+  @HttpCode(HttpStatus.OK)
+  async reactivate(
+    @Param(new ZodValidationPipe(AdminTenantParamsSchema)) params: AdminTenantParams,
+  ): Promise<AdminTenantLifecycleResponse> {
+    return await this.operatorTransition(params.slug, 'active');
+  }
+
+  /**
+   * `POST /api/v1/admin/tenants/{slug}/cancel` — end a tenant's subscription on
+   * its behalf.
+   *
+   * The same edge the tenant's own admin reaches through `POST /tenant/cancel`,
+   * with `operator_action` on the trail instead of `user_action` and the
+   * operator's credential label naming who did it. `reason` is recorded and
+   * never rendered to the tenant.
+   */
+  @Post(':slug/cancel')
+  @HttpCode(HttpStatus.OK)
+  async cancel(
+    @Param(new ZodValidationPipe(AdminTenantParamsSchema)) params: AdminTenantParams,
+    @Body(new ZodValidationPipe(AdminTenantCancelInputSchema)) input: AdminTenantCancelInput,
+  ): Promise<AdminTenantLifecycleResponse> {
+    return await this.operatorTransition(params.slug, 'cancelled', input.reason);
+  }
+
+  /**
+   * `POST /api/v1/admin/tenants/{slug}/delete` — schedule a deletion, or force
+   * one.
+   *
+   * Without `force` it is the tenant-facing route's twin: cancel with a grace
+   * period, reach `suspended`, purge when the retention window elapses.
+   *
+   * With `force` it goes straight to `suspended` and moves `purge_at` to now, so
+   * the next sweep purges. That exists for a right-to-erasure request that
+   * cannot wait 44 days, and it is deliberately the **only** way to shorten the
+   * window: there is still one road to `deleted` and one clock on it, and this
+   * moves the clock rather than adding a second road. Both halves are audited
+   * with `trigger: operator_action` and the operator's credential label.
+   */
+  @Post(':slug/delete')
+  @HttpCode(HttpStatus.OK)
+  async remove(
+    @Param(new ZodValidationPipe(AdminTenantParamsSchema)) params: AdminTenantParams,
+    @Body(new ZodValidationPipe(AdminTenantDeleteInputSchema)) input: AdminTenantDeleteInput,
+  ): Promise<AdminTenantLifecycleResponse> {
+    if (!input.force) {
+      return await this.operatorTransition(params.slug, 'cancelled', input.reason);
+    }
+
+    const state = await this.operatorTransition(params.slug, 'suspended', input.reason);
+
+    return await this.lifecycleAdmin
+      .expedite(state.id)
+      .then(toAdminLifecycleResponse)
+      .catch((error: unknown) => translateLifecycleFailure(error));
+  }
+
+  /**
+   * `GET /api/v1/admin/tenants/{slug}/lifecycle` — the tenant's whole history,
+   * newest first, **including `reason`**.
+   *
+   * The operator's copy of `GET /tenant/lifecycle/events`. The difference is one
+   * column and it is the point of having two routes: `reason` is where an
+   * operator writes why they shut a tenant off, and 0009's security section says
+   * that is not a sentence to show a customer.
+   */
+  @Get(':slug/lifecycle')
+  async lifecycle(
+    @Param(new ZodValidationPipe(AdminTenantParamsSchema)) params: AdminTenantParams,
+    @Query(new ZodValidationPipe(CursorPageQuerySchema)) query: CursorPageQuery,
+  ): Promise<CursorPage<AdminTenantLifecycleEvent>> {
+    const tenant = await this.lifecycleAdmin
+      .bySlug(params.slug)
+      .catch((error: unknown) => translateLifecycleFailure(error));
+
+    return await this.events
+      .forOperator(tenant.id, query)
+      .catch((error: unknown) => translateLifecycleFailure(error));
+  }
+
+  /**
+   * The shape the three operator writes share.
+   *
+   * The slug is resolved to an id first, because `transition()` names a tenant
+   * by id — one identity for the state machine, whatever the caller had in front
+   * of them. The actor comes from the request scope through
+   * `AdminTenantLifecycleService`, so the credential label on the trail is the
+   * one `PlatformAdminGuard` authenticated and not one a handler assembled.
+   */
+  private async operatorTransition(
+    slug: string,
+    to: 'active' | 'cancelled' | 'suspended',
+    reason?: string,
+  ): Promise<AdminTenantLifecycleResponse> {
+    return await this.lifecycleAdmin
+      .transitionBySlug(slug, to, reason)
+      .then(toAdminLifecycleResponse)
+      .catch((error: unknown) => translateLifecycleFailure(error));
+  }
+}
+
+/**
+ * Maps the lifecycle state onto the published operator response. Explicit rather
+ * than spread, so adding a column to the projection cannot quietly add a field
+ * to the API.
+ */
+function toAdminLifecycleResponse(state: TenantLifecycleState): AdminTenantLifecycleResponse {
+  return {
+    id: state.id,
+    slug: state.slug,
+    name: state.name,
+    status: state.status,
+    trialEndsAt: state.trialEndsAt?.toISOString() ?? null,
+    gracePeriodEndsAt: state.gracePeriodEndsAt?.toISOString() ?? null,
+    suspendedAt: state.suspendedAt?.toISOString() ?? null,
+    cancelledAt: state.cancelledAt?.toISOString() ?? null,
+    purgeAt: state.purgeAt?.toISOString() ?? null,
+    deletedAt: state.deletedAt?.toISOString() ?? null,
+  };
 }
 
 function translateProvisioningFailure(error: unknown): never {

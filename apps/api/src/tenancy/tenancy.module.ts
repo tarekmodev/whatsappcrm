@@ -1,7 +1,16 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
+import { EntitlementsModule } from '../entitlements/entitlements.module';
 import { MediaStorageModule } from '../media/storage/media-storage.module';
+import { AdminTenantLifecycleService } from './lifecycle/admin-tenant-lifecycle.service';
+import { LifecycleEventsRepository } from './lifecycle/lifecycle-events.repository';
+import { TenantLifecycleController } from './lifecycle/tenant-lifecycle.controller';
+import { TenantLifecycleNotifier } from './lifecycle/tenant-lifecycle.notifier';
+import { TenantLifecycleReader } from './lifecycle/tenant-lifecycle.reader';
+import { TenantLifecycleService } from './lifecycle/tenant-lifecycle.service';
+import { TenantLifecycleSweeper } from './lifecycle/tenant-lifecycle.sweeper';
+import { TenantPurgeService } from './lifecycle/tenant-purge.service';
 import { AdminDomainsController } from './admin/admin-domains.controller';
 import { AdminDomainsService } from './admin/admin-domains.service';
 import { AdminTenantScopeService } from './admin/admin-tenant-scope.service';
@@ -47,9 +56,10 @@ import { TenantProvisioningService } from './tenant-provisioning.service';
  * `QueueService` all come from global modules and are not imported here.
  */
 @Module({
-  imports: [MediaStorageModule],
+  imports: [MediaStorageModule, EntitlementsModule],
   controllers: [
     TenantController,
+    TenantLifecycleController,
     TenantDomainsController,
     AdminTenantsController,
     AdminDomainsController,
@@ -63,6 +73,13 @@ import { TenantProvisioningService } from './tenant-provisioning.service';
     DomainOwnershipChecker,
     DomainVerificationSweeper,
     TenancyQueueRunner,
+    TenantLifecycleService,
+    TenantLifecycleReader,
+    TenantLifecycleNotifier,
+    TenantLifecycleSweeper,
+    TenantPurgeService,
+    LifecycleEventsRepository,
+    AdminTenantLifecycleService,
     AdminTenantScopeService,
     AdminDomainsService,
     PlatformAdminGuard,
@@ -77,6 +94,16 @@ import { TenantProvisioningService } from './tenant-provisioning.service';
         new NodeDnsChallengeResolver(config.getOrThrow<number>('DOMAIN_VERIFICATION_TIMEOUT_MS')),
     },
   ],
-  exports: [TenantProvisioningService, TenantDeactivationService, AdminTenantScopeService],
+  exports: [
+    TenantProvisioningService,
+    TenantDeactivationService,
+    AdminTenantScopeService,
+    // TAR-37's billing adapter drives `applyBillingEvent` from its webhook
+    // consumer, which is the seam that keeps a provider out of lifecycle logic.
+    // Exported now, with no consumer, because the alternative when that story
+    // lands is a module edit inside a story that should only be adding an
+    // adapter.
+    TenantLifecycleService,
+  ],
 })
 export class TenancyModule {}

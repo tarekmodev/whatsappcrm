@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Injectable } from '@nestjs/common';
-import type { SessionPrincipal } from '@whatsappcrm/contracts';
+import type { SessionPrincipal, TenantStatus } from '@whatsappcrm/contracts';
 
 export interface TenantContext {
   /** Correlation id shared by the log line, the error tracker and the error envelope. */
@@ -25,6 +25,22 @@ export interface TenantContext {
    * fixture all legitimately have none.
    */
   hostname?: string | null;
+  /**
+   * The lifecycle status of the tenant `HostTenantGuard` resolved (ADR 0009
+   * decision 2).
+   *
+   * Read once, in the lookup that resolves the tenant in the first place, so
+   * `TenantStatusGuard` at pipeline stage 4 costs no second query. That guard is
+   * the only reader, and the reason it reads from here rather than issuing its
+   * own is the reason `hostname` lives here too: the value belongs to the guard
+   * that already had the row in front of it.
+   *
+   * Optional and absent-means-null, like `principal`: a queue worker and a
+   * fixture legitimately resolve a tenant without going through the host guard.
+   * `TenantStatusGuard` treats absent as a bug rather than as permission — it
+   * only ever runs behind that guard.
+   */
+  tenantStatus?: TenantStatus | null;
   /** Authenticated user, or `null` for unauthenticated and machine-to-machine calls. */
   userId: string | null;
   /**
@@ -106,6 +122,10 @@ export class TenantContextService {
     return this.storage.getStore()?.hostname ?? null;
   }
 
+  get tenantStatus(): TenantStatus | null {
+    return this.storage.getStore()?.tenantStatus ?? null;
+  }
+
   /** Attaches the resolved session to the active scope. */
   setTenant(tenantId: string, userId: string | null = null): void {
     const store = this.storage.getStore();
@@ -135,6 +155,26 @@ export class TenantContextService {
     }
 
     store.hostname = hostname;
+  }
+
+  /**
+   * Publishes the lifecycle status of the tenant just resolved, for
+   * `TenantStatusGuard` to decide on.
+   *
+   * Separate from `setTenant` rather than a third parameter, for the reason
+   * `setHostname` is separate: the two are written by the same guard, but a
+   * caller that only has a tenant id — a queue worker, a fixture — must not be
+   * able to supply a status it invented, and the guard is deny-by-default when
+   * none was published.
+   */
+  setTenantStatus(status: TenantStatus): void {
+    const store = this.storage.getStore();
+
+    if (!store) {
+      throw new Error('setTenantStatus() called outside of a tenant context scope');
+    }
+
+    store.tenantStatus = status;
   }
 
   /**
