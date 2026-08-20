@@ -23,6 +23,16 @@ const MESSAGE = {
   createdAt: '2026-08-10T08:05:00.000Z',
 };
 
+const CANNED_RESPONSE = {
+  id: '0192f00c-0000-7000-8000-000000000c01',
+  shortcut: '/hours',
+  title: 'Opening hours',
+  body: "We're open Sunday to Thursday, 9am to 6pm.",
+  createdByUserId: null,
+  createdAt: '2026-08-11T08:00:00.000Z',
+  updatedAt: '2026-08-11T08:00:00.000Z',
+};
+
 describe('inboxEffectOf', () => {
   it('refetches on a new message', () => {
     expect(
@@ -65,6 +75,24 @@ describe('inboxEffectOf', () => {
     ).toBe('signed-out');
   });
 
+  it('refetches on a canned-response edit, which the composer reads as a prop', () => {
+    expect(
+      inboxEffectOf({
+        event: 'canned_response.saved',
+        cannedResponse: CANNED_RESPONSE,
+      }),
+    ).toBe('refetch');
+  });
+
+  it('refetches on a canned-response deletion, so a removed shortcut stops matching', () => {
+    expect(
+      inboxEffectOf({
+        event: 'canned_response.deleted',
+        cannedResponseId: CANNED_RESPONSE.id,
+      }),
+    ).toBe('refetch');
+  });
+
   it('ignores a typing indicator, which would refetch on every keystroke', () => {
     expect(
       inboxEffectOf({
@@ -89,5 +117,12 @@ describe('INBOX_SERVER_EVENTS', () => {
   it('subscribes to nothing the effect table would ignore', () => {
     expect(INBOX_SERVER_EVENTS).not.toContain('agent.typing');
     expect(INBOX_SERVER_EVENTS).not.toContain('ticket.updated');
+  });
+
+  it('subscribes to the canned-response events, or the effect table never runs', () => {
+    // The table above answering `refetch` is worth nothing if the socket is not
+    // listening for the frame that carries it.
+    expect(INBOX_SERVER_EVENTS).toContain('canned_response.saved');
+    expect(INBOX_SERVER_EVENTS).toContain('canned_response.deleted');
   });
 });
