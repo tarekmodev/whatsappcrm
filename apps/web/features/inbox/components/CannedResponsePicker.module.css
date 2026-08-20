@@ -1,18 +1,42 @@
 .list {
   /*
    * Above the textarea, not below it. The composer sits at the foot of the
-   * thread card with the attach control and Send directly under it, so a panel
+   * thread column with the attach control and Send directly under it, so a panel
    * opening downwards would cover the button the agent is heading for — and on a
    * short viewport it would open off the bottom of the screen entirely.
+   *
+   * `fixed`, not `absolute`, and that is the whole point of this rule: since
+   * TAR-513 the composer sits in a thread column that scrolls, and an absolutely
+   * positioned box is clipped by any scrolling ancestor that contains it. A list
+   * opening *upward* then loses its top rows to that clip — and block-start
+   * overflow in a scroll container is unreachable, because `scrollTop` cannot go
+   * negative. Measured at 1440x900: 244px of room above the field against the
+   * 362px eight options need. A fixed box is contained by the viewport instead,
+   * so nothing between here and there can cut it.
+   *
+   * The trade is that a fixed box does not follow its anchor on its own, so the
+   * component measures the field and writes the four values below. Custom
+   * properties rather than inline geometry, so this file still owns the layout —
+   * see `CannedResponsePicker.tsx`.
    */
-  position: absolute;
-  inset-block-end: calc(100% + var(--space-1));
-  inset-inline: 0;
+  /* The gap between the panel and the field, read back by `useAnchoredAbove`
+     so the distance stays a token rather than a number in a hook. */
+  --picker-gap: var(--space-1);
+
+  position: fixed;
+  inset-block-end: var(--picker-block-end, 0);
+  inset-inline-start: var(--picker-inline-start, 0);
+  inline-size: var(--picker-inline-size, auto);
   z-index: var(--z-nav);
   display: flex;
   flex-direction: column;
-  /* Eight rows fit a laptop; a phone in landscape scrolls rather than overflows. */
-  max-block-size: var(--size-scroll-region);
+  /*
+   * Eight rows fit a laptop; anything shorter scrolls rather than overflowing.
+   * `--picker-max-block-size` is the room that actually exists above the field,
+   * so the list is bounded by the smaller of the two and every option stays
+   * reachable by scrolling inside it.
+   */
+  max-block-size: min(var(--size-scroll-region), var(--picker-max-block-size, 100dvh));
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: var(--space-1);

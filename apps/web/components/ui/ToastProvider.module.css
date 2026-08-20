@@ -1,7 +1,12 @@
 .region {
   position: fixed;
-  /* Bottom on mobile, clear of the safe area and of the primary action row. */
-  inset-block-end: calc(var(--space-4) + env(safe-area-inset-bottom));
+  /* Bottom on mobile, clear of the safe area and of the primary action row.
+     `--offset-toast-block-end` is `0` on an ordinary page and the height of a
+     pinned control on a route that has one, so a toast never lands on the reply
+     box (see `useToastClearance`). */
+  inset-block-end: calc(
+    var(--offset-toast-block-end) + var(--space-4) + env(safe-area-inset-bottom)
+  );
   inset-inline: var(--space-4);
   z-index: var(--z-toast);
   display: flex;
@@ -50,7 +55,7 @@
 
 @media (min-width: 40rem) {
   .region {
-    inset-block-end: var(--space-5);
+    inset-block-end: calc(var(--offset-toast-block-end) + var(--space-5));
     inset-inline-start: auto;
     inset-inline-end: var(--space-5);
     inline-size: min(24rem, calc(100% - var(--space-8)));

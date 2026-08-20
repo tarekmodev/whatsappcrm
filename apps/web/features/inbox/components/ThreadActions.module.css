@@ -2,8 +2,18 @@
   flex: 0 0 auto;
 }
 
+/*
+ * Not offered below 64rem: `InboxLayout` keeps the context panel off screen
+ * there — one region at a time, and a details band would take its height from
+ * the composer — so a disclosure whose panel cannot appear would be a control
+ * that does nothing. `display: none` rather than `visibility` or `opacity`,
+ * because it has to leave the tab order and the accessibility tree as well as
+ * the screen — it is still in the markup at every width, so hiding it any other
+ * way would leave a tab stop for a panel that cannot open. Matches
+ * `InboxLayout.module.css`, which is the file that decides this.
+ */
 .toggle {
-  display: grid;
+  display: none;
   flex: 0 0 auto;
   place-items: center;
   inline-size: var(--size-touch-target);
@@ -28,4 +38,10 @@
   background: var(--color-surface-hover);
   border-color: var(--color-border);
   color: var(--color-on-surface);
+}
+
+@media (min-width: 64rem) {
+  .toggle {
+    display: grid;
+  }
 }

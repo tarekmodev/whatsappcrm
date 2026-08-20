@@ -1,20 +1,20 @@
+/*
+ * The list does not scroll itself: since TAR-513 its column does, for its whole
+ * height, so a row is never clipped mid-card by a box that stopped at 62dvh.
+ */
 .list {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  /* Scrolls beside the thread rather than growing the page, so the two panes
-     stay side by side however long the list gets. Below the two-pane
-     breakpoint it is the whole screen and the page scroll is enough. */
-  max-block-size: var(--size-scroll-region);
-  overflow-y: auto;
-  overscroll-behavior: contain;
   padding: 0;
   margin: 0;
   list-style: none;
 }
 
+/* On `surface`, because the column behind it is `surface-sunken` now — a row the
+   same colour as its column is a row you cannot see. */
 .row {
-  background: var(--color-surface-sunken);
+  background: var(--color-surface);
   border: var(--border-hairline) solid var(--color-border);
   /* Reserved, and transparent until the row is the open one, so selecting a
      conversation changes a colour rather than the geometry of the list. */

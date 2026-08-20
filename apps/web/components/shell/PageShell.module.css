@@ -4,3 +4,19 @@
      action on the page. */
   padding-block-end: calc(var(--space-8) + env(safe-area-inset-bottom));
 }
+
+/*
+ * Fill mode. No cap, no gutter, no block padding — the workspace is the page.
+ *
+ * One row of `minmax(0, 1fr)`, so the child is exactly as tall as `<main>` and
+ * may shrink below its content instead of pushing the frame open. The bottom
+ * padding above is gone with the rest, which is why a route using this variant
+ * publishes `--offset-toast-block-end` for whatever it pins to the viewport
+ * bottom (see `useToastClearance`).
+ */
+.fill {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  block-size: 100%;
+  min-block-size: 0;
+}

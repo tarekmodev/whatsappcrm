@@ -1,20 +1,22 @@
 import { EmptyState } from '@/components/ui/EmptyState';
-import { SectionCard } from '@/components/ui/SectionCard';
 import { content } from '@/content/en';
+// The same column interior the real thread uses, so picking a conversation
+// swaps the contents rather than resizing the column around them.
+import styles from './ThreadSection.module.css';
 
 /**
- * What the thread pane shows before a conversation is picked. Usage:
- * `<NoThreadSelected />` as the `thread` slot of `InboxPanes`.
+ * What the thread column shows before a conversation is picked. Usage:
+ * `<NoThreadSelected />` as the `thread` slot of `InboxLayout`.
  *
- * The same card frame the real thread uses, so choosing a conversation swaps
- * the contents rather than resizing the pane. It only ever appears at widths
- * where both panes are on screen — below that, no thread means the list is the
- * whole screen.
+ * It only ever appears at widths where both the list and the thread are on
+ * screen — below that, no thread means the list is the whole screen.
  */
 export function NoThreadSelected() {
   return (
-    <SectionCard id="conversation" title={content.inbox.threadHeading}>
-      <EmptyState heading={content.inbox.noThreadHeading} body={content.inbox.noThreadBody} />
-    </SectionCard>
+    <div className={styles.thread}>
+      <div className={styles.state}>
+        <EmptyState heading={content.inbox.noThreadHeading} body={content.inbox.noThreadBody} />
+      </div>
+    </div>
   );
 }

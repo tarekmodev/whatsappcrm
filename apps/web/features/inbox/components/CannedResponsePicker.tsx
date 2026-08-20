@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { CannedResponseResponse } from '@whatsappcrm/contracts';
+import { useAnchoredAbove } from '@/features/inbox/useAnchoredAbove';
 import styles from './CannedResponsePicker.module.css';
 
 /**
@@ -34,6 +35,16 @@ import styles from './CannedResponsePicker.module.css';
  * A pointer commit works the same way. `mousedown` is prevented so the textarea
  * never blurs, which keeps the caret — and therefore the token being replaced —
  * exactly where it was when the row was drawn.
+ *
+ * ## Why it positions itself
+ *
+ * The list is `position: fixed`, because since TAR-513 the composer lives in a
+ * scrolling column and an absolutely positioned panel opening *upward* loses its
+ * top rows to that column's clip — unreachably, since `scrollTop` cannot go
+ * negative. Fixed escapes every ancestor, and `useAnchoredAbove` pays the cost
+ * of that by measuring the field this hangs from. It is also what bounds the
+ * list to the room above the field, so a long library scrolls inside itself
+ * rather than off the top of the screen.
  */
 
 export interface CannedResponsePickerProps {
@@ -55,6 +66,9 @@ export function CannedResponsePicker({
   onCommit,
 }: CannedResponsePickerProps) {
   const activeRef = useRef<HTMLLIElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  useAnchoredAbove(listRef);
 
   useEffect(() => {
     // `nearest`, so arrowing through a long list scrolls the row into view
@@ -63,7 +77,7 @@ export function CannedResponsePicker({
   }, [activeIndex]);
 
   return (
-    <ul id={id} role="listbox" aria-label={label} className={styles.list}>
+    <ul ref={listRef} id={id} role="listbox" aria-label={label} className={styles.list}>
       {options.map((option, index) => (
         <li
           key={option.id}

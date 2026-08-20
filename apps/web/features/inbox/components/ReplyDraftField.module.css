@@ -1,8 +1,13 @@
 /*
- * The positioning context the shortcut picker hangs from. Here rather than in
- * `CannedResponsePicker.module.css` because where a child sits is the parent's
- * layout, not the child's — the picker only knows it is anchored to the box
- * above it.
+ * The box the shortcut picker hangs from. It is *measured* rather than
+ * positioned against: the picker is `position: fixed` so that no scrolling
+ * ancestor can clip it (see `CannedResponsePicker.module.css`), and a fixed box
+ * is contained by the viewport whatever this one does.
+ *
+ * `position: relative` stays regardless. It costs nothing, it keeps this the
+ * containing block for anything *absolutely* positioned added here later, and
+ * dropping it would silently hand that job to whichever ancestor happened to
+ * have it — which is exactly the bug TAR-513 found in `VisuallyHidden`.
  */
 .anchor {
   position: relative;

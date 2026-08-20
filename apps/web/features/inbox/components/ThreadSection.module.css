@@ -1,0 +1,86 @@
+/*
+ * What fills the thread column: a header that stays put, a message stream that
+ * scrolls, and the composer pinned to the foot. The column itself is
+ * `InboxLayout`'s `.thread`; this is its interior, shared by the real thread,
+ * its skeleton, the empty state and the unavailable state — one frame, so
+ * swapping between them shifts nothing.
+ */
+.thread {
+  display: flex;
+  flex-direction: column;
+  block-size: 100%;
+  min-block-size: 0;
+  /* The containing block for what it scrolls: an absolutely positioned
+     descendant — every `VisuallyHidden` in the thread is one — is only clipped by
+     a scroll container that is also its containing block. Without this they
+     resolve against the page and drag the document's height out to meet them. */
+  position: relative;
+  /* The column is where a thread too tall for its space gives way — see below. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Opening a different conversation replaces the contents: a cross-fade, never
+     a slide. The column is not moving; what is in it is being replaced. Flattened
+     to 1ms by the token layer under `prefers-reduced-motion`. */
+  animation: threadEnter var(--duration-fast) var(--easing-standard);
+}
+
+@keyframes threadEnter {
+  from {
+    opacity: 0;
+  }
+}
+
+/*
+ * --- What gives way when the column is too short ---------------------------
+ *
+ * The three parts are taller than the column more often than you would expect:
+ * a landscape phone, and any viewport under about 900px once the reply box
+ * carries a service-window banner, a textarea, an attach field and a Send row.
+ * Nothing here may simply overflow and be clipped, and what it would clip is the
+ * composer.
+ *
+ * The message stream gives way first, because a scrollbar is exactly what a long
+ * conversation is supposed to have — but only down to a quarter of the column,
+ * because a conversation view showing no messages at all is not a degraded
+ * thread, it is a broken one. Past that the *column* scrolls, and the composer,
+ * sticky at its foot, stays on screen while the header and the stream move under
+ * it.
+ *
+ * An earlier pass had the header and the composer each scroll inside themselves
+ * instead. It fitted the parts in better and it was worse: three nested
+ * scrollports around one conversation, and the header's controls could end up
+ * behind the composer with nothing to say so. One scrollport, on the column, is
+ * the shape the rest of this file follows from.
+ *
+ * At any viewport with room, nothing shrinks and this costs nothing. The
+ * composer's own height is the pressure — roughly 630px — and reducing it is
+ * TAR-518's. The one quarter is a layout proportion, not a design value; there is
+ * no token for "a quarter of the column".
+ */
+.header {
+  flex: 0 0 auto;
+  padding: var(--space-4);
+  border-block-end: var(--border-hairline) solid var(--color-border);
+}
+
+.stream {
+  display: flex;
+  flex: 1 50 auto;
+  min-block-size: 25%;
+  padding-inline: var(--space-4);
+  padding-block-start: var(--space-4);
+}
+
+/*
+ * The empty and unavailable states stand in for the whole stream, centred in the
+ * space it would have taken rather than pinned to the top of an otherwise blank
+ * column.
+ */
+.state {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-block-size: 0;
+  padding: var(--space-4);
+}
