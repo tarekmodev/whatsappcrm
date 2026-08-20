@@ -959,15 +959,15 @@ new module edges.
 **No new error code.** `error-codes.ts` is something 0002 rules, not something an implementation edits,
 and the published taxonomy covers every refusal this surface has:
 
-| Condition                                                     | Code                  | Note                                                             |
-| ------------------------------------------------------------- | --------------------- | ---------------------------------------------------------------- |
-| Unknown document id, or another tenant's                      | `not_found`           | Never `forbidden` — a 403 would confirm the id exists somewhere. |
-| Conversation not visible, or never handed off                 | `not_found`           | Same rule the rest of the inbox uses.                            |
-| `minConfidence` out of range, unknown `model`, bad `language` | `validation_failed`   | With `details[].path` naming the field.                          |
-| Content over 256 KiB                                          | `payload_too_large`   |                                                                  |
-| Document cap reached                                          | `conflict`            |                                                                  |
-| Plan lacks `ai_chatbot` on a write                            | `feature_not_in_plan` | `GET /ai/config` is deliberately exempt.                         |
-| Deactivated tenant with a live session                        | `forbidden`           | `TenantNotActiveError`, as everywhere.                           |
+| Condition                                                     | Code                    | Note                                                                                                                 |
+| ------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Unknown document id, or another tenant's                      | `not_found`             | Never `forbidden` — a 403 would confirm the id exists somewhere.                                                     |
+| Conversation not visible, or never handed off                 | `not_found`             | Same rule the rest of the inbox uses.                                                                                |
+| `minConfidence` out of range, unknown `model`, bad `language` | `validation_failed`     | With `details[].path` naming the field.                                                                              |
+| Content over 256 KiB                                          | `payload_too_large`     |                                                                                                                      |
+| Document cap reached                                          | `conflict`              |                                                                                                                      |
+| Plan lacks `ai_chatbot` on a write                            | `feature_not_in_plan`   | `GET /ai/config` is deliberately exempt.                                                                             |
+| Deactivated tenant with a live session                        | `subscription_inactive` | `TenantNotActiveError`, as everywhere. Throw `tenantInactive()`; never the error's own message (amended by TAR-539). |
 
 `translateAiFailure` is the single mapping function, on `translateSlaFailure`'s pattern. Anything
 unrecognised is rethrown untouched — a database outage reported as a validation error is an outage

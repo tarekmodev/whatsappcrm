@@ -9,7 +9,7 @@ import type { Response } from 'express';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ApiException } from '../common/errors/api.exception';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
-import { TenantNotActiveError } from '../prisma/prisma.errors';
+import { isTenantNotActiveError, tenantInactive } from '../common/errors/tenant-inactive';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { toConnectedBusinessAccountResponse } from './connected-business-account.response';
 import { WhatsAppEmbeddedSignupService } from './embedded-signup.service';
@@ -112,11 +112,13 @@ function translateSignupFailure(error: unknown): never {
     throw new ApiException('upstream_unavailable', error.message);
   }
 
-  if (error instanceof TenantNotActiveError) {
+  if (isTenantNotActiveError(error)) {
     // A deactivated tenant with a session still open. The gate is
     // `assert_tenant_active` inside `TenantPrisma`, so it fires on the first
-    // statement of the connection rather than at the edge.
-    throw new ApiException('forbidden', error.message);
+    // statement of the connection rather than at the edge. The error's own
+    // message names the data layer and the tenant id, so it never becomes the
+    // body (TAR-539).
+    throw tenantInactive();
   }
 
   throw error;

@@ -1,9 +1,9 @@
 import { ApiException } from '../common/errors/api.exception';
+import { isTenantNotActiveError, tenantInactive } from '../common/errors/tenant-inactive';
 import {
   IdempotencyKeyReusedError,
   IdempotentRequestInFlightError,
 } from '../common/idempotency/idempotency.errors';
-import { TenantNotActiveError } from '../prisma/prisma.errors';
 import {
   EscalationAlertNotFoundError,
   InvalidTicketCursorError,
@@ -114,11 +114,13 @@ export function translateTicketFailure(error: unknown): never {
     ]);
   }
 
-  if (error instanceof TenantNotActiveError) {
+  if (isTenantNotActiveError(error)) {
     // A deactivated tenant with a session still open (TAR-51). A runtime state
     // an operator created, not a fault — reporting it as 500 would page someone
-    // every time a tenant was shut off. Same translation the inbox makes.
-    throw new ApiException('forbidden', error.message);
+    // every time a tenant was shut off. Same translation the inbox makes, and
+    // the error's own message — which names the data layer and the tenant id —
+    // never becomes the body (TAR-539).
+    throw tenantInactive();
   }
 
   throw error;

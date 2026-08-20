@@ -322,13 +322,18 @@ describe('media routes', () => {
       expect(ApiErrorSchema.parse(response.body).error.code).toBe('internal_error');
     });
 
-    it('reports a deactivated tenant as forbidden rather than as a fault', async () => {
+    it('reports a deactivated tenant as subscription_inactive rather than as a fault', async () => {
       read.mockRejectedValueOnce(new TenantNotActiveError(TENANT_ID, 'findUnique', 'MediaObject'));
 
       const response = await request(server).get(`/api/v1/media/${MEDIA_ID}/content`);
 
-      expect(response.status).toBe(403);
-      expect(ApiErrorSchema.parse(response.body).error.code).toBe('forbidden');
+      expect(response.status).toBe(402);
+      const { error } = ApiErrorSchema.parse(response.body);
+
+      expect(error.code).toBe('subscription_inactive');
+      // TAR-539: the error's own message names `TenantPrisma` and the tenant id.
+      expect(error.message).not.toContain('TenantPrisma');
+      expect(error.message).not.toContain(TENANT_ID);
     });
   });
 });

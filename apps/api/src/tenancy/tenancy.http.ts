@@ -1,6 +1,6 @@
 import { BRANDING_UPLOAD_FIELD } from '@whatsappcrm/contracts';
 import { ApiException } from '../common/errors/api.exception';
-import { TenantNotActiveError } from '../prisma/prisma.errors';
+import { isTenantNotActiveError, tenantInactive } from '../common/errors/tenant-inactive';
 import { TenantNotFoundError } from './tenant-deactivation.errors';
 import {
   BrandingAssetNotFoundError,
@@ -113,11 +113,12 @@ export function translateTenancyFailure(error: unknown): never {
     throw new ApiException('rate_limited', error.message);
   }
 
-  if (error instanceof TenantNotActiveError) {
+  if (isTenantNotActiveError(error)) {
     // A deactivated tenant with a session still open (TAR-51). A runtime state
     // an operator created, not a fault — reporting it as 500 would page someone
-    // every time a tenant was shut off.
-    throw new ApiException('forbidden', error.message);
+    // every time a tenant was shut off. The error's own message names the data
+    // layer and the tenant id, so it never becomes the body (TAR-539).
+    throw tenantInactive();
   }
 
   throw error;

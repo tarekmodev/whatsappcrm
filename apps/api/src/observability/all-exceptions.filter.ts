@@ -6,10 +6,16 @@ import {
   type ExceptionFilter,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ApiErrorDetailSchema, type ApiError, type ApiErrorDetail } from '@whatsappcrm/contracts';
+import {
+  ApiErrorDetailSchema,
+  httpStatusForErrorCode,
+  type ApiError,
+  type ApiErrorDetail,
+} from '@whatsappcrm/contracts';
 import type { Request, Response } from 'express';
 import type { Logger } from 'pino';
 import { z } from 'zod';
+import { isTenantNotActiveError, TENANT_INACTIVE_MESSAGE } from '../common/errors/tenant-inactive';
 import { pathWithoutQuery, withoutEmbeddedQuery } from '../common/http-path';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Env } from '../config/env.schema';
@@ -140,6 +146,24 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // so neither the log line nor the response body can carry a token from it.
     const sanitise = (message: string): string =>
       withoutEmbeddedQuery(message, request.originalUrl);
+
+    // Before the catch-all below, because this one is not a fault (TAR-539). It
+    // reaches here whenever the data layer refuses a statement outside a
+    // controller's own `catch` — session resolution in a guard is the path QA
+    // reproduced it on — and the default answer was a 500 whose body carried
+    // `TenantPrisma`, the failing model and the tenant's UUID. Both halves of
+    // that are wrong: an operator suspending a tenant is a state, not a fault,
+    // and a locked-out caller is the last person who should be shown the shape
+    // of the data layer. `TenantStatusGuard` (TAR-36) refuses at stage 4 and
+    // this stays as the net behind it, for the paths a guard cannot see: an
+    // interceptor, a route added later, a tenant suspended mid-request.
+    if (isTenantNotActiveError(exception)) {
+      return {
+        status: httpStatusForErrorCode('subscription_inactive'),
+        code: 'subscription_inactive',
+        message: TENANT_INACTIVE_MESSAGE,
+      };
+    }
 
     if (!(exception instanceof HttpException)) {
       return {
