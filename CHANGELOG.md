@@ -615,7 +615,7 @@ deleted`, with `pending` renamed to `created` (catalogue-only, no table rewrite)
   `audit_logs`, and the endpoint surface split into available and published-not-implemented.
   [The signup API reference](docs/reference/signup-api.md) documents the four public routes with
   their parameters, error codes and both layers of rate limiting.
-  [Set up your workspace](docs/guides/set-up-your-workspace.md) is the ninth tenant-user guide and
+  [Set up your workspace](docs/guides/set-up-your-workspace.md) is the tenth tenant-user guide and
   the third written for an **admin**: the setup checklist, seats and the invitation that takes one
   before it is accepted, what suspension means for agents, and how reactivation works.
   The style guide gains five terminology rows — _lifecycle state_, _self-signup_, _entitlements_,

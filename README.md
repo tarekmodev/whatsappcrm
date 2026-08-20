@@ -93,7 +93,7 @@ the one that produced it.
 | [Serve the workspace from your own web address](docs/guides/set-up-a-custom-domain.md)       | For admins adding a custom domain, with the exact DNS records to publish           |
 | [Hand a ticket on, or ask a supervisor](docs/guides/hand-over-or-escalate-a-ticket.md)       | For agents reassigning a ticket or escalating one, and reading the history         |
 | [Answer common questions with saved replies](docs/guides/use-saved-replies.md)               | For agents inserting a saved reply in the composer by typing a shortcut            |
-| [Set up your workspace](docs/guides/set-up-your-workspace.md) | For a new admin: the setup checklist, seats, and what suspension means |
+| [Set up your workspace](docs/guides/set-up-your-workspace.md)                                | For a new admin: the setup checklist, seats, and what suspension means             |
 | [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                             |
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                             |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                           |

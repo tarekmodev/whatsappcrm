@@ -3,7 +3,7 @@
 Status: reference companion to
 [0009 — tenant lifecycle, self-signup and the retention contract](./0009-tenant-lifecycle-and-self-signup.md)
 · **Decides nothing.** 0009 is the design authority and every "why" lives there · As built on
-`main` at `1c0b98f`, 20 August 2026
+`main` at `90cac16`, 20 August 2026
 
 Written for engineers. 0009 is 1 184 lines and answers "why is it this shape"; this page answers
 the two questions a reader has when they arrive at the code — **what are the states and the
