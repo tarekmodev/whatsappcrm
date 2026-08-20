@@ -2,19 +2,44 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  flex: 1 1 auto;
   min-inline-size: 0;
+  min-block-size: 0;
 }
 
 .scroller {
-  /* The same box whether it holds skeletons, messages or nothing, so the swap
-     never resizes the card around it. */
-  block-size: var(--size-scroll-region);
+  /* Whatever the thread column left between its header and its composer, and
+     the same box whether it holds skeletons, messages or nothing — so the swap
+     never resizes anything around it. Filling a constrained column rather than
+     standing at a fixed 62dvh is also what finally gives `useStickToBottom` a
+     container that can overflow. */
+  flex: 1 1 auto;
+  min-block-size: 0;
+  /* The containing block for what it scrolls. A message's `VisuallyHidden`
+     timestamp is `position: absolute`, and a scroll container only clips a
+     descendant it is also the containing block for — without this, a long thread
+     resolves them against an outer box and stretches *that* instead. */
+  position: relative;
   overflow-y: auto;
   /* Keeps the newest message pinned while earlier ones load above it. */
   overflow-anchor: auto;
   padding-inline-end: var(--space-2);
   /* Momentum scrolling on iOS without trapping the page's own scroll. */
   overscroll-behavior: contain;
+}
+
+/*
+ * The no-messages state stands in for the whole stream, centred in it — the same
+ * shape `NoThreadSelected` and `ThreadUnavailable` get from `.state`. Returned
+ * bare it was a flex item in a row-direction, stretch-aligned parent: a dashed
+ * box a few words wide running the full height of the column.
+ */
+.emptyState {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-block-size: 0;
 }
 
 .list {

@@ -73,6 +73,9 @@ the one that produced it.
 | [Data model reference](docs/reference/data-model.md)                                         | Every entity, which are tenant-scoped, which constraints and indexes matter        |
 | [Tenant isolation contract](docs/reference/tenancy.md)                                       | Which Prisma client to inject, and what the database refuses                       |
 | [Platform admin API](docs/reference/admin-api.md)                                            | Provisioning and deactivation: request, response, errors, retention                |
+| [Tenant lifecycle state machine](docs/architecture/0012-tenant-lifecycle-state-machine.md)   | The seven states, every edge and its trigger, and which of them is built           |
+| [Tenant lifecycle reference](docs/reference/tenant-lifecycle.md)                             | Starting states, plan entitlements and where they are enforced, the trail          |
+| [Public signup API](docs/reference/signup-api.md)                                            | The four unauthenticated routes: verification, slug reservation, rate limits       |
 | [People and teams API](docs/reference/people-api.md)                                         | Managing agents, teams and roles: permissions, invariants, isolation               |
 | [Tickets API](docs/reference/tickets-api.md)                                                 | The queue, the status/priority write, handoff and escalation, the event log        |
 | [Assignment rules API](docs/reference/assignment-rules-api.md)                               | Routing-rule CRUD, the condition grammar, and how a new ticket is routed           |
@@ -80,6 +83,7 @@ the one that produced it.
 | [SLA timers and supervisor alerts](docs/reference/sla-timers.md)                             | Response windows, breach detection, who is alerted, and the two endpoints          |
 | [Reporting dashboard and export](docs/reference/reporting-api.md)                            | The four metrics, the date range, scope and attribution, and export parity         |
 | [Branding and custom domains API](docs/reference/branding-domains-api.md)                    | The white-label surface: branding, hostnames, DNS verification, the operator queue |
+| [Canned responses API](docs/reference/canned-responses-api.md)                               | The quick-reply library: CRUD, the shortcut grammar, the picker, the relay         |
 | [Changing a ticket's status and priority](docs/guides/manage-ticket-status-and-priority.md)  | For agents working in the console, not for API consumers                           |
 | [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)           | For supervisors writing routing rules in the console                               |
 | [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md)                      | For supervisors emptying the flagged queue in the console                          |
@@ -88,6 +92,8 @@ the one that produced it.
 | [Put your own brand on the workspace](docs/guides/brand-your-workspace.md)                   | For admins setting the product name, colours, logo and favicon in the console      |
 | [Serve the workspace from your own web address](docs/guides/set-up-a-custom-domain.md)       | For admins adding a custom domain, with the exact DNS records to publish           |
 | [Hand a ticket on, or ask a supervisor](docs/guides/hand-over-or-escalate-a-ticket.md)       | For agents reassigning a ticket or escalating one, and reading the history         |
+| [Answer common questions with saved replies](docs/guides/use-saved-replies.md)               | For agents inserting a saved reply in the composer by typing a shortcut            |
+| [Set up your workspace](docs/guides/set-up-your-workspace.md)                                | For a new admin: the setup checklist, seats, and what suspension means             |
 | [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                             |
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                             |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                           |
@@ -289,10 +295,13 @@ expresses the entity table in `docs/architecture/0002-architecture-and-api-contr
 (TAR-39) — read that first for _why_ the entities are shaped this way; the schema file
 carries the per-model reasoning next to each model.
 
-41 models. 38 are tenant-scoped: they carry a non-null `tenant_id`, and row-level security
-filters them. Three are not — `tenants`, `plans` and `webhook_events`, each deliberately.
-Six conventions hold across every model, starting with a non-null `tenant_id` on every
-scoped table and composite `(tenant_id, <parent_id>)` foreign keys.
+Most models are tenant-scoped: they carry a non-null `tenant_id`, and row-level security
+filters them. Five are not — `tenants`, `plans`, `webhook_events`, `tenant_signups` and
+`lifecycle_events`, each deliberately, and
+[the tenant isolation contract](docs/reference/tenancy.md#the-five-tables-with-no-rls-policy)
+says what `TenantPrisma` does with each instead. Six conventions hold across every model,
+starting with a non-null `tenant_id` on every scoped table and composite
+`(tenant_id, <parent_id>)` foreign keys.
 
 **[Data model reference](docs/reference/data-model.md)** — every entity, its constraints,
 its load-bearing indexes and the story that owns it, plus the six conventions in full and

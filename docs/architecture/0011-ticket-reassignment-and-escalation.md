@@ -1,6 +1,6 @@
 # Ticket reassignment and escalation (TAR-467)
 
-Status: **proposed**.
+Status: **accepted**, amended 2026-08-20 (TAR-584) · [Amendments](#amendments): 2.
 Inherits: [0002 — architecture and API contract](./0002-architecture-and-api-contract.md),
 [0004 — RBAC permission matrix](./0004-rbac-permission-matrix.md),
 [0006 — SLA timers and supervisor alerts](./0006-sla-timers-and-supervisor-alerts.md),
@@ -9,6 +9,13 @@ Consumed by: TAR-468 (schema), TAR-469 (backend), TAR-470 (frontend), TAR-471 (Q
 TAR-472 (review), TAR-473 (docs).
 
 Reader: engineer.
+
+> **Two amendments are folded in and both are marked ⚠️ at the place they change**, per the
+> convention 0008 sets: a reader who trusts a line in a table does not scroll to an appendix.
+> **Amendment 1** (ratified TAR-584) — escalation alerts are `notifications` rows of
+> `type = 'escalation'`, not a parallel `escalation_alerts` table; decision 5's behaviour is
+> unchanged. **Amendment 2** (TAR-584) — the alert reports the ticket's **current** holder,
+> read at list time, not its holder at escalation time. See [Amendments](#amendments).
 
 ## Context and Problem
 
@@ -468,9 +475,13 @@ GET /api/v1/tickets/{id}/events?limit=&cursor=   ticket:read   → CursorPage<Ti
 - **No `type` filter at v1.** A ticket's history is short enough to read whole, and adding
   one costs an index on a column whose selectivity nobody has measured.
 
-## Decision 5 — Notification: `escalation_alerts`, a durable row per recipient, pushed over the existing socket
+## Decision 5 — Notification: a durable row per recipient, pushed over the existing socket
 
-> ### ⚠️ Amendment 1 — superseded in storage, unchanged in behaviour (TAR-468)
+⚠️ **The table named throughout this decision is not the table that shipped.** Read
+amendment 1 immediately below before anything under it; the storage moved, the behaviour did
+not.
+
+> ### ⚠️ Amendment 1 — superseded in storage, unchanged in behaviour (TAR-468) — **ratified**
 >
 > **What this decision specifies below — a new `escalation_alerts` table — was not
 > built. The trigger it named fired first.**
@@ -513,8 +524,24 @@ GET /api/v1/tickets/{id}/events?limit=&cursor=   ticket:read   → CursorPage<Ti
 > service over `notifications` filtered to this type — the same arrangement
 > `sla-alert.mapper.ts` already uses for `sla_breach`.
 >
-> Raised for the Architect to ratify or overrule; TAR-468 did not have the option of
-> building both.
+> **Ratified 2026-08-20 (TAR-584). `notifications.type = 'escalation'` is the decision.**
+> Decision 5 named the third notification type as the point to fold the alert tables
+> together; TAR-394 reached that point first, so by the time escalation landed the generic
+> table was the incumbent and a fourth parallel one would have been the deviation — at
+> exactly the cost this decision priced and accepted: two unread counts, two acknowledge
+> endpoints, and a supervisor who has to look in two places. The structural invariants the
+> decision reasoned from all survive the move: `ticket_event_id` is a real column and not a
+> `dedupe_key` string, the composite foreign keys and the recipient uniqueness are unchanged,
+> and `notifications_escalation_columns` makes `ticket_event_id` non-null for exactly this
+> type. Nothing downstream referenced the table name. Rebuilding `escalation_alerts` to match
+> the prose would cost a migration and buy a second place to look.
+>
+> Everything below this box is kept as written rather than rewritten, because it is the
+> record of _why_ the row and the socket are what they are, and that reasoning is unchanged.
+> Read every `escalation_alerts` under it as "a `notifications` row of `type = 'escalation'`",
+> and `EscalationAlert` / `EscalationAlertService` as `Notification` and a service over
+> `notifications` filtered to that type — the arrangement `sla-alert.mapper.ts` already uses
+> for `sla_breach`.
 
 **Trade-off axis: a purpose-built table now, vs. the generic `notifications` table 0006 predicted.**
 
@@ -634,34 +661,34 @@ address a notification to.
 Everything in ADRs 0001, 0002, 0004, 0006 and 0008 is inherited unchanged. Only what this
 document adds:
 
-| Concern               | Choice                                      | Alternatives considered                           | Rationale                                                                 |
-| --------------------- | ------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------- |
-| Reassignment surface  | Existing `POST /tickets/{id}/assign`        | A separate `/reassign` route                      | Identical transaction; two routes over one method is two RBAC surfaces    |
-| Reason enforcement    | Service-side, conditional on the row        | Always-required in the Zod schema                 | Matches the criterion; no break to TAR-274's shipped console              |
-| Agent's right to move | New `ticket:handoff`, bounded by the route  | Widening `ticket:assign`                          | 0004 invariant 7, applied to tickets one word for one word                |
-| Escalation semantics  | Signal; assignment untouched                | Reassign upward; priority bump                    | Escalating must not lose the customer their agent                         |
-| Escalation record     | `ticket_events` type `escalated`            | `audit_logs` row                                  | Operational, not security-relevant; text `type` needs no migration        |
-| Notification store    | `escalation_alerts`, mirroring `sla_alerts` | Generic `notifications`; socket only              | Survives an offline supervisor; generalising is out of this story's scope |
-| Notification push     | `ticket.escalated` → `user:{id}`            | `tenant:{id}` broadcast                           | The socket audience must equal the rows written                           |
-| Duplicate escalation  | Allowed; optional `Idempotency-Key`         | Refuse while one is open; time-window suppression | A second ask after silence is legitimate; suppression is magic            |
+| Concern               | Choice                                     | Alternatives considered                           | Rationale                                                                                    |
+| --------------------- | ------------------------------------------ | ------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Reassignment surface  | Existing `POST /tickets/{id}/assign`       | A separate `/reassign` route                      | Identical transaction; two routes over one method is two RBAC surfaces                       |
+| Reason enforcement    | Service-side, conditional on the row       | Always-required in the Zod schema                 | Matches the criterion; no break to TAR-274's shipped console                                 |
+| Agent's right to move | New `ticket:handoff`, bounded by the route | Widening `ticket:assign`                          | 0004 invariant 7, applied to tickets one word for one word                                   |
+| Escalation semantics  | Signal; assignment untouched               | Reassign upward; priority bump                    | Escalating must not lose the customer their agent                                            |
+| Escalation record     | `ticket_events` type `escalated`           | `audit_logs` row                                  | Operational, not security-relevant; text `type` needs no migration                           |
+| Notification store    | ⚠️ `notifications`, `type = 'escalation'`  | A parallel `escalation_alerts` table; socket only | Survives an offline supervisor. Amendment 1: the generic table existed before this story ran |
+| Notification push     | `ticket.escalated` → `user:{id}`           | `tenant:{id}` broadcast                           | The socket audience must equal the rows written                                              |
+| Duplicate escalation  | Allowed; optional `Idempotency-Key`        | Refuse while one is open; time-window suppression | A second ask after silence is legitimate; suppression is magic                               |
 
 ## Data Model
 
 Only `escalation_alerts` is new (specified under decision 5). Everything else is an
 existing table gaining rows:
 
-| Table               | Change                                                                         |
-| ------------------- | ------------------------------------------------------------------------------ |
-| `tickets`           | **None.** Decision 3 keeps the assignment columns out of the escalation path   |
-| `ticket_events`     | `@@unique([tenantId, id])` for the composite FK. New `type` value needs no DDL |
-| `escalation_alerts` | New table, decision 5                                                          |
+| Table           | Change                                                                                                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tickets`       | **None.** Decision 3 keeps the assignment columns out of the escalation path                                                                                        |
+| `ticket_events` | `@@unique([tenantId, id])` for the composite FK. New `type` value needs no DDL                                                                                      |
+| `notifications` | ⚠️ Rows of `type = 'escalation'`, plus the `notifications_escalation_columns` CHECK. **No new table** — amendment 1; this row read `escalation_alerts` as specified |
 
-**No enum is added.** `ticket_events.type` is text by design, and `escalation_alerts` has
-no enumerated column.
+**No enum is added.** `ticket_events.type` is text by design, and `notifications.type` is
+text for the same reason — that is what let escalation become a type rather than a table.
 
-**The migration is reversible.** `DROP TABLE escalation_alerts` and dropping the unique
-index is the whole of the down path; nothing is backfilled, and no existing row is
-rewritten.
+**The migration is reversible.** ⚠️ As shipped (amendment 1) the down path drops the CHECK
+and the escalation columns rather than a table; nothing is backfilled, and no existing row is
+rewritten. As originally specified it was `DROP TABLE escalation_alerts`.
 
 ## Interfaces
 
@@ -717,7 +744,11 @@ export const EscalationAlertResponseSchema = z.object({
   /** Who asked for help. */
   raisedByUserId: IdSchema,
   reason: z.string(),
-  /** Who was holding the ticket when it was escalated. */
+  /**
+   * ⚠️ The ticket's **current** assignment, read off the ticket at list time — not a
+   * snapshot of who held it when the escalation fired (amendment 2). A ticket reassigned
+   * since reads as it stands now.
+   */
   assignedUserId: IdSchema.nullable(),
   assignedTeamId: IdSchema.nullable(),
   acknowledgedAt: TimestampSchema.nullable(),
@@ -777,17 +808,17 @@ looking at is `forbidden`.
 
 ## Failure Modes and Operations
 
-| Condition                                               | Behaviour                                                                               | What to watch                                                                      |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Tenant has no active supervisor or admin                | Event written, zero alert rows, warning logged naming the ticket. `notifiedUserIds: []` | Count of escalations with zero recipients — a real one is a misconfigured tenant   |
-| Recipient suspended between resolution and commit       | One alert row for somebody who can no longer act. Accepted (decision 5, step 2)         | —                                                                                  |
-| Process dies between commit and socket emit             | Rows exist; recipient sees them on next list read. Push lost, record kept               | Gap between `escalation_alerts` inserts and emits                                  |
-| Socket disconnected / supervisor offline                | Identical to the above by construction. This is why the row exists                      | —                                                                                  |
-| Escalation transaction fails                            | Neither event nor alerts. Caller gets `internal_error` and can retry                    | Rollback rate on the escalate route                                                |
-| Two agents reassign the same ticket at once             | Last writer wins, both on the event log. Unchanged from today (0008)                    | —                                                                                  |
-| Ticket reassigned while an escalation is unacknowledged | Both stand. The alert names the holder **at escalation time**, deliberately             | —                                                                                  |
-| `escalation_alerts` grows without bound                 | Same unbounded-growth gap `sla_alerts` has today                                        | Row count per tenant — see open question 3                                         |
-| An agent escalates the same ticket repeatedly           | Every escalation notifies. Not rate-limited at v1                                       | Escalations per ticket; a tenant above ~3 is a process problem, not a platform one |
+| Condition                                               | Behaviour                                                                                           | What to watch                                                                      |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Tenant has no active supervisor or admin                | Event written, zero alert rows, warning logged naming the ticket. `notifiedUserIds: []`             | Count of escalations with zero recipients — a real one is a misconfigured tenant   |
+| Recipient suspended between resolution and commit       | One alert row for somebody who can no longer act. Accepted (decision 5, step 2)                     | —                                                                                  |
+| Process dies between commit and socket emit             | Rows exist; recipient sees them on next list read. Push lost, record kept                           | Gap between `escalation_alerts` inserts and emits                                  |
+| Socket disconnected / supervisor offline                | Identical to the above by construction. This is why the row exists                                  | —                                                                                  |
+| Escalation transaction fails                            | Neither event nor alerts. Caller gets `internal_error` and can retry                                | Rollback rate on the escalate route                                                |
+| Two agents reassign the same ticket at once             | Last writer wins, both on the event log. Unchanged from today (0008)                                | —                                                                                  |
+| Ticket reassigned while an escalation is unacknowledged | Both stand. ⚠️ The alert names the ticket's **current** holder, re-read on every list (amendment 2) | —                                                                                  |
+| `escalation_alerts` grows without bound                 | Same unbounded-growth gap `sla_alerts` has today                                                    | Row count per tenant — see open question 3                                         |
+| An agent escalates the same ticket repeatedly           | Every escalation notifies. Not rate-limited at v1                                                   | Escalations per ticket; a tenant above ~3 is a process problem, not a platform one |
 
 Nothing here pages anyone. An escalation that reaches no recipient is the one worth an
 alert rule, and it is a tenant-configuration signal rather than a platform fault.
@@ -859,9 +890,92 @@ found while mocking is raised here, not resolved privately with the backend.
 
 | #   | Item                                                                                                                                                        | Severity | Proposed resolution                                                                                                                                                                   |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **Two notification tables now exist.** `sla_alerts` and `escalation_alerts` are structurally the same table with different payload columns                  | Medium   | Accepted for this story (decision 5). File a story to fold both into `notifications` with a `type` column, to be done **when the third type arrives**, not before                     |
+| 1   | ~~**Two notification tables now exist.**~~ **Resolved.** They never did: TAR-394 folded `sla_alerts` into `notifications` before this story ran             | —        | Closed by amendment 1. Escalation is `notifications.type = 'escalation'`; there is one alert table, one unread count and one acknowledge surface                                      |
 | 2   | **No de-escalation and no "is escalated" state.** A ticket escalated in error stays escalated in the history, and nothing lists open escalations per ticket | Medium   | Out of scope here. `acknowledged_at` on the alert is the supervisor's half. If tenants ask for a ticket-level state, it is a column plus a filter plus a resolve flow — its own story |
 | 3   | **`escalation_alerts` retention is unset**, inheriting the same gap 0006 left open for `sla_alerts`                                                         | Low now  | Settle both together in the wider retention story rather than inventing a second policy. Must be decided before the first large tenant                                                |
 | 4   | **Is an agent allowed to escalate a ticket they do not hold?** As specified, yes — `ticket:escalate` is bounded only by `require`'s visibility rule         | Low      | Deliberate: a colleague spotting a problem on a team ticket should be able to raise it. Revisit if escalation volume suggests it is being used as a comment channel                   |
 | 5   | **`Idempotency-Key` on a non-billing, non-send route** is a first for this API                                                                              | Low      | The middleware is generic and the header stays optional. TAR-472 should confirm the replay path returns the original `notifiedUserIds` rather than re-resolving                       |
 | 6   | **`ticket:handoff` and `ticket:escalate` are granted to every role**, so `ROLE_PERMISSIONS.agent` grows by two                                              | Low      | Intended. Both are bounded rights over work the agent already has; neither reaches a ticket they cannot see                                                                           |
+
+## Amendments
+
+Both are corrected ⚠️ at their original locations as well as recorded here, per the
+convention [0008](./0008-assignment-rotation-and-workload.md#amendments) sets: a reader who
+trusts a line in a table will not scroll to an appendix.
+
+### Amendment 1 — escalation alerts are `notifications` rows, not a table (TAR-468) — **ratified 2026-08-20**
+
+Body under [decision 5](#decision-5--notification-a-durable-row-per-recipient-pushed-over-the-existing-socket),
+where the specification it corrects lives.
+
+**Ratified as `notifications.type = 'escalation'`.** Decision 5 accepted two parallel alert
+tables as a priced cost and named the **third** notification type as the trigger to fold
+them into the generic table 0006 predicted. TAR-394's
+`20260816130000_notifications_generalisation` reached that trigger first, at the second
+type. So TAR-468 did not choose against this document; it arrived after the premise this
+document reasoned from had already expired, and building `escalation_alerts` anyway would
+have bought precisely the cost decision 5 named — two unread counts, two acknowledge
+endpoints, one supervisor looking in two places.
+
+Ratified rather than overruled because every invariant decision 5 argued for survives the
+move: `ticket_event_id` is a real column carrying the composite foreign key, not a
+`dedupe_key` string, so an alert still cannot reference an escalation absent from the audit
+trail; `(tenant_id, ticket_event_id, recipient_user_id)` is unchanged, so a retried
+escalation still cannot double-notify while a second escalation still can;
+`notifications_escalation_columns` makes `ticket_event_id` non-null for exactly this type,
+which is stricter than the original table's nullability would have been. The published
+surface never referenced the storage — `TicketEscalationResponseSchema` is `{ event,
+notifiedUserIds }` (#155) and the `escalation-alerts` routes shipped as specified — so
+overruling would cost a migration and a rewrite of a shipped read path to buy a name.
+
+**Consequences recorded elsewhere in this document:** the Technology Choices "Notification
+store" row, the Data Model table and its reversibility note, and open question 1, which is
+closed rather than deferred.
+
+### Amendment 2 — the alert names the ticket's **current** holder, not its holder at escalation time (TAR-584)
+
+Two places said the escalation alert reports the ticket's holder _at escalation time,
+deliberately_: the `assignedUserId` comment in Interfaces and the
+reassigned-while-unacknowledged row in Failure Modes. **Neither describes what shipped, and
+the code is the one that is right.**
+
+`EscalationAlertResponse` is assembled in `apps/api/src/tickets/escalation-alert.mapper.ts`,
+whose projection reads the assignment through the **ticket** relation
+(`ticket: { select: { assignedUserId, assignedTeamId } }`), evaluated when the list is
+served. A ticket reassigned after the escalation therefore reads as it stands now, on every
+read.
+
+**Trade-off axis: the alert as an actionable work item, vs. the alert as an audit record.**
+
+**Chosen — the current holder, re-read on every list.** A supervisor opens an
+unacknowledged escalation in order to act on it, and the only assignment that can be acted
+on is the one in force now. An alert naming the agent who handed the ticket on two hours ago
+sends the supervisor to the wrong person and does it silently, because the row looks
+authoritative either way.
+
+**Rejected — snapshot the assignment onto the escalation.** It is neither free nor needed.
+Not free: by decision 4's per-type encoding an `escalated` event carries `assignment: null`,
+and its JSONB payload carries only `reason`, `cause` and the optional `escalatedToUserId` —
+who held the ticket at that instant is recorded nowhere on the escalation, so this is new
+payload keys or new columns, a writer change, a mapper change, and a ruling on what the rows
+already committed are supposed to say. Not needed: `ticket_events` answers it already. The
+`assigned` / `unassigned` events carry both sides of every move, so the holder at any
+instant is the last such event before the escalation's `created_at` — reconstructable from
+the append-only trail decision 4 exists to provide. **The alert is the work item;
+`ticket_events` is the record.** Carrying the point-in-time fact in both places would create
+a second source for it and make the alert the one a console trusts.
+
+**Also corrected: `packages/contracts/src/escalations.ts`.** The published doc comment on
+`assignedUserId` opened with "Who was holding the ticket **when it was escalated**" and then
+described current-holder behaviour in its second clause (#161), so the field's only
+contract-level description contradicted itself. It now states the semantics once.
+
+**Nothing about the running system changes.** No schema, no query, no response shape, no
+field name: `assignedUserId` / `assignedTeamId` are accurate names for the ticket's
+assignment and stay as they are. This amendment is a correction to the specification, not a
+change request.
+
+**What would reopen this.** A tenant asking "who was holding it when it was escalated?" as a
+list-level fact rather than a per-ticket lookup — a reporting requirement, not this story's.
+It is answerable from `ticket_events` without a schema change, and should be built as a
+reporting read rather than by widening the alert.

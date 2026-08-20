@@ -1,5 +1,3 @@
-import { SectionCard } from '@/components/ui/SectionCard';
-import { Stack } from '@/components/layout/Stack';
 import { content } from '@/content/en';
 import { verifySession } from '@/lib/session/session';
 import { loadConversationThread } from '@/features/inbox/thread.data';
@@ -11,15 +9,25 @@ import { serviceWindowAt } from '@/features/inbox/service-window';
 import { InternalNotesPanel } from './InternalNotesPanel';
 import { MessageComposer, MessageComposerSkeleton } from './MessageComposer';
 import { MessageList, MessageListSkeleton } from './MessageList';
+import { ThreadComposerDock } from './ThreadComposerDock';
 import { ThreadComposerTabs } from './ThreadComposerTabs';
 import { ThreadHeader, ThreadHeaderSkeleton, type ThreadQuery } from './ThreadHeader';
+import styles from './ThreadSection.module.css';
 
 /**
  * The open conversation: its header, its messages, and the box an agent types
  * into. Usage: inside a Suspense boundary on the inbox page, keyed on the
  * conversation id, with `ThreadSectionSkeleton` as the fallback.
  *
- * One card. The internal notes used to be a second one below the thread; they
+ * ## Three parts, one column
+ *
+ * The header does not scroll, the message stream does, and the composer is
+ * pinned to the foot — so the reply box is on screen whatever the length of the
+ * conversation. The column is `InboxLayout`'s, and it is named there; this is
+ * only what fills it, which is why there is no card and no heading here. The
+ * contact's name at the top is the thread's visible header.
+ *
+ * The internal notes used to be a second card below the thread; they
  * are now the composer's other tab, which is where the reference layout puts
  * them and — more to the point — where they are actually used: an agent writes a
  * note *instead of* a reply, and the two boxes stacked one above the other made
@@ -65,54 +73,58 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
   );
 
   return (
-    <Stack gap="4">
-      <SectionCard id="conversation" title={content.inbox.threadHeading}>
-        <Stack gap="4">
-          <ThreadHeader
-            conversation={conversation}
-            assigneeName={nameFor(userNames, conversation.assignedUserId)}
-            teamName={nameFor(teamNames, conversation.assignedTeamId)}
-            holdPermissions={{
-              canClaim: session.checker.can('conversation:claim'),
-              canAssign: session.checker.can('conversation:assign'),
-            }}
-            currentUserId={session.principal.userId}
-            query={query}
-            isUnclaimed={isUnclaimed}
-          />
-          <MessageList
-            messages={messages}
-            senderNames={userNames}
-            hasOlderMessages={hasOlderMessages}
-          />
-          <ThreadComposerTabs
-            reply={
-              /* The window is evaluated here, on the server, and handed down as
-                 the composer's starting point — so the first client render
-                 produces the markup that was sent and the countdown does not
-                 hydrate into a mismatch. The composer owns it from there. */
-              <MessageComposer
-                conversationId={conversation.id}
-                serviceWindowExpiresAt={conversation.serviceWindowExpiresAt}
-                initialWindow={serviceWindowAt(conversation.serviceWindowExpiresAt, new Date())}
-                canSend={session.checker.can('conversation:send')}
-                isUnclaimed={isUnclaimed}
-                cannedResponses={cannedResponses}
-              />
-            }
-            note={
-              <InternalNotesPanel
-                conversationId={conversation.id}
-                notes={notes}
-                authorNames={userNames}
-                canWrite={session.checker.can('conversation:note')}
-                isUnclaimed={isUnclaimed}
-              />
-            }
-          />
-        </Stack>
-      </SectionCard>
-    </Stack>
+    <div className={styles.thread}>
+      <div className={styles.header}>
+        <ThreadHeader
+          conversation={conversation}
+          assigneeName={nameFor(userNames, conversation.assignedUserId)}
+          teamName={nameFor(teamNames, conversation.assignedTeamId)}
+          holdPermissions={{
+            canClaim: session.checker.can('conversation:claim'),
+            canAssign: session.checker.can('conversation:assign'),
+          }}
+          currentUserId={session.principal.userId}
+          query={query}
+          isUnclaimed={isUnclaimed}
+        />
+      </div>
+
+      <div className={styles.stream}>
+        <MessageList
+          messages={messages}
+          senderNames={userNames}
+          hasOlderMessages={hasOlderMessages}
+        />
+      </div>
+
+      <ThreadComposerDock>
+        <ThreadComposerTabs
+          reply={
+            /* The window is evaluated here, on the server, and handed down as
+               the composer's starting point — so the first client render
+               produces the markup that was sent and the countdown does not
+               hydrate into a mismatch. The composer owns it from there. */
+            <MessageComposer
+              conversationId={conversation.id}
+              serviceWindowExpiresAt={conversation.serviceWindowExpiresAt}
+              initialWindow={serviceWindowAt(conversation.serviceWindowExpiresAt, new Date())}
+              canSend={session.checker.can('conversation:send')}
+              isUnclaimed={isUnclaimed}
+              cannedResponses={cannedResponses}
+            />
+          }
+          note={
+            <InternalNotesPanel
+              conversationId={conversation.id}
+              notes={notes}
+              authorNames={userNames}
+              canWrite={session.checker.can('conversation:note')}
+              isUnclaimed={isUnclaimed}
+            />
+          }
+        />
+      </ThreadComposerDock>
+    </div>
   );
 }
 
@@ -120,24 +132,28 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
  * What the thread pane shows for an id this reader may not open — a shared
  * supervisor link, or a thread claimed by somebody else since it was listed.
  *
- * The same card frame the real thread uses, and no Retry: the answer will not
+ * The same column frame the real thread uses, and no Retry: the answer will not
  * change on a second attempt, so offering one would be a button that cannot work.
  * The list beside it is untouched.
  */
 function ThreadUnavailable() {
   return (
-    <SectionCard id="conversation" title={content.inbox.threadHeading}>
-      <EmptyState
-        heading={content.inbox.threadUnavailableHeading}
-        body={content.inbox.threadUnavailableBody}
-      />
-    </SectionCard>
+    <div className={styles.thread}>
+      <div className={styles.state}>
+        <EmptyState
+          heading={content.inbox.threadUnavailableHeading}
+          body={content.inbox.threadUnavailableBody}
+        />
+      </div>
+    </div>
   );
 }
 
 /**
- * Mirrors `ThreadSection`: the same card, the same header, the same scroll
- * region and the same composer box below it.
+ * Mirrors `ThreadSection`: the same full-height column, the same fixed header,
+ * the same stream filling what is left, and the same pinned composer — so the
+ * swap to a real conversation moves nothing, at the moment an agent is watching
+ * it most closely.
  *
  * The tab strip is not drawn. It is chrome the real component paints instantly
  * and identically whatever the data says, and a placeholder for it would be a
@@ -146,14 +162,18 @@ function ThreadUnavailable() {
  */
 export function ThreadSectionSkeleton({ query }: { query: ThreadQuery }) {
   return (
-    <Stack gap="4">
-      <SectionCard id="conversation" title={content.inbox.threadHeading}>
-        <Stack gap="4">
-          <ThreadHeaderSkeleton query={query} />
-          <MessageListSkeleton />
-          <MessageComposerSkeleton />
-        </Stack>
-      </SectionCard>
-    </Stack>
+    <div className={styles.thread}>
+      <div className={styles.header}>
+        <ThreadHeaderSkeleton query={query} />
+      </div>
+
+      <div className={styles.stream}>
+        <MessageListSkeleton />
+      </div>
+
+      <ThreadComposerDock>
+        <MessageComposerSkeleton />
+      </ThreadComposerDock>
+    </div>
   );
 }

@@ -1,23 +1,205 @@
+/*
+ * The inbox's four regions.
+ *
+ * A fixed-height workspace, not a document: the grid is exactly as tall as
+ * `<main>` (`PageShell variant="fill"`), each region scrolls itself, and the
+ * hairline between two regions is the separation. That is why there are no
+ * cards, no gap and no radius in this file — a gap here is a strip of canvas
+ * showing through a screen that is meant to read as one surface.
+ */
 .layout {
   display: grid;
-  gap: var(--space-4);
-  /* One column, and `minmax(0, 1fr)` rather than `1fr`: a grid track's default
-     `auto` minimum is its content, which is how a long word in a message makes
-     the whole page scroll sideways at 320px. */
+  block-size: 100%;
+  min-block-size: 0;
+  /* Mobile first: the filter disclosure above whichever single region is on
+     screen, with the context panel as a band under it. `minmax(0, 1fr)` rather
+     than `1fr`, because a track's default `auto` minimum is its content — which
+     is how a long word in a message makes the whole thing scroll sideways at
+     320px. */
   grid-template-columns: minmax(0, 1fr);
+  /*
+   * Both content-sized rows are capped, and the pane keeps the rest.
+   *
+   * `auto` is the trap here: in a fixed-height grid a content-sized track takes
+   * whatever it likes and the `1fr` pane gets the remainder — which can be
+   * nothing. An open filter disclosure is about 300px, so on a landscape phone
+   * the conversation list went to zero height and the filter list was cut off by
+   * `main { overflow: hidden }` with no way to scroll to the rest of it. The
+   * context band had the same problem at 1024x800 against the composer.
+   *
+   * Capped, each band scrolls itself — the `overflow-y: auto` further down
+   * cannot engage until the track stops growing to fit it — and the pane is
+   * never squeezed out. Track proportions, not design values: there is no token
+   * for "half the workspace", and naming one would claim the number means
+   * something outside this grid.
+   */
+  --row-filters-max: 50%;
+  --row-context-max: 30%;
+
+  grid-template-rows:
+    fit-content(var(--row-filters-max)) minmax(0, 1fr)
+    fit-content(var(--row-context-max));
+  grid-template-areas:
+    'filters'
+    'pane'
+    'context';
+  background: var(--color-surface);
 }
 
+.filters {
+  grid-area: filters;
+}
+
+/* One cell between them, because below the two-pane breakpoint exactly one is on
+   screen; from 64rem they take a column each. */
+.list,
+.thread {
+  grid-area: pane;
+}
+
+.context {
+  grid-area: context;
+}
+
+/*
+ * `position: relative` on every region, and it is load-bearing rather than
+ * decorative: `overflow` clips a descendant only when the region is also its
+ * containing block. `VisuallyHidden` is `position: absolute`, so without this it
+ * resolves against the initial containing block, escapes the region it lives in
+ * and stretches the *document* to reach it — which is the one thing this whole
+ * layout exists to prevent. It cost 540px of page scroll at 1920 before it was
+ * measured.
+ */
 .filters,
 .list,
 .thread,
 .context {
+  position: relative;
   min-inline-size: 0;
+  min-block-size: 0;
+}
+
+/* The two regions that index the work sit on `surface-sunken`, the two that hold
+   the reading on `surface`. That is what gives the thread its emphasis, rather
+   than a shadow doing the job. */
+.filters,
+.list {
+  background: var(--color-surface-sunken);
+}
+
+.thread,
+.context {
+  background: var(--color-surface);
+}
+
+/* Each region scrolls itself, and contains the overscroll so a flick in the
+   conversation list does not drag the frame behind it. */
+.filters,
+.list,
+.context {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The thread is the exception: a flex column whose message stream and composer
+   own their own overflow, so the composer stays pinned to its foot. */
+.thread {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/*
+ * The thread arrives wrapped in its error boundary, which renders a plain `div`
+ * of its own. Without this the height stops at that wrapper: `ThreadSection`'s
+ * `block-size: 100%` resolves against `auto`, the column overflows instead of
+ * its message stream scrolling, and the composer is left floating mid-column —
+ * or clipped outright at a short viewport. Layout of a child is the parent's
+ * job, and this region's whole contract is that its child fills it.
+ */
+.thread > * {
+  flex: 1 1 auto;
+  min-block-size: 0;
+}
+
+.list {
+  padding: var(--space-3);
+}
+
+.context {
+  padding: var(--space-4);
+}
+
+/*
+ * The dividers. The filter column is a *row* before it is a column, so its
+ * divider is a `border-block-end` until 84rem and a `border-inline-end` after —
+ * a divider that ignored that would float in the middle of nothing at one width.
+ * Logical properties throughout, so RTL turns them for free.
+ */
+.filters {
+  border-block-end: var(--border-hairline) solid var(--color-border);
+}
+
+.context {
+  border-block-start: var(--border-hairline) solid var(--color-border);
 }
 
 /* Below the two-pane breakpoint exactly one of list and thread is on screen. */
 .layout[data-has-thread='false'] .thread,
 .layout[data-has-thread='true'] .list {
   display: none;
+}
+
+/*
+ * And the context panel is not on screen at all below it — the one deviation
+ * from "unchanged below 64rem", made because the two rules collided.
+ *
+ * A band under the thread was a *second* region at a width whose whole rule is
+ * one region at a time, and in a fixed-height workspace it takes its height
+ * from the thread rather than from the page: on a landscape phone the band left
+ * the pane 0px and the composer was clipped entirely. The composer being
+ * reachable is the acceptance criterion; a stacked details band is not. It
+ * returns at 64rem, where there is height to spend on it.
+ */
+.context {
+  display: none;
+}
+
+/*
+ * Moving between the two below that breakpoint: the arriving pane slides in from
+ * the side it came from, so an agent can feel which direction they went. A
+ * token-sized offset rather than a full-width slide — it reads as direction
+ * without repainting the screen on first load. The token layer flattens the
+ * duration to 1ms under `prefers-reduced-motion`, so this is a no-op there.
+ */
+@keyframes paneEnter {
+  from {
+    opacity: 0;
+    translate: var(--pane-enter-from) 0;
+  }
+}
+
+@media (max-width: 63.9375rem) {
+  .layout[data-has-thread='true'] .thread,
+  .layout[data-has-thread='false'] .list {
+    animation: paneEnter var(--duration-medium) var(--easing-enter);
+  }
+
+  .thread {
+    --pane-enter-from: var(--space-6);
+  }
+
+  .list {
+    --pane-enter-from: calc(var(--space-6) * -1);
+  }
+
+  [dir='rtl'] .thread {
+    --pane-enter-from: calc(var(--space-6) * -1);
+  }
+
+  [dir='rtl'] .list {
+    --pane-enter-from: var(--space-6);
+  }
 }
 
 /*
@@ -33,15 +215,29 @@
 @media (min-width: 64rem) {
   .layout {
     grid-template-columns: var(--size-pane-list) minmax(0, 1fr);
-    align-items: start;
+    grid-template-areas:
+      'filters filters'
+      'list    thread'
+      'context context';
   }
 
-  .filters,
+  .list {
+    grid-area: list;
+    border-inline-end: var(--border-hairline) solid var(--color-border);
+  }
+
+  .thread {
+    grid-area: thread;
+  }
+
   .context {
-    grid-column: 1 / -1;
+    display: block;
   }
 
-  .layout[data-has-thread='false'] .thread,
+  .layout[data-has-thread='false'] .thread {
+    display: flex;
+  }
+
   .layout[data-has-thread='true'] .list {
     display: block;
   }
@@ -49,33 +245,40 @@
 
 /*
  * 84rem: the first width where the filter column, the list and the thread all
- * fit beside the rail with the thread still above 400px — `--size-rail` +
- * `PageShell`'s gutter + `--size-pane-filters` + `--size-pane-list` + two gaps.
+ * fit beside the rail with the thread still above 400px —
+ * `--size-rail` + `--size-pane-filters` + `--size-pane-list`.
  */
 @media (min-width: 84rem) {
   .layout {
     grid-template-columns: var(--size-pane-filters) var(--size-pane-list) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) fit-content(var(--row-context-max));
+    grid-template-areas:
+      'filters list thread'
+      'context context context';
   }
 
+  /* A column now, so the divider turns with it. */
   .filters {
-    grid-column: auto;
+    border-block-end: 0;
+    border-inline-end: var(--border-hairline) solid var(--color-border);
   }
 }
 
 /*
- * 105rem: the fourth column. `PageShell` caps the canvas at
- * `--size-container-xl`, so this is the first viewport where the container is at
- * full width *and* has a column to spare — below it the context panel is a band
- * under the panes instead, which reads fine because it is a short card.
+ * 105rem: the fourth column. Below it the context panel is a band under the
+ * panes instead, which reads fine because it is two short cards.
  */
 @media (min-width: 105rem) {
   .layout {
     grid-template-columns:
       var(--size-pane-filters) var(--size-pane-list)
       minmax(0, 1fr) var(--size-pane-side);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: 'filters list thread context';
   }
 
   .context {
-    grid-column: auto;
+    border-block-start: 0;
+    border-inline-start: var(--border-hairline) solid var(--color-border);
   }
 }

@@ -1,7 +1,6 @@
 import { content } from '@/content/en';
-import { Stack } from '@/components/layout/Stack';
+import { VisuallyHidden } from '@/components/layout/VisuallyHidden';
 import { PageShell } from '@/components/shell/PageShell';
-import { PageHeader } from '@/components/shell/PageHeader';
 import { InboxFilterNav } from '@/features/inbox/components/InboxFilterNav';
 import { InboxLayout } from '@/features/inbox/components/InboxLayout';
 import { InboxSectionSkeleton } from '@/features/inbox/components/InboxSection';
@@ -9,7 +8,8 @@ import { NoThreadSelected } from '@/features/inbox/components/NoThreadSelected';
 
 /**
  * Route-level skeleton, composed from the page's own section skeletons and the
- * same four-region frame.
+ * same four-region workspace — including `variant="fill"`, so the frame the
+ * agent waits in is the frame they end up in and the arrival shifts nothing.
  *
  * `hasThread` is `false` because `loading.tsx` renders before the search
  * parameters are read: the list is what every arrival at this route sees first,
@@ -24,28 +24,27 @@ import { NoThreadSelected } from '@/features/inbox/components/NoThreadSelected';
  */
 export default function InboxLoading() {
   return (
-    <PageShell>
-      <Stack gap="5">
-        <PageHeader title={content.inbox.title} />
-        <InboxLayout
-          hasThread={false}
-          filters={
-            <InboxFilterNav
-              scope="assigned"
-              status={undefined}
-              conversationId={null}
-              // The permission is not resolved this early; the settings link is
-              // one entry, and offering it here to somebody who may not hold
-              // `channel:manage` for the half-second before the page arrives is
-              // worse than leaving it to the page.
-              canManageChannels={false}
-            />
-          }
-          list={<InboxSectionSkeleton />}
-          thread={<NoThreadSelected />}
-          context={null}
-        />
-      </Stack>
+    <PageShell variant="fill">
+      <VisuallyHidden as="h1">{content.inbox.title}</VisuallyHidden>
+
+      <InboxLayout
+        hasThread={false}
+        filters={
+          <InboxFilterNav
+            scope="assigned"
+            status={undefined}
+            conversationId={null}
+            // The permission is not resolved this early; the settings link is
+            // one entry, and offering it here to somebody who may not hold
+            // `channel:manage` for the half-second before the page arrives is
+            // worse than leaving it to the page.
+            canManageChannels={false}
+          />
+        }
+        list={<InboxSectionSkeleton />}
+        thread={<NoThreadSelected />}
+        context={null}
+      />
     </PageShell>
   );
 }

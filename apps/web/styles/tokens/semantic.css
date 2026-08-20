@@ -250,6 +250,18 @@
   --size-brand-block-lg: var(--scale-size-brand-block-md);
   --size-brand-inline-lg: var(--scale-size-brand-inline-md);
   --size-swatch: var(--scale-size-swatch);
+
+  /*
+   * How far the toast region sits above the bottom of the viewport, over and
+   * above its own inset.
+   *
+   * `0` for an ordinary page: `PageShell`'s block-end padding already keeps the
+   * last thing on the page clear of a toast. A fill-mode route has no such
+   * padding and pins a control there instead — the inbox's composer — so it
+   * publishes that control's measured height here and the toast lands above it.
+   * See `components/ui/useToastClearance.ts`.
+   */
+  --offset-toast-block-end: 0px;
 }
 
 /*

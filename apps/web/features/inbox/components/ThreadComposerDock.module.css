@@ -1,0 +1,30 @@
+.dock {
+  /*
+   * Pinned to the foot of the thread column, which is the scrollport: on a
+   * viewport too short for the whole thread the column scrolls
+   * (`ThreadSection.module.css`) and this stays put while the header and the
+   * message stream move under it. The reply box is reachable without hunting
+   * for it, which is the point of the fixed-height workspace around it.
+   *
+   * Natural height, and it does not shrink — the column above is what gives way.
+   */
+  position: sticky;
+  inset-block-end: 0;
+  /*
+   * `position: sticky` establishes a stacking context whatever its z-index, so
+   * everything in the composer — including the shortcut picker that opens out of
+   * it — is painted as part of this box rather than on its own. At `auto` that
+   * put the whole dock underneath the message stream's sticky day chips, which
+   * carry `--z-sticky`: the picker came out behind them, and so would the top
+   * edge of the composer as a chip scrolled past it. Sticky footer over scrolling
+   * content is the same layer that chip is claiming, and this one comes later.
+   */
+  z-index: var(--z-sticky);
+  flex: 0 0 auto;
+  padding: var(--space-4);
+  /* The bottom of the viewport on this route, so the home indicator is the
+     composer's problem rather than the page's. */
+  padding-block-end: calc(var(--space-4) + env(safe-area-inset-bottom));
+  background: var(--color-surface);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}

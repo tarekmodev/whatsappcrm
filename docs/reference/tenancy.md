@@ -388,6 +388,9 @@ the only thing between a suspended tenant's agent and the API. It has to be defa
 explicit allowlist, and TAR-412 has to test it directly — status × role × route — rather than
 observing that the database refuses.
 
+Which statuses each gate admits, and which of the two exists today, is tabulated in
+[0012 — lifecycle state machine](../architecture/0012-tenant-lifecycle-state-machine.md#two-gates-and-only-one-of-them-exists).
+
 Observed on a local stack, as the app role:
 
 ```text

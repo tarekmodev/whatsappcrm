@@ -198,7 +198,7 @@ all of them:
 | ------- | ------------------------------------------ | --------------------------------------------------------------------------- |
 | Rail    | `apps/web/components/shell/AppSidebar.tsx` | Fixed, collapsible, icon + label, More/Less past five entries, footer slot  |
 | Top bar | `apps/web/components/shell/AppTopBar.tsx`  | Search, quick create, account menu; the drawer trigger below the breakpoint |
-| Canvas  | `apps/web/components/shell/PageShell.tsx`  | Gutter and vertical rhythm for the sections                                 |
+| Canvas  | `apps/web/components/shell/PageShell.tsx`  | Gutter and vertical rhythm for the sections, or a full-height workspace     |
 | Drawer  | `apps/web/components/shell/MobileMenu.tsx` | The rail, below 48rem                                                       |
 
 Rules that hold for all of them:
@@ -234,6 +234,43 @@ Rules that hold for all of them:
   and no tenant name (`packages/contracts/src/auth.ts`); naming and branding the workspace
   is TAR-29.
 
+#### The canvas has two variants: `flow` and `fill`
+
+`PageShell` takes a `variant`, and it is **opt-in per route**. Ordinary screens — Reports,
+Tickets, Settings — say nothing and get `flow`. A list-and-detail screen that should read
+as one workspace asks for `fill`. The inbox is the only route on it today.
+
+|           | `flow` (default)                                                             | `fill`                                                        |
+| --------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Height    | Grows with its content; the document scrolls                                 | Exactly the region the bar left; the document does not scroll |
+| Width     | Capped at `--size-container-xl`, fluid gutter                                | Full-bleed — no cap, no gutter                                |
+| Rhythm    | `Stack gap="5"` between sections, block padding, toast clearance at the foot | None: the workspace owns its own interior                     |
+| Scrolling | The page                                                                     | Each column inside, with `overscroll-behavior: contain`       |
+
+Three things about `fill` are load-bearing, and each of them is a mistake somebody would
+otherwise make again:
+
+- **Fill the space with flex, never with arithmetic.** `calc(100dvh - var(--size-bar))` is
+  wrong: `AppTopBar` is `flex-wrap: wrap` with a safe-area inset, so below 48rem the search
+  field takes a line of its own and the bar is taller than that token — at exactly the
+  width where a pinned composer matters most. `AppShell` instead sets `block-size: 100dvh`
+  and `overflow: hidden` on the frame, and `min-block-size: 0` on the column and on
+  `<main>`, so `<main>` measures whatever the bar actually left. There is no height token
+  to keep in sync, and there must not be one.
+- **Full-bleed means full-bleed.** `fill` drops `Container`'s `xl` cap along with the
+  gutter and the block padding. Keeping the cap would put canvas either side of the
+  workspace above 90rem — the same defect as ragged column bottoms, rotated 90°. The
+  hairline dividers between columns are the structure; a gutter has nothing left to do.
+- **Something has to keep the toast off the pinned control.** `flow`'s block-end padding is
+  what does that on an ordinary page, and `fill` deletes it. The toast region reads
+  `--offset-toast-block-end` (declared `0` in `semantic.css`), and a route that pins a
+  control to the viewport bottom publishes that control's measured height through
+  `useToastClearance`. A toast must never cover a send button.
+
+`AppShell` reads the variant from `[data-page-shell='fill']` with `:has()`, because the
+shell is an ancestor of the page and a page cannot hand its ancestor a prop. That attribute
+is a documented seam, the same kind as `[data-rail]` in the other direction.
+
 ## Structural patterns
 
 ### List views
@@ -265,11 +302,30 @@ sitting beside it.
 
 ### The inbox
 
-Four regions inside the console frame, owned by `InboxLayout`: the filter column, the
-conversation list, the open thread, and the context panel beside it. Below 64rem one
-region is on screen at a time and the filters collapse into their own disclosure; from
-64rem the first three sit side by side with the context panel as a band under them; from
-90rem the context panel takes its own column.
+Four regions inside the console frame, owned by `InboxLayout`, and the one route on the
+canvas's `fill` variant: the filter column, the conversation list, the open thread, and the
+context panel beside it. Below 64rem one region is on screen at a time and the filters
+collapse into their own disclosure; from 64rem the list and the thread sit side by side
+with the filters a band above and the context panel a band under; from 84rem the filters
+take a column of their own; from 105rem the context panel takes one too.
+
+It is a **workspace, not a page of cards**, and that is a geometry rule rather than a
+decoration:
+
+- The four regions fill the height exactly and each scrolls itself. The composer is
+  pinned to the foot of the thread column and is reachable without scrolling at every
+  width, including below 48rem where the top bar takes two lines.
+- They are separated by hairline dividers, not by gaps and radii — no canvas shows
+  between, beneath or either side of them. The filter column's divider is a
+  `border-block-end` while it is a band and a `border-inline-end` from 84rem, because it
+  is a row before it is a column.
+- The regions that index the work (filters, list) sit on `--color-surface-sunken`; the
+  ones that hold the reading (thread, context) sit on `--color-surface`. That is what
+  gives the thread its emphasis; no shadow does it.
+- There is **no `PageHeader` on this route** and no card titles. The workspace is the
+  page: the `<h1>` is visually hidden for the document outline, and the filter column's
+  own "Inbox" heading is the visible one. Each region carries its accessible name on
+  itself (`aria-label`), which is what the card headings used to supply.
 
 The filter entries are data (`features/inbox/inbox-filters.ts`), each a scope plus an
 optional status — so there is no entry the conversations endpoint cannot answer. The
@@ -292,19 +348,20 @@ needs a "create a ticket from this" affordance, the endpoint comes first.
 Compose these and the screen matches this document without you specifying a colour or a
 space:
 
-| You need               | Use                                             |
-| ---------------------- | ----------------------------------------------- |
-| The frame              | Nothing — `app/(app)/layout.tsx` already has it |
-| Page gutter and rhythm | `PageShell`, then `Stack`                       |
-| The page title         | `PageHeader`                                    |
-| A section              | `SectionCard`                                   |
-| A table                | `DataTable` + `DataTableSkeleton`               |
-| Tabs                   | `Tabs`                                          |
-| Filter pills           | `FilterPills`                                   |
-| An icon                | `Icon`                                          |
-| A person's initial     | `Avatar`                                        |
-| A popup of actions     | `MenuButton`                                    |
-| Loading, empty, error  | `Skeleton`, `EmptyState`, `ErrorState`          |
+| You need                | Use                                             |
+| ----------------------- | ----------------------------------------------- |
+| The frame               | Nothing — `app/(app)/layout.tsx` already has it |
+| Page gutter and rhythm  | `PageShell`, then `Stack`                       |
+| A full-height workspace | `PageShell variant="fill"`                      |
+| The page title          | `PageHeader`                                    |
+| A section               | `SectionCard`                                   |
+| A table                 | `DataTable` + `DataTableSkeleton`               |
+| Tabs                    | `Tabs`                                          |
+| Filter pills            | `FilterPills`                                   |
+| An icon                 | `Icon`                                          |
+| A person's initial      | `Avatar`                                        |
+| A popup of actions      | `MenuButton`                                    |
+| Loading, empty, error   | `Skeleton`, `EmptyState`, `ErrorState`          |
 
 If a screen needs something not on that list, add it to `components/ui/` with a usage
 comment and add a row here. A one-off in a feature folder that a second feature then
