@@ -50,8 +50,8 @@ const LIBRARY: readonly CannedResponseResponse[] = [
   response('/wait', 'Handover to a colleague', 'Passing you to a colleague.'),
 ];
 
-function renderComposer(cannedResponses: readonly CannedResponseResponse[] = LIBRARY) {
-  return render(
+function composer(cannedResponses: readonly CannedResponseResponse[]) {
+  return (
     <ToastProvider>
       <MessageComposer
         conversationId={CONVERSATION_ID}
@@ -61,8 +61,24 @@ function renderComposer(cannedResponses: readonly CannedResponseResponse[] = LIB
         isUnclaimed={false}
         cannedResponses={cannedResponses}
       />
-    </ToastProvider>,
+    </ToastProvider>
   );
+}
+
+function renderComposer(cannedResponses: readonly CannedResponseResponse[] = LIBRARY) {
+  const view = render(composer(cannedResponses));
+
+  return {
+    ...view,
+    /**
+     * The library the server hands down has changed — what a `router.refresh()`
+     * does to this component after a `canned_response.*` event: new props into
+     * the same tree, never a remount.
+     */
+    receiveLibrary: (next: readonly CannedResponseResponse[]) => {
+      view.rerender(composer(next));
+    },
+  };
 }
 
 function replyBox(): HTMLTextAreaElement {
@@ -262,6 +278,70 @@ describe('inserting a response', () => {
     fireEvent.keyDown(type('/hours'), { key: 'Enter' });
 
     expect(options()).toHaveLength(0);
+  });
+});
+
+describe('an admin edits the library while the agent is typing', () => {
+  const EDITED_HOURS_BODY = "We're open every day, 8am to 8pm.";
+  const EDITED: readonly CannedResponseResponse[] = LIBRARY.map((entry) =>
+    entry.shortcut === '/hours' ? { ...entry, body: EDITED_HOURS_BODY } : entry,
+  );
+
+  it('inserts the new text, with no reload and nothing for the agent to do', () => {
+    const view = renderComposer();
+    const box = type('Hi there /hours');
+
+    view.receiveLibrary(EDITED);
+    fireEvent.keyDown(box, { key: 'Enter' });
+
+    expect(box).toHaveValue(`Hi there ${EDITED_HOURS_BODY}`);
+  });
+
+  it('keeps the draft the agent had typed', () => {
+    const view = renderComposer();
+    type('Hi there, one moment');
+
+    view.receiveLibrary(EDITED);
+
+    // The refetch that carries the edit re-renders the route around this box; a
+    // half-written reply must survive it.
+    expect(replyBox()).toHaveValue('Hi there, one moment');
+  });
+
+  it('stops offering a response that was deleted', () => {
+    const view = renderComposer();
+    type('/ho');
+    expect(options()).toHaveLength(2);
+
+    view.receiveLibrary(LIBRARY.filter((entry) => entry.shortcut !== '/hours'));
+
+    expect(options().map((option) => option.textContent)).toEqual([
+      '/holidayPublic holiday closure',
+    ]);
+  });
+
+  it('turns the picker off when the last response goes', () => {
+    const view = renderComposer();
+    const box = type('/ho');
+
+    view.receiveLibrary([]);
+
+    expect(options()).toHaveLength(0);
+    expect(box).not.toHaveAttribute('aria-autocomplete');
+    expect(screen.getByText(content.composer.replyHint)).toBeInTheDocument();
+  });
+
+  it('offers a response an admin has just added, to a tenant that had none', () => {
+    const view = renderComposer([]);
+    type('/h');
+    expect(options()).toHaveLength(0);
+
+    view.receiveLibrary(LIBRARY);
+    // The agent carries on typing; the next keystroke finds a picker that was
+    // not there a moment ago.
+    type('/ho');
+
+    expect(options()).toHaveLength(2);
   });
 });
 

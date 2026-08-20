@@ -70,6 +70,12 @@ export interface MessageComposerProps {
    * this in the browser, so no keystroke costs a request. Empty is ordinary —
    * a tenant with none, or a library that could not be read — and means the
    * reply box behaves exactly as it did before TAR-484.
+   *
+   * It arrives again on every route refresh, which is how an admin's edit
+   * reaches an agent mid-draft: the inbox socket refetches on
+   * `canned_response.saved` and `canned_response.deleted` (`inbox-events.ts`),
+   * and this prop is what changes. Nothing here holds a copy — a memoised one
+   * would go stale exactly when it matters.
    */
   cannedResponses?: readonly CannedResponseResponse[];
 }
