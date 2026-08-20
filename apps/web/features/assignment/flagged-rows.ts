@@ -18,7 +18,15 @@ export interface FlaggedTicketRow {
   reason: FallbackAssignmentReason;
   /** ISO 8601, when the ticket first became stuck. */
   flaggedSince: string;
-  /** The team routing tried, or `null` for the whole-workspace pool. */
+  /**
+   * The team routing tried, or `null` for the whole-workspace pool.
+   *
+   * **Null for every ticket the API can currently produce** (TAR-537): a matched
+   * rule assigns its target and stops, so only rotation-with-nobody defers, and
+   * it defers without a team. Kept rather than dropped because rotating within a
+   * matched team is a story the rule engine explicitly leaves for later, and this
+   * is the cell that reads it.
+   */
   routedToTeamName: string | null;
 }
 

@@ -1282,15 +1282,22 @@ export const content = {
      * that is the remedy ADR 0008 names for `all_at_capacity`.
      */
     assignTicketAgentHint: 'Anyone in this list can take it, including you — even at their limit.',
-    /**
-     * A flagged ticket routed to a team still carries `assignedTeamId`, and
-     * `ticketAssignRequiresReason` counts that as held — so the API requires a
-     * reason for this placement too (ADR 0011 decision 1). Asked for up front
-     * rather than discovered as a 400 after the supervisor has picked somebody.
-     */
     assignTicketReasonLabel: 'Why this person',
-    assignTicketReasonHint:
-      'Auto-assignment could not place this, so the override is recorded on the ticket’s history.',
+    /**
+     * Offered, not demanded. A flagged ticket has no holder, and the API only
+     * asks for a reason when the placement takes work away from somebody (ADR
+     * 0011 decision 1) — so on every row this queue can show, the field is
+     * skippable and says so (TAR-537).
+     *
+     * Takes the flag rather than hardcoding "Optional" because the dialog reads
+     * `ticketAssignRequiresReason` rather than assuming its answer: copy that
+     * said "optional" beside a required asterisk is the drift this parameter
+     * exists to prevent.
+     */
+    assignTicketReasonHint: (isRequired: boolean) =>
+      isRequired
+        ? 'Recorded on the ticket’s history as the reason it was taken from its current holder.'
+        : 'Optional. Anything you write is recorded on the ticket’s history as the reason for the override.',
     assignTicketSubmit: 'Assign ticket',
     assignTicketSuccess: (ticketLabel: string, agentName: string) =>
       `${ticketLabel} assigned to ${agentName}`,

@@ -1462,6 +1462,13 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
   // The deferred queue. Each hangs off a contact of its own so the five tickets
   // above keep their one-active-per-contact invariant, and each names a `routing`
   // explicitly — `defaultRouting` above only knows about tickets nothing deferred.
+  //
+  // **None of them carries an assignment**, and that is the API's behaviour rather
+  // than a gap in the fixtures (TAR-537): a matched rule assigns its target and
+  // stops, so a ticket that reaches deferral is one *no* rule claimed, and
+  // `RuleEngineService.defer` writes the three routing columns and nothing else.
+  // Both assignment columns are therefore null on every `deferred` row, which is
+  // what makes `ticketAssignRequiresReason` false for the whole of this queue.
   ticket({
     id: TICKET_IDS.deferredAtCapacity,
     number: 1041,
@@ -1469,8 +1476,8 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     subject: 'Refund still not showing on the card',
     status: 'open',
     priority: 'high',
-    // Routed to Billing by rule, and then nobody in Billing had room.
-    assignedTeamId: TEAM_IDS.billing,
+    // Nobody in the whole-workspace rotation had room. No team on it: rotation is
+    // what deferred this, and rotation is not asked to work within one.
     routing: {
       state: 'deferred',
       deferredReason: 'all_at_capacity',
@@ -1486,7 +1493,6 @@ export const MOCK_TICKETS: readonly MockTicket[] = [
     subject: 'Cannot complete activation',
     status: 'open',
     priority: 'normal',
-    assignedTeamId: TEAM_IDS.onboarding,
     routing: {
       state: 'deferred',
       deferredReason: 'none_available',

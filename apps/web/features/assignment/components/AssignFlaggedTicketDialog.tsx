@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import type { UserResponse } from '@whatsappcrm/contracts';
+import { ticketAssignRequiresReason, type UserResponse } from '@whatsappcrm/contracts';
 import { Field } from '@/components/ui/Field';
 import { FormDialog } from '@/components/ui/FormDialog';
 import { Notice } from '@/components/ui/Notice';
@@ -30,13 +30,16 @@ import { ticketLabel } from '../ticket-label';
  * The write is reversible — reassigning is the same endpoint with a different
  * name — so there is no second confirmation step in front of it.
  *
- * ⚠️ **A reason is required here**, which it was not before TAR-32. A flagged
- * ticket routed to a team still carries `assignedTeamId`, and the contract's
- * `ticketAssignRequiresReason` counts a team hold as held — so the API refuses a
- * reasonless placement of exactly the `all_at_capacity` tickets this queue is
- * mostly made of. Asking for it here is what keeps this surface working; ADR
- * 0011 decision 1 reads as though it should not be needed, and that mismatch is
- * with the architect.
+ * **The reason follows the contract's own predicate rather than being demanded
+ * outright** (TAR-537). `ticketAssignRequiresReason` is about the ticket's
+ * current holder, and a ticket in this queue has none: every writer of
+ * `routing_state` leaves a `deferred` ticket with both assignment columns null —
+ * a matched rule assigns terminally, and rotation-with-nobody defers without
+ * touching them. So the field is optional on every row this queue can show, and
+ * asking anyway would be the mandatory free-text field in front of bulk triage
+ * that ADR 0011 decision 1 rejected. The predicate is called rather than that
+ * conclusion hardcoded, so the day a deferred ticket can carry a holder the
+ * asterisk comes back on its own.
  */
 export function AssignFlaggedTicketDialog({
   row,
@@ -54,10 +57,18 @@ export function AssignFlaggedTicketDialog({
   const [userId, setUserId] = useState(firstUserId);
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | undefined>(undefined);
+  const isReasonRequired = ticketAssignRequiresReason(row.ticket);
+  const trimmedReason = reason.trim();
 
   const perform = useCallback(
-    async () => assignFlaggedTicketAction(row.ticket.id, { userId, reason: reason.trim() }),
-    [reason, row.ticket.id, userId],
+    async () =>
+      assignFlaggedTicketAction(row.ticket.id, {
+        userId,
+        // Omitted, not sent empty: `reason` is `.trim().min(3).optional()`, so
+        // `''` is a refusal rather than "no reason given".
+        reason: trimmedReason === '' ? undefined : trimmedReason,
+      }),
+    [row.ticket.id, trimmedReason, userId],
   );
 
   const onSuccess = useCallback(() => {
@@ -87,7 +98,10 @@ export function AssignFlaggedTicketDialog({
       requestId={requestId}
       onClose={onClose}
       onSubmit={() => {
-        const error = validateTicketReason(reason, content);
+        // Still validated when it is optional: a reason of two characters is a
+        // 422 whether or not one was demanded, and catching it here beats a
+        // round trip to be told.
+        const error = validateTicketReason(reason, content, { isRequired: isReasonRequired });
 
         setReasonError(error);
 
@@ -129,10 +143,11 @@ export function AssignFlaggedTicketDialog({
 
           <TicketReasonField
             label={content.assignment.assignTicketReasonLabel}
-            hint={content.assignment.assignTicketReasonHint}
+            hint={content.assignment.assignTicketReasonHint(isReasonRequired)}
             value={reason}
             error={reasonError}
             isDisabled={isPending}
+            isRequired={isReasonRequired}
             onChange={(next) => {
               setReason(next);
 
