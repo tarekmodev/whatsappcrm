@@ -5,6 +5,9 @@ import {
   AI_DEFAULT_MODEL,
   BOT_CONFIDENCE,
   BotInboundTriggerSchema,
+  CreateKnowledgeDocumentInputSchema,
+  KNOWLEDGE_DOCUMENT_LIMITS,
+  UpdateKnowledgeDocumentInputSchema,
   UpdateAiConfigInputSchema,
   botInboundJobId,
   compositeConfidence,
@@ -111,5 +114,50 @@ describe('botInboundJobId', () => {
     expect(botInboundJobId({ ...trigger, messageId: trigger.conversationId })).not.toBe(
       botInboundJobId(trigger),
     );
+  });
+});
+
+describe('the knowledge document content cap', () => {
+  const cap = KNOWLEDGE_DOCUMENT_LIMITS.contentBytes;
+
+  function parse(content: string) {
+    return CreateKnowledgeDocumentInputSchema.safeParse({ title: 'Refund policy', content });
+  }
+
+  it('accepts a document at exactly the published size', () => {
+    // The case the API used to refuse before it reached any of this: Express
+    // capped bodies at 100 KB while the contract advertised 256 KiB.
+    expect(parse('a'.repeat(cap)).success).toBe(true);
+  });
+
+  it('refuses one byte more', () => {
+    expect(parse('a'.repeat(cap + 1)).success).toBe(false);
+  });
+
+  it('counts bytes rather than code units, so the limit means one thing in every language', () => {
+    // Arabic is two UTF-8 bytes per letter. Counted as UTF-16 code units — which
+    // is what `z.string().max()` does — this document was inside a cap named in
+    // bytes while being twice its size.
+    const arabic = 'ن'.repeat(cap / 2 + 1);
+
+    expect(arabic.length).toBeLessThan(cap);
+    expect(parse(arabic).success).toBe(false);
+  });
+
+  it('counts an emoji as the four bytes it is, not the two code units it looks like', () => {
+    const withEmoji = 'a'.repeat(cap - 4) + '😀';
+
+    expect(withEmoji.length).toBeLessThan(cap);
+    expect(parse(withEmoji).success).toBe(true);
+    expect(parse('a'.repeat(cap - 3) + '😀').success).toBe(false);
+  });
+
+  it('carries the cap through to the update schema, which derives from it', () => {
+    expect(UpdateKnowledgeDocumentInputSchema.safeParse({ content: 'a'.repeat(cap) }).success).toBe(
+      true,
+    );
+    expect(
+      UpdateKnowledgeDocumentInputSchema.safeParse({ content: 'a'.repeat(cap + 1) }).success,
+    ).toBe(false);
   });
 });

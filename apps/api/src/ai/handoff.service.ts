@@ -18,6 +18,7 @@ import { ConversationBotState } from '../generated/prisma/enums';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { QueueService } from '../queue/queue.service';
 import { HandoffNotFoundError } from './ai.errors';
+import { countRepliesThisEngagement } from './engagement-replies';
 
 /**
  * Releasing a conversation to a human, and telling that human what happened
@@ -144,9 +145,19 @@ export class HandoffService {
     }
 
     const ticketId = await this.activeTicketId(conversationId);
-    const botReplyCount = await this.prisma.botTurn.count({
-      where: { conversationId, outcome: 'replied' },
-    });
+
+    // Scoped to this engagement, and the same helper the gate uses. The pair
+    // written below has to describe one span of time: `bot_engaged_at` already
+    // did, and a lifetime count beside it made the console's handoff card
+    // contradict itself — "5 replies" above a transcript holding two, because
+    // the three from a conversation resolved in June were still in `bot_turns`.
+    // The check constraint cannot catch that; it only asks the count to be zero
+    // when there is no stamp.
+    const botReplyCount = await countRepliesThisEngagement(
+      this.prisma,
+      conversationId,
+      state.botEngagedAt,
+    );
 
     await this.prisma.$tenantTransaction(async (tx) => {
       await this.record(tx, {

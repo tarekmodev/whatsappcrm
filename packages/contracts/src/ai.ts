@@ -255,11 +255,21 @@ export type KnowledgeDocumentStatus = (typeof KNOWLEDGE_DOCUMENT_STATUSES)[numbe
 
 /**
  * The two caps, so "how large can a knowledge base get" has an answer before a
- * tenant finds one. Exceeding `contentBytes` is `payload_too_large`; exceeding
- * `documentsPerTenant` is `conflict`.
+ * tenant finds one. Exceeding `contentBytes` is `validation_failed`, naming the
+ * limit; exceeding `documentsPerTenant` is `conflict`.
+ *
+ * `payload_too_large` is a different failure and a coarser one — the API's JSON
+ * body limit, which `configureApp` sets above this cap precisely so a document
+ * at the documented size is accepted rather than rejected by the parser before
+ * any of this is read.
  */
 export const KNOWLEDGE_DOCUMENT_LIMITS = {
-  /** 256 KiB of content per document. */
+  /**
+   * 256 KiB of content per document, counted in **UTF-8 bytes** as the name
+   * says — not in UTF-16 code units, which would accept roughly twice this much
+   * Arabic or Chinese and make the published number mean different things in
+   * different languages.
+   */
   contentBytes: 262_144,
   titleLength: 200,
   sourceUrlLength: 2048,
@@ -297,9 +307,45 @@ export const KnowledgeDocumentListItemSchema = KnowledgeDocumentResponseSchema.o
 
 export type KnowledgeDocumentListItem = z.infer<typeof KnowledgeDocumentListItemSchema>;
 
+/**
+ * The content cap, measured the way it is named.
+ *
+ * `z.string().max()` counts UTF-16 code units, so the same limit accepted about
+ * twice the advertised size in Arabic or Chinese and exactly the advertised size
+ * in English — one number meaning two things depending on the tenant's language.
+ *
+ * Counted by hand rather than with `TextEncoder` or `Buffer.byteLength`: this
+ * package is compiled against `lib: ES2023` alone and is consumed by both the
+ * API and the browser, so it may assume neither runtime's globals.
+ *
+ * The length check first is not an optimisation for its own sake. A UTF-8
+ * encoding is never shorter than the string's code-unit count, so a string
+ * longer than the cap is over it whatever it contains — which both answers the
+ * common case in one comparison and bounds the loop below to the cap.
+ */
+function withinContentCap(content: string): boolean {
+  if (content.length > KNOWLEDGE_DOCUMENT_LIMITS.contentBytes) {
+    return false;
+  }
+
+  let bytes = 0;
+
+  // `for…of` iterates code points, so a surrogate pair is one four-byte
+  // character rather than two three-byte ones.
+  for (const character of content) {
+    const codePoint = character.codePointAt(0) ?? 0;
+
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+  }
+
+  return bytes <= KNOWLEDGE_DOCUMENT_LIMITS.contentBytes;
+}
+
+const CONTENT_CAP_MESSAGE = `Content must be at most ${KNOWLEDGE_DOCUMENT_LIMITS.contentBytes} bytes.`;
+
 export const CreateKnowledgeDocumentInputSchema = z.object({
   title: z.string().min(1).max(KNOWLEDGE_DOCUMENT_LIMITS.titleLength),
-  content: z.string().min(1).max(KNOWLEDGE_DOCUMENT_LIMITS.contentBytes),
+  content: z.string().min(1).refine(withinContentCap, { message: CONTENT_CAP_MESSAGE }),
   sourceUrl: z.url().max(KNOWLEDGE_DOCUMENT_LIMITS.sourceUrlLength).optional(),
   language: LocaleSchema.optional(),
 });

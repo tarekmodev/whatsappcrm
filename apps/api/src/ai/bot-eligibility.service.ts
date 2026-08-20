@@ -3,13 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import type { BotInboundTrigger, HandoffReason } from '@whatsappcrm/contracts';
 import { PlanFeaturesService } from '../entitlements/plan-features.service';
 import {
-  BotTurnOutcome,
   ConversationBotState,
   KnowledgeDocumentStatus,
   MessageDirection,
 } from '../generated/prisma/enums';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { toSettings, type AiSettings } from './ai-config.service';
+import { countRepliesThisEngagement } from './engagement-replies';
 
 /**
  * The gate: may the bot take this turn at all (0010 decision 4)?
@@ -97,70 +97,12 @@ export class BotEligibilityService {
       // the opt-out clause is reached, so `false` here is never the answer to
       // "may we message them" — it is "there is nobody to ask about".
       optedOut: conversation !== null && conversation.contact.optedOutAt !== null,
-      botReplyCount: await this.countRepliesThisEngagement(
+      botReplyCount: await countRepliesThisEngagement(
+        this.prisma,
         trigger.conversationId,
         conversation?.botEngagedAt ?? null,
       ),
     };
-  }
-
-  /**
-   * Replies the bot has made **in the engagement that is running now**, not in
-   * the conversation's whole history.
-   *
-   * The distinction is the whole point. `bot_engaged_at` is cleared when a
-   * conversation is resolved or closed (0010 decision 5, `setStatus`), but
-   * `bot_turns` rows are never deleted — they are the tuning record. Counting
-   * them over the conversation's lifetime made the two inputs to the gate mean
-   * different spans of time, and both consumers got it wrong for a returning
-   * customer:
-   *
-   *   * `hasNeverEngaged` saw a null stamp beside a non-zero count and concluded
-   *     the bot *had* spoken, so an opening greeting that missed the knowledge
-   *     base became a terminal handoff again — and the customer's real question,
-   *     one message later, was refused as `already_released`. Precisely the AC1
-   *     defect the narrowing exists to fix, returning by the back door.
-   *   * `max_turns` compared a lifetime total against a per-conversation cap, so
-   *     a contact who had crossed the cap across several separate, long-resolved
-   *     engagements was handed off on every first message for ever — the exact
-   *     opposite of the reset decision 5 promises.
-   *
-   * Scoped, both inputs describe the same span and the two agree by
-   * construction.
-   *
-   * ## The `+ 1`, which is not a fudge
-   *
-   * A turn is claimed on `bot_turns` **before** the model is called, and
-   * `bot_engaged_at` is stamped later, in the transaction that sends the reply.
-   * So the very reply that starts an engagement always has a `created_at`
-   * strictly earlier than the stamp it wrote, and `gte` cannot see it. Every
-   * later reply in that engagement is created after the stamp and is counted
-   * normally.
-   *
-   * A non-null `bot_engaged_at` therefore means exactly one thing — one reply
-   * started this engagement — and it is counted here rather than matched by the
-   * predicate. Without it the cap fires one reply late.
-   */
-  private async countRepliesThisEngagement(
-    conversationId: string,
-    botEngagedAt: Date | null,
-  ): Promise<number> {
-    if (botEngagedAt === null) {
-      // No engagement is running, so there is nothing to count and no query
-      // worth making — the common case, on every conversation the bot has not
-      // yet answered in.
-      return 0;
-    }
-
-    const since = await this.prisma.botTurn.count({
-      where: {
-        conversationId,
-        outcome: BotTurnOutcome.replied,
-        createdAt: { gte: botEngagedAt },
-      },
-    });
-
-    return since + 1;
   }
 
   /** Presence only — the value itself is `ClaudeClient`'s alone. */
