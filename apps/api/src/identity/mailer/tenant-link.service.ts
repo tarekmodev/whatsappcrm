@@ -9,7 +9,8 @@ import { TENANT_PRISMA, type TenantPrisma } from '../../prisma/prisma.tokens';
  * template string at the call site:
  *
  *   * **The host comes from the control plane, not from the request.** It is the
- *     tenant's primary *verified* domain, read here. Taking it from the request
+ *     tenant's primary *deliverable* domain — verified, and attached at the edge
+ *     if it is a custom one — read here. Taking it from the request
  *     `Host` would let an attacker who can reach the reset endpoint aim a
  *     genuine email — carrying a live token — at a host they control (TAR-53,
  *     link shapes).
@@ -39,7 +40,7 @@ export class TenantLinkService {
 
   /**
    * `https://{primary host}{linkPath}#token={token}`, or `null` when the tenant
-   * has no verified domain — which means there is nowhere legitimate to send
+   * has no deliverable domain — which means there is nowhere legitimate to send
    * the recipient, and a caller must not invent one.
    */
   async absoluteLink(linkPath: string, token: string): Promise<string | null> {
@@ -77,16 +78,34 @@ export class TenantLinkService {
   }
 
   /**
-   * The primary verified domain, falling back to the oldest verified one.
+   * The primary **deliverable** domain, falling back to the oldest deliverable
+   * one. Two conditions, and they refuse for different reasons:
    *
-   * An unverified custom domain is skipped for the same reason `HostTenantGuard`
-   * refuses to resolve one: the row exists while DNS and TLS are still being
-   * proved, and mailing a live token to a hostname nobody has demonstrated
-   * control of is worse than not mailing it at all.
+   *   * **Unverified** is skipped for the same reason `HostTenantGuard` refuses
+   *     to resolve one: the row exists while DNS and TLS are still being proved,
+   *     and mailing a live token to a hostname nobody has demonstrated control
+   *     of is worse than not mailing it at all.
+   *   * **Verified but not activated** is skipped because the hostname has no
+   *     route and no certificate until an operator attaches it at the edge
+   *     (TAR-419). A link mailed there does not bounce — it sends, and the
+   *     recipient meets a certificate error or a dead host, so nobody in the
+   *     tenant can accept an invitation or reset a password. `activated_at`
+   *     belongs to custom domains only; the platform subdomain is served by the
+   *     same edge as every other tenant's and never carries one.
+   *
+   * Belt and braces, deliberately (TAR-534): `TenantDomainsService.setPrimary()`
+   * refuses to promote an unactivated domain and `AdminDomainsService` hands
+   * primary back when one is detached, so this filter should never be what saves
+   * a link. It is here because the cost of being wrong is a live token aimed at
+   * an unreachable host, and every future path that clears `activated_at` would
+   * otherwise have to remember the invariant on its own.
    */
   private async primaryHostname(): Promise<string | null> {
     const domain = await this.prisma.tenantDomain.findFirst({
-      where: { verifiedAt: { not: null } },
+      where: {
+        verifiedAt: { not: null },
+        OR: [{ kind: 'platform' }, { activatedAt: { not: null } }],
+      },
       select: { hostname: true },
       // Primary first; then the platform subdomain, which is issued by us and
       // verified at provisioning, ahead of any custom domain.

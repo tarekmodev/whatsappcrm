@@ -5,13 +5,15 @@ import { TenantLinkService } from './tenant-link.service';
 function build(
   domain: { hostname: string } | null,
   scheme = 'https',
-): { links: TenantLinkService; seenOrder: unknown } {
+): { links: TenantLinkService; seenOrder: unknown; seenWhere: unknown } {
   let seenOrder: unknown;
+  let seenWhere: unknown;
 
   const prisma = {
     tenantDomain: {
-      findFirst: (args: { orderBy: unknown }) => {
+      findFirst: (args: { orderBy: unknown; where: unknown }) => {
         seenOrder = args.orderBy;
+        seenWhere = args.where;
         return Promise.resolve(domain);
       },
     },
@@ -23,6 +25,9 @@ function build(
     links: new TenantLinkService(prisma, config),
     get seenOrder() {
       return seenOrder;
+    },
+    get seenWhere() {
+      return seenWhere;
     },
   };
 }
@@ -68,5 +73,21 @@ describe('TenantLinkService', () => {
       { kind: 'asc' },
       { createdAt: 'asc' },
     ]);
+  });
+
+  it('asks only for domains the edge is serving, so a detached primary is skipped', async () => {
+    // TAR-534. A custom domain whose `activated_at` was cleared has no route and
+    // no certificate, so a reset link mailed there sends and then dead-ends. The
+    // filter is the net under `AdminDomainsService`, which hands primary back to
+    // the platform subdomain on deactivation — the platform subdomain itself
+    // never activates, which is why it is an `OR` and not a second `AND`.
+    const harness = build({ hostname: 'acme.app.example.com' });
+
+    await harness.links.absoluteLink('/reset-password', 'tok3n');
+
+    expect(harness.seenWhere).toEqual({
+      verifiedAt: { not: null },
+      OR: [{ kind: 'platform' }, { activatedAt: { not: null } }],
+    });
   });
 });
