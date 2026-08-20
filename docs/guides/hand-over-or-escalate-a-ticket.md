@@ -110,20 +110,27 @@ has happened to the ticket.
 Each entry says what happened, who did it, and — for a handoff or an escalation — the reason
 they gave, under **Reason**.
 
-| Entry                                  | What it means                                             |
-| -------------------------------------- | --------------------------------------------------------- |
-| **Ticket opened**                      | The customer wrote in and the ticket was created          |
-| **Handed on**                          | Somebody reassigned it. The entry names who to and from   |
-| **Released**                           | It was put back with nobody holding it                    |
-| **Escalated**                          | Somebody asked for a supervisor                           |
-| **Status changed**                     | For example, from Open to Waiting on customer             |
-| **Priority changed**                   | Somebody re-prioritised it                                |
-| **Reopened — customer replied**        | The customer wrote back and the ticket reopened by itself |
-| **Auto-assignment could not place it** | Nothing matched, so it was left for a supervisor          |
-| **SLA missed**                         | The reply deadline passed                                 |
+| Entry                                         | What it means                                                 |
+| --------------------------------------------- | ------------------------------------------------------------- |
+| **Ticket opened**                             | The customer wrote in and the ticket was created              |
+| **Handed on**                                 | Somebody reassigned it. The entry names who to and from       |
+| **Released**                                  | It was put back with nobody holding it                        |
+| **Escalated**                                 | Somebody asked for a supervisor                               |
+| **Status changed**                            | For example, **Open → Waiting on customer**                   |
+| **Priority changed**                          | Somebody re-prioritised it                                    |
+| **First reply sent**                          | The first message from a person went out                      |
+| **Auto-assignment could not place it**        | Nothing matched, so it was left for a supervisor              |
+| **SLA missed**                                | The reply deadline passed                                     |
+| **Handed over by the chatbot**                | The bot stopped answering and passed the customer to a person |
+| **A message arrived on another conversation** | The same contact wrote in on a second number you run          |
 
 An escalation reads **to whoever is covering this ticket** when you left the default, and names
 a person when you chose one.
+
+**A customer reopening a ticket appears as Status changed, not as its own entry.** When
+somebody writes back to a ticket that was **Waiting on customer**, the entry reads **Status
+changed** with **Waiting on customer → Open** underneath and **by the system** beside it,
+because no person moved it. There is no separate "reopened" entry to look for.
 
 **The history shows one page.** Older entries are not shown, and the section says so rather
 than pretending the list is complete.

@@ -594,24 +594,27 @@ field of the body is missing, which is what `validation_failed` means everywhere
 event, but a missing reason on such a request is still refused. Silently accepting it would
 train a console to omit the field.
 
-> **TODO(author):** a ticket routed to a team by a rule carries `assignedTeamId`, so
-> `ticketAssignRequiresReason` counts it as held and the supervisor's **flagged-queue
-> placement now requires a reason too** — `AssignFlaggedTicketDialog` collects one. ADR 0011
-> decision 1 reads as though that case should not need one. TAR-470 raised this with the
-> architect and it is unresolved; this page documents what the code does. If the ruling goes
-> the other way, the row above and
-> [Clear tickets nobody could take](../guides/clear-flagged-tickets.md) both change.
+A ticket routed to a team by a rule carries `assignedTeamId`, so `ticketAssignRequiresReason`
+counts it as held: **the supervisor's flagged-queue placement requires a reason too.** That is
+true today — `AssignFlaggedTicketDialog` collects one and refuses to submit without it, and
+[Clear tickets nobody could take](../guides/clear-flagged-tickets.md) documents the step.
+
+> **TODO(author):** ADR 0011 decision 1 reads as though a flagged-queue placement should _not_
+> need a reason — it describes placing work nobody held, which is the case the rule exempts.
+> The predicate counts a team hold as held, so the exemption does not reach it. TAR-470 raised
+> this with the architect and it is unresolved. This page documents the behaviour as it ships;
+> if the ruling changes the behaviour, the row above and that guide both change with it.
 
 ### The handoff bound: what an agent may do without `ticket:assign`
 
 A caller holding `ticket:assign` skips this section entirely. For everybody else — every
 agent — the service requires **all three** to hold:
 
-| #   | Condition                     | Checked as                                                                     |
-| --- | ----------------------------- | ------------------------------------------------------------------------------ |
-| 1   | They hold the ticket          | `before.assignedUserId === principal.userId`                                   |
-| 2   | The target is a teammate      | `userId` shares a team with the caller, or `teamId` is one of the caller's own |
-| 3   | Somebody still holds it after | The write must not leave the ticket unassigned                                 |
+| #   | Condition                     | Checked as                                                                                                                                                                                  |
+| --- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | They hold the ticket          | `before.assignedUserId === principal.userId`                                                                                                                                                |
+| 2   | The target is a teammate      | Checked per field, for whichever the body carries: a `userId` must share a team with the caller, **and** a `teamId` must be one of the caller's own. A body carrying both must satisfy both |
+| 3   | Somebody still holds it after | The write must not leave the ticket unassigned                                                                                                                                              |
 
 Each has a reason it is not the obvious wider rule:
 
@@ -1003,9 +1006,23 @@ gap — it is the encoding.
 | `unassigned`          | null         | null                         | **set**      | when given                     |
 | `escalated`           | null         | named supervisor id, or null | null         | **always**                     |
 | `assignment_deferred` | null         | null                         | null         | the `FallbackAssignmentReason` |
+| `first_response`      | null         | null                         | null         | null                           |
 | `sla_breached`        | null         | the `SlaTargetKind`          | null         | null                           |
+| `bot_handoff`         | null         | null                         | null         | null                           |
+| `reopened`            | null         | null                         | null         | null                           |
 
-Three things this table says that are easy to miss:
+**The table is exhaustive, and deliberately so.** The read filters on
+`PUBLISHED_TICKET_EVENT_TYPES`, which is the whole of `TICKET_EVENT_TYPES` — so every type
+above can reach a client and needs an encoding. `first_response` is the one most likely to
+surprise a client built from an older draft of this page: it is written on **every** ticket
+that gets a reply from a person, so any real ticket will carry one.
+
+**`reopened` is listed but is written by nothing.** It is reserved for the `resolved →` reopen
+window that does not exist at v1 — see [the event log](#what-lands-in-the-event-log) for why
+the customer-reply reopen is a `status_changed` instead. A client should handle it and expect
+never to see it.
+
+Three more things this table says that are easy to miss:
 
 - **`toValue: null` on an `escalated` event is meaningful, not missing.** It says the
   escalation was addressed to whoever supervises this ticket rather than to a named person,
@@ -1197,8 +1214,14 @@ Two more rules worth holding on to:
   `status_changed` carrying `cause: "inbound_message"`, which is what the linker has written
   since TAR-21. Two event types meaning "the status moved" would make every consumer learn
   both, and the `reopened` name belongs to the `resolved →` reopen window that does not
-  exist at v1. The distinction a client needs is `cause` plus a null actor; the console
-  renders that pair as **"Reopened — customer replied"**.
+  exist at v1. The distinction a client needs is `cause` plus a null actor.
+  ⚠️ **The console does not currently draw that distinction.** `toHistoryEntry` titles every
+  entry from the event's `type` alone and never reads `cause`, so a customer reopen renders as
+  **Status changed / Waiting on customer → Open / by the system**. A
+  `reopenedByCustomer: 'Reopened — customer replied'` string exists in
+  `apps/web/content/en.ts` and is referenced nowhere. Earlier revisions of this page said the
+  console renders that label; it does not. A client that wants the distinction must make it
+  from `cause` itself.
 - **Ticket changes are not written to `audit_logs`.** That trail carries security-relevant
   events, and ordinary triage happening hundreds of times a day per tenant would drown it.
   `ticket_events` is the per-ticket history.

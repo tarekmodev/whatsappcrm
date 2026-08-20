@@ -233,6 +233,8 @@ change.
   to be settled with `sla_alerts` rather than given a second policy here.
   Documented in [the tickets API reference](docs/reference/tickets-api.md) and, for agents, in
   [Hand a ticket on, or ask a supervisor](docs/guides/hand-over-or-escalate-a-ticket.md).
+  [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md) gains the reason step
+  the flagged-queue dialog now collects.
 
 - **An admin can now define the tenant's custom contact fields, and the contract says what a
   value means** (TAR-33, TAR-476) — `custom_field_defs` has existed since the initial

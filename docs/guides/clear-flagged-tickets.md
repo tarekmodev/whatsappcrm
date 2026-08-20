@@ -97,9 +97,17 @@ page, and check the rule that sent the ticket there.
 
 1. Find the ticket in the list and select **Assign**. The **Assign** dialog opens.
 2. Under **Assign to**, choose an agent.
-3. Select **Assign ticket**.
+3. Write a short reason under **Why this person**. It is required, and at least three
+   characters — the dialog will not submit without one.
+4. Select **Assign ticket**.
 
 A message confirms who it went to, and the ticket leaves the flagged list.
+
+**Why the reason is asked for.** Auto-assignment could not place this ticket, so your override
+is recorded on the ticket's history — the dialog says as much. Whoever picks the ticket up, or
+reads its trail later, sees why it went to this person rather than being left in the queue.
+The same field appears when an agent hands a ticket on;
+[Hand a ticket on, or ask a supervisor](hand-over-or-escalate-a-ticket.md) covers that flow.
 
 **The list of agents is not filtered by availability or by ticket limit**, and that is
 deliberate: the reason this ticket is here is that nobody passed those tests, so a filtered
