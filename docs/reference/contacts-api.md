@@ -149,9 +149,14 @@ edits a phone number silently erase every custom value their form did not happen
 The cost is that "clear this field" has to be an explicit `null` rather than an omission —
 one line in a client.
 
-**The merge is per request, and it is not a concurrency guarantee.** It is what stops one
-write from dropping keys that write never carried; it does nothing about two writes landing
-together, which can still lose one — see [Known gaps](#known-gaps).
+**The merge is not what makes concurrent edits safe — the row lock is.** The merge is a pure
+function over a map its caller has already read, so on its own two callers reading the same
+stored map would both merge into that map and the second write would replace the first
+whole. `PATCH` takes `SELECT … FOR NO KEY UPDATE` on the contact row _before_ that read
+(TAR-530), so a second writer blocks before reading rather than in the middle of its own
+read-modify-write. The merge stops an _unloaded_ key being erased; the lock stops a
+_concurrently written_ one being erased. Reading the merge as the guarantee is how the
+concurrent case gets missed.
 
 **Only the keys a write carries are validated.** That is what makes removing a `select`
 option safe: a contact holding the removed value keeps it until that field is next written,
@@ -456,6 +461,15 @@ removes every tag; omitting `tagIds` changes none.
 
 **The definitions are read inside the write transaction**, so a field cannot be deleted
 between validating a value against it and storing that value.
+
+**The whole update takes the contact’s row lock first** — `SELECT … FOR NO KEY UPDATE`,
+one extra round trip served by the primary key (TAR-530). Both the custom-field merge and
+the tag delta are read-modify-write, so without it two agents patching different keys both
+read the same map and the second overwrites the first, with both answering `200`. The mode
+is deliberately the weakest that works: `FOR NO KEY UPDATE` excludes other writers but not
+`FOR KEY SHARE`, which PostgreSQL takes on the contact row whenever a `conversations` or
+`tickets` row referencing it is inserted — `FOR UPDATE` would make an inbound WhatsApp
+message wait on any in-flight console save of that contact.
 
 ## `GET /api/v1/tags`
 
@@ -812,12 +826,13 @@ the record that they happened.
 
 Open at the time of writing, all filed:
 
-- **Two concurrent `PATCH`es to different custom-field keys on the same contact can lose one
-  write** (TAR-530). `update()` reads the stored map, merges in JavaScript, and writes the
-  whole computed map back; `$tenantTransaction` runs at PostgreSQL's default READ COMMITTED,
-  so the read and the write are not atomic against a concurrent transaction. Both requests
-  answer `200`. The merge fixes the _form-did-not-load-every-key_ half of the problem, not
-  the concurrency half. Live on `main`; the fix is in review.
+- **A `PATCH` writing a key can still interleave with that key’s definition being deleted,
+  leaving an orphaned value.** `PATCH`’s row lock orders it against the delete strip only for
+  a contact that _already holds_ the key: `stripValues` filters on
+  `jsonb_exists(custom_fields, key)`, so a contact with no value under it is never matched
+  and never locked. Closing it needs either an unconditional lock in the strip or `FOR SHARE`
+  on the definition rows `readCustomFieldDefinitions` reads. Older than TAR-530 and not
+  closed by it.
 - **The console offers no way to reorder definitions.** `POST /custom-fields/reorder` is
   implemented and tested, and nothing in `apps/web` calls it — the admin table renders in
   `position` order with no drag handle, deliberately, rather than shipping a control that
@@ -843,23 +858,21 @@ Two, both additive, and both discovered when the surface was first implemented:
    `jsonb_exists` and the `jsonb_typeof` object check, both described under
    [`DELETE`](#delete-apiv1custom-fieldsid).
 
-> **TODO(author):** the comment on `packages/contracts/src/contacts.ts:37` still says
-> `tags.name` is `citext`. It is plain `text` (`apps/api/prisma/schema.prisma`), and the
-> case-insensitivity comes entirely from `mode: 'insensitive'` in the query. TAR-530 owns
-> that correction; this page documents the actual mechanism rather than the comment.
-
 ## Verification
 
-Everything below was run on 2026-08-16, against `main` at `e48d3b2` — the commit this page
-was written from, with both TAR-479 (#158) and TAR-480 (#157) merged.
+Everything below was run on 2026-08-20, against `main` at `7926d2b` — with TAR-479 (#158),
+TAR-480 (#157) and TAR-530 (#165) all merged.
 
 - **Every status code, error code and isolation claim on this page**:
   `apps/api/src/contacts/contacts-tenant-isolation.int-spec.ts`, run against a real
   PostgreSQL and the real request pipeline over two tenants whose fixtures are identical in
   shape — same tag name `VIP`, same field key `tier`, same stored value `gold`, so a leak is
-  visible rather than plausible — **33 tests, all passing**.
+  visible rather than plausible.
+- **The row lock on `PATCH`**: `apps/api/src/contacts/contact-custom-field-concurrency.int-spec.ts`,
+  which holds one transaction open and gates a second on it, so the race is reproduced rather
+  than argued about. Both integration suites together — **36 tests, 2 suites, all passing**.
 - **Merge semantics, per-type validation, the reserved-key list and the mappers**:
-  `pnpm --filter @whatsappcrm/api exec jest src/contacts src/tags` — **34 tests, 3 suites,
+  `pnpm --filter @whatsappcrm/api exec jest src/contacts src/tags` — **36 tests, 3 suites,
   all passing**.
 - **Every JSON body on this page** parses against its schema in
   `packages/contracts/src/contacts.ts`.

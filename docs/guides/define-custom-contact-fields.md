@@ -117,7 +117,8 @@ every field you defined, in the order shown on your settings page, with a contro
 its type. An agent fills in what they know and selects **Save fields**.
 
 An agent editing one field never disturbs another: a save carries only the fields that agent
-changed, and every other value on the contact is left alone.
+changed, and every other value on the contact is left alone. Two agents saving different
+fields on the same contact at the same moment both keep their changes.
 
 Until you define your first field, that card reads **No custom fields yet** — with a link
 here for you, and "Ask a workspace admin to define the fields your team needs on a contact"
@@ -137,11 +138,6 @@ for everyone else.
 
 ## What this cannot do yet
 
-- **Two agents saving the same contact at the same moment can lose one set of changes.** Each
-  save carries only the fields that agent edited, but two saves landing together are not yet
-  kept apart, so one can overwrite the other with no warning to either person. It needs both
-  saves inside the same second on the same contact, so it is rare — but it is silent when it
-  happens, and a fix is in progress.
 - **You cannot reorder fields from the console.** They appear in the order you created them,
   and there is no way to drag one. Changing the order is possible over the API but has no
   screen yet.

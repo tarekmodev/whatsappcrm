@@ -500,10 +500,14 @@ RETURNING id`. A ticket that stays open for six hours escalates **once**, not on
   (deleting one has to reckon with `workflow_references` refusing it), and contact creation in
   the console (a contact is created by the ingest pipeline the first time somebody messages the
   tenant, and a screen that invents one is a route into the product nobody designed).
-  ⚠️ **Two concurrent `PATCH`es to different custom-field keys on the same contact can still
-  lose one write** — the merge is a read-modify-write under READ COMMITTED, and both requests
-  answer `200`. It fixes the form-did-not-load-every-key half of the problem, not the
-  concurrency half. TAR-530 closes it.
+  One thing this shipped wrong and TAR-530 has since fixed, recorded because the reasoning is
+  worth keeping: the merge was credited with making two agents editing different fields on one
+  contact safe. It is not — it is a pure function over a map its caller already read, so both
+  callers merged into the same stored map and the second write replaced the first whole, with
+  both answering `200`. `PATCH` now takes `SELECT … FOR NO KEY UPDATE` on the contact row
+  before that read. The merge stops an _unloaded_ key being erased; the lock stops a
+  _concurrently written_ one being erased, and conflating the two is how the concurrent case
+  went unnoticed through implementation, review and a first pass of these docs.
   ⚠️ **The console cannot reorder definitions.** `POST /custom-fields/reorder` is implemented
   and tested; the admin table renders in `position` order with no drag handle, deliberately,
   rather than shipping a control that could not call the endpoint. Console admins get creation

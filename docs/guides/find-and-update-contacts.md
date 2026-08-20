@@ -102,8 +102,10 @@ integrations to add the tags your team needs.
 A message confirms the fields were updated. **Save fields** stays unavailable until you
 change something; the card says **Nothing has changed yet** rather than leaving a dead button.
 
-**Only what you changed is saved.** Fields you did not touch stay exactly as they were. To
-empty a field, clear its control and save — that clears it deliberately.
+**Only what you changed is saved.** Fields you did not touch stay exactly as they were, so
+you and a colleague can update different fields on the same contact at the same moment and
+both changes are kept. To empty a field, clear its control and save — that clears it
+deliberately.
 
 If the card says **No custom fields yet**, nobody has defined any. An admin can define fields
 such as "Plan tier" or "Account manager" under **Settings** → **Custom fields**.
@@ -129,11 +131,6 @@ not disturb it. Pick a current option if you know which one is right.
 
 ## What this cannot do yet
 
-- **If you and a colleague save the same contact at the same moment, one set of changes can
-  be lost.** Both saves report success and neither of you is warned. It takes two saves
-  landing within the same second on the same contact, so it is rare — but if you know
-  somebody else is working the same customer, reopen the profile after saving and check your
-  values are there. A fix is in progress.
 - **You cannot create a contact.** One appears when somebody first messages your workspace.
 - **You cannot create or delete a tag** from the console — only apply and remove existing
   ones.
