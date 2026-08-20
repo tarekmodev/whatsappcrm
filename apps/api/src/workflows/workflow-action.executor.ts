@@ -6,9 +6,10 @@ import type {
   WorkflowActionResult,
 } from '@whatsappcrm/contracts';
 import { describeFailure } from '../common/describe-failure';
-import { UserRole, UserStatus } from '../generated/prisma/enums';
+import { UserRole } from '../generated/prisma/enums';
 import { resolveAlertRecipients, type AlertCandidate } from '../people/supervisor-recipients';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
+import { REFERENCEABLE_USER } from './workflow-referenceable';
 import {
   TicketCommandService,
   type TicketAutomationResult,
@@ -176,7 +177,7 @@ export class WorkflowActionExecutor {
     // an `invited` user has no session to open the ticket with. Escalating to
     // any of them would look like a fix and be a second deferral.
     const user = await this.prisma.user.findUnique({
-      where: { id: action.target.userId, status: UserStatus.active },
+      where: { ...REFERENCEABLE_USER, id: action.target.userId },
       select: { id: true },
     });
 
@@ -304,7 +305,7 @@ export class WorkflowActionExecutor {
         action.userId === null
           ? null
           : await this.prisma.user.findUnique({
-              where: { id: action.userId, status: UserStatus.active },
+              where: { ...REFERENCEABLE_USER, id: action.userId },
               select: { id: true },
             });
 
@@ -317,7 +318,7 @@ export class WorkflowActionExecutor {
       }
 
       const members = await this.prisma.teamMember.findMany({
-        where: { teamId: action.teamId, user: { status: UserStatus.active } },
+        where: { teamId: action.teamId, user: REFERENCEABLE_USER },
         select: { userId: true },
       });
 
@@ -344,7 +345,7 @@ export class WorkflowActionExecutor {
 
   private async loadSupervisorCandidates(): Promise<AlertCandidate[]> {
     const candidates = await this.prisma.user.findMany({
-      where: { role: { in: [...SUPERVISOR_ROLES] }, status: UserStatus.active },
+      where: { ...REFERENCEABLE_USER, role: { in: [...SUPERVISOR_ROLES] } },
       select: { id: true, teamMemberships: { select: { teamId: true } } },
     });
 

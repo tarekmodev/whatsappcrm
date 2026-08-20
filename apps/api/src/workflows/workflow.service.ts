@@ -18,6 +18,7 @@ import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
+import { REFERENCEABLE_USER } from './workflow-referenceable';
 import {
   readDefinition,
   referenceKey,
@@ -447,7 +448,13 @@ export class WorkflowService {
       userIds.length === 0
         ? []
         : client.user.findMany({
-            where: { id: { in: userIds } },
+            // `REFERENCEABLE_USER` — the same predicate the executor applies when
+            // it reassigns or notifies. Without it a removed user still resolved
+            // by name here, so a workflow could be armed against somebody the
+            // executor would then refuse to use: the run fails
+            // `reference_missing`, the workflow auto-disarms, the console offers
+            // Enable again, and it loops.
+            where: { ...REFERENCEABLE_USER, id: { in: userIds } },
             select: { id: true, name: true },
           }),
     ]);

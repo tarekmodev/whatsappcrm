@@ -30,8 +30,12 @@ const TENANT = '019fed83-0000-7000-8000-00000000b001';
 const WORKFLOW = '019fed83-0000-7000-8000-00000000b002';
 /** In the tenant, so a live read finds it. */
 const LIVE_USER = '019fed83-0000-7000-8000-00000000b003';
-/** Removed — the id a disarmed workflow is still carrying. */
-const DEAD_USER = '019fed83-0000-7000-8000-00000000b004';
+/**
+ * Removed — and **still a row**, with `status: 'removed'`. This is the id a
+ * disarmed workflow is carrying, and the one a read without a status filter
+ * happily resolves.
+ */
+const REMOVED_USER = '019fed83-0000-7000-8000-00000000b004';
 
 function notifying(userId: string): WorkflowDefinition {
   return {
@@ -64,7 +68,7 @@ interface Harness {
 
 /**
  * A stand-in for `workflows` plus the three taxonomy reads, with the one
- * behaviour that matters: `LIVE_USER` resolves and `DEAD_USER` does not, which
+ * behaviour that matters: `LIVE_USER` resolves and `REMOVED_USER` does not, which
  * is what a removed user looks like through RLS.
  */
 function harness(seed: Partial<StoredWorkflow>): Harness {
@@ -75,7 +79,7 @@ function harness(seed: Partial<StoredWorkflow>): Harness {
     isActive: false,
     brokenReason: 'reference_removed',
     triggerType: 'ticket_created',
-    definition: notifying(DEAD_USER),
+    definition: notifying(REMOVED_USER),
     version: 3,
     createdAt: new Date('2026-08-01T00:00:00.000Z'),
     updatedAt: new Date('2026-08-01T00:00:00.000Z'),
@@ -84,15 +88,31 @@ function harness(seed: Partial<StoredWorkflow>): Harness {
 
   let indexed: string[] = [];
 
-  const livingUsers = (ids: readonly string[]): { id: string; name: string }[] =>
-    ids.filter((id) => id === LIVE_USER).map((id) => ({ id, name: 'Priya' }));
+  /**
+   * The tenant's users **as rows**, with a status — because removal is a status
+   * change and not a delete, so `REMOVED_USER` is still there to be found by any
+   * read that forgets to filter. A stub that modelled removal as absence could
+   * not catch the bug this file pins.
+   */
+  const userRows = [
+    { id: LIVE_USER, name: 'Priya', status: 'active' },
+    { id: REMOVED_USER, name: 'Sam', status: 'removed' },
+  ];
 
   const taxonomy = {
     tag: { findMany: () => Promise.resolve([]) },
     team: { findMany: () => Promise.resolve([]) },
     user: {
-      findMany: ({ where }: { where: { id: { in: string[] } } }) =>
-        Promise.resolve(livingUsers(where.id.in)),
+      findMany: ({ where }: { where: { id: { in: string[] }; status?: string } }) =>
+        Promise.resolve(
+          userRows
+            .filter(
+              (row) =>
+                where.id.in.includes(row.id) &&
+                (where.status === undefined || row.status === where.status),
+            )
+            .map(({ id, name }) => ({ id, name })),
+        ),
     },
   };
 
@@ -196,7 +216,7 @@ describe('arming while a reference is still unresolved', () => {
     expect((refusal as WorkflowReferenceBrokenError).broken).toHaveLength(1);
     expect((refusal as WorkflowReferenceBrokenError).broken[0]).toMatchObject({
       kind: 'user',
-      id: DEAD_USER,
+      id: REMOVED_USER,
     });
     expect((refusal as WorkflowReferenceBrokenError).broken[0]?.path).toContain('actions.0');
     expect(held.stored().isActive).toBe(false);
@@ -224,6 +244,46 @@ describe('arming while a reference is still unresolved', () => {
   });
 });
 
+describe('a removed user is not referenceable, so the arm/fail loop cannot start', () => {
+  it('does not resolve a removed user, even though the row is still there', async () => {
+    // Removal is a status change, not a delete. A name lookup with no status
+    // filter finds the row and reports `exists: true` — which is what let a
+    // workflow be armed against somebody the executor would then refuse to use.
+    const held = harness({});
+
+    const refusal = await held.update({ isActive: true }).catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(WorkflowReferenceBrokenError);
+    expect((refusal as WorkflowReferenceBrokenError).broken[0]).toMatchObject({
+      kind: 'user',
+      id: REMOVED_USER,
+    });
+  });
+
+  it('keeps brokenReason standing across a write that repairs nothing else', async () => {
+    // The step that closed the loop: `brokenReason` cleared, the console offered
+    // Enable, the first ticket failed `reference_missing`, the workflow
+    // auto-disarmed, and round it went. The reference must stay unresolved.
+    const held = harness({});
+
+    await held.update({ name: 'Still pointing at somebody who left' });
+
+    expect(held.stored().brokenReason).toBe('reference_removed');
+  });
+
+  it('resolves again only once the definition names an active user', async () => {
+    // And then the repair works exactly as before — the fix narrows what counts
+    // as resolvable, it does not make repair harder.
+    const held = harness({});
+
+    await held.update({ actions: notifying(LIVE_USER).actions });
+    await held.update({ isActive: true });
+
+    expect(held.stored().isActive).toBe(true);
+    expect(held.stored().brokenReason).toBeNull();
+  });
+});
+
 describe('the reverse index', () => {
   it('carries only references that resolve', async () => {
     // `workflow_references` exists to make a *delete* refusable, and a row that
@@ -235,7 +295,7 @@ describe('the reverse index', () => {
     await held.update({
       actions: [
         ...notifying(LIVE_USER).actions,
-        { type: 'notify', audience: 'user', userId: DEAD_USER, teamId: null, message: null },
+        { type: 'notify', audience: 'user', userId: REMOVED_USER, teamId: null, message: null },
       ],
     });
 
