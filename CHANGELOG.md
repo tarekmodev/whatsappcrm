@@ -276,6 +276,47 @@ RETURNING id`. A ticket that stays open for six hours escalates **once**, not on
   [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md) gains the optional
   reason field the flagged-queue dialog now offers.
 
+- **Canned responses are documented, for both readers** (TAR-489) — TAR-31 shipped a
+  tenant-shared quick-reply library across five merged pull requests: the database bounds,
+  the CRUD surface, the realtime relay, the composer's shortcut picker and the console's
+  refresh on an edit. None of it had documentation, and the two facts a reader most needs
+  were the two least visible in the source.
+  [The canned responses API reference](docs/reference/canned-responses-api.md) is the
+  engineer's: the five routes with parameters, examples and every error, the four limits
+  `CANNED_RESPONSE_LIMITS` publishes, the shortcut grammar and why it is enforced twice, the
+  audit actions, the two server events and the room they are addressed to, and the isolation
+  properties. It records the things a reader would otherwise derive from source — that the
+  list is unpaginated **on purpose**, because the console resolves a typed shortcut against
+  its own copy of the whole set rather than putting a request on the keystroke path, and
+  that `perTenant` enforced on create is what makes that bounded response a promise the
+  server can keep; that a `PATCH` moving no column writes nothing, audits nothing and
+  announces nothing, so a caller cannot tell a no-op from a write; that `DELETE` is
+  idempotent and clears nothing, because a body is copied into the draft at insertion time;
+  and that another tenant's id is `not_found` rather than `403` because row-level security
+  means the server genuinely cannot tell it from an id that never existed. `is_shared` is
+  documented as a deliberate absence from the DTO rather than left as a column a reader
+  finds in `schema.prisma` and wonders about.
+  [Answer common questions with saved replies](docs/guides/use-saved-replies.md) is the
+  agent's, and refuses all of that vocabulary — including the term _canned response_, which
+  no screen in the console uses. It says where a code is recognised and why (start of the
+  message or after a space, so a web address ending in `/hours` does not open a menu
+  mid-link), what the list matches and in what order, what each key does, and — first,
+  because it is the thing an agent most needs to trust — that **inserting a reply never
+  sends it**.
+  `canned_responses` in [the data model reference](docs/reference/data-model.md) is brought
+  up to what TAR-475 actually shipped: `citext`, the four CHECK constraints Prisma cannot
+  express, and why the by-creator index stays although no application query reads it.
+  ⚠️ Three gaps are marked rather than left to be discovered. **There is no console screen
+  for writing** — `POST`, `PATCH` and `DELETE` have no settings surface and the web client
+  exposes only the list, so a supervisor manages the library through the API, which is what
+  the guide's last section has to tell a non-technical reader. **The design document the
+  code cites throughout — `docs/architecture/0011-canned-responses-contract.md` — is not in
+  the repository**, so every "0011, decision N" in the reference is transcribed from source
+  comments rather than read from the contract; its number is also already taken by
+  `0011-ticket-reassignment-and-escalation.md`. And **nothing records which responses are
+  used**, so a library nobody prunes cannot be pruned on evidence. Each carries a
+  `TODO(author)` naming the question and who should answer it.
+
 - **The reporting dashboard and its export are documented, for both readers** (TAR-434) —
   TAR-30 shipped a performance dashboard, a CSV export and the guarantee that the two agree,
   across six stories and four merged pull requests. None of it had documentation, and the

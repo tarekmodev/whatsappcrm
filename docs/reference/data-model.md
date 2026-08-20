@@ -1285,9 +1285,47 @@ nothing at all is TAR-28's decision, and adding the column here would make it lo
 
 #### `canned_responses`
 
-- **Unique:** `(tenant_id, shortcut)`
+The tenant-shared quick-reply library: standing text an agent expands in the composer by
+typing a shortcut such as `/hours`.
+
+- **Unique:** `(tenant_id, shortcut)` — case-insensitive, because `shortcut` is `citext`
 - **Indexes:** `(tenant_id, created_by_user_id)`
-- **Owned by:** TAR-31
+- **Model:** `CannedResponse`
+- **Owned by:** TAR-31, shaped by TAR-475
+
+`shortcut` stores the leading `/`, which is what the agent types and what the composer's
+picker opens on. It is `citext` on the `tenants.slug` and `teams.name` precedent: a
+human-typed unique key within the tenant, so `/Hours` and `/hours` colliding is the correct
+answer — and it is what makes the console's case-insensitive picker agree with the database
+about which row `/HOURS` means.
+
+`is_shared` is always true. TAR-31 puts personal (per-agent) responses out of scope, and the
+CHECK below is the seam a future story drops rather than a flag anything reads.
+
+**Four CHECK constraints live only in the migration.** Prisma cannot express a CHECK and its
+describer ignores them, so they are absent from `schema.prisma` and `migrate dev` proposes
+neither to create nor to drop them — that is not drift.
+`apps/api/src/prisma/canned-response-schema.int-spec.ts` fails if any goes missing.
+
+| Constraint                         | Holds                                                        |
+| ---------------------------------- | ------------------------------------------------------------ |
+| `canned_responses_shortcut_format` | `^/[a-z0-9][a-z0-9_-]{0,38}$` — 40 characters with the slash |
+| `canned_responses_title_length`    | 1–80 characters                                              |
+| `canned_responses_body_length`     | 1–4096, `SendTextInputSchema.body`'s own ceiling             |
+| `canned_responses_is_shared`       | `is_shared` is true                                          |
+
+Neither length CHECK trims. `'   '` is a valid title to the database and a `400` to the wire
+schema, deliberately: a constraint stricter than the schema in front of it turns a
+`validation_failed` into a `500`.
+
+**`(tenant_id, created_by_user_id)` is kept although no application query reads by creator**
+— the composite foreign key to `users` does. Postgres does not index the referencing side of
+a foreign key, so without it every `users` delete on the tenant-purge path is a sequential
+scan of this table. Writes here are a supervisor's, a few times a month, so the write
+amplification it costs is not worth that.
+
+The surface built on this table is
+[the canned responses API reference](canned-responses-api.md).
 
 ### Billing — TAR-37
 
