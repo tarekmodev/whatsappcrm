@@ -42,10 +42,13 @@ control by its **visible label**, taken from `apps/web/content/en.ts` rather tha
 component name.
 
 **A guide may describe a surface that does not exist yet, if it says so.** TAR-489's last
-section tells a supervisor that saved replies are managed through the API because no settings
-screen has shipped, marked with a `TODO(author)` and the instruction to split it into an
-admin guide once one does. That is the honest form: the alternative is a guide that answers
-half the reader's question and does not admit which half.
+section told a supervisor that saved replies were managed through the API because no settings
+screen had shipped, marked with a `TODO(author)` and the instruction to rewrite it once one
+did. That is the honest form: the alternative is a guide that answers half the reader's
+question and does not admit which half. TAR-575 shipped the screen and the section became
+numbered steps in the same change — which is the other half of the rule: **a `TODO(author)`
+naming a missing surface is closed by the story that ships it**, not left to age into a
+sentence the product contradicts.
 
 One subject splits into two guides when it splits into two permissions. Branding and custom
 domains sit on one settings area and read as one topic, but `branding:write` and

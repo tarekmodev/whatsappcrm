@@ -97,12 +97,21 @@ already inserted into the box is left alone — what you are holding is your tex
 
 ## For supervisors and admins: keeping the list up to date
 
-> **There is no screen for this yet.** The saved replies your agents see are managed through
-> the API, not through **Settings**. If you need one added, changed or removed, ask whoever
-> maintains your integration — the request they need is documented in
-> [the canned responses API reference](../reference/canned-responses-api.md).
+Open **Settings**, then **Saved replies**. The entry is there for supervisors and admins; an
+agent does not see it, because an agent uses the list rather than keeping it.
 
-What is worth knowing while that is true:
+To **add one**, select **Add saved reply**, fill in the shortcut, the name and the text, and
+select **Add saved reply** again. Agents can use it straight away — nobody has to reload.
+
+To **change one**, select **Edit** on its row, make the change, and select **Save changes**.
+Everybody's list updates on its own, and an agent who has already put the old text in their
+reply box keeps what they are holding.
+
+To **remove one**, select **Delete** on its row and confirm. The shortcut stops inserting
+anything for everybody. Messages already sent are not touched, and there is no undo — so read
+what the confirmation names before you accept it.
+
+What is worth knowing:
 
 - **Anyone with supervisor or admin permission may change the list**, and everybody in the
   workspace sees the same list.
@@ -118,6 +127,10 @@ What is worth knowing while that is true:
   to have it fill in a customer's name or any other detail automatically.
 - **Every change is recorded** — who changed which saved reply, and when.
 
-> **TODO(author):** this section describes an API-only workflow to a non-technical reader
-> because no settings screen exists. Once one ships, replace it with numbered steps and
-> split it into its own guide for admins, as branding and custom domains are split.
+If you are building against the API instead, the same five routes are documented in
+[the canned responses API reference](../reference/canned-responses-api.md).
+
+> **TODO(author):** the settings screen shipped with TAR-575, so these are real steps now.
+> What is still outstanding is the split: this section addresses a supervisor or admin inside
+> a guide whose reader is an agent, and belongs in its own admin guide, as branding and custom
+> domains are split.

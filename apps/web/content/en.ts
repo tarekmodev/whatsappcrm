@@ -74,6 +74,8 @@ export const content = {
     settings: 'Settings',
     workspace: 'Workspace',
     customFields: 'Custom fields',
+    /** `docs/STYLE.md`: *canned response* in code, *saved reply* on screen. */
+    savedReplies: 'Saved replies',
     people: 'People',
     assignment: 'Assignment',
     workflows: 'Workflows',
@@ -1100,6 +1102,74 @@ export const content = {
 
     limitReachedNotice: (limit: number) =>
       `This workspace has all ${String(limit)} custom fields it may define. Delete one to add another.`,
+  },
+
+  /**
+   * The admin surface for the tenant's shared canned-response library
+   * (TAR-31, TAR-575).
+   *
+   * Every visible string says **saved reply**, which `docs/STYLE.md` fixes as
+   * the console's word on screen — `cannedResponses` is the code's word for the
+   * same thing, and the composer's own copy beside `inbox.cannedListLabel`
+   * already says it the same way.
+   */
+  cannedResponses: {
+    title: 'Saved replies',
+    subtitle: 'The standing replies your agents insert by typing a shortcut.',
+
+    listHeading: 'Saved replies',
+    listLoading: 'Loading saved replies',
+    listDescription: (count: number, limit: number) =>
+      `${count === 1 ? '1 saved reply' : `${String(count)} saved replies`} of ${String(limit)}. Everybody in this workspace sees the same list.`,
+    emptyHeading: 'No saved replies yet',
+    emptyBody:
+      'Add one such as “Opening hours” and every agent can insert it in the reply box by typing its shortcut.',
+
+    columnShortcut: 'Shortcut',
+    columnName: 'Name',
+    columnText: 'Text',
+    columnActions: 'Actions',
+
+    create: 'Add saved reply',
+    createTitle: 'Add a saved reply',
+    createDescription: 'Agents can use it the moment you save it — no reload needed.',
+    createSubmit: 'Add saved reply',
+    createSuccess: (title: string) => `${title} is ready for every agent to use`,
+
+    edit: 'Edit',
+    editAria: (title: string) => `Edit ${title}`,
+    editTitle: (title: string) => `Edit ${title}`,
+    editSuccess: (title: string) => `${title} updated`,
+
+    remove: 'Delete',
+    removeAria: (title: string) => `Delete ${title}`,
+    removeTitle: 'Delete saved reply',
+    removeBody: (title: string, shortcut: string) =>
+      `${title} disappears from every agent's reply box, and ${shortcut} stops inserting anything. Messages already sent are untouched. This cannot be undone.`,
+    removeConfirm: 'Delete saved reply',
+    removeSuccess: (title: string) => `${title} deleted`,
+
+    shortcutLabel: 'Shortcut',
+    shortcutHint: (trigger: string) =>
+      `What an agent types in the reply box, starting with ${trigger}. Lowercase letters, numbers, - and _.`,
+    shortcutPlaceholder: '/hours',
+    shortcutInvalidError: (trigger: string) =>
+      `Start with ${trigger}, then lowercase letters, numbers, - or _`,
+    shortcutTooLongError: (limit: number) =>
+      `A shortcut is at most ${String(limit)} characters, including the leading /`,
+
+    nameLabel: 'Name',
+    nameHint: 'What agents see beside the shortcut when they pick from the list.',
+    namePlaceholder: 'Opening hours',
+
+    textLabel: 'Text',
+    textHint: 'Inserted into the reply box exactly as written. Nothing is filled in automatically.',
+    textPlaceholder: 'We’re open Sunday to Thursday, 9am to 6pm.',
+    /** Read by an admin scanning the list, so it names the cap it was cut to. */
+    textTruncatedAria: (limit: number) => `First ${String(limit)} characters. Edit to read it all.`,
+
+    limitReachedNotice: (limit: number) =>
+      `This workspace has all ${String(limit)} saved replies it may hold. Delete one to add another.`,
   },
 
   people: {
