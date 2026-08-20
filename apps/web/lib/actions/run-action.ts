@@ -146,6 +146,14 @@ function toErrorResult<T>(error: unknown, label: string): ActionResult<T> {
  * `whatsapp_template_invalid` names the template or the variable that does not
  * match what Meta approved. Flattened into "we could not save that", both would
  * leave an agent re-pressing Send on a message that can never go.
+ *
+ * `workflow_reference_broken` is here for exactly that reason (TAR-27). 0009
+ * introduces it as the **one** new code in the story, and its whole
+ * justification for existing rather than reusing `validation_failed` is that the
+ * next action differs — "pick a replacement", not "fix what you just typed".
+ * Showing the generic line instead would remove the only thing it was added
+ * for, and leave a supervisor re-pressing Enable on a workflow that names a tag
+ * somebody deleted last week.
  */
 const ACTIONABLE_ERROR_CODES = new Set([
   'conflict',
@@ -154,4 +162,5 @@ const ACTIONABLE_ERROR_CODES = new Set([
   'forbidden',
   'whatsapp_window_expired',
   'whatsapp_template_invalid',
+  'workflow_reference_broken',
 ]);

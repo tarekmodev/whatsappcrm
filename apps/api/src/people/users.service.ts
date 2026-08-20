@@ -259,6 +259,38 @@ export class UsersService {
         // target, not find it silently gone.
         data: { targetUserId: null, isActive: false },
       });
+      // The same rule for workflows (TAR-27, 0009 decision 6, delta 5), and it
+      // has to happen here rather than through a foreign key: `workflow_references`
+      // permits a user delete on purpose, because removal is a security action
+      // that must **always** succeed — where a tag or team delete is refused by
+      // the constraint precisely so a supervisor is told before anything breaks.
+      //
+      // Deactivated with a reason rather than deleted, matching the assignment
+      // rule above: a supervisor should find the workflow needing a new target,
+      // not find it silently gone. `broken_reason` is what blocks re-enabling it
+      // until the reference is replaced, and `workflows_broken_is_inactive`
+      // makes the pairing structural — which is why both columns move in one
+      // statement.
+      //
+      // The dangling id stays in `definition` deliberately: the workflow's
+      // `references` array then reports `exists: false` and the console shows
+      // exactly which field needs a new value.
+      const brokenWorkflowIds = await tx.workflowReference.findMany({
+        where: { userId },
+        select: { workflowId: true },
+      });
+
+      if (brokenWorkflowIds.length > 0) {
+        await tx.workflow.updateMany({
+          where: { id: { in: brokenWorkflowIds.map((reference) => reference.workflowId) } },
+          data: { isActive: false, brokenReason: 'reference_removed' },
+        });
+        // The reverse index drops the rows naming this user, so the next
+        // "which workflows use this?" lookup is accurate. The composite foreign
+        // key is `NoAction`, so this is what makes the removal legal at all.
+        await tx.workflowReference.deleteMany({ where: { userId } });
+      }
+
       // Team membership goes with them, so they disappear from every team
       // picker and stop widening anybody's `teamIds`.
       await tx.teamMember.deleteMany({ where: { userId } });

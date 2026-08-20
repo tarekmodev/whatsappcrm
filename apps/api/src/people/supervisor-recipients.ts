@@ -1,10 +1,20 @@
 /**
- * Who is told that a ticket breached (0006, decision 4).
+ * Who is told that something happened on a ticket they supervise (0006,
+ * decision 4).
  *
  * A pure function over rows the caller has already read, so the rule is testable
  * without a database and lives in exactly one place — which is what makes 0006's
  * "reconsider when a tenant runs more than a handful of supervisors" a local
  * change rather than a hunt.
+ *
+ * ## Why it lives in `people/` rather than in `SlaModule`
+ *
+ * It shipped in `sla/sla-recipients.ts` with one caller. TAR-27's `notify`
+ * action with `audience: 'supervisors'` is the second, and it is in
+ * `WorkflowsModule` — a *sibling* L4 module, which may not import `SlaModule`
+ * and must not carry a second copy of the rule (0009, delta 4). A pure function
+ * two L4 modules depend on belongs below both of them, beside the role and team
+ * model it is about. Nothing was changed in the move but this paragraph.
  *
  * ## Why it is derived rather than configured
  *

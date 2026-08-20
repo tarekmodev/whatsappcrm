@@ -29,6 +29,7 @@ import { TenancyModule } from './tenancy/tenancy.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
+import { WorkflowsModule } from './workflows/workflows.module';
 
 @Module({
   imports: [
@@ -101,6 +102,14 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     // nothing and nothing imports it. Reporting is a synchronous read over
     // `tickets` through `TenantPrisma`: no queue, no worker, no event.
     ReportingModule,
+    // L4, beside `SlaModule` rather than above it: the two share no data and
+    // neither imports the other, which is 0009 decision 1's whole argument for a
+    // separate failure domain — a tenant's malformed workflow must not be able
+    // to fail the job that detects SLA breaches. Unlike the two above it, it
+    // *does* import `TicketsModule` (L3), because its actions write ticket
+    // status, priority and assignment through the one implementation of those
+    // writes.
+    WorkflowsModule,
   ],
 })
 export class AppModule implements NestModule {

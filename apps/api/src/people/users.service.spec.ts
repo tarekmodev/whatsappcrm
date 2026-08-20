@@ -31,6 +31,9 @@ import { UsersService } from './users.service';
 const TENANT = '0192f0ff-0000-7000-8000-0000000000b1';
 const CALLER = '0192f0ff-0000-7000-8000-00000000a001';
 const TARGET = '0192f0ff-0000-7000-8000-00000000a002';
+/** Two workflows naming the removed user, for TAR-27's cascade (0009 delta 5). */
+const WORKFLOW_A = '0192f0ff-0000-7000-8000-00000000af01';
+const WORKFLOW_B = '0192f0ff-0000-7000-8000-00000000af02';
 const TEAM = '0192f0ff-0000-7000-8000-00000000b001';
 
 function principalFor(role: TenantRole): SessionPrincipal {
@@ -56,6 +59,8 @@ interface FakeState {
   memberships: readonly string[];
   /** TAR-59's lockout state on the target, as the columns hold it. */
   lockout?: { lockedUntil: Date | null; failedLoginAttempts: number };
+  /** Workflows naming the target through `workflow_references` (TAR-27, 0009 delta 5). */
+  workflowsNamingTarget?: readonly string[];
 }
 
 interface Recorded {
@@ -70,6 +75,10 @@ interface Recorded {
   unlockedUserIds: string[];
   /** The Redis half of the same unlock, keyed by the address rather than the row. */
   clearedEmailLocks: { tenantId: string; email: string }[];
+  /** `workflow.updateMany` calls the removal issued — the disarm (TAR-27). */
+  workflowDisarms: { where: unknown; data: unknown }[];
+  /** `workflowReference.deleteMany` calls — what makes the `NoAction` FK legal. */
+  workflowReferenceDeletes: unknown[];
 }
 
 function buildService(state: FakeState): {
@@ -85,6 +94,8 @@ function buildService(state: FakeState): {
     inviteWithdrawals: [],
     unlockedUserIds: [],
     clearedEmailLocks: [],
+    workflowDisarms: [],
+    workflowReferenceDeletes: [],
   };
 
   const lockout = state.lockout ?? { lockedUntil: null, failedLoginAttempts: 0 };
@@ -149,6 +160,25 @@ function buildService(state: FakeState): {
     ticket: { updateMany: () => Promise.resolve({ count: 0 }) },
     assignmentState: { updateMany: () => Promise.resolve({ count: 0 }) },
     assignmentRule: { updateMany: () => Promise.resolve({ count: 0 }) },
+    // The same cleanup for workflows (TAR-27, 0009 delta 5), driven by
+    // `workflowsNamingTarget` so the deactivation branch is actually exercised
+    // rather than skipped past. What the composite `NoAction` foreign key does
+    // to a *real* row is still the integration suite's job; what is asserted
+    // here is that the service disarms and clears in the same transaction.
+    workflowReference: {
+      findMany: () =>
+        Promise.resolve((state.workflowsNamingTarget ?? []).map((workflowId) => ({ workflowId }))),
+      deleteMany: (args: unknown) => {
+        recorded.workflowReferenceDeletes.push(args);
+        return Promise.resolve({ count: (state.workflowsNamingTarget ?? []).length });
+      },
+    },
+    workflow: {
+      updateMany: (args: { where: unknown; data: unknown }) => {
+        recorded.workflowDisarms.push(args);
+        return Promise.resolve({ count: (state.workflowsNamingTarget ?? []).length });
+      },
+    },
     session: { deleteMany: () => Promise.resolve({ count: 1 }) },
     auditLog: { create: () => Promise.resolve({}) },
     $queryRaw: () => Promise.resolve(state.activeAdminIds.map((id) => ({ id }))),
@@ -390,6 +420,52 @@ describe('UsersService — role write invariants', () => {
       // Live invitations only. An accepted or already-withdrawn row is history
       // and stays as it is.
       expect(recorded.audits.map((entry) => entry.action)).toContain('user.removed');
+    });
+
+    it('disarms every workflow naming them, and clears the reference rows', async () => {
+      // TAR-27, 0009 delta 5. A tag or team a workflow names cannot be deleted —
+      // the composite foreign key refuses it — but removing a *user* is a
+      // security action that must always succeed, so the cascade is code here
+      // rather than a constraint.
+      const { users, tenantContext, recorded } = buildService({
+        target: activeAgent,
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+        workflowsNamingTarget: [WORKFLOW_A, WORKFLOW_B],
+      });
+
+      await asPrincipal(tenantContext, 'admin', () => users.remove(TARGET));
+
+      // Disarmed with a reason, not deleted: a supervisor should find the
+      // workflow that needs a new target, not find it silently gone. Both
+      // columns move in one statement because `workflows_broken_is_inactive`
+      // requires exactly that pairing.
+      expect(recorded.workflowDisarms).toEqual([
+        {
+          where: { id: { in: [WORKFLOW_A, WORKFLOW_B] } },
+          data: { isActive: false, brokenReason: 'reference_removed' },
+        },
+      ]);
+      // And the reverse index drops the rows naming them, which is what makes
+      // the `NoAction` foreign key legal at all.
+      expect(recorded.workflowReferenceDeletes).toEqual([{ where: { userId: TARGET } }]);
+    });
+
+    it('touches no workflow when the removed user is named by none', async () => {
+      // The common case, and the one the branch must not fire on: an untargeted
+      // `updateMany` here would disarm every workflow in the tenant.
+      const { users, tenantContext, recorded } = buildService({
+        target: activeAgent,
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+      });
+
+      await asPrincipal(tenantContext, 'admin', () => users.remove(TARGET));
+
+      expect(recorded.workflowDisarms).toEqual([]);
+      expect(recorded.workflowReferenceDeletes).toEqual([]);
     });
   });
 

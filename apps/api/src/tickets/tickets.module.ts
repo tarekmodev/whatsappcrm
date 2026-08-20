@@ -45,10 +45,12 @@ import { TicketsController } from './tickets.controller';
  * module edge from L3 to L4, which the layering forbids in that direction.
  *
  * What *is* shared with `SlaModule` is `resolveAlertRecipients`, a pure function
- * imported from `sla/sla-recipients.ts` with no provider, no injection and no
- * module edge — the same category of sharing `SlaBreachResourceService`
- * documents. A breach and an escalation ask the same question, and two answers
- * that drift would send them to different people.
+ * imported from `people/supervisor-recipients.ts` with no provider, no injection
+ * and no module edge. A breach and an escalation ask the same question, and two
+ * answers that drift would send them to different people. It sat in `sla/` until
+ * TAR-27 made `WorkflowsModule` its third caller; a rule three modules depend on
+ * belongs below all of them, which is also what stops this import crossing a
+ * layer.
  *
  * `IdempotencyModule` is the one import: `POST /tickets/{id}/escalate` is the
  * first non-billing route in this API that genuinely creates, and it honours an
@@ -72,6 +74,12 @@ import { TicketsController } from './tickets.controller';
     EscalationAlertService,
     ApiExceptionFilter,
   ],
-  exports: [TICKET_LINKER],
+  // `TICKET_LINKER` is the seam `ConversationsModule` reaches over a queue.
+  // `TicketCommandService` is exported for exactly one consumer —
+  // `WorkflowsModule` (L4), whose action executor writes ticket status, priority
+  // and assignment through `applyAutomation` rather than reimplementing five
+  // behaviours that live in that class (0009, decision 5). L4 importing L3 is
+  // what 0002's layering rule permits; the reverse would not be.
+  exports: [TICKET_LINKER, TicketCommandService],
 })
 export class TicketsModule {}

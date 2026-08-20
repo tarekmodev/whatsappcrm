@@ -184,6 +184,30 @@ const SUPERVISOR_PERMISSIONS = [
    * "cut their access now" and is one click back.
    */
   'user:update',
+  /**
+   * TAR-27's user story opens "As a supervisor, I want to build trigger →
+   * condition → action automations", and 0004 granted these to admin only. Both
+   * could not stand; 0009's security section rules for the supervisor and moves
+   * the gate to where the risk actually is.
+   *
+   * 0004's stated reason — workflows "can send messages autonomously", so "a
+   * misconfigured workflow is a mass-messaging incident" — is exactly right
+   * about the risk it names and does not apply to the launch action set. `tag`,
+   * `reassign`, `notify` and `set_status`/`set_priority` are all **internal**:
+   * every one is something a supervisor can already do by hand with permissions
+   * they already hold (`ticket:update`, `ticket:assign`, `ticket:read_all`), on
+   * tickets they can already see. Automating them changes the speed, not the
+   * blast radius.
+   *
+   * The rule this fixes for whoever adds the first outbound action: **any
+   * workflow action that sends a message to a customer requires a separate
+   * permission (`workflow:send_message`), admin-only, checked at workflow-write
+   * time on the action type — never at execution time.** A workflow runs with no
+   * principal, so there is nobody to check against when it fires; the permission
+   * is a property of the person who armed it.
+   */
+  'workflow:read',
+  'workflow:write',
 ] as const satisfies readonly Permission[];
 
 /**

@@ -234,7 +234,11 @@ function harnessFor(
 
         // The id and the timestamp the database would supply. `escalate` reads
         // its event back through `TICKET_EVENT_PROJECTION` and publishes it, so
-        // a stub returning only what was written would answer with no id.
+        // a stub returning only what was written would answer with no id — and
+        // since TAR-27 the id is load-bearing for a second reason: it **is** the
+        // triggering occurrence a workflow dedupes on, so a mock without one
+        // would let a payload with no `occurrenceId` past a test that is
+        // supposed to describe the shipped shape.
         return Promise.resolve({
           ...data,
           id: EVENT_ID,
@@ -912,15 +916,21 @@ describe('the event an assignment appends', () => {
     expect(appended.map((event) => event.type)).toEqual(['unassigned']);
   });
 
-  it('announces nothing and enqueues nothing', async () => {
+  it('announces nothing and starts no SLA evaluation', async () => {
     // `ticket.updated` carries status and priority, neither of which moved, and
     // 0006's fourth SLA trigger is a status change.
+    //
+    // It does **not** enqueue nothing at all any more: TAR-27 made an
+    // assignment a `ticket_assigned` triggering occurrence (0009 delta 2), so
+    // exactly one job goes out and it is on the workflows queue, not the SLA
+    // one. Asserted by queue rather than by count, so a future producer on a
+    // third queue fails this test instead of slipping past it.
     const { asAgent, emitted, enqueue } = placementHarness(ticket({ assignedUserId: null }));
 
     await asAgent(async (commands) => commands.assign(TICKET, { userId: TEAMMATE }));
 
     expect(emitted).toEqual([]);
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(enqueue.mock.calls.map((call: unknown[]) => call[0])).toEqual(['workflows']);
   });
 });
 

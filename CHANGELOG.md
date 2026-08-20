@@ -169,6 +169,45 @@ change.
 
 ### Added
 
+- **A supervisor can now build trigger → condition → action automations, and they run without
+  anybody watching** (TAR-27, TAR-395) — a workflow is one rule: one trigger, one condition
+  set, one ordered action list, and the tenant's workflows _are_ the rule list the console
+  renders. `POST /api/v1/workflows` and its five siblings, plus
+  `GET /api/v1/workflow-catalog` for the vocabulary a builder renders from — one endpoint
+  rather than three listings, because a form needs all of it before it can draw anything and
+  three endpoints can disagree across a deploy. The launch actions are `add_ticket_tag`,
+  `reassign`, `notify` and `set_status`/`set_priority`; the five triggers are ticket created,
+  status changed, assigned, SLA breached, and unresolved for N minutes.
+
+  **Exactly-once is one unique index, and everything else is an optimisation.** The row that
+  records what a workflow did is the same row that reserves the right to do it:
+  `INSERT INTO workflow_runs … ON CONFLICT (tenant_id, workflow_id, dedupe_key) DO NOTHING
+RETURNING id`. A ticket that stays open for six hours escalates **once**, not once per
+  sweep tick, and it does so whether or not the sweep is correct — which is the failure a
+  supervisor would otherwise experience as a pager. Nothing reads, decides in TypeScript and
+  then writes, because the window between such a read and its write is exactly the window two
+  sweep ticks race in. These jobs carry **no custom BullMQ id**, on the incident
+  `@whatsappcrm/contracts/sla` documents: a ticket-keyed id collapses every occurrence after
+  the first into the completed — or failed — key of the one before it.
+
+  **A rename needs nothing and a delete is refused, both by the shape rather than by a code
+  path.** A definition stores taxonomy ids and only ids, so renaming a tag a workflow uses
+  requires no migration, no backfill and no cache bust; the name reaching the console is
+  joined at read time, and a reference whose row is gone comes back `exists: false` so the
+  rule renders as visibly broken instead of quietly healthy. `workflow_references` carries
+  real composite foreign keys, so PostgreSQL — not a cross-module call the layering rule
+  forbids — is what refuses to delete a tag or team a workflow names. Removing a _user_ still
+  always succeeds, because that is a security action, and leaves the workflow deactivated
+  with `brokenReason: 'reference_removed'`.
+
+  Three bounds contain the loop a workflow's own writes create: the dedupe key (a workflow
+  cannot fire twice for one occurrence, so it cannot trigger itself), `maxChainDepth`, and a
+  per-ticket hourly run budget that records a `failed` run rather than dropping silently —
+  the tenant's rule is what is wrong, and a supervisor needs to find it in the run list
+  rather than in our logs. `POST /workflows/{id}/test` is a dry run that **writes nothing**;
+  `GET /workflows/{id}/runs` is what to read first when a rule looks wrong, before the
+  definition.
+
 - **An agent can now hand on the ticket they are working, with a reason, and raise a
   supervisor without losing it** (TAR-32, TAR-468, TAR-469, TAR-470, TAR-473) — TAR-32 asked
   for two things a ticket could not do. Neither needed much new machinery, and
@@ -236,6 +275,47 @@ change.
   [Hand a ticket on, or ask a supervisor](docs/guides/hand-over-or-escalate-a-ticket.md).
   [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md) gains the optional
   reason field the flagged-queue dialog now offers.
+
+- **Canned responses are documented, for both readers** (TAR-489) — TAR-31 shipped a
+  tenant-shared quick-reply library across five merged pull requests: the database bounds,
+  the CRUD surface, the realtime relay, the composer's shortcut picker and the console's
+  refresh on an edit. None of it had documentation, and the two facts a reader most needs
+  were the two least visible in the source.
+  [The canned responses API reference](docs/reference/canned-responses-api.md) is the
+  engineer's: the five routes with parameters, examples and every error, the four limits
+  `CANNED_RESPONSE_LIMITS` publishes, the shortcut grammar and why it is enforced twice, the
+  audit actions, the two server events and the room they are addressed to, and the isolation
+  properties. It records the things a reader would otherwise derive from source — that the
+  list is unpaginated **on purpose**, because the console resolves a typed shortcut against
+  its own copy of the whole set rather than putting a request on the keystroke path, and
+  that `perTenant` enforced on create is what makes that bounded response a promise the
+  server can keep; that a `PATCH` moving no column writes nothing, audits nothing and
+  announces nothing, so a caller cannot tell a no-op from a write; that `DELETE` is
+  idempotent and clears nothing, because a body is copied into the draft at insertion time;
+  and that another tenant's id is `not_found` rather than `403` because row-level security
+  means the server genuinely cannot tell it from an id that never existed. `is_shared` is
+  documented as a deliberate absence from the DTO rather than left as a column a reader
+  finds in `schema.prisma` and wonders about.
+  [Answer common questions with saved replies](docs/guides/use-saved-replies.md) is the
+  agent's, and refuses all of that vocabulary — including the term _canned response_, which
+  no screen in the console uses. It says where a code is recognised and why (start of the
+  message or after a space, so a web address ending in `/hours` does not open a menu
+  mid-link), what the list matches and in what order, what each key does, and — first,
+  because it is the thing an agent most needs to trust — that **inserting a reply never
+  sends it**.
+  `canned_responses` in [the data model reference](docs/reference/data-model.md) is brought
+  up to what TAR-475 actually shipped: `citext`, the four CHECK constraints Prisma cannot
+  express, and why the by-creator index stays although no application query reads it.
+  ⚠️ Three gaps are marked rather than left to be discovered. **There is no console screen
+  for writing** — `POST`, `PATCH` and `DELETE` have no settings surface and the web client
+  exposes only the list, so a supervisor manages the library through the API, which is what
+  the guide's last section has to tell a non-technical reader. **The design document the
+  code cites throughout — `docs/architecture/0011-canned-responses-contract.md` — is not in
+  the repository**, so every "0011, decision N" in the reference is transcribed from source
+  comments rather than read from the contract; its number is also already taken by
+  `0011-ticket-reassignment-and-escalation.md`. And **nothing records which responses are
+  used**, so a library nobody prunes cannot be pruned on evidence. Each carries a
+  `TODO(author)` naming the question and who should answer it.
 
 - **The reporting dashboard and its export are documented, for both readers** (TAR-434) —
   TAR-30 shipped a performance dashboard, a CSV export and the guarantee that the two agree,

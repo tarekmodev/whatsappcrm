@@ -80,6 +80,7 @@ the one that produced it.
 | [SLA timers and supervisor alerts](docs/reference/sla-timers.md)                             | Response windows, breach detection, who is alerted, and the two endpoints          |
 | [Reporting dashboard and export](docs/reference/reporting-api.md)                            | The four metrics, the date range, scope and attribution, and export parity         |
 | [Branding and custom domains API](docs/reference/branding-domains-api.md)                    | The white-label surface: branding, hostnames, DNS verification, the operator queue |
+| [Canned responses API](docs/reference/canned-responses-api.md)                               | The quick-reply library: CRUD, the shortcut grammar, the picker, the relay         |
 | [Changing a ticket's status and priority](docs/guides/manage-ticket-status-and-priority.md)  | For agents working in the console, not for API consumers                           |
 | [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)           | For supervisors writing routing rules in the console                               |
 | [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md)                      | For supervisors emptying the flagged queue in the console                          |
@@ -88,6 +89,7 @@ the one that produced it.
 | [Put your own brand on the workspace](docs/guides/brand-your-workspace.md)                   | For admins setting the product name, colours, logo and favicon in the console      |
 | [Serve the workspace from your own web address](docs/guides/set-up-a-custom-domain.md)       | For admins adding a custom domain, with the exact DNS records to publish           |
 | [Hand a ticket on, or ask a supervisor](docs/guides/hand-over-or-escalate-a-ticket.md)       | For agents reassigning a ticket or escalating one, and reading the history         |
+| [Answer common questions with saved replies](docs/guides/use-saved-replies.md)               | For agents inserting a saved reply in the composer by typing a shortcut            |
 | [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                             |
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                             |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                           |
