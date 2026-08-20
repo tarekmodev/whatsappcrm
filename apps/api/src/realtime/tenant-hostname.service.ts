@@ -18,11 +18,12 @@ import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
  * that arrived on a completely different connection.
  *
  * So the hostname comes from the control plane instead, on `TenantLinkService`'s
- * reasoning for invite and reset links: the tenant's primary **verified**
+ * reasoning for invite and reset links: the tenant's primary **deliverable**
  * domain, read through `TenantPrisma` so RLS decides which rows exist. An
  * unverified custom domain is skipped for the same reason `HostTenantGuard`
  * refuses to resolve one — the row exists while DNS and TLS are still being
- * proved.
+ * proved — and a verified one the edge is not serving is skipped because it has
+ * no certificate yet (TAR-534).
  *
  * The query is a near-copy of `TenantLinkService.primaryHostname`, and
  * deliberately not extracted yet: two call sites in two different layers is not
@@ -67,7 +68,14 @@ export class TenantHostnameService {
    */
   async publish(): Promise<boolean> {
     const domain = await this.prisma.tenantDomain.findFirst({
-      where: { verifiedAt: { not: null } },
+      where: {
+        verifiedAt: { not: null },
+        // And deliverable: a custom domain the edge is not serving has no route
+        // and no certificate, so a payload naming it points a browser at a host
+        // it cannot load. `TenantLinkService.primaryHostname` skips it on the
+        // same rule (TAR-534); the platform subdomain never activates.
+        OR: [{ kind: 'platform' }, { activatedAt: { not: null } }],
+      },
       select: { hostname: true },
       // Primary first; then the platform subdomain, which is issued by us and
       // verified at provisioning, ahead of any custom domain.
