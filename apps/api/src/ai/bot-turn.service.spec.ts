@@ -108,6 +108,7 @@ describe('BotTurnService', () => {
   let service: BotTurnService;
   let snapshotSettings: AiSettings;
   let conversationBotEngagedAt: Date | null;
+  let snapshotBotReplyCount: number;
   let chunks: RetrievedChunk[];
   let modelResult: BotCallResult;
   let claimSucceeds: boolean;
@@ -144,9 +145,22 @@ describe('BotTurnService', () => {
     return Object.assign({}, ...botTurnUpdates) as Record<string, unknown>;
   }
 
+  /**
+   * The bot has already answered once in this conversation.
+   *
+   * Since the narrowing on 0010 decision 5, a refusal is only terminal once the
+   * bot has actually spoken — so a test about the handoff machinery has to put
+   * itself on that side of the line deliberately rather than by default.
+   */
+  function botHasAlreadySpoken(): void {
+    conversationBotEngagedAt = new Date('2026-08-16T09:30:00.000Z');
+    snapshotBotReplyCount = 1;
+  }
+
   beforeEach(() => {
     snapshotSettings = settings();
     conversationBotEngagedAt = null;
+    snapshotBotReplyCount = 0;
     chunks = [STRONG_CHUNK];
     modelResult = answered();
     claimSucceeds = true;
@@ -235,7 +249,7 @@ describe('BotTurnService', () => {
             serviceWindowExpiresAt: new Date('2026-08-16T20:00:00.000Z'),
           },
           optedOut: false,
-          botReplyCount: 0,
+          botReplyCount: snapshotBotReplyCount,
         }),
     } as unknown as BotEligibilityService;
 
@@ -381,6 +395,10 @@ describe('BotTurnService', () => {
   });
 
   describe('the composite score is the minimum of two signals', () => {
+    // About the score, not about terminality: an engaged conversation is where a
+    // refusal is still a handoff.
+    beforeEach(botHasAlreadySpoken);
+
     it('refuses when retrieval is weak even though the model is certain', async () => {
       // The hallucination case the whole design exists to prevent: an average
       // would let a confident model compensate for material that was not there.
@@ -415,9 +433,21 @@ describe('BotTurnService', () => {
 
       expect(finalTurn()).toMatchObject({ modelConfidence: 0.3, retrievalScore: 1 });
     });
+
+    it('clears the claim placeholder, so the row is not a failure that never happened', async () => {
+      // Every other terminal write overwrote `error`; this branch did not, and a
+      // turn refused purely on score kept reading as `claimed` for ever.
+      modelResult = answered({ confidence: 'low' });
+
+      await service.handle(TRIGGER);
+
+      expect(finalTurn().error).toBeNull();
+    });
   });
 
   describe('the citation precondition, which sits outside the score', () => {
+    beforeEach(botHasAlreadySpoken);
+
     it('refuses an answer that cites a chunk this turn never retrieved', async () => {
       // An id the model invented is a fabrication signal, and no score should be
       // able to rescue it.
@@ -443,6 +473,8 @@ describe('BotTurnService', () => {
   });
 
   describe('the handoff paths', () => {
+    beforeEach(botHasAlreadySpoken);
+
     it('hands off on a keyword before spending a retrieval query or a token', async () => {
       snapshotSettings = settings({ handoffKeywords: ['refunds'] });
 
@@ -498,6 +530,121 @@ describe('BotTurnService', () => {
         expect.objectContaining({ body: 'Let me get a colleague for you.' }),
       );
       expect(dispatch).toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The narrowing of 0010 decision 5 (Architect's ruling on TAR-406).
+   *
+   * Decision 5 put two facts in one state: *a human has been asked for*, and
+   * *the bot could not help*. Only the first is terminal. Until this, an opening
+   * "hi" that missed the knowledge base disabled the bot for the rest of the
+   * conversation — so the customer's real question, one message later, was never
+   * eligible to be answered, and TAR-28 AC1 was unreachable through the most
+   * ordinary opener there is.
+   */
+  describe('a bot that has never spoken cannot hand off', () => {
+    it('answers the question that follows a greeting it could not match', async () => {
+      // AC1 through a realistic opener, and the case that was broken.
+      chunks = [];
+
+      await expect(service.handle(TRIGGER)).resolves.toBe('suppressed');
+
+      chunks = [STRONG_CHUNK];
+
+      await expect(
+        service.handle({ ...TRIGGER, messageId: '70444444-4444-7444-8444-4444444444e1' }),
+      ).resolves.toBe('replied');
+    });
+
+    it('leaves the conversation exactly as it found it', async () => {
+      chunks = [];
+
+      await service.handle(TRIGGER);
+
+      // No handoff event, no state move, no routing re-request, and nothing said
+      // to the customer. The whole point is that the next message is gated afresh.
+      expect(recordHandoff).not.toHaveBeenCalled();
+      expect(conversationUpdates).toHaveLength(0);
+      expect(requestRouting).not.toHaveBeenCalled();
+      expect(writeOutboundText).not.toHaveBeenCalled();
+    });
+
+    it('still records the refusal, because an operator will ask about it', async () => {
+      chunks = [];
+
+      await service.handle(TRIGGER);
+
+      expect(botTurnCreates).toEqual([
+        expect.objectContaining({
+          outcome: 'suppressed',
+          error: 'no_answer_unengaged',
+          inboundMessageId: MESSAGE,
+        }),
+      ]);
+    });
+
+    it('suppresses a low-confidence answer too, or the defect survives by a second door', async () => {
+      // A greeting that clears the trigram floor reaches the model and comes back
+      // unable to answer. Same outcome for the customer as `no_match`; it must
+      // not be the one that stays terminal.
+      modelResult = answered({ answered: false });
+
+      await expect(service.handle(TRIGGER)).resolves.toBe('suppressed');
+      expect(recordHandoff).not.toHaveBeenCalled();
+    });
+
+    it('updates the claimed row rather than inserting a second one', async () => {
+      // `suppress()` inserts, and the claim already holds
+      // `(tenant_id, inbound_message_id)` — calling it here would throw a unique
+      // violation on a path whose whole purpose is to do nothing.
+      modelResult = answered({ answered: false });
+
+      await service.handle(TRIGGER);
+
+      expect(botTurnCreates).toHaveLength(1);
+      expect(finalTurn()).toMatchObject({
+        outcome: 'suppressed',
+        error: 'no_answer_unengaged',
+      });
+    });
+
+    it('clears the claim’s handoff reason, which the database will not accept', async () => {
+      // `bot_turns_handoff_reason_matches_outcome` is a biconditional, and the
+      // pessimistic claim writes `bot_error`. A suppressed row that kept it is
+      // rejected outright — a check violation thrown on the path whose whole
+      // purpose is to do nothing, and one no mock would ever show.
+      modelResult = answered({ answered: false });
+
+      await service.handle(TRIGGER);
+
+      expect(finalTurn().handoffReason).toBeNull();
+    });
+
+    it('still hands off when the customer asks for a person', async () => {
+      // The one thing the bot must never talk its way out of.
+      snapshotSettings = settings({ handoffKeywords: ['refunds'] });
+
+      await expect(service.handle(TRIGGER)).resolves.toBe('handed_off');
+      expect(handoffReason()).toBe('customer_requested');
+    });
+
+    it('still hands off when the provider fails', async () => {
+      // A provider incident fails toward a human, per 0010's failure table.
+      modelResult = { outcome: 'failed', error: 'timeout', latencyMs: 20_000 };
+
+      await expect(service.handle(TRIGGER)).resolves.toBe('handed_off');
+      expect(handoffReason()).toBe('bot_error');
+    });
+
+    it('does not leak into a conversation the bot has already answered in', async () => {
+      // Turn two missing the knowledge base is a real handoff: the customer is
+      // mid-conversation with a bot that has stopped being able to help.
+      botHasAlreadySpoken();
+      chunks = [];
+
+      await expect(service.handle(TRIGGER)).resolves.toBe('handed_off');
+      expect(handoffReason()).toBe('no_match');
     });
   });
 

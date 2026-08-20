@@ -158,6 +158,13 @@ export type BotSuppressionReason =
   | 'no_knowledge_base'
   /** The contact has opted out of messages; nothing may be sent to them. */
   | 'opted_out'
+  /**
+   * The bot had nothing to say, and had never said anything in this
+   * conversation. Produced by the orchestrator rather than by this gate — see
+   * `BotTurnService.handOff` — and the reason an opening "hi" that misses the
+   * knowledge base leaves the conversation open to the question that follows.
+   */
+  | 'no_answer_unengaged'
   | 'not_inbound'
   | 'empty_message'
   /** The conversation is already `handed_off` or `human_active`. */

@@ -531,6 +531,45 @@ describe('AI chatbot schema', () => {
       expect(turn.modelConfidence).toBeNull();
       expect(turn.citedChunkIds).toEqual([]);
     });
+
+    it('accepts a scored turn that ends as a suppression, with no handoff reason', async () => {
+      // The shape `BotTurnService.suppressUnanswered` writes when the bot could
+      // not answer and had never spoken: the claim is corrected from
+      // `handed_off`/`bot_error` to `suppressed`, and the reason **must** go with
+      // it, because the check is a biconditional. The scores stay, which is what
+      // still shows the model was called.
+      //
+      // Proved here rather than against a mock: a unit test that stubs Prisma
+      // cannot fail on a constraint, and this is the path that must never throw.
+      const turn = await systemPrisma.botTurn.create({
+        data: {
+          tenantId: TENANT,
+          conversationId: CONVERSATION,
+          inboundMessageId: await insertLegacyMessage('inbound', null),
+          outcome: 'suppressed',
+          handoffReason: null,
+          error: 'no_answer_unengaged',
+          score: 0.3,
+          modelConfidence: 0.3,
+          retrievalScore: 1,
+        },
+        select: { id: true, handoffReason: true, error: true },
+      });
+
+      expect(turn).toMatchObject({ handoffReason: null, error: 'no_answer_unengaged' });
+
+      await expect(
+        systemPrisma.botTurn.create({
+          data: {
+            tenantId: TENANT,
+            conversationId: CONVERSATION,
+            inboundMessageId: await insertLegacyMessage('inbound', null),
+            outcome: 'suppressed',
+            handoffReason: 'low_confidence',
+          },
+        }),
+      ).rejects.toThrow();
+    });
   });
 
   describe('`handoff_events`', () => {

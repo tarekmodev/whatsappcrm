@@ -197,7 +197,14 @@ export class BotTurnService {
     }
 
     if (score < snapshot.settings.minConfidence) {
-      await this.prisma.botTurn.updateMany({ where: { id: turnId }, data: scores });
+      // `error: null` clears the claim placeholder. Every other terminal write
+      // already overwrites it; this branch did not, so a turn refused purely on
+      // score kept an `error` of 'claimed' and read as a failure that never
+      // happened.
+      await this.prisma.botTurn.updateMany({
+        where: { id: turnId },
+        data: { ...scores, error: null },
+      });
 
       return this.handOff(trigger, snapshot, 'low_confidence', turnId);
     }
@@ -293,10 +300,15 @@ export class BotTurnService {
    * customer-facing message all commit together, and the routing request follows
    * the commit.
    *
-   * `handoffMessage` is opt-in and null by default, deliberately: a tenant that
-   * hands off on every unmatched greeting would otherwise send an apology to
-   * every customer who said hello. It is sent once per engagement because
-   * `handed_off` is a state the gate refuses to start a second turn from.
+   * **Not every refusal reaches here.** A `no_match` or `low_confidence` refusal
+   * on a conversation the bot has never spoken in is not a handoff at all — see
+   * `suppressUnanswered`, which the guard below routes it to. That is also what
+   * keeps `handoffMessage` at most once per conversation: the apology is never
+   * sent to a greeting, and after a real handoff `handed_off` is a state the
+   * gate refuses to start a second turn from.
+   *
+   * `handoffMessage` stays opt-in and null by default regardless — a tenant may
+   * still prefer their customers hear nothing rather than an apology.
    */
   private async handOff(
     trigger: BotInboundTrigger,
@@ -304,6 +316,10 @@ export class BotTurnService {
     reason: HandoffReason,
     turnId: string | null,
   ): Promise<BotTurnOutcome> {
+    if (SUPPRESSED_WHEN_UNENGAGED.has(reason) && hasNeverEngaged(snapshot)) {
+      return this.suppressUnanswered(trigger, snapshot, reason, turnId);
+    }
+
     const sentAt = new Date();
     const message = snapshot.settings.handoffMessage;
     const botEngagedAt = snapshot.conversation?.botEngagedAt ?? null;
@@ -360,6 +376,73 @@ export class BotTurnService {
     await this.handoffs.requestRoutingIfUnowned(trigger.ticketId, trigger.contactId);
 
     return 'handed_off';
+  }
+
+  /**
+   * The bot had nothing to say, and had never said anything (0010 decision 5,
+   * as narrowed by the Architect on TAR-406).
+   *
+   * Decision 5 put two different facts in one state: **a human has been asked
+   * for**, and **the bot could not help**. Only the first should be terminal.
+   * An opening "hi" that misses the knowledge base is the second, and treating
+   * it as the first disabled the bot for the rest of the conversation — so the
+   * real question, arriving one message later, was never eligible to be
+   * answered. That made TAR-28 AC1 unreachable through the most ordinary opener
+   * there is.
+   *
+   * So this path records the refusal and stops: **no handoff event, no
+   * `handoffMessage`, no `bot_state` move, no routing re-request.** The
+   * conversation stays `off`, which is the truth — the bot is not and has never
+   * been in charge of it — and the next message is gated afresh.
+   *
+   * Nobody is stranded by the silence, because the handoff was never what got a
+   * human involved: the ticket exists and routing already ran on ticket
+   * creation (decision 8), and the SLA clock is still running because only a
+   * *successful reply* pauses it (decision 7). An unanswerable opening question
+   * is a live, routed, clocked ticket, with the breach sweep as the backstop.
+   *
+   * The two call sites differ only in whether the claim row exists yet, and the
+   * difference is not cosmetic: `suppress()` inserts, so calling it after the
+   * claim would hit the `inbound_message_id` unique constraint and throw on a
+   * path whose whole purpose is to do nothing.
+   */
+  private async suppressUnanswered(
+    trigger: BotInboundTrigger,
+    snapshot: BotGateSnapshot,
+    reason: HandoffReason,
+    turnId: string | null,
+  ): Promise<BotTurnOutcome> {
+    if (turnId === null) {
+      return this.suppress(trigger, snapshot, UNENGAGED_SUPPRESSION);
+    }
+
+    await this.prisma.botTurn.updateMany({
+      where: { id: turnId },
+      data: {
+        outcome: StoredBotTurnOutcome.suppressed,
+        // **Nulled, and it has to be.** `bot_turns_handoff_reason_matches_outcome`
+        // is a biconditional — `(outcome = 'handed_off') = (handoff_reason IS NOT
+        // NULL)` — so a suppressed row carrying a reason is rejected by the
+        // database, and the claim wrote `bot_error` here. Leaving it would throw a
+        // check violation on the one path whose entire purpose is to do nothing.
+        //
+        // The reason still survives, in `error`, which is where `suppress()`
+        // already records why a suppressed turn was suppressed. What that costs is
+        // the `ungrounded_citation` marker on the narrow overlap of "cited
+        // something it never retrieved" and "had never spoken" — the scores and
+        // token counts are still on the row, so the model was demonstrably called.
+        handoffReason: null,
+        error: UNENGAGED_SUPPRESSION,
+      },
+    });
+
+    this.logger.debug(
+      `Bot turn for message ${trigger.messageId} suppressed ` +
+        `(${UNENGAGED_SUPPRESSION}, ${reason}); conversation ${trigger.conversationId} ` +
+        `stays eligible for the message that follows.`,
+    );
+
+    return 'suppressed';
   }
 
   /**
@@ -568,6 +651,48 @@ interface TurnScores {
   readonly outputTokens: number;
   readonly cachedInputTokens: number | null;
   readonly latencyMs: number;
+}
+
+/**
+ * The reason written on a turn that becomes a suppression because the bot had
+ * never spoken. Deliberately **absent** from `TENANT_LEVEL_SUPPRESSIONS`: it is
+ * a fact about one thread, not about the tenant, and it is the row an operator
+ * asks about when a bot that is switched on said nothing.
+ */
+const UNENGAGED_SUPPRESSION: BotSuppressionReason = 'no_answer_unengaged';
+
+/**
+ * Handoff reasons that mean *the bot could not help*, which stop being terminal
+ * when the bot has never spoken in the conversation.
+ *
+ * The three reasons deliberately left out stay terminal at zero engagement:
+ *
+ *   * `customer_requested` — the customer asked for a person. The one thing the
+ *     bot must never talk its way out of.
+ *   * `bot_error` — a provider incident fails toward a human, per 0010's own
+ *     failure table.
+ *   * `max_turns` — unreachable with no replies, and listed so that stays a
+ *     decision rather than an accident of the arithmetic.
+ *
+ * `low_confidence` has to be here or the defect survives by a second door: a
+ * greeting that clears the trigram floor reaches the model, comes back
+ * `answered: false`, and lands in the same terminal state that `no_match` used
+ * to.
+ */
+const SUPPRESSED_WHEN_UNENGAGED = new Set<HandoffReason>(['no_match', 'low_confidence']);
+
+/**
+ * Has the bot ever spoken in this conversation?
+ *
+ * Both columns, not either: `bot_engaged_at` is stamped in the same transaction
+ * as the first reply and `bot_reply_count` counts replied turns, so they agree —
+ * and reading both means a future path that moves one without the other cannot
+ * quietly re-open a terminal handoff. `handoff_events` already carries the pair,
+ * which is the tell that "was the bot actually engaged" was always the
+ * load-bearing distinction.
+ */
+function hasNeverEngaged(snapshot: BotGateSnapshot): boolean {
+  return (snapshot.conversation?.botEngagedAt ?? null) === null && snapshot.botReplyCount === 0;
 }
 
 /**
