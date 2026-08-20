@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { PermissionGuard } from '../../rbac/permission.guard';
 import { PrincipalGuard } from '../../rbac/principal.guard';
 import { HostTenantGuard } from '../../tenancy/host-tenant.guard';
+import { TenantStatusGuard } from './tenant-status.guard';
 
 /**
  * Installs TAR-39's request pipeline globally (TAR-58).
@@ -27,20 +28,29 @@ import { HostTenantGuard } from '../../tenancy/host-tenant.guard';
  * Nest runs global guards in the order their `APP_GUARD` providers are declared,
  * and each of these three depends on the last:
  *
- *   1. `HostTenantGuard`  — **where** the request is, from the `Host` header.
- *   2. `PrincipalGuard`   — **who** is calling, from the session cookie, checked
- *                           against the tenant stage 1 resolved.
- *   3. `PermissionGuard`  — **may they**, from `@RequirePermission`.
+ *   1. `HostTenantGuard`   — **where** the request is, from the `Host` header.
+ *   2. `PrincipalGuard`    — **who** is calling, from the session cookie, checked
+ *                            against the tenant stage 1 resolved.
+ *   3. `TenantStatusGuard` — **is that tenant open to them**, from its lifecycle
+ *                            status and the caller's role (TAR-36, ADR 0009).
+ *   4. `PermissionGuard`   — **may they**, from `@RequirePermission`.
  *
  * Reordering them does not fail loudly at boot, so it is asserted end to end in
  * `request-pipeline.http.spec.ts`: an unknown host answers `tenant_not_found`
  * before it can answer `unauthenticated`, which is only true if stage 1 ran
- * first. Stages 4 and 6 of the published pipeline — `TenantStatusGuard` (TAR-36)
- * and `FeatureGuard` (TAR-37) — slot in here when those stories land.
+ * first. Stage 6 of the published pipeline — `FeatureGuard` (TAR-37) — slots in
+ * here when that story lands.
+ *
+ * `TenantStatusGuard` sits between the last two rather than beside them because
+ * both neighbours constrain it: it needs the role `PrincipalGuard` resolved, and
+ * "your workspace is suspended" is a truer answer than "you lack
+ * `ticket:write`", so it has to run before the permission check can produce the
+ * second one.
  *
  * ## Why this module owns them rather than `RbacModule`
  *
- * The three guards live in three different bounded contexts — tenancy, RBAC —
+ * The four guards live in three different bounded contexts — tenancy, the
+ * pipeline itself, RBAC —
  * and the pipeline is a property of the application, not of any one of them.
  * Putting the registration in a feature module would make "what runs on every
  * request" something you have to already know where to look for. Every
@@ -51,6 +61,7 @@ import { HostTenantGuard } from '../../tenancy/host-tenant.guard';
   providers: [
     { provide: APP_GUARD, useClass: HostTenantGuard },
     { provide: APP_GUARD, useClass: PrincipalGuard },
+    { provide: APP_GUARD, useClass: TenantStatusGuard },
     { provide: APP_GUARD, useClass: PermissionGuard },
   ],
 })

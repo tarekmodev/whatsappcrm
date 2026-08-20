@@ -3,6 +3,9 @@ import { resolveAuditActor, type AuditActor } from '../audit/audit-actor';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { $Enums, Prisma } from '../generated/prisma/client';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
+import { NOTIFY_TENANT_LIFECYCLE_JOB, TENANCY_QUEUE } from '../queue/queue.constants';
+import { QueueService } from '../queue/queue.service';
+import { applyTransition } from './lifecycle/tenant-lifecycle.service';
 import { TenantNotFoundError } from './tenant-deactivation.errors';
 
 /**
@@ -21,10 +24,10 @@ const TRANSACTION_TIMEOUT_MS = 10_000;
 export const TENANT_DEACTIVATED_ACTION = 'tenant.deactivated';
 
 /**
- * The statuses from which there is nothing left to deactivate. All three already
- * fail `assert_tenant_active`, so the tenant's agents are already locked out
- * and re-stamping `suspended_at` would only overwrite the record of when that
- * happened.
+ * The statuses from which there is nothing left to deactivate. `TenantStatusGuard`
+ * already refuses every principal on all three, so the tenant's agents are
+ * locked out and re-stamping `suspended_at` would only overwrite the record of
+ * when that happened.
  *
  * `deleted` joins them with TAR-403, and not merely for tidiness: it is a
  * terminal state — `TENANT_STATUS_TRANSITIONS` gives it no outgoing edge — so
@@ -65,37 +68,45 @@ const TENANT_PROJECTION = {
 } as const;
 
 /**
- * Admin-triggered tenant deactivation (TAR-19, third acceptance criterion).
+ * Admin-triggered tenant deactivation (TAR-19, third acceptance criterion),
+ * delegating to the lifecycle engine since TAR-404.
  *
  * ## What it does, and what it deliberately does not
  *
- * Deactivation writes two columns — `tenants.status` and `tenants.suspended_at`
- * — and nothing else. That is the whole operation, and the reason it is safe:
+ * Deactivation moves the tenant to `suspended` and records who did it. That is
+ * the whole operation, and the reason it is safe:
  *
  *   * **The data is retained.** Nothing is deleted, anonymised or moved. Every
  *     contact, conversation, ticket and message the tenant ever wrote stays
  *     exactly where it was, reachable through `SystemPrisma` for support,
  *     billing, export and reactivation. Deletion is a separate operation with a
  *     retention window, and it is not this one.
- *   * **Access is revoked at the data layer, not at the edge.** The status this
- *     writes is read by `assert_tenant_active`
- *     (`20260810150000_tenant_deactivation_guard`), which every `TenantPrisma`
- *     statement passes through on its way to setting the RLS GUC. So the block
- *     covers HTTP handlers, queue workers, WebSocket handlers and raw SQL
- *     alike, and it is in force from the instant this transaction commits —
- *     there is no cache to expire and no guard a new route could forget to
- *     apply.
- *   * **No other tenant is touched.** One row is written, identified by slug,
- *     and the gate reads only the row named by the GUC. A neighbour's queries
- *     do not change shape, cost or result.
+ *   * **Access is revoked at request pipeline stage 4.** `TenantStatusGuard`
+ *     reads the status this writes and refuses every principal on every route
+ *     except the recovery allowlist an admin needs to pay their way back in.
+ *     Before TAR-404 the block lived in the data layer, in
+ *     `assert_tenant_active` — it moved because a suspended tenant's **inbound
+ *     WhatsApp messages must still be stored** (ADR 0009 decision 2), which a
+ *     database gate that refused `suspended` made impossible. `TenantPrisma`
+ *     therefore now admits a suspended tenant, and the HTTP guard is what keeps
+ *     its people out.
+ *   * **No other tenant is touched.** One row is written, identified by slug.
+ *     A neighbour's queries do not change shape, cost or result.
  *
  * Two things it leaves to their owners. It does not revoke sessions — TAR-35
- * owns `sessions` and login, and must refuse a non-active tenant there so a
- * deactivated tenant cannot get as far as a session; the gate below means such
- * a session would reach no data in any case. And it does not reactivate:
- * `suspended → active` is the lifecycle state machine TAR-36 owns, and putting
- * the inverse here would make an endpoint that exists to take access away also
- * the one that gives it back.
+ * owns `sessions` and login, and refuses an agent or supervisor of a suspended
+ * tenant there; an admin's surviving session reaches only the allowlist. And it
+ * does not reactivate: `POST /admin/tenants/{slug}/reactivate` is the inverse,
+ * and putting it here would make an endpoint that exists to take access away
+ * also the one that gives it back.
+ *
+ * ## What is written, and by whom
+ *
+ * `tenants.status`, the timer columns and the `lifecycle_events` row are
+ * `TenantLifecycleService`'s — this delegates through `applyTransition`, so an
+ * operator deactivation lands in the lifecycle trail alongside every other route
+ * to `suspended` and starts the same retention clock. What stays here is the
+ * `audit_logs` row, the slug identity of the request, and the advisory lock.
  *
  * ## Why `SystemPrisma`
  *
@@ -121,6 +132,7 @@ export class TenantDeactivationService {
   constructor(
     @Inject(SYSTEM_PRISMA) private readonly systemPrisma: SystemPrisma,
     private readonly tenantContext: TenantContextService,
+    private readonly queue: QueueService,
   ) {}
 
   async deactivate(command: DeactivateTenantCommand): Promise<DeactivateTenantResult> {
@@ -146,24 +158,43 @@ export class TenantDeactivationService {
           throw new TenantNotFoundError(command.slug);
         }
 
-        return ALREADY_INACCESSIBLE.includes(existing.status)
-          ? { tenant: existing, deactivated: false }
-          : {
-              tenant: await suspendTenant(
-                tx,
-                existing.id,
-                command.reason,
-                // Read here rather than inside `suspendTenant`, so the actor is
-                // resolved from the request scope in one place and cannot be
-                // assembled by hand into a combination
-                // `audit_logs_actor_attribution` rejects.
-                resolveAuditActor(this.tenantContext),
-              ),
-              deactivated: true,
-            };
+        if (ALREADY_INACCESSIBLE.includes(existing.status)) {
+          return { tenant: existing, deactivated: false, eventId: null };
+        }
+
+        // The status write, the timer columns and the `lifecycle_events` row all
+        // belong to the single writer (ADR 0009, the transition seam). What
+        // stays here is the operator-facing audit row, the slug identity of the
+        // request, and the lock.
+        //
+        // `applyTransition` rather than `TenantLifecycleService.transition`,
+        // because that method opens its own transaction — nesting one inside
+        // this one would either deadlock on the advisory lock it takes or commit
+        // the status write independently of the `audit_logs` row below, which is
+        // exactly the gap this transaction exists to close.
+        const { state, eventId } = await applyTransition(tx, {
+          tenantId: existing.id,
+          to: 'suspended',
+          trigger: 'operator_action',
+          // Resolved from the request scope in one place, so no call site can
+          // assemble a combination `lifecycle_events_actor_attribution` rejects.
+          actor: resolveAuditActor(this.tenantContext),
+          reason: command.reason,
+        });
+
+        await recordDeactivationAudit(
+          tx,
+          state,
+          command.reason,
+          resolveAuditActor(this.tenantContext),
+        );
+
+        return { tenant: state, deactivated: true, eventId };
       },
       { timeout: TRANSACTION_TIMEOUT_MS },
     );
+
+    await this.notifyDeactivation(result);
 
     this.logger.log(
       result.deactivated
@@ -171,15 +202,62 @@ export class TenantDeactivationService {
         : `Tenant ${result.tenant.slug} (${result.tenant.id}) is already ${result.tenant.status}; no changes made`,
     );
 
-    return result;
+    return { tenant: result.tenant, deactivated: result.deactivated };
+  }
+
+  /**
+   * The `tenant_suspended` email, enqueued **after** the commit.
+   *
+   * The same rule the rest of the lifecycle follows and for the same reason: a
+   * mailer or Redis outage that rolled this transaction back would leave a
+   * tenant an operator meant to shut off still running. The `lifecycle_events`
+   * row is already committed with `notified_at IS NULL`, so the sweep is the
+   * backstop if this fails — which is why `enqueue` reporting anything other
+   * than `added` is a log line rather than an error.
+   */
+  private async notifyDeactivation({ eventId, tenant }: DeactivationOutcome): Promise<void> {
+    if (eventId === null) {
+      return;
+    }
+
+    const outcome = await this.queue.enqueue(
+      TENANCY_QUEUE,
+      NOTIFY_TENANT_LIFECYCLE_JOB,
+      { tenantId: tenant.id, eventId },
+      { jobId: eventId },
+    );
+
+    if (outcome !== 'added') {
+      this.logger.warn(
+        `Could not queue the suspension notice for lifecycle event ${eventId} (${outcome}); ` +
+          'the lifecycle sweep will re-enqueue it.',
+      );
+    }
   }
 }
 
+/** What the transaction returns, before the published result drops the event id. */
+interface DeactivationOutcome {
+  tenant: DeactivatedTenant;
+  deactivated: boolean;
+  eventId: string | null;
+}
+
 /**
- * The write, plus the audit entry that has to land or roll back with it. An
- * access revocation nobody can account for afterwards is the kind of gap a
- * SOC 2 style audit asks about, so the two are one transaction rather than two
- * statements that usually both succeed.
+ * The **operator-facing** audit entry, which has to land or roll back with the
+ * status write. An access revocation nobody can account for afterwards is the
+ * kind of gap a SOC 2 style audit asks about, so the two are one transaction
+ * rather than two statements that usually both succeed.
+ *
+ * ## Why this survives alongside `lifecycle_events`
+ *
+ * The transition now writes a `lifecycle_events` row too, and the two are not
+ * redundant. `lifecycle_events` is the state machine's trail: platform-level,
+ * append-only, and it outlives the purge. `audit_logs` is the **tenant's own**
+ * operational audit, tenant-scoped and readable by whatever support tooling
+ * reads the rest of that table — and `tenant.deactivated` has been its action
+ * name since TAR-51, with readers that would lose the answer to "when did this
+ * tenant lose access" if it stopped being written.
  *
  * `actorUserId` stays null: the actor is the platform operator, who is not a
  * user inside this tenant — the column is a foreign key into this tenant's
@@ -190,14 +268,13 @@ export class TenantDeactivationService {
  *
  * Written directly rather than through `AuditService` because this row is not
  * the audit of a tenant-scoped change: it runs under `SystemPrisma` against a
- * tenant nobody is in the scope of, and it carries the transaction's `now()`.
- * The actor still comes from the request scope — the rule that matters — via
- * `resolveAuditActor`, which is the same value `AuditService` would have used.
+ * tenant nobody is in the scope of.
  *
- * Both timestamps come from the **database** clock, read once as `now()` —
- * transaction start — and written to both rows. Two API instances a few seconds
- * apart would otherwise be able to order the audit trail inconsistently with
- * the row it describes.
+ * The timestamp comes from the **database** clock, read as `now()` —
+ * transaction start, therefore the same instant `applyTransition` stamped the
+ * tenant row and the lifecycle event with. Two API instances a few seconds apart
+ * would otherwise be able to order the audit trail inconsistently with the row
+ * it describes.
  *
  * `created_at` is passed explicitly rather than left to its column default, and
  * that is not belt and braces: `audit_logs.created_at` does carry
@@ -207,19 +284,13 @@ export class TenantDeactivationService {
  * start on an idle local database. Naming the value is what actually makes the
  * two agree.
  */
-async function suspendTenant(
+async function recordDeactivationAudit(
   tx: Prisma.TransactionClient,
-  tenantId: string,
+  tenant: DeactivatedTenant,
   reason: string | undefined,
   actor: AuditActor,
-): Promise<DeactivatedTenant> {
+): Promise<void> {
   const [{ now }] = await tx.$queryRaw<[{ now: Date }]>`SELECT now() AS now`;
-
-  const tenant = await tx.tenant.update({
-    where: { id: tenantId },
-    data: { status: 'suspended', suspendedAt: now },
-    select: TENANT_PROJECTION,
-  });
 
   await tx.auditLog.create({
     data: {
@@ -230,8 +301,8 @@ async function suspendTenant(
       action: TENANT_DEACTIVATED_ACTION,
       targetType: 'tenant',
       targetId: tenant.id,
-      // The same instant the row above was stamped with. See the note above on
-      // why the column default is not what would happen otherwise.
+      // The same instant the two rows above were stamped with. See the note
+      // above on why the column default is not what would happen otherwise.
       createdAt: now,
       // Operator-supplied free text, and the only thing here that did not come
       // from the database. Recorded as given; never rendered to the tenant, and
@@ -240,6 +311,4 @@ async function suspendTenant(
     },
     select: { id: true },
   });
-
-  return tenant;
 }

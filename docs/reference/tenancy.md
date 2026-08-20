@@ -67,7 +67,7 @@ to the one it overrides, and can be revoked one table at a time.
 
 ```sql
 BEGIN;
-SELECT set_config('app.tenant_id', public.assert_tenant_active($1), true);  -- true = transaction-local
+SELECT set_config('app.tenant_id', public.assert_tenant_serviceable($1), true);  -- true = transaction-local
 <the query>;
 COMMIT;
 ```
@@ -76,6 +76,24 @@ COMMIT;
 request's tenant into the next one. A session-level `set_config(..., false)` anywhere in this
 codebase would be a cross-tenant leak; there is none, and the integration suite asserts that a
 connection reused across two tenants stays honest.
+
+### The gate is not the lockout
+
+`assert_tenant_serviceable` answers one question — **does this tenant's data exist and is it
+intact** — and it admits `trialing`, `active`, `past_due`, `suspended` and `cancelled`. It
+refuses `created` and `deleted`, and nothing else (ADR 0009 decision 2, Amendment 1 ruling 1).
+
+It replaced TAR-51's `assert_tenant_active`, which refused every status but `active`, because a
+**suspended tenant's inbound WhatsApp messages must still be stored**: the ingest path writes
+`conversations` and `messages` through `TenantPrisma`, and a gate that refused `suspended` would
+have forced the highest-volume write in the product onto the unscoped client.
+
+Who may _reach the API_ is a different question, and it has a different answer in a different
+place: `TenantStatusGuard` at request pipeline stage 4, which knows the caller's role and the
+route they asked for. It is default-deny, and `@AvailableWhileSuspended()` on an admin-reachable
+route is the sole exemption. **Neither gate carries a copy of the other's policy**, and a
+suspended tenant reading its own rows through `TenantPrisma` is the design rather than a leak —
+row-level security is what confines it, as it does for every other tenant.
 
 The tenant comes from `TenantContextService`'s `AsyncLocalStorage`, which HTTP requests, queue
 jobs and WebSocket handlers all share.

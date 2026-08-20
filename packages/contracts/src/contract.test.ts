@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ProvisionTenantInputSchema } from './admin';
 import {
   AUTH_POLICY,
+  OUTBOUND_EMAIL_TEMPLATES,
   PasswordChangeInputSchema,
   PasswordSchema,
   SESSION_COOKIE_ATTRIBUTES,
@@ -413,6 +414,57 @@ describe('tenant lifecycle', () => {
       inboundAccepted: true,
       outboundAllowed: true,
     });
+  });
+
+  it('locks a suspended tenant out of the API while its data stays serviceable', () => {
+    // The two halves of ADR 0009 decision 2, which must not be collapsed:
+    // `apiAccess: false` is `TenantStatusGuard`'s at pipeline stage 4, and
+    // `inboundAccepted: true` is why `assert_tenant_serviceable` admits the same
+    // status at the data layer. A table where both were false would make the
+    // webhook path unimplementable; both true would give the product away.
+    expect(TENANT_STATUS_EFFECTS.suspended.apiAccess).toBe(false);
+    expect(TENANT_STATUS_EFFECTS.suspended.inboundAccepted).toBe(true);
+  });
+
+  /**
+   * ADR 0009 decision 7's notification table, pinned.
+   *
+   * Nine of these have exactly one producer — `TenantLifecycleNotifier`, driven
+   * off a committed `lifecycle_events` row — and the failure mode of a missing
+   * member is a tenant that is suspended, or purged, and never told. Nothing
+   * else in the system notices that, so the set is asserted here rather than
+   * left to a reader of two files to reconcile.
+   */
+  it('publishes a template for every lifecycle notification 0009 specifies', () => {
+    expect(OUTBOUND_EMAIL_TEMPLATES).toEqual(
+      expect.arrayContaining([
+        'tenant_welcome',
+        'trial_ending',
+        'trial_expired',
+        'payment_failed',
+        'tenant_cancelled',
+        'tenant_suspended',
+        'deletion_reminder',
+        'tenant_deleted',
+        'tenant_reactivated',
+      ]),
+    );
+  });
+
+  it('keeps the identity and signup templates alongside them, in one union', () => {
+    // One `MailerPort`, one method for a provider adapter to implement. A
+    // separate seam for lifecycle mail would be a second adapter for TAR-41 to
+    // wire and a second place a template can be added and never triggered.
+    expect(OUTBOUND_EMAIL_TEMPLATES).toEqual(
+      expect.arrayContaining([
+        'invite',
+        'password_reset',
+        'password_changed',
+        'account_locked',
+        'signup_verification',
+      ]),
+    );
+    expect(new Set(OUTBOUND_EMAIL_TEMPLATES).size).toBe(OUTBOUND_EMAIL_TEMPLATES.length);
   });
 });
 
