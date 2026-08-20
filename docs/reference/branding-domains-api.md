@@ -48,17 +48,18 @@ header names are published as `TENANT_HOST_HEADER` and `EDGE_AUTH_HEADER`.
 
 ## Conventions
 
-| Concern           | Rule                                                                           |
-| ----------------- | ------------------------------------------------------------------------------ |
-| Base path         | `/api/v1`                                                                      |
-| Bodies            | JSON, `camelCase` keys. Unknown keys are stripped, not rejected                |
-| Uploads           | `multipart/form-data`, one file part named `file` (`BRANDING_UPLOAD_FIELD`)    |
-| Timestamps        | ISO 8601 with an explicit offset                                               |
-| Success shape     | The resource itself. No envelope, except the `{ items }` lists                 |
-| Error shape       | The envelope in [the admin API reference](admin-api.md#error-envelope), always |
-| Authentication    | Session cookie, except the two `@Public()` routes and the operator routes      |
-| `Idempotency-Key` | Not used. `PUT`, `PATCH` and `DELETE` are idempotent by shape                  |
-| Rate limiting     | One control only — the 10-second floor between two checks of the same domain   |
+| Concern           | Rule                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------ |
+| Base path         | `/api/v1`                                                                                              |
+| Bodies            | JSON, `camelCase` keys. Unknown keys are stripped, not rejected                                        |
+| Uploads           | `multipart/form-data`, one file part named `file` (`BRANDING_UPLOAD_FIELD`)                            |
+| Timestamps        | ISO 8601 with an explicit offset                                                                       |
+| Success shape     | The resource itself. No envelope, except the `{ items }` lists                                         |
+| Error shape       | The envelope in [the admin API reference](admin-api.md#error-envelope), always                         |
+| Authentication    | Session cookie, except the two `@Public()` routes and the operator routes                              |
+| `Idempotency-Key` | Not used. `PUT`, `PATCH` and `DELETE` are idempotent by shape                                          |
+| Rate limiting     | One control only — the 10-second floor between two checks of the same domain                           |
+| Suspended tenant  | Every route here answers `402 subscription_inactive` — see [the tenant isolation contract](tenancy.md) |
 
 ### Permissions
 
