@@ -90,9 +90,23 @@ describe('TenantPurgeService', () => {
    * service happens to hold.
    */
   function deletedTables(): string[] {
+    return statementsMatching(/DELETE FROM/);
+  }
+
+  /**
+   * The tables a statement of `shape` was issued against, in order.
+   *
+   * DELETE and UPDATE are told apart deliberately: `webhook_events` is
+   * **unlinked, not deleted**, and a helper that lumped the two together would
+   * let a future change start deleting Meta’s payloads while
+   * `expect(order).not.toContain('webhook_events')` still passed.
+   */
+  function statementsMatching(shape: RegExp): string[] {
     return executeRaw.mock.calls
       .map(([statement]: [unknown]) => JSON.stringify(statement))
-      .map((text: string) => /public\\?"\\?\.\\?"([a-z_]+)/.exec(text)?.[1] ?? '')
+      .filter((text: string) => shape.test(text))
+      .map((text: string) => text.split('public').at(1) ?? '')
+      .map((tail: string) => /[a-z_]{3,}/.exec(tail)?.[0] ?? '')
       .filter((table: string) => table !== '');
   }
 
@@ -205,10 +219,13 @@ describe('TenantPurgeService', () => {
       // it, and nothing here deletes from it.
       expect(order).not.toContain('lifecycle_events');
       expect(order).not.toContain('webhook_events');
-      expect(updateManyWebhooks).toHaveBeenCalledWith({
-        where: { tenantId: TENANT_ID },
-        data: { tenantId: null },
-      });
+      // Unlinked, not deleted — and in batches, because `webhook_events` is the
+      // highest-volume table in the product and a single UPDATE across a busy
+      // tenant's whole history is the statement that exceeds the 30-second
+      // server-side `statement_timeout`. It is the *last* statement of the
+      // purge, so a cancellation there strands the tenant half-deleted.
+      expect(statementsMatching(/UPDATE/)).toEqual(['webhook_events']);
+      expect(JSON.stringify(executeRaw.mock.calls)).toContain('LIMIT');
     });
 
     it('writes the transition to `deleted` only after the last batch', async () => {

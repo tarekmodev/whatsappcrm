@@ -5,6 +5,10 @@ import type { $Enums, Prisma } from '../generated/prisma/client';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 import { NOTIFY_TENANT_LIFECYCLE_JOB, TENANCY_QUEUE } from '../queue/queue.constants';
 import { QueueService } from '../queue/queue.service';
+import {
+  LIFECYCLE_NOTIFICATION_JOB_OPTIONS,
+  lifecycleNotificationJobId,
+} from './lifecycle/lifecycle-jobs';
 import { applyTransition } from './lifecycle/tenant-lifecycle.service';
 import { TenantNotFoundError } from './tenant-deactivation.errors';
 
@@ -224,7 +228,11 @@ export class TenantDeactivationService {
       TENANCY_QUEUE,
       NOTIFY_TENANT_LIFECYCLE_JOB,
       { tenantId: tenant.id, eventId },
-      { jobId: eventId },
+      // Deterministic on the audit row, so a redelivery of the same transition
+      // is a duplicate BullMQ discards rather than a second email to every admin.
+      // Retries and retention come from the shared options — without `attempts`
+      // one transient mailer failure would be terminal for this notice.
+      { jobId: lifecycleNotificationJobId(eventId), ...LIFECYCLE_NOTIFICATION_JOB_OPTIONS },
     );
 
     if (outcome !== 'added') {

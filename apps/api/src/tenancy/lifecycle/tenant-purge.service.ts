@@ -346,11 +346,51 @@ export class TenantPurgeService {
       }
     }
 
-    await this.systemPrisma.webhookEvent.updateMany({
-      where: { tenantId },
-      data: { tenantId: null },
-    });
+    await this.unlinkWebhookEvents(tenantId);
 
     return total;
+  }
+
+  /**
+   * Nulls `webhook_events.tenant_id`, in batches, for the reason every delete
+   * above is batched.
+   *
+   * `webhook_events` holds Meta's raw payloads and is the **highest-volume table
+   * in the product** — one row per delivery, retained for platform forensics
+   * rather than trimmed with the tenant's data. A single `UPDATE` across a busy
+   * tenant's whole history is exactly the statement that exceeds the 30-second
+   * server-side `statement_timeout` every connection carries
+   * (`prisma-client.factory.ts`).
+   *
+   * Getting that wrong is worse here than anywhere else in the purge, because
+   * this is the **last** statement: every row is already deleted, so a
+   * cancellation leaves the tenant `suspended` with `purge_started_at` set and
+   * `deleted_at` null — the stuck-purge alert condition — and every retry re-runs
+   * the same doomed statement against the same rows and is cancelled again.
+   *
+   * `ctid` batching rather than a `take`/cursor loop, matching `deleteRows`:
+   * each statement bounds its own work, and the predicate shrinks as it goes
+   * because the rows it matched no longer carry the tenant id.
+   */
+  private async unlinkWebhookEvents(tenantId: string): Promise<void> {
+    for (;;) {
+      const unlinked = await this.systemPrisma.$transaction(
+        async (tx) =>
+          await tx.$executeRaw`
+            UPDATE "public"."webhook_events"
+            SET "tenant_id" = NULL
+            WHERE ctid IN (
+              SELECT ctid FROM "public"."webhook_events"
+              WHERE "tenant_id" = ${tenantId}::uuid
+              LIMIT ${PURGE_BATCH_SIZE}
+            )
+          `,
+        { timeout: BATCH_TIMEOUT_MS },
+      );
+
+      if (unlinked < PURGE_BATCH_SIZE) {
+        return;
+      }
+    }
   }
 }

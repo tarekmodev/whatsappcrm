@@ -95,6 +95,30 @@ route is the sole exemption. **Neither gate carries a copy of the other's policy
 suspended tenant reading its own rows through `TenantPrisma` is the design rather than a leak —
 row-level security is what confines it, as it does for every other tenant.
 
+### There is a third question, and no guard can answer it
+
+ADR 0009 decision 2 names two gates. Enforcing `TENANT_STATUS_EFFECTS` needs three, because the
+table has three columns and only two of them are about a request:
+
+| Question                                    | Answered by                           | Column            |
+| ------------------------------------------- | ------------------------------------- | ----------------- |
+| May any statement touch this tenant's rows? | `assert_tenant_serviceable`           | —                 |
+| May this principal reach this route?        | `TenantStatusGuard`, pipeline stage 4 | `apiAccess`       |
+| May this tenant have side effects now?      | **the worker that causes them**       | `outboundAllowed` |
+
+The third row has no guard because it has no request. `OutboundMessageDispatcher` runs in a
+BullMQ worker: a job, a tenant id, and no pipeline in front of it. Until ADR 0009 that did not
+matter — `assert_tenant_active` refused every status but `active`, so a suspended tenant's
+queued send died at the data layer and `outboundAllowed: false` was enforced by accident.
+Widening the gate removed that, and for one review cycle a tenant suspended between an agent
+pressing send and a worker picking the job up still had its message delivered to a real customer.
+
+**So any worker that causes an outward-facing side effect must ask this itself**, by reading
+`TENANT_STATUS_EFFECTS[status].outboundAllowed` — not by restating which statuses are closed,
+because `past_due` deliberately still sends. `OutboundMessageDispatcher.statusRefusingOutbound`
+is the shape to copy. A worker that only reads or writes the tenant's own rows needs nothing:
+row-level security already confines it, and inbound persistence is required while suspended.
+
 The tenant comes from `TenantContextService`'s `AsyncLocalStorage`, which HTTP requests, queue
 jobs and WebSocket handlers all share.
 

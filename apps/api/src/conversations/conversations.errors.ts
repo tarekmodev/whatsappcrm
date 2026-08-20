@@ -208,3 +208,40 @@ export class UnknownTenantMemberError extends ConversationError {
     super(`${id} does not name an active ${kind} in this tenant.`);
   }
 }
+
+/**
+ * The tenant's status forbids outbound traffic at the moment its queued message
+ * reached a worker (TAR-538, ADR 0009 decision 2).
+ *
+ * ## Why this has to exist in the dispatcher at all
+ *
+ * `TENANT_STATUS_EFFECTS.suspended` is `{ apiAccess: false, inboundAccepted:
+ * true, outboundAllowed: false }`, and until ADR 0009 all three were enforced by
+ * one thing: `assert_tenant_active` refused every status but `active`, so a
+ * suspended tenant's queued send failed at the data layer on its first
+ * statement.
+ *
+ * Widening that gate to `assert_tenant_serviceable` — which it had to be, so
+ * inbound WhatsApp messages are still stored — moved the lockout to
+ * `TenantStatusGuard`. That guard is an **HTTP** guard, and this dispatcher runs
+ * in a queue worker: no request, no pipeline, no guard. Without this check a
+ * tenant suspended between an agent pressing send and the worker picking the job
+ * up would still have its message delivered to a real customer, which is
+ * `outboundAllowed: false` not being enforced anywhere.
+ *
+ * ## Why the message is failed rather than left queued
+ *
+ * Leaving it `queued` would either strand it — the job is consumed, and nothing
+ * re-triggers it — or deliver it whenever the tenant came back, which for an
+ * agent's reply could be weeks later and to a customer who has moved on. Failing
+ * it is the honest outcome and the one the agent can see:
+ * `MessageResponse.failureReason` renders this sentence.
+ */
+export class TenantOutboundNotAllowedError extends ConversationError {
+  constructor(readonly status: string) {
+    super(
+      'This workspace cannot send messages while it is not active. ' +
+        'Reactivate it and send again.',
+    );
+  }
+}

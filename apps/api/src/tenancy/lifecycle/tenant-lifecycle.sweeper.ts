@@ -7,6 +7,12 @@ import {
   TENANCY_QUEUE,
 } from '../../queue/queue.constants';
 import { QueueService } from '../../queue/queue.service';
+import {
+  LIFECYCLE_NOTIFICATION_JOB_OPTIONS,
+  PURGE_JOB_OPTIONS,
+  purgeTenantJobId,
+  sweptLifecycleNotificationJobId,
+} from './lifecycle-jobs';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../../prisma/prisma.tokens';
 import { TenantLifecycleNotifier } from './tenant-lifecycle.notifier';
 import { TenantLifecycleService } from './tenant-lifecycle.service';
@@ -197,7 +203,12 @@ export class TenantLifecycleSweeper {
         TENANCY_QUEUE,
         PURGE_TENANT_JOB,
         { tenantId: tenant.id },
-        { jobId: `purge:${tenant.id}` },
+        // The id is the concurrency control — a purge already waiting or running
+        // holds it, so the next sweep cannot queue a second one against the same
+        // tenant. `purgeTenantJobId` also spells it with hyphens: a colon is
+        // refused by BullMQ and `enqueue` reports that as `failed`, which is how
+        // this silently queued nothing at all.
+        { jobId: purgeTenantJobId(tenant.id), ...PURGE_JOB_OPTIONS },
       );
 
       if (outcome === 'added') {
@@ -290,7 +301,20 @@ export class TenantLifecycleSweeper {
         TENANCY_QUEUE,
         NOTIFY_TENANT_LIFECYCLE_JOB,
         { tenantId: event.tenantId, eventId: event.id },
-        { jobId: event.id },
+        {
+          // **Not** the transition path's deterministic id. A notification that
+          // exhausted its attempts leaves a failed job holding that id for as
+          // long as `removeOnFail` retains it, and BullMQ ignores an `add` for
+          // an id it holds — so re-queueing under it would be a silent no-op on
+          // every sweep from here on, for exactly the row this backstop exists
+          // to rescue. See `sweptLifecycleNotificationJobId`.
+          jobId: sweptLifecycleNotificationJobId(event.id, now),
+          // The extra read is worth it here and nowhere else: this count is a
+          // recovery report, and a duplicate counted as a re-enqueue is the log
+          // line lying about work it did not schedule.
+          detectDuplicate: true,
+          ...LIFECYCLE_NOTIFICATION_JOB_OPTIONS,
+        },
       );
 
       if (outcome === 'added') {

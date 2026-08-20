@@ -6,6 +6,7 @@ import { NOTIFY_TENANT_LIFECYCLE_JOB, TENANCY_QUEUE } from '../../queue/queue.co
 import type { QueueService } from '../../queue/queue.service';
 import { TenantNotFoundError } from '../tenant-deactivation.errors';
 import { InvalidTenantTransitionError } from './tenant-lifecycle.errors';
+import { lifecycleNotificationJobId } from './lifecycle-jobs';
 import { TenantLifecycleService } from './tenant-lifecycle.service';
 
 /**
@@ -187,7 +188,12 @@ describe('TenantLifecycleService', () => {
         TENANCY_QUEUE,
         NOTIFY_TENANT_LIFECYCLE_JOB,
         { tenantId: TENANT_ID, eventId: result.eventId },
-        { jobId: result.eventId },
+        expect.objectContaining({
+          jobId: lifecycleNotificationJobId(result.eventId ?? ''),
+          // Without `attempts` BullMQ tries once, and one transient mailer
+          // failure would be terminal for this notice.
+          attempts: 3,
+        }) as unknown,
       );
     });
 

@@ -44,6 +44,7 @@ function writtenBy(updateMany: jest.Mock): Record<string, unknown> {
 describe('OutboundMessageDispatcher', () => {
   let findUnique: jest.Mock;
   let updateMany: jest.Mock;
+  let findFirstTenant: jest.Mock;
   let sendText: jest.Mock;
   let sendMedia: jest.Mock;
   let sendTemplate: jest.Mock;
@@ -76,8 +77,13 @@ describe('OutboundMessageDispatcher', () => {
     resolveForSend = jest.fn(() => Promise.resolve({ mediaId: 'meta-handle' }));
     emit = jest.fn();
 
+    findFirstTenant = jest.fn(() => Promise.resolve({ status: 'active' }));
+
     dispatcher = new OutboundMessageDispatcher(
-      { message: { findUnique, updateMany } } as unknown as TenantPrisma,
+      {
+        message: { findUnique, updateMany },
+        tenant: { findFirst: findFirstTenant },
+      } as unknown as TenantPrisma,
       { sendText, sendMedia, sendTemplate } as unknown as WhatsAppSenderService,
       { resolveForSend } as unknown as MediaSendResolver,
       { emit } as unknown as EventEmitter2,
@@ -236,6 +242,70 @@ describe('OutboundMessageDispatcher', () => {
       await dispatcher.deliver(JOB, 1);
 
       expect(emit).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * TAR-538 / ADR 0009 decision 2, and the regression that made it necessary.
+   *
+   * `TENANT_STATUS_EFFECTS.suspended.outboundAllowed` has been `false` since the
+   * contract was published, and until the lifecycle engine landed it was enforced
+   * by accident: `assert_tenant_active` refused every status but `active`, so a
+   * suspended tenant's queued send died at the data layer.
+   *
+   * Widening that gate to `assert_tenant_serviceable` — required, so inbound
+   * messages are still stored — moved the lockout to `TenantStatusGuard`, which
+   * is an HTTP guard. This dispatcher runs in a queue worker. For one review
+   * cycle that meant a suspended tenant's queued replies were still delivered to
+   * real customers, with nothing failing and no test noticing.
+   */
+  describe('a tenant that may not send', () => {
+    it.each(['suspended', 'cancelled'] as const)('refuses to deliver on %s', async (status) => {
+      findFirstTenant.mockResolvedValue({ status });
+
+      await dispatcher.deliver(JOB, 1);
+
+      expect(sendText).not.toHaveBeenCalled();
+      expect(sendTemplate).not.toHaveBeenCalled();
+    });
+
+    it('fails the message rather than leaving it queued for ever', async () => {
+      findFirstTenant.mockResolvedValue({ status: 'suspended' });
+
+      await dispatcher.deliver(JOB, 1);
+
+      // Left `queued` it would be stranded — the job is consumed and nothing
+      // re-triggers it — or delivered weeks later when the tenant came back.
+      expect(writtenBy(updateMany).status).toBe('failed');
+    });
+
+    it('tells the agent why, in words rather than a code', async () => {
+      findFirstTenant.mockResolvedValue({ status: 'suspended' });
+
+      await dispatcher.deliver(JOB, 1);
+
+      // `MessageResponse.failureReason` renders this, so it names the workspace
+      // state and the remedy and nothing about the data layer.
+      expect(writtenBy(updateMany).errorMessage).toContain('not active');
+    });
+
+    it('still sends for a past_due tenant, because dunning is a banner', async () => {
+      // The check reads `TENANT_STATUS_EFFECTS` rather than restating a list, so
+      // this is the case that proves it did not simply refuse everything that is
+      // not `active`.
+      findFirstTenant.mockResolvedValue({ status: 'past_due' });
+
+      await dispatcher.deliver(JOB, 1);
+
+      expect(sendText).toHaveBeenCalled();
+    });
+
+    it('refuses when the tenant row has gone, which is the fail-closed direction', async () => {
+      findFirstTenant.mockResolvedValue(null);
+
+      await dispatcher.deliver(JOB, 1);
+
+      expect(sendText).not.toHaveBeenCalled();
     });
   });
 });

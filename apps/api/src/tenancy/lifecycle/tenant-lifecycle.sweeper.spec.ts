@@ -6,6 +6,7 @@ import {
   TENANCY_QUEUE,
 } from '../../queue/queue.constants';
 import type { QueueService } from '../../queue/queue.service';
+import { purgeTenantJobId, sweptLifecycleNotificationJobId } from './lifecycle-jobs';
 import type { TenantLifecycleNotifier } from './tenant-lifecycle.notifier';
 import type { TenantLifecycleService } from './tenant-lifecycle.service';
 import { TenantLifecycleSweeper } from './tenant-lifecycle.sweeper';
@@ -174,7 +175,7 @@ describe('TenantLifecycleSweeper', () => {
         TENANCY_QUEUE,
         PURGE_TENANT_JOB,
         { tenantId: TENANT_ONE },
-        { jobId: `purge:${TENANT_ONE}` },
+        expect.objectContaining({ jobId: purgeTenantJobId(TENANT_ONE) }) as unknown,
       );
       // A purge can run for minutes on a large tenant. Running it here would
       // hold the schedule's slot and delay every other tenant's timers.
@@ -262,9 +263,15 @@ describe('TenantLifecycleSweeper', () => {
         TENANCY_QUEUE,
         NOTIFY_TENANT_LIFECYCLE_JOB,
         { tenantId: TENANT_ONE, eventId: 'event-1' },
-        // The row id is the job id, so a redelivery is a duplicate BullMQ
-        // discards rather than a second email.
-        { jobId: 'event-1' },
+        expect.objectContaining({
+          // **Not** the transition path's id. That one may still be held by a
+          // failed job `removeOnFail` retains, and BullMQ ignores an `add` for an
+          // id it holds — so reusing it would make this backstop a permanent
+          // no-op for exactly the row it exists to rescue.
+          jobId: sweptLifecycleNotificationJobId('event-1', NOW),
+          detectDuplicate: true,
+          attempts: 3,
+        }) as unknown,
       );
     });
 

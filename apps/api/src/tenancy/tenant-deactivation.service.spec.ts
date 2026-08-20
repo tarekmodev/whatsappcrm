@@ -3,6 +3,7 @@ import type { Prisma } from '../generated/prisma/client';
 import type { SystemPrisma } from '../prisma/prisma.tokens';
 import { NOTIFY_TENANT_LIFECYCLE_JOB, TENANCY_QUEUE } from '../queue/queue.constants';
 import type { QueueService } from '../queue/queue.service';
+import { lifecycleNotificationJobId } from './lifecycle/lifecycle-jobs';
 import { TenantNotFoundError } from './tenant-deactivation.errors';
 import {
   TenantDeactivationService,
@@ -183,9 +184,10 @@ describe('TenantDeactivationService', () => {
 
       expect(queue).toBe(TENANCY_QUEUE);
       expect(job).toBe(NOTIFY_TENANT_LIFECYCLE_JOB);
-      // The row id is the job id, which is what makes a redelivery a duplicate
-      // BullMQ discards rather than a second email to every admin.
-      expect(options.jobId).toBe(data.eventId);
+      // Deterministic on the row id, which is what makes a redelivery a
+      // duplicate BullMQ discards rather than a second email to every admin —
+      // and hyphen-prefixed, because BullMQ refuses an id containing a colon.
+      expect(options.jobId).toBe(lifecycleNotificationJobId(data.eventId));
     });
 
     it('records who lost access and why, in the same transaction as the write', async () => {
