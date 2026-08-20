@@ -24,6 +24,10 @@ import { ServerEventSchema, type ServerEvent, type ServerEventName } from '@what
  * `agent.typing` and `ticket.updated` are deliberately absent: neither changes
  * what this screen renders, and subscribing to a typing indicator would refetch
  * the whole route on every keystroke somebody else makes.
+ *
+ * The two canned-response events are here because the composer's shortcut
+ * library *is* part of this route's server render (TAR-486) — see the effect
+ * table below.
  */
 export const INBOX_SERVER_EVENTS = [
   'message.created',
@@ -31,6 +35,8 @@ export const INBOX_SERVER_EVENTS = [
   'conversation.updated',
   'note.created',
   'session.revoked',
+  'canned_response.saved',
+  'canned_response.deleted',
 ] as const satisfies readonly ServerEventName[];
 
 /**
@@ -60,26 +66,35 @@ function effectOfEvent(event: ServerEvent): InboxEffect {
     case 'conversation.updated':
     case 'note.created':
       return 'refetch';
+    // An admin edited the tenant's canned-response library. TAR-485 left these
+    // two on `ignore` and handed the question here, on the reading that a
+    // library edit "changes neither a thread nor a message" — true, and not the
+    // test. `refetch` re-renders the inbox route, and the composer's copy of the
+    // library is a *prop of that render*: `ThreadSection` reads the set on the
+    // server and hands it to `MessageComposer`, which passes it down to the
+    // picker unmemoised. So the same refresh that carries a new message also
+    // carries the new shortcut text, and an agent gets the admin's edit without
+    // touching anything (TAR-486).
+    //
+    // Refetch rather than applying `cannedResponse` from the payload, for this
+    // file's standing reason: the server render re-runs the read rule, so an
+    // agent who has lost `canned_response:read` between the two renders sees the
+    // library disappear rather than keep a patched copy of it. The events are
+    // rare — an admin saving a row, not a customer typing — so the route render
+    // they cost is not a budget worth protecting with a second code path.
+    case 'canned_response.saved':
+    case 'canned_response.deleted':
+      return 'refetch';
     // `sla.breached` and `ticket.escalated` are both addressed to a supervisor's
     // own user room and belong to the alert surfaces, not to the inbox — and an
     // escalation moves nothing on the ticket, so there is nothing on this screen
     // to re-render either. Listed rather than defaulted, like the ones beside
     // them, so this switch stays exhaustive: the day a wire event is added and
     // this screen should react to it, the compiler is what says so.
-    //
-    // The two canned-response events are that compiler prompt arriving
-    // (TAR-485). They are answered here rather than left to break the build, and
-    // answered with `ignore` because nothing this table drives is stale after
-    // one: `refetch` re-renders the *inbox route*, and an edit to the shared
-    // library changes neither a thread nor a message. Which surface does react —
-    // the composer's copy of the set, and the settings list — and whether it
-    // reuses this hook at all is TAR-486's call, and its scope note says so.
     case 'agent.typing':
     case 'ticket.updated':
     case 'sla.breached':
     case 'ticket.escalated':
-    case 'canned_response.saved':
-    case 'canned_response.deleted':
       return 'ignore';
   }
 }
