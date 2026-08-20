@@ -142,6 +142,11 @@ export const API_ERROR_STATUS: Record<ApiErrorCode, number> = {
   conflict: 409,
   idempotency_key_reused: 409,
   last_admin_required: 409,
+  /**
+   * 400 rather than 409: nothing raced and nothing collided. The definition
+   * names a row that is gone, which is a fact about the request's content — the
+   * caller just did not author it.
+   */
   workflow_reference_broken: 400,
   payload_too_large: 413,
   rate_limited: 429,

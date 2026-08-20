@@ -3,6 +3,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import { SLA_BREACHED_EVENT, type SlaBreachedEvent } from '../events/domain-events';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
 import type { SystemPrisma, TenantPrisma } from '../prisma/prisma.tokens';
+import type { QueueService } from '../queue/queue.service';
 import type { SlaAlertService, InsertedSlaAlert } from './sla-alert.service';
 import { SlaSweepService } from './sla-sweep.service';
 import type { SlaTimerService } from './sla-timer.service';
@@ -84,6 +85,13 @@ describe('SlaSweepService', () => {
   let resolveRecipients: jest.Mock;
   let insertForBreach: jest.Mock;
   let emit: jest.Mock;
+  /**
+   * TAR-27 delta 3: every committed breach also raises a `ticket_sla_breached`
+   * workflow occurrence. Captured rather than asserted here — this suite is
+   * about detection and fairness — but it must not throw, because a refused
+   * enqueue may never cost a tenant its breach.
+   */
+  let enqueueWorkflow: jest.Mock;
   let tenantContext: TenantContextService;
   let sweep: SlaSweepService;
 
@@ -165,6 +173,7 @@ describe('SlaSweepService', () => {
       ] satisfies InsertedSlaAlert[]),
     );
     emit = jest.fn();
+    enqueueWorkflow = jest.fn(() => Promise.resolve('added' as const));
 
     const systemPrisma = {
       $queryRaw: jest.fn(() => Promise.resolve(due)),
@@ -196,6 +205,7 @@ describe('SlaSweepService', () => {
       { reconcile } as unknown as SlaTimerService,
       { loadAlertCandidates, resolveRecipients, insertForBreach } as unknown as SlaAlertService,
       { emit } as unknown as EventEmitter2,
+      { enqueue: enqueueWorkflow } as unknown as QueueService,
     );
   });
 

@@ -457,6 +457,26 @@ const envShape = z.object({
   SLA_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1_000).default(30_000),
 
   // ---------------------------------------------------------------------------
+  // Workflow automation (TAR-27)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * How often the elapsed-trigger sweep runs, and therefore the upper bound on
+   * detection latency for `ticket_unresolved_for` (0009, decision 3). Sixty
+   * seconds against a four-hour threshold is 0.4% of it.
+   *
+   * Longer than `SLA_SWEEP_INTERVAL_MS` on purpose. An SLA breach is a
+   * contractual deadline measured in minutes; an escalation threshold is a
+   * supervisor's own rule with a five-minute floor, so the same precision would
+   * buy nothing and cost one probe per active tenant twice as often.
+   *
+   * 0009 risk 7 records this as an assumption rather than a measurement.
+   * `WorkflowElapsedSweep` logs batch size and elapsed time on every run that
+   * finds work, so the evidence to change it exists from the first commit.
+   */
+  WORKFLOW_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1_000).default(60_000),
+
+  // ---------------------------------------------------------------------------
   // WhatsApp Cloud API (TAR-20)
   // ---------------------------------------------------------------------------
 

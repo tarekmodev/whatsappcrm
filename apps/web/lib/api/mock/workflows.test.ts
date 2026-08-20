@@ -218,6 +218,47 @@ describe('taxonomy references — TAR-27 acceptance criterion 2', () => {
     await expect(attempt).rejects.toMatchObject({ code: 'workflow_reference_broken' });
   });
 
+  it('clears brokenReason on a repair that does not arm, then arms on its own', async () => {
+    // The request the console actually produces. `WorkflowFormDialog` carries
+    // `isActive` through unchanged — arming is a deliberate act on the list, not
+    // a side effect of saving an edit — so the repair PATCH is always
+    // `isActive: false` and enabling is a *separate* request.
+    //
+    // The combined-request case below never exercised that path, which is how
+    // the API shipped a rule that made a repaired workflow permanently
+    // un-enableable (TAR-399's ruling on 0009 decision 6).
+    const repaired = (await handleMockRequest({
+      method: 'PATCH',
+      path: `/v1/workflows/${MOCK_IDS.workflows.brokenNotify}`,
+      body: {
+        actions: [
+          {
+            type: 'notify',
+            audience: 'user',
+            userId: MOCK_IDS.users.priya,
+            teamId: null,
+            message: null,
+          },
+        ],
+      },
+    })) as WorkflowResponse;
+
+    // Step one leaves it healthy but disarmed. Clearing arms nothing.
+    expect(repaired.isActive).toBe(false);
+    expect(repaired.brokenReason).toBeNull();
+    expect(repaired.references.every((reference) => reference.exists)).toBe(true);
+
+    const armed = (await handleMockRequest({
+      method: 'PATCH',
+      path: `/v1/workflows/${MOCK_IDS.workflows.brokenNotify}`,
+      body: { isActive: true },
+    })) as WorkflowResponse;
+
+    // Step two, with no definition echoed back — the bare toggle from the list.
+    expect(armed.isActive).toBe(true);
+    expect(armed.brokenReason).toBeNull();
+  });
+
   it('arms it once the missing target has been replaced', async () => {
     const updated = (await handleMockRequest({
       method: 'PATCH',

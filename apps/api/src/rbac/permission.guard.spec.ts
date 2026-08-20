@@ -93,9 +93,27 @@ describe('PermissionGuard', () => {
   });
 
   it('refuses a supervisor the admin-only permissions', () => {
-    for (const permission of ['user:set_role', 'user:remove', 'workflow:write'] as const) {
+    // `workflow:write` left this list under TAR-27. 0004 made it admin-only
+    // because a workflow "can send messages autonomously"; 0009's security
+    // section rules that the reason is right about the risk it names and does
+    // not apply to the launch action set — every action a supervisor can arm is
+    // one they can already perform by hand — and moves the gate to a separate
+    // `workflow:send_message` for whoever adds the first customer-facing
+    // action. See the case below.
+    for (const permission of ['user:set_role', 'user:remove', 'billing:manage'] as const) {
       expect(refusalFor('supervisor', handlerRequiring(permission)).code).toBe('forbidden');
     }
+  });
+
+  it('admits a supervisor the workflow builder — TAR-27', () => {
+    for (const permission of ['workflow:read', 'workflow:write'] as const) {
+      expect(activateAs('supervisor', handlerRequiring(permission))).toBe(true);
+    }
+
+    // Still refused to an agent: the console's automation surface is a
+    // supervisor-and-above one, and it writes to tickets without anybody
+    // watching.
+    expect(refusalFor('agent', handlerRequiring('workflow:read')).code).toBe('forbidden');
   });
 
   it('requires every permission when a route names more than one', () => {

@@ -14,13 +14,13 @@ import {
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Prisma } from '../generated/prisma/client';
 import { UserRole, UserStatus } from '../generated/prisma/enums';
-import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
-import { SLA_ALERT_PROJECTION, SLA_BREACH_ONLY, toSlaAlertResponse } from './sla-alert.mapper';
 import {
   resolveAlertRecipients,
   type AlertCandidate,
   type TicketResponsibility,
-} from './sla-recipients';
+} from '../people/supervisor-recipients';
+import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
+import { SLA_ALERT_PROJECTION, SLA_BREACH_ONLY, toSlaAlertResponse } from './sla-alert.mapper';
 import { InvalidSlaCursorError, SlaAlertNotFoundError } from './sla.errors';
 
 /**

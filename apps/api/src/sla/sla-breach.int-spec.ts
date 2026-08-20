@@ -8,6 +8,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import { SLA_BREACHED_EVENT, type SlaBreachedEvent } from '../events/domain-events';
 import type { PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
+import type { QueueService } from '../queue/queue.service';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import { SlaAlertService } from './sla-alert.service';
 import { SlaAlertNotFoundError } from './sla.errors';
@@ -289,7 +290,19 @@ describe('SLA breach detection against a real database', () => {
 
     alerts = new SlaAlertService(tenantPrisma, tenantContext);
     timers = new SlaTimerService(tenantPrisma, policies);
-    sweep = new SlaSweepService(systemPrisma, tenantPrisma, tenantContext, timers, alerts, events);
+    sweep = new SlaSweepService(
+      systemPrisma,
+      tenantPrisma,
+      tenantContext,
+      timers,
+      alerts,
+      events,
+      // TAR-27 delta 3: the sweep now also raises a `ticket_sla_breached`
+      // workflow occurrence. Stubbed rather than wired — this suite is about
+      // breach detection, and `enqueue` is contractually allowed to report
+      // `unavailable`, which is what a bare clone with no Redis does anyway.
+      { enqueue: () => Promise.resolve('unavailable' as const) } as unknown as QueueService,
+    );
 
     await removeFixture();
 

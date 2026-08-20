@@ -1,6 +1,11 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import type { SlaTargetKind } from '@whatsappcrm/contracts';
+import {
+  WORKFLOWS_QUEUE,
+  WORKFLOW_EVALUATE_TICKET_JOB,
+  type SlaTargetKind,
+  type WorkflowEvaluateTicketTrigger,
+} from '@whatsappcrm/contracts';
 import { randomUUID } from 'node:crypto';
 import { describeFailure } from '../common/describe-failure';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
@@ -13,6 +18,7 @@ import {
   type SystemPrisma,
   type TenantPrisma,
 } from '../prisma/prisma.tokens';
+import { QueueService } from '../queue/queue.service';
 import { SlaAlertService, type InsertedSlaAlert } from './sla-alert.service';
 import { SlaTimerService } from './sla-timer.service';
 import {
@@ -134,6 +140,22 @@ import {
  *     timeout — a livelock that reports itself only as a warning.
  */
 
+/**
+ * One breach this sweep committed: the ticket, the timer that missed, and the
+ * alert rows it actually inserted.
+ *
+ * `slaTimerId` is carried because it is the **occurrence** a `ticket_sla_breached`
+ * workflow dedupes on — `ticket:{id}:timer:{slaTimerId}`, once per breached
+ * timer (0009, decision 2). Without it the trigger would have to key on the
+ * ticket, and a ticket whose first-response and resolution timers both breach
+ * would fire the workflow once instead of twice.
+ */
+interface BreachRecord {
+  readonly ticketId: string;
+  readonly slaTimerId: string;
+  readonly alerts: InsertedSlaAlert[];
+}
+
 /** One due timer, as phase 1 sees it: two uuids and nothing else. */
 interface DueTimerRow {
   readonly tenantId: string;
@@ -186,6 +208,7 @@ export class SlaSweepService {
     private readonly timers: SlaTimerService,
     private readonly alerts: SlaAlertService,
     private readonly events: EventEmitter2,
+    private readonly queue: QueueService,
   ) {}
 
   async sweep(): Promise<SlaSweepReport> {
@@ -381,6 +404,14 @@ export class SlaSweepService {
     );
 
     for (const breach of breaches) {
+      // 0009 delta 3: one `ticket_sla_breached` occurrence per breached timer,
+      // after the transaction that flipped it has committed. Raised for **every**
+      // committed breach, including one with no supervisor to alert — a workflow
+      // reacting to a breach is a separate concern from telling a person about
+      // it, and a tenant with no active supervisor is exactly the tenant most
+      // likely to have automated the response.
+      await this.triggerWorkflowEvaluation(tenantId, breach);
+
       if (breach.alerts.length === 0) {
         continue;
       }
@@ -401,6 +432,49 @@ export class SlaSweepService {
   }
 
   /**
+   * 0009 delta 3 — the fourth producer of a workflow triggering occurrence.
+   *
+   * An enqueue after commit, never a call: `WorkflowsModule` is a sibling L4
+   * module, so what crosses the line is the payload in
+   * `@whatsappcrm/contracts/workflows` and a queue name. A refused enqueue is
+   * logged and swallowed, on `QueueService`'s contract — the breach itself is
+   * committed and the sweep's other tenants are still owed their tick.
+   *
+   * **This is the one trigger with no reconciler and no self-healing** (0009,
+   * risk 3): the timer is terminally `breached`, so nothing re-derives it. A
+   * Redis outage in this window costs that ticket its automation permanently.
+   */
+  private async triggerWorkflowEvaluation(tenantId: string, breach: BreachRecord): Promise<void> {
+    const trigger: WorkflowEvaluateTicketTrigger = {
+      tenantId,
+      ticketId: breach.ticketId,
+      triggerType: 'ticket_sla_breached',
+      occurrenceId: breach.slaTimerId,
+      depth: 0,
+      causedByRunId: null,
+    };
+
+    const outcome = await this.queue.enqueue<WorkflowEvaluateTicketTrigger>(
+      WORKFLOWS_QUEUE,
+      WORKFLOW_EVALUATE_TICKET_JOB,
+      trigger,
+      {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1_000 },
+        removeOnComplete: 1_000,
+        removeOnFail: 5_000,
+      },
+    );
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      this.logger.warn(
+        `Ticket ${breach.ticketId} breached timer ${breach.slaTimerId} but its workflow ` +
+          `evaluation was not queued (${outcome}); no automation will run for this breach.`,
+      );
+    }
+  }
+
+  /**
    * One chunk of one tenant's phase 2, in one transaction: reconcile, claim,
    * audit, deliver.
    */
@@ -408,11 +482,11 @@ export class SlaSweepService {
     tx: Prisma.TransactionClient,
     tenantId: string,
     timerIds: readonly string[],
-  ): Promise<{ ticketId: string; alerts: InsertedSlaAlert[] }[]> {
+  ): Promise<BreachRecord[]> {
     await this.reconcileDueTickets(tx, tenantId, timerIds);
 
     const claimed = await this.claim(tx, timerIds);
-    const breaches: { ticketId: string; alerts: InsertedSlaAlert[] }[] = [];
+    const breaches: BreachRecord[] = [];
 
     if (claimed.length === 0) {
       return breaches;
@@ -461,12 +535,13 @@ export class SlaSweepService {
         this.logger.warn(
           `Ticket ${timer.ticketId} breached in tenant ${tenantId} with no active supervisor or admin to alert`,
         );
-        breaches.push({ ticketId: timer.ticketId, alerts: [] });
+        breaches.push({ ticketId: timer.ticketId, slaTimerId: timer.id, alerts: [] });
         continue;
       }
 
       breaches.push({
         ticketId: timer.ticketId,
+        slaTimerId: timer.id,
         alerts: await this.alerts.insertForBreach(tx, {
           tenantId,
           slaTimerId: timer.id,

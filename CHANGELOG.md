@@ -169,6 +169,45 @@ change.
 
 ### Added
 
+- **A supervisor can now build trigger → condition → action automations, and they run without
+  anybody watching** (TAR-27, TAR-395) — a workflow is one rule: one trigger, one condition
+  set, one ordered action list, and the tenant's workflows _are_ the rule list the console
+  renders. `POST /api/v1/workflows` and its five siblings, plus
+  `GET /api/v1/workflow-catalog` for the vocabulary a builder renders from — one endpoint
+  rather than three listings, because a form needs all of it before it can draw anything and
+  three endpoints can disagree across a deploy. The launch actions are `add_ticket_tag`,
+  `reassign`, `notify` and `set_status`/`set_priority`; the five triggers are ticket created,
+  status changed, assigned, SLA breached, and unresolved for N minutes.
+
+  **Exactly-once is one unique index, and everything else is an optimisation.** The row that
+  records what a workflow did is the same row that reserves the right to do it:
+  `INSERT INTO workflow_runs … ON CONFLICT (tenant_id, workflow_id, dedupe_key) DO NOTHING
+RETURNING id`. A ticket that stays open for six hours escalates **once**, not once per
+  sweep tick, and it does so whether or not the sweep is correct — which is the failure a
+  supervisor would otherwise experience as a pager. Nothing reads, decides in TypeScript and
+  then writes, because the window between such a read and its write is exactly the window two
+  sweep ticks race in. These jobs carry **no custom BullMQ id**, on the incident
+  `@whatsappcrm/contracts/sla` documents: a ticket-keyed id collapses every occurrence after
+  the first into the completed — or failed — key of the one before it.
+
+  **A rename needs nothing and a delete is refused, both by the shape rather than by a code
+  path.** A definition stores taxonomy ids and only ids, so renaming a tag a workflow uses
+  requires no migration, no backfill and no cache bust; the name reaching the console is
+  joined at read time, and a reference whose row is gone comes back `exists: false` so the
+  rule renders as visibly broken instead of quietly healthy. `workflow_references` carries
+  real composite foreign keys, so PostgreSQL — not a cross-module call the layering rule
+  forbids — is what refuses to delete a tag or team a workflow names. Removing a _user_ still
+  always succeeds, because that is a security action, and leaves the workflow deactivated
+  with `brokenReason: 'reference_removed'`.
+
+  Three bounds contain the loop a workflow's own writes create: the dedupe key (a workflow
+  cannot fire twice for one occurrence, so it cannot trigger itself), `maxChainDepth`, and a
+  per-ticket hourly run budget that records a `failed` run rather than dropping silently —
+  the tenant's rule is what is wrong, and a supervisor needs to find it in the run list
+  rather than in our logs. `POST /workflows/{id}/test` is a dry run that **writes nothing**;
+  `GET /workflows/{id}/runs` is what to read first when a rule looks wrong, before the
+  definition.
+
 - **An agent can now hand on the ticket they are working, with a reason, and raise a
   supervisor without losing it** (TAR-32, TAR-468, TAR-469, TAR-470, TAR-473) — TAR-32 asked
   for two things a ticket could not do. Neither needed much new machinery, and

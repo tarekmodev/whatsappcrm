@@ -165,6 +165,7 @@ describe('the SLA triggers, through the real queue', () => {
       timers,
       alerts,
       events(),
+      queue,
     );
 
     // The shipped registration, so what is under test is the wiring that ships.

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { IdSchema, TimestampSchema } from './common';
+import { CursorPageQuerySchema } from './pagination';
 import {
   TICKET_PRIORITIES,
   TICKET_STATUSES,
@@ -812,3 +813,334 @@ export type WorkflowTestResponse = z.infer<typeof WorkflowTestResponseSchema>;
 export type WorkflowParameterKind = z.infer<typeof WorkflowParameterKindSchema>;
 export type WorkflowParameter = z.infer<typeof WorkflowParameterSchema>;
 export type WorkflowCatalogResponse = z.infer<typeof WorkflowCatalogResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Transport — the queue trigger (TAR-395)
+// ---------------------------------------------------------------------------
+
+/**
+ * The half only the worker uses, added exactly as the header above said it would
+ * be: additive, with nothing above it changed.
+ *
+ * `assignment.ts` grew the same way — TAR-289 transcribed the console's half of
+ * 0007 and TAR-273 added the transport later — and for the same reason. A queue
+ * name and a payload shape are not something a builder renders, but they *are*
+ * something two sides of a seam have to agree on exactly, so they belong in the
+ * one package both import.
+ */
+
+/** BullMQ queue owned by `WorkflowsModule`. */
+export const WORKFLOWS_QUEUE = 'workflows';
+
+/**
+ * Evaluate every active workflow in one tenant against one triggering occurrence
+ * on one ticket.
+ *
+ * Delivery is at-least-once and nothing about the handler depends on it being
+ * once: the claim is `INSERT INTO workflow_runs … ON CONFLICT DO NOTHING`
+ * against `UNIQUE (tenant_id, workflow_id, dedupe_key)`, so a redelivery finds
+ * the occurrence already owned and moves on (0009 decision 2).
+ */
+export const WORKFLOW_EVALUATE_TICKET_JOB = 'workflow.evaluate-ticket';
+
+/** The repeatable elapsed-trigger sweep. Installed under the scheduler key `workflow-sweep`. */
+export const WORKFLOW_SWEEP_JOB = 'workflow.sweep';
+
+/**
+ * The trigger types whose dedupe key is the ticket itself rather than an
+ * occurrence row — so `occurrenceId` is null for them and non-null for the rest.
+ *
+ * Exported because three places have to agree: the payload schema's refinement,
+ * the dedupe key below, and the sweep that produces one of them.
+ */
+export const TICKET_SCOPED_TRIGGER_TYPES = [
+  'ticket_created',
+  ELAPSED_WORKFLOW_TRIGGER_TYPE,
+] as const;
+
+export function triggerIsTicketScoped(triggerType: WorkflowTriggerType): boolean {
+  return TICKET_SCOPED_TRIGGER_TYPES.some((candidate) => candidate === triggerType);
+}
+
+export const WorkflowEvaluateTicketTriggerSchema = z
+  .object({
+    tenantId: IdSchema,
+    ticketId: IdSchema,
+    triggerType: WorkflowTriggerTypeSchema,
+    /**
+     * The `ticket_events` row, or the `sla_timers` row, that this occurrence
+     * *is*. Null for `ticket_created` and `ticket_unresolved_for`, whose dedupe
+     * key is the ticket itself.
+     */
+    occurrenceId: IdSchema.nullable(),
+    /**
+     * How many workflow runs deep this chain is. A trigger raised by a workflow
+     * action carries its cause's depth plus one; anything else carries 0. Above
+     * `WORKFLOW_LIMITS.maxChainDepth` the job is dropped with a warning.
+     */
+    depth: z
+      .int()
+      .min(0)
+      .max(WORKFLOW_LIMITS.maxChainDepth + 1),
+    /** The run whose action raised this, when one did. For the audit trail only. */
+    causedByRunId: IdSchema.nullable(),
+  })
+  .refine(
+    (trigger) => triggerIsTicketScoped(trigger.triggerType) === (trigger.occurrenceId === null),
+    {
+      message:
+        '`occurrenceId` is null for exactly `ticket_created` and `ticket_unresolved_for`, and ' +
+        'non-null for every other trigger type',
+      path: ['occurrenceId'],
+    },
+  );
+
+export type WorkflowEvaluateTicketTrigger = z.infer<typeof WorkflowEvaluateTicketTriggerSchema>;
+
+/**
+ * The dedupe key of 0009 decision 2 — the reservation half of `workflow_runs`.
+ *
+ * Pure, so the sweep and the four event paths cannot disagree about what "the
+ * same occurrence" means. It carries no workflow id: the unique index is
+ * `(tenant_id, workflow_id, dedupe_key)`, so every workflow gets its own claim
+ * on the same occurrence and they never collide with each other — which is what
+ * makes "every matching workflow runs" true.
+ *
+ * | Trigger                 | Key                                       | Meaning                      |
+ * | ----------------------- | ----------------------------------------- | ---------------------------- |
+ * | `ticket_created`        | `ticket:{ticketId}:created`               | Once per ticket, ever        |
+ * | `ticket_status_changed` | `ticket:{ticketId}:event:{ticketEventId}` | Once per recorded change     |
+ * | `ticket_assigned`       | `ticket:{ticketId}:event:{ticketEventId}` | Once per recorded assignment |
+ * | `ticket_sla_breached`   | `ticket:{ticketId}:timer:{slaTimerId}`    | Once per breached timer      |
+ * | `ticket_unresolved_for` | `ticket:{ticketId}:elapsed`               | **Once per ticket, ever**    |
+ *
+ * The two ticket-scoped keys carry a suffix so they cannot collide with each
+ * other across an edit of the workflow's own trigger — see the switch below.
+ *
+ * The last row is the one to read twice. A sweep that re-evaluates the same
+ * overdue ticket every minute would notify a supervisor every minute; this
+ * constraint is what stops it, and it stops it whether or not the sweep is
+ * correct.
+ */
+export function workflowDedupeKey(trigger: WorkflowEvaluateTicketTrigger): string {
+  const ticket = `ticket:${trigger.ticketId}`;
+
+  switch (trigger.triggerType) {
+    // The two ticket-scoped keys are **namespaced apart**, and the suffix is the
+    // whole point of this arm rather than decoration.
+    //
+    // A workflow has one trigger at a time, so a bare `ticket:{id}` for both
+    // looks safe — but `WorkflowUpdateInputSchema.trigger` is editable and
+    // `workflow_runs` rows survive the edit, so a workflow carries its own spent
+    // keys across a change between these two types. A rule that ran on 800
+    // tickets as `ticket_created` and is then re-pointed at
+    // `ticket_unresolved_for` would find its own earlier claims already sitting
+    // on every one of those tickets, and could never fire on any of them again —
+    // silently, permanently, and with nothing in the run list to show for it,
+    // because no run is ever claimed.
+    case 'ticket_created':
+      return `${ticket}:created`;
+    case 'ticket_unresolved_for':
+      return `${ticket}:elapsed`;
+    case 'ticket_status_changed':
+    case 'ticket_assigned':
+      return `${ticket}:event:${trigger.occurrenceId ?? 'unknown'}`;
+    case 'ticket_sla_breached':
+      return `${ticket}:timer:${trigger.occurrenceId ?? 'unknown'}`;
+  }
+}
+
+/**
+ * ## There is deliberately no `workflowEvaluateJobId`
+ *
+ * 0009 publishes one, keyed `workflow-evaluate-{tenant}-{ticket}`, as the third
+ * and explicitly non-load-bearing idempotency layer: "collapses a duplicate
+ * enqueue while the first is queued".
+ *
+ * **That premise does not hold for the pinned `bullmq@6.0.10`**, and
+ * `@whatsappcrm/contracts/sla` carries the incident report: `addStandardJob`
+ * answers `handleDuplicatedJob` whenever the job hash key `EXISTS` in *any*
+ * state, `removeOnComplete`/`removeOnFail` keep those keys alive for thousands
+ * of jobs, and `Queue.add` neither throws nor signals it. A ticket's id is
+ * stable for its whole life, so a ticket-keyed id would collapse every trigger
+ * after the first into the completed key of the one before it — the
+ * `ticket_status_changed` occurrence silently dropped behind the
+ * `ticket_created` one, and, worse, an elapsed sweep re-enqueue dropped for ever
+ * behind a job that *failed* before it could claim. That is an escalation that
+ * never happens, reported nowhere.
+ *
+ * Nothing is lost by omitting it. The claim in `workflow_runs` is the
+ * correctness mechanism and it is a unique index over a row that is inserted and
+ * never re-derived, so a duplicate delivery costs one conflicting insert.
+ * Anything reintroducing an id must key it on the *occurrence*, never on the
+ * ticket — and must account for the failed set as well as the completed one.
+ */
+
+// ---------------------------------------------------------------------------
+// What the worker reads back out of the row
+// ---------------------------------------------------------------------------
+
+/**
+ * The definition as it is stored in `workflows.definition` — ids and only ids.
+ *
+ * Parsed on read as well as validated on write, so a row hand-edited into a
+ * shape the grammar no longer accepts is a named failure rather than a silent
+ * mismatch. `workflows.trigger_type` is a column duplicating `trigger.type`; the
+ * service writes both in one statement, and parsing through this schema is what
+ * catches a divergence.
+ */
+export const WorkflowDefinitionSchema = z.object({
+  trigger: WorkflowTriggerSchema,
+  conditions: WorkflowConditionListSchema,
+  actions: WorkflowActionListSchema,
+});
+
+export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
+
+/**
+ * Every taxonomy id a definition names, in a stable order, with the field path
+ * each was read from.
+ *
+ * Here rather than in `apps/api` because three consumers have to agree: the
+ * write path that indexes `workflow_references`, the read path that resolves
+ * names into `WorkflowReference`, and the `workflow_reference_broken` refusal
+ * that names the broken field in `details`.
+ */
+export interface WorkflowReferenceUse {
+  readonly kind: WorkflowTaxonomyKind;
+  readonly id: string;
+  /** `actions.1.tagId`, `conditions.0.teamId` — the path the console highlights. */
+  readonly path: string;
+}
+
+export function workflowReferenceUses(
+  conditions: readonly WorkflowCondition[],
+  actions: readonly WorkflowAction[],
+): WorkflowReferenceUse[] {
+  const uses: WorkflowReferenceUse[] = [];
+
+  conditions.forEach((condition, index) => {
+    if (condition.type === 'ticket_assignment') {
+      if (condition.teamId !== null) {
+        uses.push({ kind: 'team', id: condition.teamId, path: `conditions.${index}.teamId` });
+      }
+
+      if (condition.userId !== null) {
+        uses.push({ kind: 'user', id: condition.userId, path: `conditions.${index}.userId` });
+      }
+    }
+
+    if (condition.type === 'ticket_tag' || condition.type === 'contact_tag') {
+      for (const tagId of condition.tagIds) {
+        uses.push({ kind: 'tag', id: tagId, path: `conditions.${index}.tagIds` });
+      }
+    }
+  });
+
+  actions.forEach((action, index) => {
+    switch (action.type) {
+      case 'add_ticket_tag':
+        uses.push({ kind: 'tag', id: action.tagId, path: `actions.${index}.tagId` });
+        break;
+      case 'reassign':
+        uses.push(
+          action.target.kind === 'team'
+            ? { kind: 'team', id: action.target.teamId, path: `actions.${index}.target.teamId` }
+            : { kind: 'user', id: action.target.userId, path: `actions.${index}.target.userId` },
+        );
+        break;
+      case 'notify':
+        if (action.userId !== null) {
+          uses.push({ kind: 'user', id: action.userId, path: `actions.${index}.userId` });
+        }
+
+        if (action.teamId !== null) {
+          uses.push({ kind: 'team', id: action.teamId, path: `actions.${index}.teamId` });
+        }
+
+        break;
+      case 'set_status':
+      case 'set_priority':
+        break;
+    }
+  });
+
+  return uses;
+}
+
+/**
+ * Why a condition could not be evaluated at all, as opposed to evaluating false
+ * on data it could read.
+ *
+ * `WorkflowTestResponse.conditions[].reason` stays a plain string, as 0009
+ * publishes it and as the console parses it. This is the closed set the server
+ * actually emits, so the evaluator and the dry run cannot invent a third value
+ * the console has no copy for.
+ */
+export const WORKFLOW_CONDITION_UNREADABLE_REASONS = [
+  'no_contact',
+  'business_hours_unconfigured',
+] as const;
+
+export const WorkflowConditionUnreadableReasonSchema = z.enum(
+  WORKFLOW_CONDITION_UNREADABLE_REASONS,
+);
+
+export type WorkflowConditionUnreadableReason =
+  (typeof WORKFLOW_CONDITION_UNREADABLE_REASONS)[number];
+
+/**
+ * The run history's query. **This list paginates and the workflow list does
+ * not**, and the asymmetry is the point: workflows are capped per tenant, so an
+ * unbounded response is a promise the server can keep, while runs grow with
+ * ticket volume × active workflows and are exactly the unbounded set 0002's
+ * pagination rule exists for.
+ */
+export const WorkflowRunListQuerySchema = CursorPageQuerySchema.extend({
+  status: WorkflowRunStatusSchema.optional(),
+});
+
+export type WorkflowRunListQuery = z.infer<typeof WorkflowRunListQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// Notifications — the `sla_alerts` generalisation (0009 decision 7)
+// ---------------------------------------------------------------------------
+
+export const NOTIFICATION_TYPES = ['sla_breach', 'workflow_notify', 'workflow_broken'] as const;
+
+export const NotificationTypeSchema = z.enum(NOTIFICATION_TYPES);
+
+/**
+ * One inbox, one unread count. `GET /api/v1/sla-alerts` keeps its path and its
+ * response as a documented `type = 'sla_breach'` view over the same table, so
+ * nothing that reads it had to change.
+ *
+ * The type-specific `data` blob is flattened into named fields here, because a
+ * console rendering a list should not have to reach into an untyped object to
+ * find out which workflow spoke.
+ */
+export const NotificationResponseSchema = z.object({
+  id: IdSchema,
+  type: NotificationTypeSchema,
+  ticketId: IdSchema,
+  ticketNumber: z.int().positive(),
+  /** Present for `sla_breach` only. */
+  slaTimerId: IdSchema.nullable(),
+  dueAt: TimestampSchema.nullable(),
+  /** The supervisor's own `notify` text, when there was one. */
+  message: z.string().nullable(),
+  workflowId: IdSchema.nullable(),
+  workflowRunId: IdSchema.nullable(),
+  acknowledgedAt: TimestampSchema.nullable(),
+  createdAt: TimestampSchema,
+});
+
+export const NotificationListQuerySchema = CursorPageQuerySchema.extend({
+  /** Default true: the landing view is what still needs attention. */
+  unacknowledgedOnly: z.stringbool().default(true),
+  type: NotificationTypeSchema.optional(),
+});
+
+export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
+export type NotificationResponse = z.infer<typeof NotificationResponseSchema>;
+export type NotificationListQuery = z.infer<typeof NotificationListQuerySchema>;
