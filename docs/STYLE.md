@@ -34,9 +34,18 @@ the fifth. [Put your own brand on the workspace](guides/brand-your-workspace.md)
 TAR-423) are the sixth and seventh, and the first pair written for a workspace **admin**
 rather than a supervisor.
 [Hand a ticket on, or ask a supervisor](guides/hand-over-or-escalate-a-ticket.md) (TAR-473) is
-the eighth, and the first written for an **agent** rather than a supervisor or an admin. A
-guide for a tenant user names its reader in the first line and refers to every control by its
-**visible label**, taken from `apps/web/content/en.ts` rather than from a component name.
+the eighth, and the first written for an **agent** rather than a supervisor or an admin.
+[Answer common questions with saved replies](guides/use-saved-replies.md) (TAR-489) is the
+ninth, and the second for an agent — this one for the reader who never opens a settings page
+at all. A guide for a tenant user names its reader in the first line and refers to every
+control by its **visible label**, taken from `apps/web/content/en.ts` rather than from a
+component name.
+
+**A guide may describe a surface that does not exist yet, if it says so.** TAR-489's last
+section tells a supervisor that saved replies are managed through the API because no settings
+screen has shipped, marked with a `TODO(author)` and the instruction to split it into an
+admin guide once one does. That is the honest form: the alternative is a guide that answers
+half the reader's question and does not admit which half.
 
 One subject splits into two guides when it splits into two permissions. Branding and custom
 domains sit on one settings area and read as one topic, but `branding:write` and
@@ -85,22 +94,24 @@ one-line pointer — a summary that drifts from the reference is worse than a li
 
 Fixed vocabulary. Use the left column; never rotate synonyms.
 
-| Term                             | Not                                      | Notes                                                                                                                                                              |
-| -------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| tenant                           | organisation, workspace, account, client | One customer business on the platform. **Except in `docs/guides/` written for a tenant user**, which says _workspace_ — the word the console itself uses on screen |
-| handoff                          | transfer, pass on, delegate              | Giving a ticket to somebody else. The console's own word; `ticket:handoff` is the permission                                                                       |
-| escalate                         | raise, flag, bump, elevate               | Asking a supervisor to look. **Never means the ticket changed hands** — it does not                                                                                |
-| platform operator                | admin, superadmin, us                    | Operates the platform; not a user inside any tenant                                                                                                                |
-| agent                            | user, rep, operator                      | A person working inside a tenant. Never means "AI agent"                                                                                                           |
-| provision                        | create, onboard, sign up                 | `POST /api/v1/admin/tenants`                                                                                                                                       |
-| deactivate                       | suspend, disable, delete, offboard       | `POST /api/v1/admin/tenants/{slug}/deactivate`                                                                                                                     |
-| WhatsApp Business Account (WABA) | business account, Meta account           | Spell out at first use per document, then `WABA`                                                                                                                   |
-| `TenantPrisma` / `SystemPrisma`  | the tenant client / the system client    | Exact casing; they are type and token names                                                                                                                        |
-| row-level security (RLS)         | row security, database policies          | Spell out at first use per document                                                                                                                                |
-| tenant-scoped                    | multi-tenant, isolated                   | Carries a non-null `tenant_id` and an RLS policy                                                                                                                   |
-| ticket                           | case, issue, request                     | One unit of work on a conversation                                                                                                                                 |
-| active queue                     | open queue, active list, the backlog     | `GET /tickets` with no `status`: `open` and `pending`                                                                                                              |
-| auto-reopen                      | reopen, un-resolve                       | `pending → open` written by the customer's reply                                                                                                                   |
+| Term                             | Not                                      | Notes                                                                                                                                                                                                 |
+| -------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| tenant                           | organisation, workspace, account, client | One customer business on the platform. **Except in `docs/guides/` written for a tenant user**, which says _workspace_ — the word the console itself uses on screen                                    |
+| handoff                          | transfer, pass on, delegate              | Giving a ticket to somebody else. The console's own word; `ticket:handoff` is the permission                                                                                                          |
+| escalate                         | raise, flag, bump, elevate               | Asking a supervisor to look. **Never means the ticket changed hands** — it does not                                                                                                                   |
+| platform operator                | admin, superadmin, us                    | Operates the platform; not a user inside any tenant                                                                                                                                                   |
+| agent                            | user, rep, operator                      | A person working inside a tenant. Never means "AI agent"                                                                                                                                              |
+| provision                        | create, onboard, sign up                 | `POST /api/v1/admin/tenants`                                                                                                                                                                          |
+| deactivate                       | suspend, disable, delete, offboard       | `POST /api/v1/admin/tenants/{slug}/deactivate`                                                                                                                                                        |
+| WhatsApp Business Account (WABA) | business account, Meta account           | Spell out at first use per document, then `WABA`                                                                                                                                                      |
+| `TenantPrisma` / `SystemPrisma`  | the tenant client / the system client    | Exact casing; they are type and token names                                                                                                                                                           |
+| row-level security (RLS)         | row security, database policies          | Spell out at first use per document                                                                                                                                                                   |
+| tenant-scoped                    | multi-tenant, isolated                   | Carries a non-null `tenant_id` and an RLS policy                                                                                                                                                      |
+| ticket                           | case, issue, request                     | One unit of work on a conversation                                                                                                                                                                    |
+| active queue                     | open queue, active list, the backlog     | `GET /tickets` with no `status`: `open` and `pending`                                                                                                                                                 |
+| auto-reopen                      | reopen, un-resolve                       | `pending → open` written by the customer's reply                                                                                                                                                      |
+| canned response                  | quick reply, snippet, macro, template    | Standing text an agent expands in the composer. **Except in `docs/guides/`**, which says _saved reply_ — the console's own words on screen. Never _template_, which is Meta's approved-message object |
+| shortcut                         | trigger, code, slash command             | The `/hours` token. Both readers use this word; only the engineer's pages call `/` the _trigger_                                                                                                      |
 
 Product entity names take their schema spelling in prose: `conversations`, `tickets`,
 `message_templates`. TypeScript identifiers take theirs: `MessageTemplate`,
