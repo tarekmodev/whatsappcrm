@@ -29,9 +29,18 @@ Nothing under `docs/reference/` targets a tenant user. Tenant-user documentation
 the second, [Clear tickets nobody could take](guides/clear-flagged-tickets.md) (TAR-277) the
 third, [Watch tickets that miss their deadline](guides/track-overdue-tickets.md) (TAR-287) the
 fourth and [Read the performance dashboard](guides/read-the-performance-dashboard.md) (TAR-434)
-the fifth. A guide for a tenant user names its reader in the first line and refers to every
-control by its **visible label**, taken from `apps/web/content/en.ts` rather than from a
-component name.
+the fifth. [Put your own brand on the workspace](guides/brand-your-workspace.md) and
+[Serve the workspace from your own web address](guides/set-up-a-custom-domain.md) (both
+TAR-423) are the sixth and seventh, and the first pair written for a workspace **admin**
+rather than a supervisor. A guide for a tenant user names its reader in the first line and
+refers to every control by its **visible label**, taken from `apps/web/content/en.ts` rather
+than from a component name.
+
+One subject splits into two guides when it splits into two permissions. Branding and custom
+domains sit on one settings area and read as one topic, but `branding:write` and
+`domain:write` are deliberately separate authorities — and the second guide asks its reader
+to edit DNS and then wait, which is a different afternoon from picking a colour. One file
+would have served neither reader.
 
 **A guide that documents a surface should link the reference for the same subject, and the
 reference should link back.** The two readers meet at that link and nowhere else: it is what

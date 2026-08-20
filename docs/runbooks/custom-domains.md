@@ -16,7 +16,10 @@ is never removed — it is the host that keeps working while a customer's DNS is
 propagating, and the one a tenant falls back to if its own domain lapses.
 
 The technical contract behind all of this is TAR-416; the routing and TLS half of it is
-TAR-419, which is what this document is.
+TAR-419, which is what this document is. The HTTP surface the console and this runbook both
+call is [the branding and custom domains API reference](../reference/branding-domains-api.md);
+what the customer sees and is asked to do is
+[Serve the workspace from your own web address](../guides/set-up-a-custom-domain.md).
 
 ## What the edge decides, and what it does not
 
