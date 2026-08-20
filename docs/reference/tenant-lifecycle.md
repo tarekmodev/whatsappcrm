@@ -291,11 +291,12 @@ Pointed at the real API with the flag off, both screens fail: the routes they ca
 | `not_found`             | 404    | An operator named a slug no tenant carries; or signup is disabled              |
 
 `subscription_inactive` is the single published answer for `TenantNotActiveError`, wherever it is
-raised (TAR-539). Ten per-domain translators throw `tenantInactive()` from
-`apps/api/src/common/errors/tenant-inactive.ts`, and `AllExceptionsFilter` answers the same thing
-for anything that reaches HTTP without a translator — a guard, an interceptor, a tenant suspended
-mid-request. So a member of a `suspended`, `cancelled`, `created` or `deleted` tenant gets `402`
-and one fixed message on every tenant-scoped route, not just at login.
+raised (TAR-539). Every per-domain translator throws `tenantInactive()` from
+`apps/api/src/common/errors/tenant-inactive.ts`: eleven call sites at the time of writing, six in
+`*.http.ts` and five in controllers. `AllExceptionsFilter` answers the same thing for anything
+that reaches HTTP without a translator — a guard, an interceptor, a tenant suspended mid-request.
+So a member of a `suspended`, `cancelled`, `created` or `deleted` tenant gets `402` and one fixed
+message on every tenant-scoped route, not just at login.
 
 **Never put the error's own message in a response body.** It is written for an engineer reading a
 log and names `TenantPrisma`, the failing model and the tenant's UUID; the caller who would see it

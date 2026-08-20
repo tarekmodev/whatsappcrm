@@ -512,7 +512,8 @@ RETURNING id`. A ticket that stays open for six hours escalates **once**, not on
   signup in flight, or already runs a tenant. Rate limits are `SIGNUP_POLICY`, and each of the two
   signup-creating ones is enforced **twice**, in Redis and against `tenant_signups` itself, so a
   cache outage loosens them rather than removing them; `resend` creates no row for those counts to
-  see, so its ceiling is `tenant_signups.resend_count` carried in the `UPDATE`'s own predicate.
+  see, so its **durable** ceiling is `tenant_signups.resend_count` carried in the `UPDATE`'s own
+  predicate, behind a Redis per-address window of its own.
   A resend rotates the token and deliberately does **not** move `expires_at` — the deadline
   belongs to the signup, and a renewable one would let an address hold a slug indefinitely.
   ⚠️ There is no `/signup` and no `/verify` screen in the console. The API is complete and
@@ -614,8 +615,8 @@ deleted`, with `pending` renamed to `created` (catalogue-only, no table rewrite)
   `audit_logs`, and the endpoint surface split into available and published-not-implemented.
   [The signup API reference](docs/reference/signup-api.md) documents the four public routes with
   their parameters, error codes and both layers of rate limiting.
-  [Set up your workspace](docs/guides/set-up-your-workspace.md) is the fifth tenant-user guide and
-  the first written for an **admin**: the setup checklist, seats and the invitation that takes one
+  [Set up your workspace](docs/guides/set-up-your-workspace.md) is the ninth tenant-user guide and
+  the third written for an **admin**: the setup checklist, seats and the invitation that takes one
   before it is accepted, what suspension means for agents, and how reactivation works.
   The style guide gains five terminology rows — _lifecycle state_, _self-signup_, _entitlements_,
   _seat_, _purge_ — so the next writer does not have to re-decide them.
