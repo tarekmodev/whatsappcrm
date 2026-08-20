@@ -169,6 +169,42 @@ change.
 
 ### Added
 
+- **The reporting dashboard and its export are documented, for both readers** (TAR-434) —
+  TAR-30 shipped a performance dashboard, a CSV export and the guarantee that the two agree,
+  across six stories and four merged pull requests. None of it had documentation, and the
+  parity guarantee in particular is the kind of property that is invisible until somebody
+  reimplements around it. Two pages, split by reader rather than averaged into one.
+  [The reporting dashboard and export reference](docs/reference/reporting-api.md) is the
+  engineer's: both endpoints with every parameter, the CSV byte format, the error table, and
+  — at length, because it is the design and not a detail — **why the file and the screen
+  cannot disagree**. `ReportingQueryService.dashboard()` is the only method that aggregates
+  ticket metrics, both routes call it, and there is no SQL on the export path, so parity is
+  structural rather than maintained by attention. It also documents what a reader would
+  otherwise have to derive from source: that each metric is anchored on the event that makes
+  it true rather than on `created_at`, which is what makes a range reproducible; that
+  durations are null exactly when the sample is empty, because a week nobody answered and a
+  week answered instantly are different facts; and the asymmetry between visibility and
+  attribution — visibility reads _current_ assignment, attribution reads _recorded_ history,
+  so an agent's own response on a ticket since reassigned away leaves their scoped report
+  while staying on their row in a supervisor's.
+  [Read the performance dashboard](docs/guides/read-the-performance-dashboard.md) is the
+  supervisor's, and refuses all of that vocabulary: what each figure counts, why opened and
+  resolved are not meant to reconcile, why medians must not be averaged down the column, and
+  why the export always matches the screen. Both pages say plainly that **durations are
+  wall-clock** — a ticket arriving at 17:30 carries the whole night in its first response
+  time, and a client-facing report inherits it.
+  Everything on the reference page was executed against a local stack rather than read off
+  the source: parity was compared field by field between the CSV `total` row and the JSON
+  summary, the byte-order mark was checked byte by byte, an agent renamed `=cmd|' /c calc'!A1`
+  was confirmed exported inert, and the range cap was probed at 366 and 367 days. The
+  reporting suite passed at 87 tests. ⚠️ Three things are marked as unresolved rather than
+  written up as settled, because they are product calls nobody has made: whether an agent
+  should see a per-agent breakdown of their team (ADR 0010 open question 1), whether p50/p90
+  are the intended definition (risk 7), and the wall-clock question, which ADR 0006 raised
+  first for SLA windows and which should be answered once for both. A fourth is a defect
+  found while verifying and reported rather than fixed: `validation_failed` on these routes
+  says "The request body failed validation." on two routes that read only the query string.
+
 - **An admin can now define the tenant's custom contact fields, and the contract says what a
   value means** (TAR-33, TAR-476) — `custom_field_defs` has existed since the initial
   migration and `CustomFieldDefinitionSchema` has been published since TAR-39, but nothing

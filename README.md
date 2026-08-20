@@ -78,10 +78,12 @@ the one that produced it.
 | [Assignment rules API](docs/reference/assignment-rules-api.md)                               | Routing-rule CRUD, the condition grammar, and how a new ticket is routed      |
 | [Auto-assignment](docs/reference/auto-assignment.md)                                         | Rotation, eligibility, workload caps, and the flagged-ticket fallback         |
 | [SLA timers and supervisor alerts](docs/reference/sla-timers.md)                             | Response windows, breach detection, who is alerted, and the two endpoints     |
+| [Reporting dashboard and export](docs/reference/reporting-api.md)                            | The four metrics, the date range, scope and attribution, and export parity    |
 | [Changing a ticket's status and priority](docs/guides/manage-ticket-status-and-priority.md)  | For agents working in the console, not for API consumers                      |
 | [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)           | For supervisors writing routing rules in the console                          |
 | [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md)                      | For supervisors emptying the flagged queue in the console                     |
 | [Watch tickets that miss their deadline](docs/guides/track-overdue-tickets.md)               | For supervisors reading the overdue badge and clearing SLA alerts             |
+| [Read the performance dashboard](docs/guides/read-the-performance-dashboard.md)              | For supervisors reading the metrics and exporting them as a spreadsheet       |
 | [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                        |
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                        |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                      |
