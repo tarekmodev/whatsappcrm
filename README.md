@@ -83,7 +83,8 @@ the one that produced it.
 | [Public signup API](docs/reference/signup-api.md)                                            | The four unauthenticated routes: verification, slug reservation, rate limits       |
 | [People and teams API](docs/reference/people-api.md)                                         | Managing agents, teams and roles: permissions, invariants, isolation               |
 | [Tickets API](docs/reference/tickets-api.md)                                                 | The queue, the status/priority write, handoff and escalation, the event log        |
-| [Contacts, tags and custom fields API](docs/reference/contacts-api.md) | The CRM core: the directory, the tag taxonomy, and admin CRUD on definitions || [Assignment rules API](docs/reference/assignment-rules-api.md)                               | Routing-rule CRUD, the condition grammar, and how a new ticket is routed           |
+| [Contacts, tags and custom fields API](docs/reference/contacts-api.md)                       | The CRM core: the directory, the tag taxonomy, and admin CRUD on definitions       |
+| [Assignment rules API](docs/reference/assignment-rules-api.md)                               | Routing-rule CRUD, the condition grammar, and how a new ticket is routed           |
 | [Auto-assignment](docs/reference/auto-assignment.md)                                         | Rotation, eligibility, workload caps, and the flagged-ticket fallback              |
 | [SLA timers and supervisor alerts](docs/reference/sla-timers.md)                             | Response windows, breach detection, who is alerted, and the two endpoints          |
 | [Reporting dashboard and export](docs/reference/reporting-api.md)                            | The four metrics, the date range, scope and attribution, and export parity         |
