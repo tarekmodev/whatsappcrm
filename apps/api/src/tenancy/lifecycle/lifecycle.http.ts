@@ -1,5 +1,5 @@
 import { ApiException } from '../../common/errors/api.exception';
-import { TenantNotActiveError } from '../../prisma/prisma.errors';
+import { isTenantNotActiveError, tenantInactive } from '../../common/errors/tenant-inactive';
 import { TenantNotFoundError } from '../tenant-deactivation.errors';
 import {
   InvalidLifecycleCursorError,
@@ -51,12 +51,16 @@ export function translateLifecycleFailure(error: unknown): never {
     throw new ApiException('not_found', error.message);
   }
 
-  if (error instanceof TenantNotActiveError) {
+  if (isTenantNotActiveError(error)) {
     // The database gate refused. Reachable on the tenant routes for a `created`
     // or `deleted` tenant only, both of which `HostTenantGuard` already answers
-    // `tenant_not_found` for — so this is the backstop rather than the path, and
-    // it reports what every other reader of this error reports.
-    throw new ApiException('subscription_inactive', error.message);
+    // `tenant_not_found` for — so this is the backstop rather than the path.
+    //
+    // `tenantInactive()` rather than a message of our own (TAR-539):
+    // `TenantNotActiveError.message` names `TenantPrisma`, the failing model and
+    // the tenant's UUID, and a 402 is not redacted in production the way a 500
+    // is. That helper is the one answer eleven translators now give.
+    throw tenantInactive();
   }
 
   throw error;

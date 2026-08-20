@@ -1,7 +1,8 @@
 import { Injectable, type CanActivate, type ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { TENANT_STATUS_EFFECTS, type TenantStatus } from '@whatsappcrm/contracts';
-import { ApiException } from '../errors/api.exception';
+import { TENANT_STATUS_EFFECTS } from '@whatsappcrm/contracts';
+import type { ApiException } from '../errors/api.exception';
+import { tenantInactive } from '../errors/tenant-inactive';
 import { TenantContextService } from '../tenant-context/tenant-context.service';
 import { isAvailableWhileSuspended, isPlatformRoute, isPublicRoute } from './route-access';
 
@@ -94,7 +95,7 @@ export class TenantStatusGuard implements CanActivate {
       return true;
     }
 
-    throw refusal(status);
+    throw refusal();
   }
 
   /**
@@ -119,23 +120,30 @@ export class TenantStatusGuard implements CanActivate {
 }
 
 /**
- * One message for `suspended` and one for `cancelled`, and the same code for
- * both.
+ * One code and one message, shared with every other place this condition is
+ * raised (TAR-539).
  *
- * `subscription_inactive` is what `identity.http.ts` already answers when the
- * data layer refuses a non-serviceable tenant, and what the console already maps
- * to its workspace-inactive screen — so a refusal here lands in a path the
- * frontend has had since TAR-53 rather than in a new one.
+ * `subscription_inactive` is what `identity.http.ts` has answered since TAR-51
+ * and what the console already maps to its workspace-inactive screen, so a
+ * refusal here lands in a path the frontend has had for a while rather than in a
+ * new one.
  *
- * The message names the state and nothing else: not who suspended the tenant,
- * not why, and not when it purges. `reason` is operator free text, and a
- * refusal an agent sees is not where it gets rendered.
+ * **`tenantInactive()` rather than copy of this guard's own**, which is a
+ * deliberate reversal: an earlier revision distinguished `suspended` from
+ * `cancelled` and added "an administrator can still sign in to restore it".
+ * TAR-539 landed while this was in review and normalised the same refusal across
+ * ten translators, saying in as many words that the guard at the edge and the
+ * data-layer fallback behind it must "say the same thing". Two messages for one
+ * condition is the drift that helper exists to remove, and a caller cannot tell
+ * which layer answered — so the shared one wins.
+ *
+ * What is given up is a sentence of product copy, not information a caller is
+ * owed: which of the two states a workspace is in, and when it purges, are on
+ * `GET /tenant/lifecycle`, which is on the recovery allowlist precisely so an
+ * admin can read them. Nothing here names who suspended the tenant or why —
+ * `reason` is operator free text, and a refusal an agent sees is not where it
+ * gets rendered.
  */
-function refusal(status: TenantStatus): ApiException {
-  return new ApiException(
-    'subscription_inactive',
-    status === 'cancelled'
-      ? 'This workspace has been cancelled. An administrator can still sign in to restore it.'
-      : 'This workspace is suspended. An administrator can still sign in to restore it.',
-  );
+function refusal(): ApiException {
+  return tenantInactive();
 }
