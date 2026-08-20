@@ -1,5 +1,7 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import {
+  AI_HANDLE_INBOUND_JOB,
+  AI_QUEUE,
   ASSIGNMENT_QUEUE,
   ASSIGNMENT_ROUTE_JOB,
   InboundMessageTicketTriggerSchema,
@@ -11,6 +13,8 @@ import {
   WORKFLOWS_QUEUE,
   WORKFLOW_EVALUATE_TICKET_JOB,
   assignmentRouteJobId,
+  botInboundJobId,
+  type BotInboundTrigger,
   type InboundMessageTicketTrigger,
   type SlaEvaluateReason,
   type SlaEvaluateTicketTrigger,
@@ -112,12 +116,13 @@ export class TicketQueueRunner implements OnApplicationBootstrap {
 
       // Three independent consequences of the same linked message, and all three
       // are enqueues rather than in-process calls: SLA timers (TAR-26), routing
-      // (TAR-24) and workflow automation (TAR-27). None can fail the message —
-      // each logs and moves on — so the order between them carries no meaning
-      // beyond reading order.
+      // (TAR-24), workflow automation (TAR-27) and the AI chatbot (TAR-28). None
+      // can fail the message — each logs and moves on — so the order between
+      // them carries no meaning beyond reading order.
       await this.triggerSlaEvaluation(trigger.tenantId, result);
       await this.requestRouting(trigger, result);
       await this.triggerWorkflowEvaluation(trigger.tenantId, result);
+      await this.triggerBot(trigger, result);
     } catch (error: unknown) {
       if (error instanceof TenantNotActiveError) {
         // 0003's error table: non-retryable, and discarded rather than failed.
@@ -313,6 +318,79 @@ export class TicketQueueRunner implements OnApplicationBootstrap {
       this.logger.warn(
         `Ticket ${result.ticketId} was created but not queued for routing (${outcome}): ` +
           'it will stay unassigned until a routing job runs for it.',
+      );
+    }
+  }
+
+  /**
+   * The AI chatbot's trigger (TAR-28, 0010 decision 1) — the third fan-out, and
+   * the entire change this story makes to `TicketsModule`.
+   *
+   * **After the linking transaction, and from here rather than from the inbound
+   * writer.** Three things fall out of that placement, and all three are the
+   * reason for it:
+   *
+   *   * **The bot gets a `ticketId`.** It needs one to move the ticket to
+   *     `pending` after a successful reply — which is what pauses the SLA clock
+   *     and stops a perfectly-answered conversation paging a supervisor — and to
+   *     re-request routing on handoff.
+   *   * **It inherits the inbound-only, once-per-message filter for free.**
+   *     `WhatsAppInboundWriter` already decided that outbound status
+   *     placeholders never reach this chain, and `skipped` already means "no
+   *     ticket, nothing to do".
+   *   * **It cannot race the ticket's commit.** A trigger fired in parallel from
+   *     the inbound writer could reach a worker first, and the `pending`
+   *     transition would then silently not happen — a correctness bug that
+   *     appears only under load.
+   *
+   * `created` and `attached`, never `skipped`: an attached message is a
+   * customer's follow-up on a live thread, which is exactly the conversation a
+   * bot should still be answering.
+   *
+   * The cost of the coupling, stated rather than glossed: a broken or backed-up
+   * ticket pipeline also stops the bot. The bot is an accelerator on top of a
+   * pipeline that already has to work, and `ai` queue depth is monitored
+   * separately for that reason.
+   */
+  private async triggerBot(
+    trigger: InboundMessageTicketTrigger,
+    result: TicketLinkResult,
+  ): Promise<void> {
+    if (result.outcome === 'skipped') {
+      return;
+    }
+
+    const bot: BotInboundTrigger = {
+      tenantId: trigger.tenantId,
+      conversationId: trigger.conversationId,
+      contactId: trigger.contactId,
+      messageId: trigger.messageId,
+      ticketId: result.ticketId,
+      receivedAt: trigger.receivedAt,
+    };
+
+    const outcome = await this.queue.enqueue<BotInboundTrigger>(
+      AI_QUEUE,
+      AI_HANDLE_INBOUND_JOB,
+      bot,
+      {
+        jobId: botInboundJobId(bot),
+        attempts: 2,
+        backoff: { type: 'exponential', delay: 2_000 },
+        removeOnComplete: 1_000,
+        removeOnFail: 5_000,
+      },
+    );
+
+    if (outcome === 'failed' || outcome === 'unavailable') {
+      // Degrades to exactly the pre-TAR-28 product: the message is committed, the
+      // ticket exists, and a human answers. Logged at `debug` rather than `warn`
+      // because it is also the ordinary state of every deployment that has not
+      // configured a chatbot, and a warning per inbound message would drown the
+      // ones that matter.
+      this.logger.debug(
+        `Message ${trigger.messageId} was linked but not queued for the chatbot (${outcome}); ` +
+          'it will be handled by a human.',
       );
     }
   }

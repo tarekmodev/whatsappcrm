@@ -12,6 +12,25 @@ import { CursorPageQuerySchema } from './pagination';
 export const CONVERSATION_STATUSES = ['open', 'pending', 'resolved', 'closed'] as const;
 export const ConversationStatusSchema = z.enum(CONVERSATION_STATUSES);
 
+/**
+ * Who owns the reply in a thread (0010 decision 5, TAR-28).
+ *
+ * Four values where the story names three, because "the bot never engaged" and
+ * "the bot gave up" are different facts the console has to render differently —
+ * a tenant with no knowledge base must not look like a tenant whose bot is
+ * failing.
+ *
+ * `human_active` is terminal for the conversation's active life on purpose, and
+ * resets to `off` when the conversation is resolved or closed. A bot that
+ * resumes after an agent has spoken talks over a colleague in front of the
+ * customer, and no confidence score prevents that.
+ *
+ * Declared here rather than in `ai.ts` so the AI contract can import the inbox's
+ * vocabulary without the inbox importing the AI contract back.
+ */
+export const CONVERSATION_BOT_STATES = ['off', 'bot_active', 'handed_off', 'human_active'] as const;
+export const ConversationBotStateSchema = z.enum(CONVERSATION_BOT_STATES);
+
 export const ConversationResponseSchema = z.object({
   id: IdSchema,
   contact: ContactResponseSchema,
@@ -29,8 +48,20 @@ export const ConversationResponseSchema = z.object({
    * because every inbox row renders it, and recomputing per row costs a join.
    */
   serviceWindowExpiresAt: TimestampSchema.nullable(),
-  /** True while the AI chatbot (TAR-28) is answering and no human has taken over. */
+  /**
+   * True while the AI chatbot (TAR-28) is answering and no human has taken over.
+   *
+   * **Unchanged in meaning**, now derived: `botState === 'bot_active'`. Kept
+   * alongside `botState` so a console running yesterday's bundle keeps working.
+   */
   botHandling: z.boolean(),
+  /**
+   * The full state machine behind `botHandling` (0010 decision 5). Additive: it
+   * distinguishes a thread the bot never touched (`off`) from one it released
+   * (`handed_off`) and one a human has taken (`human_active`), which
+   * `botHandling` alone cannot.
+   */
+  botState: ConversationBotStateSchema,
   lastMessagePreview: z.string().nullable(),
   /**
    * Never null: the column is `NOT NULL` (TAR-92) because it leads the inbox's
@@ -91,6 +122,7 @@ export const InternalNoteCreateInputSchema = z.object({
 });
 
 export type ConversationStatus = z.infer<typeof ConversationStatusSchema>;
+export type ConversationBotState = (typeof CONVERSATION_BOT_STATES)[number];
 export type ConversationResponse = z.infer<typeof ConversationResponseSchema>;
 export type ConversationListQuery = z.infer<typeof ConversationListQuerySchema>;
 export type ConversationAssignInput = z.infer<typeof ConversationAssignInputSchema>;

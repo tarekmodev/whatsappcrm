@@ -809,6 +809,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     // both halves of the composer can be walked without editing a fixture.
     serviceWindowExpiresAt: OPEN_SERVICE_WINDOW,
     botHandling: false,
+    botState: 'off',
     lastMessagePreview: 'Could you resend the July invoice?',
     lastMessageAt: '2026-08-10T08:45:00.000Z',
     createdAt: '2026-08-09T14:00:00.000Z',
@@ -826,6 +827,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     unreadCount: 0,
     serviceWindowExpiresAt: '2026-08-11T06:30:00.000Z',
     botHandling: false,
+    botState: 'off',
     lastMessagePreview: 'Thanks, I will check with accounting.',
     lastMessageAt: '2026-08-10T06:30:00.000Z',
     createdAt: '2026-08-08T11:00:00.000Z',
@@ -843,6 +845,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     unreadCount: 5,
     serviceWindowExpiresAt: null,
     botHandling: false,
+    botState: 'off',
     lastMessagePreview: 'The activation link has expired again.',
     lastMessageAt: '2026-08-09T22:10:00.000Z',
     createdAt: '2026-08-07T09:00:00.000Z',
@@ -860,6 +863,10 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     unreadCount: 1,
     serviceWindowExpiresAt: '2026-08-11T10:00:00.000Z',
     botHandling: true,
+    // `botHandling` is `botState === 'bot_active'` (TAR-28, 0010 decision 5).
+    // The pair is written out rather than derived so a fixture that drifts is
+    // visible here rather than only in whatever renders it.
+    botState: 'bot_active',
     lastMessagePreview: 'Hello, is anyone there?',
     lastMessageAt: '2026-08-10T09:05:00.000Z',
     createdAt: '2026-08-10T09:00:00.000Z',
@@ -878,6 +885,7 @@ export const MOCK_CONVERSATIONS: readonly MockConversation[] = [
     unreadCount: 9,
     serviceWindowExpiresAt: null,
     botHandling: false,
+    botState: 'off',
     lastMessagePreview: 'This must never appear in another tenant’s console.',
     lastMessageAt: '2026-08-10T08:00:00.000Z',
     createdAt: '2026-06-02T09:00:00.000Z',
@@ -939,9 +947,9 @@ function message(
   overrides: Partial<MockMessage> &
     Pick<MockMessage, 'id' | 'conversationId' | 'direction' | 'type' | 'sentAt'>,
 ): MockMessage {
-  return {
+  const draft = {
     tenantId: MOCK_TENANT_ID,
-    status: overrides.direction === 'inbound' ? 'delivered' : 'read',
+    status: overrides.direction === 'inbound' ? ('delivered' as const) : ('read' as const),
     body: null,
     attachments: [],
     sentByUserId: null,
@@ -951,6 +959,26 @@ function message(
     createdAt: overrides.sentAt,
     ...overrides,
   };
+
+  // Derived rather than defaulted, and spread *before* the draft so a fixture
+  // that names an origin still wins. The API applies the same rule — a message
+  // is `contact`-authored if and only if it is inbound, an outbound one with a
+  // sender is the agent's, and the rest is automation — so a fixture cannot
+  // drift into a shape the database's own CHECK would refuse.
+  return { origin: originFor(draft), ...draft };
+}
+
+/** The rule `messages_derive_origin` and the API mapper both apply (TAR-28). */
+function originFor(draft: Omit<MockMessage, 'origin'>): MockMessage['origin'] {
+  if (draft.direction === 'inbound') {
+    return 'contact';
+  }
+
+  if (draft.sentByUserId !== null) {
+    return 'agent';
+  }
+
+  return draft.sentByAutomation ? 'bot' : 'system';
 }
 
 export const MOCK_MESSAGES: readonly MockMessage[] = [

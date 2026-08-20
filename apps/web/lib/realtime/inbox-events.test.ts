@@ -17,6 +17,10 @@ const MESSAGE = {
   attachments: [],
   sentByUserId: null,
   sentByAutomation: false,
+  // Required on `MessageResponse` since TAR-28, and `inboxEffectOf` parses the
+  // whole payload — a fixture missing it is ignored rather than refetched,
+  // which is the console silently going stale.
+  origin: 'contact',
   providerMessageId: null,
   failureReason: null,
   sentAt: '2026-08-10T08:05:00.000Z',
@@ -50,7 +54,7 @@ describe('inboxEffectOf', () => {
         event: 'message.status_changed',
         conversationId: MESSAGE.conversationId,
         messageId: MESSAGE.id,
-        message: { ...MESSAGE, direction: 'outbound', status: 'read' },
+        message: { ...MESSAGE, direction: 'outbound', origin: 'agent', status: 'read' },
       }),
     ).toBe('refetch');
   });

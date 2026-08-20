@@ -13,6 +13,7 @@ function message(id: string, sentAt: string): MessageResponse {
     attachments: [],
     sentByUserId: null,
     sentByAutomation: false,
+    origin: 'contact',
     providerMessageId: null,
     failureReason: null,
     sentAt,

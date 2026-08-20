@@ -57,6 +57,7 @@ function row(overrides: Partial<ConversationRow> = {}): ConversationRow {
     assignedTeamId: null,
     unreadCount: 0,
     serviceWindowExpiresAt: null,
+    botState: 'off' as const,
     lastMessageAt: new Date('2026-08-11T09:00:00.000Z'),
     createdAt: new Date('2026-08-11T08:00:00.000Z'),
     updatedAt: new Date('2026-08-11T09:00:00.000Z'),
@@ -325,8 +326,26 @@ describe('claiming a conversation', () => {
     await asTenant(async (commands) => commands.claim(CONVERSATION));
 
     expect(updates).toEqual([
-      { where: { id: CONVERSATION, assignedUserId: null }, data: { assignedUserId: AGENT } },
+      {
+        where: { id: CONVERSATION, assignedUserId: null },
+        data: { assignedUserId: AGENT, botState: 'human_active' },
+      },
     ]);
+  });
+
+  it('stops the bot in the same compare-and-set, so only the winner writes it', async () => {
+    // TAR-28, 0010 decision 5: taking a thread out of the shared pool is a
+    // person taking it. Written in the claim's own statement rather than after
+    // it, because a second statement could be applied by the agent who lost.
+    const { asTenant, updates } = claimHarness({
+      before: row(),
+      updated: 1,
+      current: row({ assignedUserId: AGENT }),
+    });
+
+    await asTenant(async (commands) => commands.claim(CONVERSATION));
+
+    expect(updates[0]).toMatchObject({ data: { botState: 'human_active' } });
   });
 
   it('reports a conflict to the agent who lost the race, and announces nothing', async () => {
@@ -372,7 +391,10 @@ describe('claiming a conversation', () => {
 
     expect(claimed).toMatchObject({ assignedUserId: AGENT, assignedTeamId: TEAM });
     expect(updates).toEqual([
-      { where: { id: CONVERSATION, assignedUserId: null }, data: { assignedUserId: AGENT } },
+      {
+        where: { id: CONVERSATION, assignedUserId: null },
+        data: { assignedUserId: AGENT, botState: 'human_active' },
+      },
     ]);
   });
 });

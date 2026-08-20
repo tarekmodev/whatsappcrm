@@ -1,6 +1,6 @@
 import type { MessageAttachment, MessageResponse, MessageStatus } from '@whatsappcrm/contracts';
 import type { Prisma } from '../generated/prisma/client';
-import { MessageDirection, MessageStatus as StoredMessageStatus } from '../generated/prisma/enums';
+import { MessageStatus as StoredMessageStatus } from '../generated/prisma/enums';
 
 /**
  * `messages` → `MessageResponse`.
@@ -22,21 +22,24 @@ import { MessageDirection, MessageStatus as StoredMessageStatus } from '../gener
  * a sixth value with no place on that ladder would have to be given one it does
  * not have. An inbound message *is* delivered — it is in our hands.
  *
- * ## `sentByAutomation`: derived from who sent it, because that is the fact
+ * ## `origin` is the column, and `sentByAutomation` is derived from it
  *
- * `messages.sender_user_id` is null for two kinds of row: an inbound message,
- * and an outbound one nobody typed — the chatbot (TAR-28), a workflow (TAR-27),
- * the placeholder the ingest writer creates when a status webhook overtakes its
- * message. So automation is exactly "outbound with no sender", and a boolean
- * column would be a second copy of that same fact for the two writers to keep
- * in step.
+ * TAR-28 shipped `messages.origin` (0010 decision 14), because "outbound with no
+ * sender" was about to stop being a useful fact: the chatbot and TAR-27's
+ * workflows will both write rows with a null sender, and the console has to
+ * badge exactly one of them.
  *
- * The placeholder case is the one worth naming: it reports `sentByAutomation:
- * true` for a message an agent did send, because all this platform knows about
- * it is a delivery receipt that arrived first. It corrects itself the moment
- * the send path's own row wins the race, which it does on every send this API
- * performs — the placeholder exists for messages sent before this system
- * existed, or through Meta directly.
+ * `sentByAutomation` keeps its published meaning — "the chatbot or a workflow
+ * produced this" — now read as `origin` being neither `contact` nor `agent`. For
+ * every row this codebase has ever written, the two definitions agree: the
+ * migration backfilled `agent` for outbound rows with a sender and `system` for
+ * the rest, and a trigger completes any writer that does not name one.
+ *
+ * The placeholder case is the one worth naming: a delivery receipt that
+ * overtakes its own message produces a row with no sender, so it reports
+ * `sentByAutomation: true` and `origin: 'system'` for a message an agent did
+ * send. It corrects itself the moment the send path's own row wins the race,
+ * which it does on every send this API performs.
  *
  * ## `attachments[].url`: absolute, and built here
  *
@@ -63,6 +66,7 @@ export const MESSAGE_PROJECTION = {
   status: true,
   body: true,
   senderUserId: true,
+  origin: true,
   providerMessageId: true,
   errorCode: true,
   errorMessage: true,
@@ -102,8 +106,8 @@ export function toMessageResponse(message: MessageRow, origin: string): MessageR
     body: message.body,
     attachments: message.attachments.map((attachment) => toAttachment(attachment, origin)),
     sentByUserId: message.senderUserId,
-    sentByAutomation:
-      message.direction === MessageDirection.outbound && message.senderUserId === null,
+    sentByAutomation: message.origin !== 'contact' && message.origin !== 'agent',
+    origin: message.origin,
     providerMessageId: message.providerMessageId,
     failureReason: toFailureReason(message.errorCode, message.errorMessage),
     sentAt: message.sentAt.toISOString(),
