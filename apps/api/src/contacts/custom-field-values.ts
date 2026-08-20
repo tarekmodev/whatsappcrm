@@ -14,9 +14,16 @@ import { CustomFieldValuesInvalidError } from './contacts.errors';
  *   * **A write is a merge, not a replacement.** Keys present are set, an
  *     explicit `null` clears one, and keys absent are left exactly as they were.
  *     Replacement would make an agent who edits a phone number silently erase
- *     every custom value their form did not happen to load, and would make two
- *     agents editing different fields on the same contact a last-writer-wins
- *     data loss.
+ *     every custom value their form did not happen to load.
+ *
+ *     The merge is **not** what makes two agents editing different fields on the
+ *     same contact safe, and reading it that way is how the concurrent case gets
+ *     missed. This is a pure function over a map its caller has already read: two
+ *     callers that read the same stored map both merge into that same map, and
+ *     the second write replaces the first whole. What actually holds there is the
+ *     row lock `ContactsService.update` takes before its read (`lockContact`,
+ *     `SELECT … FOR NO KEY UPDATE`) — the merge stops an *unloaded* key being
+ *     erased, the lock stops a *concurrently written* one being erased.
  *   * **An unknown key is refused, never silently dropped.** A typo that stores
  *     nothing and reports success is the same silent-failure shape the amendment
  *     refuses on the definition side.
