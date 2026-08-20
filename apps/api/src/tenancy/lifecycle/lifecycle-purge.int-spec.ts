@@ -3,12 +3,13 @@ import { TenantContextService } from '../../common/tenant-context/tenant-context
 import type { PrismaClient } from '../../generated/prisma/client';
 import type { MediaStorage } from '../../media/storage/media-storage.port';
 import { createPrismaClient } from '../../prisma/prisma-client.factory';
+import { uuidV7 } from '../../prisma/uuid-v7';
 import { TenantNotActiveError } from '../../prisma/prisma.errors';
 import { withTenantScope, type TenantPrisma } from '../../prisma/tenant-scope.extension';
 import { QueueService } from '../../queue/queue.service';
 import { TenantLifecycleNotifier } from './tenant-lifecycle.notifier';
 import { TenantLifecycleService } from './tenant-lifecycle.service';
-import { TenantPurgeService } from './tenant-purge.service';
+import { PURGE_ORDER, TenantPurgeService } from './tenant-purge.service';
 
 /**
  * The three integration assertions ADR 0009 asks TAR-404 for **by name**, plus
@@ -38,22 +39,45 @@ import { TenantPurgeService } from './tenant-purge.service';
 
 const FIXTURE_PREFIX = 'tar404-fixture';
 
+/**
+ * **Fresh ids on every run**, which is a consequence of the thing this file is
+ * testing rather than a style choice.
+ *
+ * `lifecycle_events` cannot be cleaned up. `app-roles.sql` grants
+ * `whatsappcrm_system` `SELECT, INSERT` and withholds `DELETE` — from
+ * `SystemPrisma` too, which is otherwise unrestricted by design — and its
+ * comment says why in as many words: *"a fixture teardown can no longer take it
+ * with it."* An audit trail of suspensions and purges that the platform itself
+ * can rewrite is a record of what somebody was willing to leave behind.
+ *
+ * So the trail rows this suite writes are permanent, exactly as a real tenant's
+ * are. Re-using fixed ids would mean the second run of the suite read four rows
+ * where it asserted two. Fresh ids per run means every assertion sees only its
+ * own run's history, and the rows left behind are the correct outcome rather
+ * than litter. On CI the database is created and dropped per job, so nothing
+ * accumulates at all; locally it is a handful of rows per run in a table
+ * designed to hold them for ever.
+ *
+ * The slugs stay fixed, because `removeFixture` finds an interrupted previous
+ * run by slug prefix — the tenant rows themselves *are* deletable, and
+ * everything with a foreign key into them cascades.
+ */
 /** Purged by the suite. */
-const DOOMED_ID = '5f444444-4444-7444-8444-444444444401';
+const DOOMED_ID = uuidV7();
 /** Its neighbour, active throughout: the regression subject. */
-const NEIGHBOUR_ID = '5f444444-4444-7444-8444-444444444402';
+const NEIGHBOUR_ID = uuidV7();
 /** Suspended and then reactivated, to show the data was only ever hidden. */
-const RESTORED_ID = '5f444444-4444-7444-8444-444444444403';
+const RESTORED_ID = uuidV7();
 
 const CONTACT_OF = {
-  doomed: '5f444444-4444-7444-8444-4444444444a1',
-  neighbour: '5f444444-4444-7444-8444-4444444444a2',
-  restored: '5f444444-4444-7444-8444-4444444444a3',
+  doomed: uuidV7(),
+  neighbour: uuidV7(),
+  restored: uuidV7(),
 } as const;
 
 const ADMIN_OF = {
-  doomed: '5f444444-4444-7444-8444-4444444444b1',
-  neighbour: '5f444444-4444-7444-8444-4444444444b2',
+  doomed: uuidV7(),
+  neighbour: uuidV7(),
 } as const;
 
 const REQUEST_ID = 'tar404-int-spec';
@@ -86,13 +110,14 @@ describe('the tenant lifecycle, end to end', () => {
   }
 
   async function removeFixture(): Promise<void> {
+    // By slug rather than by id, so an interrupted previous run is cleaned up
+    // too. Everything with a foreign key into `tenants` cascades.
+    //
+    // `lifecycle_events` is deliberately **not** cleaned up: it has no foreign
+    // key to cascade through, and neither application role holds `DELETE` on it
+    // — the trail outliving its tenant is the property, not a leak. See the
+    // note on the fixture ids above.
     await systemPrisma.tenant.deleteMany({ where: { slug: { startsWith: FIXTURE_PREFIX } } });
-    // `lifecycle_events` has no foreign key to `tenants` by design — that is
-    // what makes it survive a purge — so it does not cascade and has to be
-    // cleaned up by hand.
-    await systemPrisma.lifecycleEvent.deleteMany({
-      where: { tenantId: { in: [DOOMED_ID, NEIGHBOUR_ID, RESTORED_ID] } },
-    });
   }
 
   beforeAll(async () => {
@@ -256,6 +281,50 @@ describe('the tenant lifecycle, end to end', () => {
         where: { id: DOOMED_ID },
         data: { purgeAt: new Date(Date.now() - 1_000) },
       });
+    });
+
+    /**
+     * `PURGE_ORDER` against the live catalogue, in both directions.
+     *
+     * This is the assertion that would have caught the mistake this file
+     * actually found on its first real run: `PURGE_ORDER` listed `sla_alerts`,
+     * which ADR 0009's decision-5 table names and which stopped existing when
+     * TAR-485 generalised it into `notifications`. The purge died on `42P01`
+     * part-way through, leaving a tenant half-deleted and still `suspended`.
+     *
+     * The other direction matters more and is quieter: **a table that carries
+     * `tenant_id` and is missing from the list is a table whose rows survive a
+     * purge.** Nothing else in the system would notice — the purge would report
+     * success, the tombstone would say `deleted`, and a customer told their data
+     * was destroyed would still have some of it in the database. So the two sets
+     * are compared exactly, with the three deliberate exclusions named.
+     */
+    it('covers every tenant-scoped table, and no table that does not exist', async () => {
+      const rows = await systemPrisma.$queryRaw<{ table_name: string }[]>`
+        SELECT c.relname AS table_name
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_attribute a ON a.attrelid = c.oid
+        WHERE n.nspname = 'public'
+          AND c.relkind = 'r'
+          AND a.attname = 'tenant_id'
+          AND NOT a.attisdropped
+        ORDER BY c.relname
+      `;
+
+      const scoped = rows.map((row) => row.table_name);
+
+      const expected = [
+        ...PURGE_ORDER,
+        // Retained permanently: the audit trail TAR-36's sixth criterion asks
+        // for, and the reason it has no foreign key to cascade through.
+        'lifecycle_events',
+        // Unlinked rather than deleted — Meta's raw payloads are kept for
+        // platform forensics with `tenant_id` set to NULL.
+        'webhook_events',
+      ];
+
+      expect([...scoped].sort()).toEqual([...expected].sort());
     });
 
     it('finishes: the delete order satisfies every foreign key in the schema', async () => {

@@ -44,7 +44,7 @@ const BATCH_TIMEOUT_MS = 30_000;
  *   * `webhook_events` — its `tenant_id` is nulled instead. Meta's raw payloads
  *     are kept for platform forensics, unlinked.
  */
-const PURGE_ORDER: readonly string[] = [
+export const PURGE_ORDER: readonly string[] = [
   // The message graph, deepest first.
   'message_attachments',
   'messages',
@@ -55,9 +55,15 @@ const PURGE_ORDER: readonly string[] = [
   'conversations',
 
   // Tickets and everything hanging off them.
+  //
+  // No `sla_alerts`: ADR 0009's decision-5 table names it, and it stopped
+  // existing when TAR-485 generalised it into `notifications`
+  // (`20260816130000_notifications_generalisation`). The ADR is older than the
+  // schema here, and `purge-covers-every-tenant-table` in
+  // `lifecycle-purge.int-spec.ts` is what makes that a caught mistake rather
+  // than a `42P01` on the first real purge.
   'ticket_tags',
   'ticket_events',
-  'sla_alerts',
   'sla_timers',
   'tickets',
   'ticket_counters',
