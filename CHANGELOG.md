@@ -215,8 +215,11 @@ change.
   gets two settings screens behind two permissions: `branding:write` for the editor, and a
   separate `domain:write` for hostnames, because DNS control decides where every invitation
   and password-reset link in the tenant is addressed and choosing a colour does not. Both are
-  admin-only today. `settings/workspace` stops apologising for a branding editor that did not
-  exist.
+  admin-only today. ⚠️ `settings/workspace` still carries its pre-TAR-418 notice — "The
+  branding editor … arrives with the white-labelling work" (`BrandingSummary.tsx`,
+  `workspace.brandingPendingNotice`) — and so does the onboarding checklist's
+  `unavailableNotice`. The editor exists now, on its own **Branding** screen; both notices
+  describe a gap that has closed and are copy left for a follow-up.
   Four decisions are worth reading before building on this. **The tenant is the host and is
   never in the request** — every route above is the same URL for every tenant, so the two
   public ones send `Vary: x-edge-host` and any cache in front of them that keys on the URL
@@ -240,8 +243,10 @@ change.
   proves ownership automatically, then the domain sits on `GET /api/v1/admin/domains` until
   somebody attaches it and posts the activate route. Promoting a verified-but-unattached
   domain to primary is refused for that reason — the mail would send and nobody could accept
-  an invitation. Custom domains are also billed per domain beyond each plan's allowance, which
-  grows linearly with exactly the customers this is sold to. Documented in
+  an invitation. There is also a hosting cost: **Render bills the platform per custom domain**
+  beyond the web service's own allowance, which grows linearly with exactly the customers this
+  is sold to. Nothing meters it per tenant — `custom_domain` is a boolean plan feature and the
+  only ceiling is the flat `MAX_CUSTOM_DOMAINS_PER_TENANT`. Documented in
   [the custom domains runbook](docs/runbooks/custom-domains.md),
   [the API reference](docs/reference/branding-domains-api.md) and the two admin guides
   ([branding](docs/guides/brand-your-workspace.md),

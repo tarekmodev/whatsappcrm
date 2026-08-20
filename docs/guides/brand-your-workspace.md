@@ -60,13 +60,15 @@ by itself; select **Save changes** afterwards.
 
 ## Upload a logo or favicon
 
-The logo and the favicon are uploaded one at a time, and each is saved on its own — they are
-not part of the **Save changes** above.
+The logo and the favicon are uploaded one at a time, and each is saved on its own. Every
+section on this page has its own **Save changes** button and each saves only its own section
+— the one under **Logo and favicon** does not save the name and colours above it, and vice
+versa.
 
 1. On the same **Branding** page, find **Logo and favicon**.
 2. Under **Choose a new logo**, select your file.
-3. Select **Save**. **Logo updated** confirms it, and the preview beside the field shows what
-   you uploaded.
+3. Select **Save changes**. **Logo updated** confirms it, and the preview beside the field
+   shows what you uploaded.
 4. Repeat under **Choose a new favicon** for the tab icon.
 
 A file that is too large or the wrong format is refused **before** it is uploaded, with the
@@ -93,7 +95,7 @@ not accepted.
 **"That logo is over 512 KB." / "That favicon is over 64 KB."**
 Export it smaller or resize it. A logo is displayed small; a large file buys nothing.
 
-**"That logo is not a supported image. Use PNG, JPEG or WebP."**
+**"That logo is not a supported image. Use image/png, image/jpeg, image/webp."**
 The file is not one of the accepted formats — most often an SVG, or a file renamed to `.png`
 without being converted. Export it properly from your design tool.
 

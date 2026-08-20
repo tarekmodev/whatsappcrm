@@ -722,7 +722,7 @@ The inverse, once the hostname has been removed from the web service. Same statu
 
 | Variable                                | Required | Default         | What it decides                                                                       |
 | --------------------------------------- | -------- | --------------- | ------------------------------------------------------------------------------------- |
-| `PLATFORM_DOMAIN`                       | yes      | `app.localhost` | The zone platform subdomains are issued under, and the zone no tenant may claim under |
+| `PLATFORM_DOMAIN`                       | no       | `app.localhost` | The zone platform subdomains are issued under, and the zone no tenant may claim under |
 | `PLATFORM_EDGE_HOSTNAME`                | no       | —               | The CNAME target handed to a claimant. **Absent means claims are refused**            |
 | `PLATFORM_PRODUCT_NAME`                 | no       | `WhatsApp CRM`  | What a tenant that has set no product name is called                                  |
 | `DOMAIN_VERIFICATION_TTL_DAYS`          | no       | `7`             | How long an unverified claim holds its hostname                                       |

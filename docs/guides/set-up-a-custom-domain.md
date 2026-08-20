@@ -54,8 +54,9 @@ DNS** and the records you need.
 
 ## Step 2 — Prove you own it
 
-The card shows **Step 1 — prove you own it** with one record. Add it at your DNS provider
-exactly as shown — use the copy buttons rather than retyping.
+The card shows both records from the moment you add the domain. Start with **Step 1 — prove
+you own it**, and add it at your DNS provider exactly as shown — use the copy buttons rather
+than retyping.
 
 | Type  | Name                                      | Value                                     |
 | ----- | ----------------------------------------- | ----------------------------------------- |
@@ -85,8 +86,9 @@ the hostname goes back to being claimable by anyone, and you would start over.
 
 ## Step 3 — Point it at us
 
-Once the domain is **Verified**, the card shows **Step 2 — point it at us** with a second
-record.
+The card's second block, **Step 2 — point it at us**, has been there since you added the
+domain. Add this record once the status is **Verified** — publishing it earlier does no harm,
+but nothing can use it until ownership is proved.
 
 | Type    | Name               | Value                       |
 | ------- | ------------------ | --------------------------- |
@@ -177,7 +179,7 @@ Remove one you are no longer using before adding another.
 **"Custom domains are not available in this environment."**
 Custom domains are not configured on the deployment you are signed in to. Contact support.
 
-**"Your workspace address cannot be removed — it is how you always reach the console."**
+**"Your platform subdomain cannot be removed — it is how you always reach the console."**
 The platform address is your fallback and is never removable. This is what stops a workspace
 becoming unreachable.
 
