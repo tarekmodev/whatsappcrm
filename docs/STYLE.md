@@ -32,9 +32,11 @@ fourth and [Read the performance dashboard](guides/read-the-performance-dashboar
 the fifth. [Put your own brand on the workspace](guides/brand-your-workspace.md) and
 [Serve the workspace from your own web address](guides/set-up-a-custom-domain.md) (both
 TAR-423) are the sixth and seventh, and the first pair written for a workspace **admin**
-rather than a supervisor. A guide for a tenant user names its reader in the first line and
-refers to every control by its **visible label**, taken from `apps/web/content/en.ts` rather
-than from a component name.
+rather than a supervisor.
+[Hand a ticket on, or ask a supervisor](guides/hand-over-or-escalate-a-ticket.md) (TAR-473) is
+the eighth, and the first written for an **agent** rather than a supervisor or an admin. A
+guide for a tenant user names its reader in the first line and refers to every control by its
+**visible label**, taken from `apps/web/content/en.ts` rather than from a component name.
 
 One subject splits into two guides when it splits into two permissions. Branding and custom
 domains sit on one settings area and read as one topic, but `branding:write` and
@@ -86,6 +88,8 @@ Fixed vocabulary. Use the left column; never rotate synonyms.
 | Term                             | Not                                      | Notes                                                                                                                                                              |
 | -------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | tenant                           | organisation, workspace, account, client | One customer business on the platform. **Except in `docs/guides/` written for a tenant user**, which says _workspace_ — the word the console itself uses on screen |
+| handoff                          | transfer, pass on, delegate              | Giving a ticket to somebody else. The console's own word; `ticket:handoff` is the permission                                                                       |
+| escalate                         | raise, flag, bump, elevate               | Asking a supervisor to look. **Never means the ticket changed hands** — it does not                                                                                |
 | platform operator                | admin, superadmin, us                    | Operates the platform; not a user inside any tenant                                                                                                                |
 | agent                            | user, rep, operator                      | A person working inside a tenant. Never means "AI agent"                                                                                                           |
 | provision                        | create, onboard, sign up                 | `POST /api/v1/admin/tenants`                                                                                                                                       |

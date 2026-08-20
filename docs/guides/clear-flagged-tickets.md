@@ -97,9 +97,21 @@ page, and check the rule that sent the ticket there.
 
 1. Find the ticket in the list and select **Assign**. The **Assign** dialog opens.
 2. Under **Assign to**, choose an agent.
-3. Select **Assign ticket**.
+3. Optionally write a note under **Why this person**. The hint says **Optional. Anything you
+   write is recorded on the ticket’s history as the reason for the override.**
+4. Select **Assign ticket**.
 
 A message confirms who it went to, and the ticket leaves the flagged list.
+
+**The reason is offered here, not demanded.** A flagged ticket is held by nobody — that is
+what put it in this list — so placing it takes work away from no one and there is no handoff
+to explain. Clearing this queue is bulk triage, and a mandatory free-text field in front of it
+would slow down exactly the task this page exists for. If you do write something, it goes on
+the ticket's history.
+
+**It is required when you move a ticket somebody already holds.** That is a different act on a
+different screen — [Hand a ticket on, or ask a supervisor](hand-over-or-escalate-a-ticket.md)
+covers it — and there the field carries an asterisk and the dialog will not submit without it.
 
 **The list of agents is not filtered by availability or by ticket limit**, and that is
 deliberate: the reason this ticket is here is that nobody passed those tests, so a filtered
@@ -119,8 +131,11 @@ formality.
 response deadline keeps running from when the customer wrote in. Placing a ticket quickly is
 the point.
 
-**A ticket flagged after a rule sent it to a team keeps that team.** You are choosing a person
-inside — or outside — that team, not undoing the rule.
+**A flagged ticket belongs to nobody and to no team.** If a routing rule matched, it placed
+the ticket and the ticket never reached this list; only a ticket that rotation could not place
+is flagged, and that happens without a team. So the **Ticket** column reads **Whole
+workspace** on every row today, and you are choosing a person rather than working inside a
+team the rule picked.
 
 **The list is per workspace, not per supervisor.** "Flagged for you" means "for a supervisor
 to handle", so a colleague may clear a ticket before you do. If a row disappears while you are
