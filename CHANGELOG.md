@@ -1303,6 +1303,29 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
 
 ### Fixed
 
+- **Detaching a tenant's primary custom domain no longer leaves invite and password-reset
+  links pointing at it** (TAR-534) — `AdminDomainsService.deactivate()` cleared
+  `activated_at` and left `is_primary` exactly where it was, so the state TAR-420 blocks on
+  _promotion_ — primary on a hostname the edge is not serving — was still reachable from the
+  operator side. An operator detaching a domain during a certificate failure or a migration
+  left every invite and reset mail addressed to a host with no route and no certificate, and
+  nothing failed visibly: the mail sends, and the tenant finds out when a customer cannot get
+  back into their account.
+  Deactivation now hands primary back to the platform subdomain in the same transaction,
+  mirroring what `remove()` already did, and names the new host on the deactivation audit row
+  so the trail explains why a tenant's links changed. The two writes are ordered — the old
+  primary is cleared by the same statement that clears `activated_at`, before the fallback is
+  set — because `tenant_domains_one_primary` is a unique index and would otherwise reject the
+  pair. A tenant with no platform subdomain to fall back to is left without a primary and
+  logged rather than refused: the hostname is gone from the edge either way, and that tenant
+  is a provisioning fault this path did not cause.
+  `TenantLinkService.primaryHostname()` gained the matching filter as a net under it — a
+  verified custom domain with no `activated_at` is now skipped in favour of the platform
+  subdomain, so any future path that clears the column cannot re-open this. The realtime
+  near-copy in `TenantHostnameService` skips it too, for the same reason and to keep the two
+  queries from disagreeing about the same rows. Nothing here changes which hosts _resolve_:
+  `HostTenantGuard` reads `verified_at`, and it is untouched.
+
 - **A ticket answered in time is no longer breached because a queue job did not survive Redis**
   (TAR-380) — the breach sweep claimed timers with `WHERE state = 'running'`, which reads as
   "not yet answered" only if something reliably moves an answered timer out of `running`. The

@@ -8,9 +8,11 @@ import { AuditService } from '../audit/audit.service';
 import { ApiException } from '../common/errors/api.exception';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { PrismaClient } from '../generated/prisma/client';
+import { TenantLinkService } from '../identity/mailer/tenant-link.service';
 import { FilesystemMediaStorage } from '../media/storage/filesystem-media.storage';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
+import { AdminDomainsService } from './admin/admin-domains.service';
 import { TenantBrandingService } from './branding/tenant-branding.service';
 import { DomainOwnershipChecker } from './domains/domain-ownership.checker';
 import { TenantDomainsService } from './domains/tenant-domains.service';
@@ -129,6 +131,8 @@ describe('branding and custom domains, end to end', () => {
   let branding: TenantBrandingService;
   let profile: TenantProfileService;
   let domains: TenantDomainsService;
+  let adminDomains: AdminDomainsService;
+  let links: TenantLinkService;
   let guard: HostTenantGuard;
 
   /** What the stubbed DNS resolver will answer next. */
@@ -157,13 +161,28 @@ describe('branding and custom domains, end to end', () => {
    * TAR-419's operator step, which has no tenant-facing route: the hostname is
    * attached at the edge and its certificate issued. Written through
    * `systemPrisma` because that is the plane an operator acts on, and because
-   * `AdminDomainsService` is not one of the services under test here.
+   * most cases here are about `TenantDomainsService` rather than the operator
+   * surface. The block that *is* about the operator surface drives
+   * `adminDomains` directly.
    */
   async function activateAtEdge(hostname: string): Promise<void> {
     await systemPrisma.tenantDomain.updateMany({
       where: { hostname },
       data: { activatedAt: new Date() },
     });
+  }
+
+  /** Verifies `hostname` for `tenantId` the way a tenant does, and answers its id. */
+  async function claimAndVerify(tenantId: string, hostname: string): Promise<string> {
+    const claimed = await asTenant(tenantId, () => domains.claim(hostname));
+
+    publishedTxt[`_whatsappcrm-challenge.${hostname}`] = [
+      [claimed.domain.verification?.recordValue ?? ''],
+    ];
+
+    await asTenant(tenantId, () => domains.verify(claimed.domain.id));
+
+    return claimed.domain.id;
   }
 
   async function removeFixture(): Promise<void> {
@@ -207,6 +226,11 @@ describe('branding and custom domains, end to end', () => {
         PLATFORM_EDGE_HOSTNAME: EDGE_HOSTNAME,
         DOMAIN_VERIFICATION_TTL_DAYS: TTL_DAYS,
       }),
+    );
+    adminDomains = new AdminDomainsService(systemPrisma, tenantPrisma, audit);
+    links = new TenantLinkService(
+      tenantPrisma,
+      configWith({ APP_LINK_SCHEME: 'https', PLATFORM_DOMAIN }),
     );
     guard = new HostTenantGuard(
       new Reflector(),
@@ -544,6 +568,100 @@ describe('branding and custom domains, end to end', () => {
       await expect(
         asTenant(TENANT_A, () => domains.setPrimary(platform?.id ?? '')),
       ).resolves.toMatchObject({ hostname: HOST_A, isPrimary: true, activatedAt: null });
+    });
+  });
+
+  describe('a detached domain stops being where links are mailed', () => {
+    const RESET_PATH = '/reset-password';
+
+    /** Claims, verifies, activates through the operator surface, and promotes. */
+    async function goLive(hostname: string): Promise<string> {
+      const id = await claimAndVerify(TENANT_A, hostname);
+
+      await asTenant(TENANT_A, () => adminDomains.activate(hostname));
+      await asTenant(TENANT_A, () => domains.setPrimary(id));
+
+      return id;
+    }
+
+    it('hands primary back to the platform subdomain when an operator detaches it', async () => {
+      // The incident this exists for: a certificate fails to renew, an operator
+      // detaches the hostname at the edge, and until TAR-534 `is_primary` stayed
+      // exactly where `setPrimary` refuses to put it — so every invite and reset
+      // link kept naming a host with no route and no certificate.
+      await goLive(CUSTOM_A);
+
+      await expect(asTenant(TENANT_A, () => links.absoluteLink(RESET_PATH, 'tok3n'))).resolves.toBe(
+        `https://${CUSTOM_A}${RESET_PATH}#token=tok3n`,
+      );
+
+      await asTenant(TENANT_A, () => adminDomains.deactivate(CUSTOM_A));
+
+      // Both halves in one assertion set: the flag moved, and the link followed
+      // it. The unique index also had to permit the two writes, which it only
+      // does because the old primary is cleared before the fallback is set.
+      const remaining = await asTenant(TENANT_A, () => domains.list());
+
+      expect(remaining).toEqual([
+        expect.objectContaining({ hostname: HOST_A, isPrimary: true }),
+        expect.objectContaining({ hostname: CUSTOM_A, isPrimary: false, activatedAt: null }),
+      ]);
+      await expect(asTenant(TENANT_A, () => links.absoluteLink(RESET_PATH, 'tok3n'))).resolves.toBe(
+        `https://${HOST_A}${RESET_PATH}#token=tok3n`,
+      );
+    });
+
+    it('leaves primary alone when the detached domain was not the primary', async () => {
+      const id = await claimAndVerify(TENANT_A, CUSTOM_A);
+
+      await asTenant(TENANT_A, () => adminDomains.activate(CUSTOM_A));
+      await asTenant(TENANT_A, () => adminDomains.deactivate(CUSTOM_A));
+
+      const detached = (await asTenant(TENANT_A, () => domains.list())).find(
+        (domain) => domain.id === id,
+      );
+
+      expect(detached).toMatchObject({ activatedAt: null, isPrimary: false });
+      await expect(asTenant(TENANT_A, () => links.absoluteLink(RESET_PATH, 'tok3n'))).resolves.toBe(
+        `https://${HOST_A}${RESET_PATH}#token=tok3n`,
+      );
+    });
+
+    it('skips an unactivated primary even when the flag was left behind', async () => {
+      // The state the revert above prevents, forced directly against the table
+      // so the net under it is what is being tested rather than the fix that
+      // stops it arising. Two statements because `tenant_domains_one_primary`
+      // is checked per statement.
+      await claimAndVerify(TENANT_A, CUSTOM_A);
+      await systemPrisma.tenantDomain.updateMany({
+        where: { tenantId: TENANT_A },
+        data: { isPrimary: false },
+      });
+      await systemPrisma.tenantDomain.updateMany({
+        where: { hostname: CUSTOM_A },
+        data: { isPrimary: true, activatedAt: null },
+      });
+
+      await expect(asTenant(TENANT_A, () => links.absoluteLink(RESET_PATH, 'tok3n'))).resolves.toBe(
+        `https://${HOST_A}${RESET_PATH}#token=tok3n`,
+      );
+    });
+
+    it('refuses to detach a domain the named tenant does not hold', async () => {
+      await goLive(CUSTOM_A);
+
+      // The operator is authorised for every tenant, but the slug in the path
+      // decides whose rows are in scope. RLS is what makes naming the wrong one
+      // a not-found rather than a neighbour's primary being reverted.
+      await expect(
+        asTenant(TENANT_B, () => adminDomains.deactivate(CUSTOM_A)),
+      ).rejects.toBeInstanceOf(TenantDomainNotFoundError);
+
+      const stillLive = (await asTenant(TENANT_A, () => domains.list())).find(
+        (domain) => domain.hostname === CUSTOM_A,
+      );
+
+      expect(stillLive).toMatchObject({ isPrimary: true });
     });
   });
 });
