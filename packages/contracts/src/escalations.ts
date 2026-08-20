@@ -49,8 +49,13 @@ export const EscalationAlertResponseSchema = z.object({
   raisedByUserId: IdSchema,
   reason: z.string(),
   /**
-   * Who was holding the ticket **when it was escalated** — read off the alert's
-   * ticket at list time, so a ticket reassigned since reads as it stands now.
+   * The ticket's **current** assignment, read off the alert's ticket at list
+   * time — not a snapshot of who held it when the escalation fired. A ticket
+   * reassigned since reads as it stands now, and deliberately: the supervisor
+   * opens an unacknowledged escalation to act on it, and the only holder that
+   * can be acted on is the one in force now. Who held it at that instant is
+   * reconstructable from the ticket's `assigned` / `unassigned` events — the
+   * alert is the work item, `ticket_events` is the record (0011 amendment 2).
    */
   assignedUserId: IdSchema.nullable(),
   assignedTeamId: IdSchema.nullable(),
