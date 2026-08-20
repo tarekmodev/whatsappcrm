@@ -3,8 +3,11 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Injectable,
   Module,
   NotFoundException,
+  UseGuards,
+  type CanActivate,
   type INestApplication,
   type MiddlewareConsumer,
   type NestModule,
@@ -15,14 +18,34 @@ import { Test } from '@nestjs/testing';
 import { ApiErrorSchema } from '@whatsappcrm/contracts';
 import type { Server } from 'node:http';
 import request from 'supertest';
+import { TENANT_INACTIVE_MESSAGE } from '../common/errors/tenant-inactive';
 import { REQUEST_ID_HEADER } from '../common/tenant-context/request-id';
 import { TenantContextMiddleware } from '../common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from '../common/tenant-context/tenant-context.module';
 import { validateEnv } from '../config/env';
+import { TenantNotActiveError } from '../prisma/prisma.errors';
 import { ErrorTrackingService } from './error-tracking.service';
 import { ObservabilityModule } from './observability.module';
 
 const LEAKED_INTERNAL_DETAIL = 'connect ECONNREFUSED 10.0.0.7:5432';
+
+/** The tenant id the suspended-tenant probe reports, and must never echo back. */
+const SUSPENDED_TENANT_ID = '01a00a47-4800-7689-9027-5e47aadf64fd';
+
+/**
+ * Session resolution against a suspended tenant, which is where TAR-539 was
+ * found: `SessionService.resolve` reads `User.findFirst()` through
+ * `TenantPrisma`, the database gate refuses it, and the throw happens in a
+ * **guard** — before any controller, and so outside every `translate*Failure`
+ * the codebase has. A guard is the shape that matters here; a controller could
+ * always have caught it for itself.
+ */
+@Injectable()
+class SuspendedTenantGuard implements CanActivate {
+  canActivate(): never {
+    throw new TenantNotActiveError(SUSPENDED_TENANT_ID, 'findFirst', 'User');
+  }
+}
 
 @Controller('boom')
 class BoomController {
@@ -43,6 +66,12 @@ class BoomController {
   unhandled(): never {
     throw new Error(LEAKED_INTERNAL_DETAIL);
   }
+
+  @Get('suspended-tenant')
+  @UseGuards(SuspendedTenantGuard)
+  suspendedTenant(): never {
+    throw new Error('unreachable: the guard refuses first');
+  }
 }
 
 /**
@@ -58,6 +87,7 @@ function buildBoomModule(): Type<unknown> {
       ObservabilityModule,
     ],
     controllers: [BoomController],
+    providers: [SuspendedTenantGuard],
   })
   class BoomModule implements NestModule {
     configure(consumer: MiddlewareConsumer): void {
@@ -154,6 +184,35 @@ describe('AllExceptionsFilter', () => {
     expect(ApiErrorSchema.parse(response.body).error.code).toBe('internal_error');
     expect(JSON.stringify(response.body)).not.toContain('at ');
   });
+
+  /**
+   * TAR-539. A suspended tenant with an open session used to reach here as a raw
+   * `TenantNotActiveError` and be reported as a fault, on every tenant-scoped
+   * route, with the error's engineer-facing message in the body.
+   */
+  describe('a suspended tenant whose caller still holds a session', () => {
+    it('answers subscription_inactive rather than a fault', async () => {
+      const response = await request(server).get('/boom/suspended-tenant').expect(402);
+
+      expect(ApiErrorSchema.parse(response.body).error.code).toBe('subscription_inactive');
+    });
+
+    it('names neither the data layer nor the tenant it refused', async () => {
+      const response = await request(server).get('/boom/suspended-tenant').expect(402);
+      const body = JSON.stringify(response.body);
+
+      expect(body).not.toContain('TenantPrisma');
+      expect(body).not.toContain('SystemPrisma');
+      expect(body).not.toContain(SUSPENDED_TENANT_ID);
+      expect(body).not.toContain('findFirst');
+    });
+
+    it('does not page anyone: an operator suspended the tenant, nothing broke', async () => {
+      await request(server).get('/boom/suspended-tenant').expect(402);
+
+      expect(captureException).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('AllExceptionsFilter in production', () => {
@@ -191,5 +250,19 @@ describe('AllExceptionsFilter in production', () => {
 
     expect(ApiErrorSchema.parse(response.body).error.message).not.toContain(LEAKED_INTERNAL_DETAIL);
     expect(ApiErrorSchema.parse(response.body).error.message).not.toContain('5432');
+  });
+
+  /**
+   * The 500 above is redacted only because it is a server error, and that
+   * redaction is what hid how much a `TenantNotActiveError` used to carry. The
+   * suspended-tenant answer is a 4xx, so nothing redacts it — it has to be
+   * written safe at the source, and this asserts it is (TAR-539).
+   */
+  it('answers a suspended tenant with the same safe message it does elsewhere', async () => {
+    const response = await request(server).get('/boom/suspended-tenant').expect(402);
+    const { error } = ApiErrorSchema.parse(response.body);
+
+    expect(error.code).toBe('subscription_inactive');
+    expect(error.message).toBe(TENANT_INACTIVE_MESSAGE);
   });
 });

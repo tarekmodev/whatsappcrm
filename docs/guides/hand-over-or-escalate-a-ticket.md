@@ -157,9 +157,11 @@ entries could disappear, none of them could be relied on.
 That is the reason field. It is required whenever somebody already holds the ticket, and three
 characters is the minimum. A reason of spaces is refused too.
 
-**I was asked for a reason on a ticket nobody was holding.**
-A ticket routed to a team counts as held even when no individual name is on it, so the reason
-is asked for. This is under review and may change.
+**The reason was optional when I placed a ticket from the flagged list.**
+That is correct. A flagged ticket is held by nobody, so placing it takes work from no one and
+there is nothing to explain — see
+[Clear tickets nobody could take](clear-flagged-tickets.md). The reason is required only when
+you move a ticket somebody already holds.
 
 **"You can only hand on a ticket that is assigned to you."**
 The ticket is a colleague's, or it sits with a team rather than with you. Ask a supervisor to

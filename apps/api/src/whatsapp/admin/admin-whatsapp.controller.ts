@@ -24,7 +24,7 @@ import { ApiExceptionFilter } from '../../common/errors/api-exception.filter';
 import { ApiException } from '../../common/errors/api.exception';
 import { PlatformRoute } from '../../common/request-pipeline/route-access';
 import { ZodValidationPipe } from '../../common/validation/zod-validation.pipe';
-import { TenantNotActiveError } from '../../prisma/prisma.errors';
+import { isTenantNotActiveError, tenantInactive } from '../../common/errors/tenant-inactive';
 import { AdminTenantScopeService } from '../../tenancy/admin/admin-tenant-scope.service';
 import { PlatformAdminGuard } from '../../tenancy/admin/platform-admin.guard';
 import { TenantNotFoundError } from '../../tenancy/tenant-deactivation.errors';
@@ -191,14 +191,14 @@ export class AdminWhatsAppController {
  * deployment.
  */
 function translateWhatsAppFailure(error: unknown): never {
-  if (error instanceof TenantNotActiveError) {
+  if (isTenantNotActiveError(error)) {
     // Reachable here in a way it is not on a session-authenticated route: an
     // operator can name a tenant that has since been deactivated. The gate is
     // `assert_tenant_active` inside `TenantPrisma`, so it fires on the first
-    // statement rather than at the edge. TAR-41's global filter will own this
-    // mapping for every route; until then the routes that can hit it map it
-    // themselves rather than answering 500 for a state an operator created.
-    throw new ApiException('forbidden', error.message);
+    // statement rather than at the edge. The same refusal every other route
+    // gives, from the same helper, so the operator surface and the tenant
+    // surface cannot drift apart (TAR-539).
+    throw tenantInactive();
   }
 
   if (error instanceof WhatsAppIdentityTakenError) {

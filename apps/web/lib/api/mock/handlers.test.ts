@@ -1057,11 +1057,18 @@ describe('the ticket queue', () => {
   it('gives `unassigned` to a supervisor and nothing to an agent', async () => {
     // Unlike an unclaimed conversation, an unassigned ticket is triaged work.
     asRole('supervisor');
-    // `unassigned` is "no user **and** no team", so of TAR-23's deferred three
-    // only `no_candidate_pool` qualifies — the other two were routed to a team
-    // by rule before rotation ran out of people.
+    // `unassigned` is "no user **and** no team", which is every deferred ticket
+    // there is: a rule that matched would have assigned its target and stopped,
+    // so a ticket only reaches deferral with both columns still null (TAR-537).
+    // In queue order, so the deferred three are interleaved with Mei's by
+    // priority rather than appended.
     expect((await listTickets('?scope=unassigned&limit=100')).items.map((item) => item.id)).toEqual(
-      [MOCK_IDS.tickets.meiUnassigned, MOCK_IDS.tickets.deferredNoCandidatePool],
+      [
+        MOCK_IDS.tickets.deferredAtCapacity,
+        MOCK_IDS.tickets.meiUnassigned,
+        MOCK_IDS.tickets.deferredNoCandidatePool,
+        MOCK_IDS.tickets.deferredNoneAvailable,
+      ],
     );
 
     asRole('agent');
@@ -1373,12 +1380,10 @@ describe('flagged ticket queue', () => {
       path: FLAGGED_PATH,
     })) as CursorPage<TicketResponse>;
 
-    // Amina holds no deferred ticket: the two that carry a team are Billing's and
-    // Onboarding's, and she is only in Billing — which routes by *team*, and a
-    // deferred ticket has no user on it at all.
-    expect(page.items.map((ticket) => ticket.id)).not.toContain(
-      MOCK_IDS.tickets.deferredNoCandidatePool,
-    );
+    // Empty, not merely short of one: a deferred ticket carries neither a user
+    // nor a team (TAR-537), so there is nothing on any of them for the
+    // own-and-my-teams predicate to match.
+    expect(page.items).toEqual([]);
   });
 
   it('takes an assigned ticket off the queue and marks routing manual', async () => {
@@ -1387,9 +1392,10 @@ describe('flagged ticket queue', () => {
     const assigned = (await handleMockRequest({
       method: 'POST',
       path: `/v1/tickets/${MOCK_IDS.tickets.deferredAtCapacity}/assign`,
-      // A reason, because this ticket is routed to Billing and
-      // `ticketAssignRequiresReason` counts a team hold as held (TAR-32,
-      // ADR 0011 decision 1).
+      // A reason, though nothing requires one: a deferred ticket is held by
+      // nobody, so `ticketAssignRequiresReason` is false for it (TAR-537). Sent
+      // anyway because the field is accepted either way, and a placement that
+      // carries one is the case worth exercising end to end.
       body: { userId: MOCK_IDS.users.amina, reason: 'Amina has room and knows the account.' },
     })) as TicketResponse;
 
@@ -1413,9 +1419,6 @@ describe('flagged ticket queue', () => {
       handleMockRequest({
         method: 'POST',
         path: `/v1/tickets/${MOCK_IDS.tickets.deferredAtCapacity}/assign`,
-        // The reason is present so the assignee check is what refuses this: the
-        // reason rule runs first by design (ADR 0011 decision 1), and without
-        // one this would be `validation_failed` about the reason instead.
         body: { userId: MOCK_IDS.users.otherTenant, reason: 'Cross-tenant assignment attempt.' },
       }),
     ).rejects.toMatchObject({ code: 'not_found' });
@@ -1442,13 +1445,37 @@ describe('flagged ticket queue', () => {
     ).rejects.toMatchObject({ code: 'not_found' });
   });
 
-  it('refuses a role without ticket:assign', async () => {
+  /**
+   * `not_found`, not `forbidden`: a deferred ticket carries neither a user nor a
+   * team (TAR-537), so it fails the visibility rule before the act is judged —
+   * the same answer this mock gives for any ticket a principal may not see, and
+   * the reason emptying this queue is a `ticket:read_all` surface.
+   */
+  it('hides the flagged queue’s tickets from a role that may not read them all', async () => {
     asRole('agent');
 
     await expect(
       handleMockRequest({
         method: 'POST',
         path: `/v1/tickets/${MOCK_IDS.tickets.deferredAtCapacity}/assign`,
+        body: { userId: MOCK_IDS.users.amina },
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  /**
+   * The bound itself, on a ticket the agent *can* see: Jonas's is held by her
+   * team, which ADR 0011 decision 2 is explicit is not hers to give away. Kept
+   * beside the case above so the 403 half of the assign route stays covered now
+   * that no flagged ticket reaches it.
+   */
+  it('refuses a placement by somebody who does not hold the ticket', async () => {
+    asRole('agent');
+
+    await expect(
+      handleMockRequest({
+        method: 'POST',
+        path: `/v1/tickets/${MOCK_IDS.tickets.jonasPending}/assign`,
         body: { userId: MOCK_IDS.users.amina },
       }),
     ).rejects.toMatchObject({ code: 'forbidden' });

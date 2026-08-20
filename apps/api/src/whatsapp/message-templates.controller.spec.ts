@@ -234,7 +234,7 @@ describe('GET /api/v1/message-templates', () => {
     expect(ApiErrorSchema.parse(response.body).error.details?.[0]?.path).toBe('whatsappAccountId');
   });
 
-  it('reports a deactivated tenant as forbidden, not as a server fault', async () => {
+  it('reports a deactivated tenant as subscription_inactive, not as a server fault', async () => {
     // The gate is `assert_tenant_active` inside TenantPrisma, so it fires on the
     // query rather than at the edge. A 500 here would page someone every time an
     // operator shut a tenant off with a session still open.
@@ -242,8 +242,13 @@ describe('GET /api/v1/message-templates', () => {
 
     const response = await get();
 
-    expect(response.status).toBe(403);
-    expect(ApiErrorSchema.parse(response.body).error.code).toBe('forbidden');
+    expect(response.status).toBe(402);
+    const { error } = ApiErrorSchema.parse(response.body);
+
+    expect(error.code).toBe('subscription_inactive');
+    // TAR-539: the error's own message names `TenantPrisma` and the tenant id.
+    expect(error.message).not.toContain('TenantPrisma');
+    expect(error.message).not.toContain(TENANT_ID);
   });
 
   it('reports a corrupted cursor as bad input rather than as a fault', async () => {

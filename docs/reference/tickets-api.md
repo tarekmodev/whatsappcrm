@@ -594,16 +594,19 @@ field of the body is missing, which is what `validation_failed` means everywhere
 event, but a missing reason on such a request is still refused. Silently accepting it would
 train a console to omit the field.
 
-A ticket routed to a team by a rule carries `assignedTeamId`, so `ticketAssignRequiresReason`
-counts it as held: **the supervisor's flagged-queue placement requires a reason too.** That is
-true today — `AssignFlaggedTicketDialog` collects one and refuses to submit without it, and
-[Clear tickets nobody could take](../guides/clear-flagged-tickets.md) documents the step.
+**The flagged queue needs no reason, and that is settled** (TAR-537). TAR-470 raised a worry
+that a rule-routed ticket carries `assignedTeamId`, which the predicate would count as held —
+so the supervisor's flagged-queue placement would demand a reason that ADR 0011 decision 1
+says it should not. **The premise was wrong.** A matched rule assigns its target and stops;
+only rotation-with-nobody defers, and `RuleEngineService.defer` writes the three routing
+columns and nothing else. **Both assignment columns are null on every `deferred` row**, so
+`ticketAssignRequiresReason` is false for the whole flagged queue and the exemption reaches it
+exactly as decision 1 intended.
 
-> **TODO(author):** ADR 0011 decision 1 reads as though a flagged-queue placement should _not_
-> need a reason — it describes placing work nobody held, which is the case the rule exempts.
-> The predicate counts a team hold as held, so the exemption does not reach it. TAR-470 raised
-> this with the architect and it is unresolved. This page documents the behaviour as it ships;
-> if the ruling changes the behaviour, the row above and that guide both change with it.
+`AssignFlaggedTicketDialog` now gates on the published predicate rather than demanding a
+reason unconditionally, so the field is offered and not required there —
+[Clear tickets nobody could take](../guides/clear-flagged-tickets.md) describes it that way.
+The asterisk returns on its own if a deferred ticket can ever carry a holder.
 
 ### The handoff bound: what an agent may do without `ticket:assign`
 

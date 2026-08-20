@@ -223,18 +223,113 @@ change.
   `ignore`. A supervisor is notified in the durable sense the API guarantees — the row exists
   and the list read returns it — but today they reach it through the API or by opening the
   ticket's history. Its own story.
-  ⚠️ **A rule-routed ticket carries `assignedTeamId`, so the supervisor's flagged-queue
-  placement now asks for a reason too**, which ADR 0011 decision 1 reads as though it should
-  not. TAR-470 raised it with the architect; it is unresolved, and the docs describe what the
-  code does.
+  A worry TAR-470 raised — that a rule-routed ticket carries `assignedTeamId` and would drag
+  the supervisor's flagged-queue placement into needing a reason — turned out to rest on a false
+  premise, and TAR-537 settled it: a matched rule assigns and stops, so every `deferred` row has
+  both assignment columns null and the exemption in decision 1 reaches the flagged queue exactly
+  as intended.
   ⚠️ **No de-escalation and no "is escalated" state on a ticket.** `acknowledgedAt` on the alert
   is the supervisor's half; nothing lists open escalations per ticket, and one raised in error
   stays in the history. Escalations are not rate-limited, and alert retention is still unset —
   to be settled with `sla_alerts` rather than given a second policy here.
   Documented in [the tickets API reference](docs/reference/tickets-api.md) and, for agents, in
   [Hand a ticket on, or ask a supervisor](docs/guides/hand-over-or-escalate-a-ticket.md).
-  [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md) gains the reason step
-  the flagged-queue dialog now collects.
+  [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md) gains the optional
+  reason field the flagged-queue dialog now offers.
+
+- **The reporting dashboard and its export are documented, for both readers** (TAR-434) —
+  TAR-30 shipped a performance dashboard, a CSV export and the guarantee that the two agree,
+  across six stories and four merged pull requests. None of it had documentation, and the
+  parity guarantee in particular is the kind of property that is invisible until somebody
+  reimplements around it. Two pages, split by reader rather than averaged into one.
+  [The reporting dashboard and export reference](docs/reference/reporting-api.md) is the
+  engineer's: both endpoints with every parameter, the CSV byte format, the error table, and
+  — at length, because it is the design and not a detail — **why the file and the screen
+  cannot disagree**. `ReportingQueryService.dashboard()` is the only method that aggregates
+  ticket metrics, both routes call it, and there is no SQL on the export path, so parity is
+  structural rather than maintained by attention. It also documents what a reader would
+  otherwise have to derive from source: that each metric is anchored on the event that makes
+  it true rather than on `created_at`, which is what makes a range reproducible; that
+  durations are null exactly when the sample is empty, because a week nobody answered and a
+  week answered instantly are different facts; and the asymmetry between visibility and
+  attribution — visibility reads _current_ assignment, attribution reads _recorded_ history,
+  so an agent's own response on a ticket since reassigned away leaves their scoped report
+  while staying on their row in a supervisor's.
+  [Read the performance dashboard](docs/guides/read-the-performance-dashboard.md) is the
+  supervisor's, and refuses all of that vocabulary: what each figure counts, why opened and
+  resolved are not meant to reconcile, why medians must not be averaged down the column, and
+  why the export always matches the screen. Both pages say plainly that **durations are
+  wall-clock** — a ticket arriving at 17:30 carries the whole night in its first response
+  time, and a client-facing report inherits it.
+  Everything on the reference page was executed against a local stack rather than read off
+  the source: parity was compared field by field between the CSV `total` row and the JSON
+  summary, the byte-order mark was checked byte by byte, an agent renamed `=cmd|' /c calc'!A1`
+  was confirmed exported inert, and the range cap was probed at 366 and 367 days. The
+  reporting suite passed at 87 tests. ⚠️ Three things are marked as unresolved rather than
+  written up as settled, because they are product calls nobody has made: whether an agent
+  should see a per-agent breakdown of their team (ADR 0010 open question 1), whether p50/p90
+  are the intended definition (risk 7), and the wall-clock question, which ADR 0006 raised
+  first for SLA windows and which should be answered once for both. A fourth is a defect
+  found while verifying and reported rather than fixed: `validation_failed` on these routes
+  says "The request body failed validation." on two routes that read only the query string.
+
+- **A tenant can put its own name, logo and colours on the product, and serve it from its own
+  web address** (TAR-29) — the white-label surface. `tenant_branding` and `tenant_domains`
+  now exist and are written; `PATCH /api/v1/tenant`, `PUT`/`DELETE /tenant/branding/{kind}`
+  and the five routes under `/tenant/domains` are the tenant-facing half, and
+  `GET /tenant/public` plus `GET /tenant/branding/{kind}` are the unauthenticated pair that
+  makes the **sign-in screen themeable before anybody has a session** — TAR-35's requirement,
+  and the reason a tenant identifier appears nowhere in any of these contracts. The console
+  gets two settings screens behind two permissions: `branding:write` for the editor, and a
+  separate `domain:write` for hostnames, because DNS control decides where every invitation
+  and password-reset link in the tenant is addressed and choosing a colour does not. Both are
+  admin-only today. ⚠️ `settings/workspace` still carries its pre-TAR-418 notice — "The
+  branding editor … arrives with the white-labelling work" (`BrandingSummary.tsx`,
+  `workspace.brandingPendingNotice`) — and so does the onboarding checklist's
+  `unavailableNotice`. The editor exists now, on its own **Branding** screen; both notices
+  describe a gap that has closed and are copy left for a follow-up.
+  Four decisions are worth reading before building on this. **The tenant is the host and is
+  never in the request** — every route above is the same URL for every tenant, so the two
+  public ones send `Vary: x-edge-host` and any cache in front of them that keys on the URL
+  alone is a direct cross-tenant leak, which is the highest-severity mistake this feature
+  makes available. **Branding defaults live in `@whatsappcrm/contracts`, not as column
+  defaults**, so the response is always fully populated and "has this tenant customised
+  anything" stays answerable. **Uploads are sniffed, never trusted**: the declared
+  `Content-Type` is not consulted, the sniffed value is what the serve route later sets, and
+  `image/svg+xml` is refused outright rather than sanitised — an SVG served same-origin
+  executes script, and a sanitiser is a security dependency to own forever. And **a domain's
+  status is derived from its timestamps rather than stored**, because a stored status
+  disagrees with its own columns after one failed write.
+  Isolation rests on two things the integration suite asserts against a real database rather
+  than on either alone: `hostname citext UNIQUE` is global and enforced **below** row-level
+  security, so the loser of a race for one hostname gets `conflict` and cannot read, or learn
+  anything about, the holder; and a verified-but-unattached domain receives no traffic while
+  an attached-but-unverified one answers `tenant_not_found` on every route — two halves held
+  by different parties, neither able to forge the other.
+  The cost is a wait, and it is the honest headline. **`verified` and `live` are separate
+  states because attaching a hostname at the edge is a manual operator step**: the platform
+  proves ownership automatically, then the domain sits on `GET /api/v1/admin/domains` until
+  somebody attaches it and posts the activate route. Promoting a verified-but-unattached
+  domain to primary is refused for that reason — the mail would send and nobody could accept
+  an invitation. There is also a hosting cost: **Render bills the platform per custom domain**
+  beyond the web service's own allowance, which grows linearly with exactly the customers this
+  is sold to. Nothing meters it per tenant — `custom_domain` is a boolean plan feature and the
+  only ceiling is the flat `MAX_CUSTOM_DOMAINS_PER_TENANT`. Documented in
+  [the custom domains runbook](docs/runbooks/custom-domains.md),
+  [the API reference](docs/reference/branding-domains-api.md) and the two admin guides
+  ([branding](docs/guides/brand-your-workspace.md),
+  [custom domains](docs/guides/set-up-a-custom-domain.md)).
+  ⚠️ Four things shipped knowingly incomplete, each named rather than left to be discovered.
+  **Apex domains are refused** — a root domain cannot take the `CNAME` the routing record
+  hands back — and the check counts labels rather than consulting a Public Suffix List, so
+  `acme.co.uk` is accepted and will never route; raised against TAR-416. **TAR-416's second
+  verification throttle, 20 checks per hour per tenant, is not built**: it needs a shared
+  sliding-window counter, and the durable 10-second per-domain floor is the only control
+  today. **Periodic re-verification is deliberately absent** — a tenant that repoints DNS
+  after verification leaves a stale verified row, which is better than letting one DNS blip
+  un-verify a live domain. And **the activation queue has no alerting**: "verified more than
+  24 hours ago with no activation" is the failure mode this feature actually has, and it is a
+  daily digest somebody has to build.
 
 - **An admin can now define the tenant's custom contact fields, and the contract says what a
   value means** (TAR-33, TAR-476) — `custom_field_defs` has existed since the initial
@@ -1333,6 +1428,29 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
   incremental sort inside one millisecond. Recorded as ADR 0008 amendment 3.
 
 ### Fixed
+
+- **Detaching a tenant's primary custom domain no longer leaves invite and password-reset
+  links pointing at it** (TAR-534) — `AdminDomainsService.deactivate()` cleared
+  `activated_at` and left `is_primary` exactly where it was, so the state TAR-420 blocks on
+  _promotion_ — primary on a hostname the edge is not serving — was still reachable from the
+  operator side. An operator detaching a domain during a certificate failure or a migration
+  left every invite and reset mail addressed to a host with no route and no certificate, and
+  nothing failed visibly: the mail sends, and the tenant finds out when a customer cannot get
+  back into their account.
+  Deactivation now hands primary back to the platform subdomain in the same transaction,
+  mirroring what `remove()` already did, and names the new host on the deactivation audit row
+  so the trail explains why a tenant's links changed. The two writes are ordered — the old
+  primary is cleared by the same statement that clears `activated_at`, before the fallback is
+  set — because `tenant_domains_one_primary` is a unique index and would otherwise reject the
+  pair. A tenant with no platform subdomain to fall back to is left without a primary and
+  logged rather than refused: the hostname is gone from the edge either way, and that tenant
+  is a provisioning fault this path did not cause.
+  `TenantLinkService.primaryHostname()` gained the matching filter as a net under it — a
+  verified custom domain with no `activated_at` is now skipped in favour of the platform
+  subdomain, so any future path that clears the column cannot re-open this. The realtime
+  near-copy in `TenantHostnameService` skips it too, for the same reason and to keep the two
+  queries from disagreeing about the same rows. Nothing here changes which hosts _resolve_:
+  `HostTenantGuard` reads `verified_at`, and it is untouched.
 
 - **A ticket answered in time is no longer breached because a queue job did not survive Redis**
   (TAR-380) — the breach sweep claimed timers with `WHERE state = 'running'`, which reads as
