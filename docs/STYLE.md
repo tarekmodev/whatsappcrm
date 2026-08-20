@@ -54,6 +54,8 @@ losing branch had to renumber rather than resolve. New guides are named and plac
 instead. Two more (TAR-483) cover contacts: [Define the fields your contacts carry](guides/define-custom-contact-fields.md) for
 an admin, and [Find a contact and keep their record up to date](guides/find-and-update-contacts.md)
 for an agent.
+[Automate what happens to a ticket](guides/automate-tickets-with-workflows.md) (TAR-401) is for
+a supervisor.
 
 One subject splits into two guides when it splits into two permissions. Branding and custom
 domains sit on one settings area and read as one topic, but `branding:write` and
@@ -142,6 +144,11 @@ Fixed vocabulary. Use the left column; never rotate synonyms.
 | tag                              | label, category                           | A shared label on a contact. Never "custom field" — the two are different resources                                                                                                                   |
 | definition                       | field def, schema row, `custom_field_def` | One row of `custom_field_defs`. The **definition list** is `GET /api/v1/custom-fields`                                                                                                                |
 | vocabulary                       | dictionary, lookup set                    | A tenant's complete tag set or definition set, read whole rather than paged. Use it only for that                                                                                                     |
+| workflow                         | automation rule, recipe, macro            | One trigger, one condition set, one ordered action list (TAR-27). **Never "rule"** — that word is taken by a routing rule, and the two behave differently                                             |
+| routing rule                     | assignment rule, rule                     | Where a _new_ ticket goes, first match wins. `assignment_rules` is the table; the prose word is _routing rule_                                                                                        |
+| triggering occurrence            | trigger event, firing                     | The one thing a run is claimed against — a ticket event, an SLA timer, or the ticket itself                                                                                                           |
+| run                              | execution, invocation                     | One workflow's attempt at one triggering occurrence. "The run history" is the console's own word                                                                                                      |
+| dry run                          | simulation, preview                       | `POST /workflows/{id}/test`, which writes nothing. In `docs/guides/` say **Test**, the button's own label                                                                                             |
 
 Product entity names take their schema spelling in prose: `conversations`, `tickets`,
 `message_templates`. TypeScript identifiers take theirs: `MessageTemplate`,

@@ -12,6 +12,10 @@ triaging it by hand.
 Rules run **once, at the moment a ticket opens** — when a customer writes in and no ticket
 is already running for them. Rules never re-route a ticket somebody is already working on.
 
+To change a ticket that already exists — tag it, hand it on, escalate it or re-prioritise it
+after something happens to it — you want a workflow instead, on the **Workflows** page:
+[Automate what happens to a ticket](automate-tickets-with-workflows.md).
+
 ## Before you start
 
 - You are signed in to your workspace as a supervisor or an admin. Agents cannot see or
