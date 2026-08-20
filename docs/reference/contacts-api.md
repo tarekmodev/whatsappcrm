@@ -860,7 +860,7 @@ Two, both additive, and both discovered when the surface was first implemented:
 
 ## Verification
 
-Everything below was run on 2026-08-20, against `main` at `7926d2b` — with TAR-479 (#158),
+Everything below was run on 2026-08-20, against `main` at `1c0b98f` — with TAR-479 (#158),
 TAR-480 (#157) and TAR-530 (#165) all merged.
 
 - **Every status code, error code and isolation claim on this page**:
