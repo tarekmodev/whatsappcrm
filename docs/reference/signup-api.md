@@ -332,13 +332,13 @@ endpoint without ever succeeding. Postgres counts **rows created**.
 `POST /signup/resend` is bounded on both layers too, but they bound different things and the
 numbers differ — the table's value is the Postgres half only:
 
-| Layer                                            | Bounds                       | Ceiling                                        |
-| ------------------------------------------------ | ---------------------------- | ---------------------------------------------- |
-| Redis `signup:resend:<hash(email)>`, 24 h        | Re-sends **per address**     | `resendsPerSignup × signupsPerEmailPerDay` = 9 |
-| Redis `signup:ip:<hash(ip)>`, 1 h                | Shared with `POST /signup`   | `signupsPerIpPerHour` = 5                      |
-| Postgres `tenant_signups.resend_count`           | Re-sends **per signup**      | `resendsPerSignup` = 3                         |
+| Layer                                     | Bounds                     | Ceiling                                        |
+| ----------------------------------------- | -------------------------- | ---------------------------------------------- |
+| Redis `signup:resend:<hash(email)>`, 24 h | Re-sends **per address**   | `resendsPerSignup × signupsPerEmailPerDay` = 9 |
+| Redis `signup:ip:<hash(ip)>`, 1 h         | Shared with `POST /signup` | `signupsPerIpPerHour` = 5                      |
+| Postgres `tenant_signups.resend_count`    | Re-sends **per signup**    | `resendsPerSignup` = 3                         |
 
-The per-address window is deliberately the *total* rather than the per-signup ceiling: an address
+The per-address window is deliberately the _total_ rather than the per-signup ceiling: an address
 may hold `signupsPerEmailPerDay` signups and re-send each of them, so anything tighter would
 refuse a legitimate resend for a second signup and — worse — would fire before `resend_count` ever
 bound anything, leaving the durable ceiling unreachable whenever Redis was up.

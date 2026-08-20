@@ -580,7 +580,7 @@ deleted`, with `pending` renamed to `created` (catalogue-only, no table rewrite)
   gate and still refuses `suspended`. That is narrower than it sounds and the difference matters:
   a suspended tenant's inbound message is still **accepted** — Meta gets its `200` and the payload
   is stored in `webhook_events` through `SystemPrisma`, before any tenant is resolved. What the
-  gate refuses is the *projection* into `conversations` and `messages`, which runs under
+  gate refuses is the _projection_ into `conversations` and `messages`, which runs under
   `TenantPrisma`; the processor catches `TenantNotActiveError` by name and parks the event with
   its payload intact rather than failing it. So nothing is bounced and nothing is lost — but a
   parked row is deliberately not claimable, so **a reactivated tenant does not get those messages

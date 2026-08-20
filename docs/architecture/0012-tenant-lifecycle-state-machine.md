@@ -3,7 +3,7 @@
 Status: reference companion to
 [0009 — tenant lifecycle, self-signup and the retention contract](./0009-tenant-lifecycle-and-self-signup.md)
 · **Decides nothing.** 0009 is the design authority and every "why" lives there · As built on
-`main` at `904a5d1`, 16 August 2026
+`main` at `1c0b98f`, 20 August 2026
 
 Written for engineers. 0009 is 1 184 lines and answers "why is it this shape"; this page answers
 the two questions a reader has when they arrive at the code — **what are the states and the
@@ -150,7 +150,7 @@ right now".** Neither carries a copy of the other's policy.
 | ---------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------- |
 | `public.assert_tenant_active(text)`      | `trialing`, `active`, `past_due`                                  | **The live gate.** Every `TenantPrisma` statement |
 | `public.assert_tenant_serviceable(text)` | + `suspended`, `cancelled`                                        | Exists, has no callers                            |
-| `TenantStatusGuard` (pipeline stage 4)   | Per status × role, with an `@AvailableWhileSuspended()` allowlist | Does not exist                                    |
+| `TenantStatusGuard` (pipeline stage 4)   | Per status × role, with an `@AvailableWhileSuspended()` allowlist | Does not exist — TAR-538                          |
 
 The consequence of only the first one being wired is worth stating plainly, because it is the
 opposite of the shipped design and it is what a reader will observe:
@@ -174,16 +174,17 @@ Nothing is bounced and nothing is lost, and it is worth walking the path because
 `suspended`" is only true of one hop in it.
 
 1. **Meta gets its `200`.** `WebhookIngestService` verifies the signature, stores the payload and
-   answers, *then* enqueues — in that order, so a queue outage cannot turn into permanent message
+   answers, _then_ enqueues — in that order, so a queue outage cannot turn into permanent message
    loss.
 2. **The payload is durable before any tenant is known.** `webhook_events` is written through
    `SystemPrisma`; it carries no `tenant_isolation` policy and passes no gate.
 3. **Only the projection is gated.** `WhatsAppInboundWriter` writes `conversations` and
    `messages` through `TenantPrisma`, so that is where `TN001` is raised for a suspended tenant.
-4. **The event is parked, not failed.** `whatsapp-event.processor.ts` catches
-   `TenantNotActiveError` by name and parks the row `failed` with reason `tenantNotActive`,
-   keeping the raw payload — "parking keeps the message replayable if the tenant comes back, and
-   stops the retry budget being spent on a refusal that will not change".
+4. **The event is parked, not dropped.** `whatsapp-event.processor.ts` catches
+   `TenantNotActiveError` by name and parks the row — status `failed`, which is this pipeline's
+   word for "will not succeed as it stands", not for "discarded" — with reason `tenantNotActive`
+   and the raw payload intact. Its own comment: "parking keeps the message replayable if the
+   tenant comes back, and stops the retry budget being spent on a refusal that will not change".
 
 So the customer's message is received, acknowledged and retained; what a suspended tenant loses is
 the projection into its inbox, not the message.
@@ -211,7 +212,11 @@ rather than the engine.
 
 - `TenantLifecycleService` — the single writer of `tenants.status`, its `lifecycle_events` row
   and its notification enqueue.
-- `TenantStatusGuard` at pipeline stage 4, and the `@AvailableWhileSuspended()` decorator.
+- `TenantStatusGuard` at pipeline stage 4, and the `@AvailableWhileSuspended()` decorator —
+  TAR-538. TAR-539 has since built the net beneath it: `AllExceptionsFilter` answers
+  `subscription_inactive` (402) for a `TenantNotActiveError` that reaches HTTP without a
+  translator, so a suspended tenant gets a clean refusal rather than a 500 naming the data layer.
+  That is a fallback for what a guard cannot see, not the guard.
 - The five-minute lifecycle sweep over `grace_period_ends_at` and `purge_at`.
 - The batched, resumable purge, and `purge_started_at`'s writer.
 - Eight of the nine notification templates, and the `tenant.notify` job.

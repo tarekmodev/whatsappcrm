@@ -286,19 +286,26 @@ Pointed at the real API with the flag off, both screens fail: the routes they ca
 | Code                    | Status | Raised when                                                                    |
 | ----------------------- | ------ | ------------------------------------------------------------------------------ |
 | `plan_limit_exceeded`   | 402    | A seat or conversation cap has no room for the write. Carries limit, cap, used |
-| `subscription_inactive` | 402    | Login against a tenant the database gate refuses. The only producer on `main`  |
+| `subscription_inactive` | 402    | The tenant in scope is not serviceable — anywhere, not only at login           |
 | `conflict`              | 409    | A slug is taken, at provisioning or at signup                                  |
 | `not_found`             | 404    | An operator named a slug no tenant carries; or signup is disabled              |
 
-`subscription_inactive` has exactly one call site today: `identity.http.ts` maps
-`TenantNotActiveError` onto it, so a member of a `suspended`, `cancelled`, `created` or `deleted`
-tenant is refused at login. When `TenantStatusGuard` lands it becomes the guard's answer too, for
-every route outside the recovery allowlist.
+`subscription_inactive` is the single published answer for `TenantNotActiveError`, wherever it is
+raised (TAR-539). Ten per-domain translators throw `tenantInactive()` from
+`apps/api/src/common/errors/tenant-inactive.ts`, and `AllExceptionsFilter` answers the same thing
+for anything that reaches HTTP without a translator — a guard, an interceptor, a tenant suspended
+mid-request. So a member of a `suspended`, `cancelled`, `created` or `deleted` tenant gets `402`
+and one fixed message on every tenant-scoped route, not just at login.
 
-`TenantNotActiveError` reaching a handler that does not map it reports as `forbidden`. It is
-deliberately outside the `TenantPrismaError` family — a filter that reported it as
-`internal_error` would page somebody every time an operator deactivated a tenant with a session
-still open. See [the tenant isolation contract](tenancy.md#errors).
+**Never put the error's own message in a response body.** It is written for an engineer reading a
+log and names `TenantPrisma`, the failing model and the tenant's UUID; the caller who would see it
+is by definition one who has just been locked out. `tenantInactive()` is the helper that gets this
+right, and the filter logs the thrown error under the same `requestId` the caller was shown.
+
+When `TenantStatusGuard` lands (TAR-538) it answers the same code at pipeline stage 4, for every
+route outside the recovery allowlist. That is deliberate: the guard refuses at the edge, this
+catches whatever reached the data layer first, and both say the same thing. See
+[the tenant isolation contract](tenancy.md#errors).
 
 ## Open questions this page inherits
 

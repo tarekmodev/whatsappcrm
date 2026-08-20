@@ -152,7 +152,7 @@ Your agents sign in and find their conversations, tickets and contacts where the
 
 Settle whatever caused the suspension — usually an outstanding payment — and access is restored.
 
-> ⚠️ **Messages sent to you *during* the suspension do not appear by themselves.** They were kept,
+> ⚠️ **Messages sent to you _during_ the suspension do not appear by themselves.** They were kept,
 > not lost, but putting them into your inbox is a manual step someone on the platform team has to
 > run. Ask for it when you ask for the workspace to be reactivated, and tell your team to expect a
 > gap in the thread until it is done.

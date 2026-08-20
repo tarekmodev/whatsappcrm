@@ -73,9 +73,9 @@ the one that produced it.
 | [Data model reference](docs/reference/data-model.md)                                         | Every entity, which are tenant-scoped, which constraints and indexes matter        |
 | [Tenant isolation contract](docs/reference/tenancy.md)                                       | Which Prisma client to inject, and what the database refuses                       |
 | [Platform admin API](docs/reference/admin-api.md)                                            | Provisioning and deactivation: request, response, errors, retention                |
-| [Tenant lifecycle state machine](docs/architecture/0012-tenant-lifecycle-state-machine.md) | The seven states, every edge and its trigger, and which of them is built |
-| [Tenant lifecycle reference](docs/reference/tenant-lifecycle.md) | Starting states, plan entitlements and where they are enforced, the trail |
-| [Public signup API](docs/reference/signup-api.md) | The four unauthenticated routes: verification, slug reservation, rate limits |
+| [Tenant lifecycle state machine](docs/architecture/0012-tenant-lifecycle-state-machine.md)   | The seven states, every edge and its trigger, and which of them is built           |
+| [Tenant lifecycle reference](docs/reference/tenant-lifecycle.md)                             | Starting states, plan entitlements and where they are enforced, the trail          |
+| [Public signup API](docs/reference/signup-api.md)                                            | The four unauthenticated routes: verification, slug reservation, rate limits       |
 | [People and teams API](docs/reference/people-api.md)                                         | Managing agents, teams and roles: permissions, invariants, isolation               |
 | [Tickets API](docs/reference/tickets-api.md)                                                 | The queue, the status/priority write, handoff and escalation, the event log        |
 | [Assignment rules API](docs/reference/assignment-rules-api.md)                               | Routing-rule CRUD, the condition grammar, and how a new ticket is routed           |
