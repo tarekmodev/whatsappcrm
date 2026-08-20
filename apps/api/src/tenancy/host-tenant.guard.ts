@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
-import { EDGE_AUTH_HEADER, TENANT_HOST_HEADER } from '@whatsappcrm/contracts';
+import { EDGE_AUTH_HEADER, TENANT_HOST_HEADER, type TenantStatus } from '@whatsappcrm/contracts';
 import type { Request } from 'express';
 import { ApiException } from '../common/errors/api.exception';
 import { isPlatformRoute } from '../common/request-pipeline/route-access';
@@ -31,6 +31,18 @@ const PORT_SUFFIX = /:\d+$/;
  * throttled rather than written per request.
  */
 const REFUSAL_LOG_INTERVAL_MS = 60_000;
+
+/**
+ * The two statuses ADR 0009's stage-4 table marks "unreachable:
+ * `HostTenantGuard` answers `tenant_not_found` first".
+ *
+ * Stated here rather than left to `TenantStatusGuard` because both are about
+ * whether there is anything at this address at all, which is this guard's
+ * question — and because a `deleted` tenant must not be distinguishable from one
+ * that never existed. Everything else about who may do what in a given state is
+ * stage 4's, and this list deliberately holds no other value.
+ */
+const UNREACHABLE_STATUSES: readonly TenantStatus[] = ['created', 'deleted'];
 
 /**
  * Resolves **which tenant** a request is for, from the host it arrived on, and
@@ -180,16 +192,33 @@ export class HostTenantGuard implements CanActivate, OnModuleInit {
 
     const domain = await this.systemPrisma.tenantDomain.findFirst({
       where: { hostname, verifiedAt: { not: null } },
-      select: { tenantId: true },
+      // The status comes back on the same lookup rather than on a second one
+      // `TenantStatusGuard` would otherwise have to make per request: this row is
+      // already being read, and `tenant_domains.tenant_id` is a foreign key, so
+      // the join is an index lookup on the primary key.
+      select: { tenantId: true, tenant: { select: { status: true } } },
     });
 
     if (domain === null) {
       throw tenantNotFound();
     }
 
+    if (UNREACHABLE_STATUSES.includes(domain.tenant.status)) {
+      // ADR 0009's guard table marks `created` and `deleted` unreachable and
+      // says why: a tenant mid-provision has no rows to serve, and a purged one
+      // keeps its `tenants` row only as a slug tombstone. `tenant_not_found`
+      // rather than `subscription_inactive`, because from the caller's side
+      // there is nothing there — and because the alternative would confirm that
+      // a purged tenant once existed at this address.
+      throw tenantNotFound();
+    }
+
     // Only the tenant. The user is `PrincipalGuard`'s to add — this guard has
     // established where the request is, not who is making it.
     this.tenantContext.setTenant(domain.tenantId);
+    // And what state it is in, for `TenantStatusGuard` at stage 4. Published
+    // here because this is the read that already had the row.
+    this.tenantContext.setTenantStatus(domain.tenant.status);
     // And *where* that is, for the responses that have to name this origin back
     // to the caller. Written here because this is the one place the forwarded-
     // host trust rule is implemented, and a second reader of those headers is

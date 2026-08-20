@@ -159,6 +159,28 @@ const envShape = z.object({
     .default(15 * 60_000),
 
   /**
+   * How often the tenant-lifecycle sweep runs (TAR-404, ADR 0009 decision 4).
+   *
+   * Five minutes, which is the interval the ADR names. It is the upper bound on
+   * how late a timer fires, and every window it watches is measured in days — so
+   * the value is chosen for the cost of the pass rather than for its precision:
+   * two indexed scans over `tenants` and one over `lifecycle_events`, whether or
+   * not anything is due.
+   *
+   * It is also the notification backstop's latency. A transition committed while
+   * Redis was unavailable is re-enqueued on the next pass, so this is how long a
+   * tenant can be suspended without being told.
+   *
+   * Configurable mainly so a test environment can make an expiry observable in
+   * seconds rather than waiting out a real interval.
+   */
+  LIFECYCLE_SWEEP_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .default(5 * 60_000),
+
+  /**
    * Upper bound on one DNS lookup during ownership verification.
    *
    * Every outbound call has one, and this one sits on a request path a tenant is

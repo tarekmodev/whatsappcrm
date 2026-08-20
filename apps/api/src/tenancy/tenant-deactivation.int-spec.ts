@@ -1,8 +1,10 @@
+import type { ConfigService } from '@nestjs/config';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { TenantNotActiveError } from '../prisma/prisma.errors';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
+import { QueueService } from '../queue/queue.service';
 import {
   TenantDeactivationService,
   TENANT_DEACTIVATED_ACTION,
@@ -10,16 +12,40 @@ import {
 
 /**
  * TAR-19's third acceptance criterion, against a real PostgreSQL with TAR-48's
- * policies and TAR-51's `assert_tenant_active` applied:
+ * policies and ADR 0009's `assert_tenant_serviceable` applied:
  *
- *   * a deactivated tenant's agents reach **nothing** — reads, writes, raw SQL
- *     and transactions all refused, on the next statement after the
- *     deactivation commits;
  *   * its data is **retained**, visible through `SystemPrisma` throughout and
  *     readable again in full the moment the tenant is active again;
  *   * **its neighbour is unaffected** — the regression the criterion asks for.
  *
- * None of that is assertable without a database: the block is a function the
+ * ## What changed at TAR-404, and why this file's expectations moved
+ *
+ * Until TAR-404 this file asserted that a deactivated tenant reached **nothing**
+ * through `TenantPrisma`: `assert_tenant_active` refused every status but
+ * `active`, so a read, a write, raw SQL and a transaction were all refused at
+ * the data layer.
+ *
+ * ADR 0009 decision 2 splits that in two, and the split is the point rather than
+ * a relaxation. The database gate answers "does this tenant's data exist and is
+ * it intact", so it now admits `suspended` — because **inbound WhatsApp messages
+ * must still be received and stored for a suspended tenant** (TAR-36's fourth
+ * acceptance criterion), and that path writes `conversations` and `messages`
+ * through this very client. Refusing there would have forced the
+ * highest-volume write in the product onto the unscoped client.
+ *
+ * Who may *reach the API* is `TenantStatusGuard`'s question, at request pipeline
+ * stage 4, and it is default-deny with a four-route recovery allowlist. So the
+ * lockout TAR-19 asked for still holds — it is asserted in
+ * `tenant-status.guard.spec.ts` and end to end in
+ * `request-pipeline.http.spec.ts`, at the layer that knows which principal is
+ * asking.
+ *
+ * What this file still proves at the data layer is the half that is genuinely
+ * the database's: `created` and `deleted` are refused, an unknown id is refused,
+ * a malformed id is a refusal rather than a fault, and no tenant's rows leak
+ * into another's in any of those states.
+ *
+ * None of that is assertable without a database: the gate is a function the
  * policies' GUC passes through, and a mock would prove only that this file
  * agrees with itself.
  *
@@ -81,7 +107,17 @@ describe('tenant deactivation, end to end', () => {
     systemPrisma = createPrismaClient('system', requireEnv('SYSTEM_DATABASE_URL'));
     tenantBase = createPrismaClient('tenant', requireEnv('APP_DATABASE_URL'));
     tenantPrisma = withTenantScope(tenantBase, tenantContext);
-    deactivation = new TenantDeactivationService(systemPrisma, tenantContext);
+    // No `REDIS_URL`, so every `enqueue` answers `unavailable` and nothing is
+    // notified. That is a supported state rather than a stub: the transition
+    // still commits, `lifecycle_events.notified_at` stays null, and the sweep is
+    // the backstop — which is exactly what this file wants, since it is
+    // asserting what deactivation *writes* and not what it emails.
+    const queue = new QueueService(
+      { get: () => undefined } as unknown as ConfigService,
+      tenantContext,
+    );
+
+    deactivation = new TenantDeactivationService(systemPrisma, tenantContext, queue);
 
     await removeFixture();
 
@@ -188,66 +224,69 @@ describe('tenant deactivation, end to end', () => {
     });
   });
 
-  describe('the deactivated tenant reaches nothing', () => {
-    it('refuses a read', async () => {
-      await asTenant(DEACTIVATED_ID, async () => {
+  describe('the suspended tenant keeps its data layer, so inbound traffic still lands', () => {
+    /**
+     * TAR-36's fourth acceptance criterion, and the reason
+     * `assert_tenant_serviceable` exists: refusing Meta's webhook makes Meta
+     * retry and then drop a real customer's message. The ingest path writes
+     * through this client under row-level security, so this write succeeding is
+     * what makes `TENANT_STATUS_EFFECTS.suspended.inboundAccepted: true`
+     * implementable at all.
+     */
+    it('accepts a write for a suspended tenant, and scopes it to that tenant', async () => {
+      const created = await asTenant(DEACTIVATED_ID, () =>
+        tenantPrisma.contact.create({
+          data: { tenantId: DEACTIVATED_ID, phoneE164: '+10000005199' },
+          select: { id: true, tenantId: true },
+        }),
+      );
+
+      expect(created.tenantId).toBe(DEACTIVATED_ID);
+
+      await asTenant(DEACTIVATED_ID, () =>
+        tenantPrisma.contact.delete({ where: { id: created.id } }),
+      );
+    });
+
+    it('still sees only its own rows', async () => {
+      const rows = await asTenant(DEACTIVATED_ID, () =>
+        tenantPrisma.contact.findMany({ select: { id: true } }),
+      );
+
+      expect(rows).toEqual([{ id: CONTACT_OF.deactivated }]);
+    });
+
+    it('refuses a tenant that never finished provisioning', async () => {
+      // After ADR 0009 the gate refuses exactly two statuses, and this is one of
+      // them: provisioning has not finished, so the tenant's settings, domain
+      // and policies may not exist yet.
+      await asTenant(PENDING_ID, async () => {
         await expect(tenantPrisma.contact.findMany()).rejects.toBeInstanceOf(TenantNotActiveError);
       });
     });
 
-    it('refuses a write', async () => {
-      await asTenant(DEACTIVATED_ID, async () => {
-        await expect(
-          tenantPrisma.contact.create({
-            data: { tenantId: DEACTIVATED_ID, phoneE164: '+10000005199' },
-          }),
-        ).rejects.toBeInstanceOf(TenantNotActiveError);
+    it('refuses a purged tenant, which is a tombstone rather than a workspace', async () => {
+      await systemPrisma.tenant.update({
+        where: { id: PENDING_ID },
+        data: { status: 'deleted', deletedAt: new Date() },
       });
 
-      const planted = await systemPrisma.contact.findMany({
-        where: { phoneE164: '+10000005199' },
-        select: { id: true },
+      await asTenant(PENDING_ID, async () => {
+        await expect(tenantPrisma.contact.findMany()).rejects.toBeInstanceOf(TenantNotActiveError);
       });
-      expect(planted).toHaveLength(0);
-    });
 
-    it('refuses raw SQL, which no argument-rewriting extension could reach', async () => {
-      await asTenant(DEACTIVATED_ID, async () => {
-        await expect(tenantPrisma.$queryRaw`SELECT count(*) FROM contacts`).rejects.toBeInstanceOf(
-          TenantNotActiveError,
-        );
-      });
-    });
-
-    it('refuses a transaction, and every statement inside it', async () => {
-      await asTenant(DEACTIVATED_ID, async () => {
-        await expect(
-          tenantPrisma.$tenantTransaction(async (tx) => tx.contact.findMany()),
-        ).rejects.toBeInstanceOf(TenantNotActiveError);
-      });
-    });
-
-    it('cannot even read its own tenant record', async () => {
-      await asTenant(DEACTIVATED_ID, async () => {
-        await expect(tenantPrisma.tenant.findMany()).rejects.toBeInstanceOf(TenantNotActiveError);
+      await systemPrisma.tenant.update({
+        where: { id: PENDING_ID },
+        data: { status: 'created', deletedAt: null },
       });
     });
 
     it('names the tenant it refused, so the log line locates it', async () => {
-      const error = await asTenant(DEACTIVATED_ID, () =>
+      const error = await asTenant(PENDING_ID, () =>
         tenantPrisma.contact.findMany().catch((e: unknown) => e),
       );
 
-      expect((error as TenantNotActiveError).tenantId).toBe(DEACTIVATED_ID);
-    });
-
-    it('refuses a tenant that never finished provisioning, for the same reason', async () => {
-      // The gate admits `active`, `trialing` and `past_due` (TAR-403) and
-      // nothing else, so a half-provisioned `created` tenant is closed by the
-      // same mechanism rather than by a second rule.
-      await asTenant(PENDING_ID, async () => {
-        await expect(tenantPrisma.contact.findMany()).rejects.toBeInstanceOf(TenantNotActiveError);
-      });
+      expect((error as TenantNotActiveError).tenantId).toBe(PENDING_ID);
     });
 
     it('refuses a tenant id that never existed, telling the caller nothing', async () => {
@@ -258,9 +297,9 @@ describe('tenant deactivation, end to end', () => {
 
     it('refuses an id that is not a uuid as a refusal, not a fault', async () => {
       // `TenantContextService` takes any string, so a malformed id can reach the
-      // gate once TAR-35 is resolving sessions. Before the shape check it hit
-      // the `::uuid` cast and surfaced as SQLSTATE 22P02 — fail-closed either
-      // way, but reported to the caller as a 500 rather than the 403 it is.
+      // gate. Before the shape check it hit the `::uuid` cast and surfaced as
+      // SQLSTATE 22P02 — fail-closed either way, but reported to the caller as a
+      // 500 rather than the 403 it is.
       await asTenant('not-a-uuid', async () => {
         await expect(tenantPrisma.contact.findMany()).rejects.toBeInstanceOf(TenantNotActiveError);
       });
@@ -284,20 +323,31 @@ describe('tenant deactivation, end to end', () => {
       expect(contacts).toEqual([{ id: CONTACT_OF.deactivated }]);
     });
 
-    it('gives it all back the moment the tenant is active again', async () => {
-      // Deactivation hides data; it does not destroy it. Reactivation is
-      // TAR-36's flow, so the status is put back here the way that flow will —
-      // and the point of the assertion is that nothing else had to happen for
+    it('starts the retention clock rather than deleting anything', async () => {
+      // The one thing deactivation now writes beyond the status: `purge_at`,
+      // 30 days out, which is the only timer that can ever destroy data. Nothing
+      // reads it until the sweep, and the sweep only queues a purge once it has
+      // elapsed.
+      const tenant = await systemPrisma.tenant.findUniqueOrThrow({
+        where: { id: DEACTIVATED_ID },
+        select: { purgeAt: true, deletedAt: true },
+      });
+
+      expect(tenant.purgeAt).toBeInstanceOf(Date);
+      expect(tenant.deletedAt).toBeNull();
+      expect(tenant.purgeAt?.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('gives it all back the moment the tenant is active again, with no re-provisioning', async () => {
+      // TAR-36's third acceptance criterion. Deactivation hides data behind a
+      // status; it does not destroy it, and reactivation is one column write
+      // away — the point of the assertion is that nothing else had to happen for
       // the rows to be reachable again.
       await deactivation.deactivate({ slug: `${FIXTURE_PREFIX}-restored` });
 
-      await asTenant(RESTORED_ID, async () => {
-        await expect(tenantPrisma.contact.findMany()).rejects.toBeInstanceOf(TenantNotActiveError);
-      });
-
       await systemPrisma.tenant.update({
         where: { id: RESTORED_ID },
-        data: { status: 'active', suspendedAt: null },
+        data: { status: 'active', purgeAt: null },
       });
 
       const restored = await asTenant(RESTORED_ID, () =>
@@ -347,13 +397,15 @@ describe('tenant deactivation, end to end', () => {
     });
 
     it('is not reachable from the deactivated tenant either', async () => {
-      // The neighbour's rows do not become visible to a tenant that has lost
-      // its own: the refusal is before the GUC, so nothing is in scope at all.
-      await asTenant(DEACTIVATED_ID, async () => {
-        await expect(
-          tenantPrisma.contact.findUnique({ where: { id: CONTACT_OF.neighbour } }),
-        ).rejects.toBeInstanceOf(TenantNotActiveError);
-      });
+      // The suspended tenant's own rows are reachable again after ADR 0009, so
+      // this is the assertion that actually matters now: row-level security is
+      // what confines it, not the gate. A neighbour's row answers `null` — the
+      // same answer an id belonging to nobody gets.
+      const found = await asTenant(DEACTIVATED_ID, () =>
+        tenantPrisma.contact.findUnique({ where: { id: CONTACT_OF.neighbour } }),
+      );
+
+      expect(found).toBeNull();
 
       const survivor = await systemPrisma.contact.findUniqueOrThrow({
         where: { id: CONTACT_OF.neighbour },

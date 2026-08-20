@@ -727,6 +727,27 @@ model Tenant {
   /// directions. It is a CHECK, so it lives in the migration rather than here.
   deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(3)
 
+  /// When the `trial_ending` reminder was sent for the trial currently running
+  /// (TAR-404, ADR 0009 decision 7). **NULL means one is owed** once
+  /// `trial_ends_at` comes within `trialEndingReminderDays`.
+  ///
+  /// A column rather than a `lifecycle_events` stamp because this notification
+  /// is a *timer, not a transition*: nothing changes state when it fires, so
+  /// there is no event row to hang it off —
+  /// `lifecycle_events_transition_changes_state` refuses one whose two states
+  /// are equal. The sweep runs every five minutes over a window measured in
+  /// days, so without somewhere to record the send it would email the same
+  /// tenant on every pass.
+  ///
+  /// Forward-looking state, not history: cleared by any transition that leaves
+  /// `trialing`, in the same statement that clears `trial_ends_at`, so a tenant
+  /// that starts a second trial is reminded about it.
+  trialEndingNotifiedAt      DateTime? @map("trial_ending_notified_at") @db.Timestamptz(3)
+  /// The same mechanism for `deletion_reminder`, which fires at `purge_at` minus
+  /// `deletionReminderDays`. Cleared by any transition that leaves `suspended`,
+  /// so a re-suspension re-arms it.
+  deletionReminderNotifiedAt DateTime? @map("deletion_reminder_notified_at") @db.Timestamptz(3)
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 

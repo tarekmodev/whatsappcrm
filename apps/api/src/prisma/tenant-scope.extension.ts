@@ -15,13 +15,26 @@ import {
 export const TENANT_GUC = 'app.tenant_id';
 
 /**
- * How that refusal is recognised on the way back. The function raises SQLSTATE
- * `TN001` with `TENANT_NOT_ACTIVE` in the message; both are checked, because
- * Prisma surfaces a driver error's code and its message in different places
- * depending on which path it took, and either one alone identifies it.
+ * How that refusal is recognised on the way back. The gate raises SQLSTATE
+ * `TN001` with a marker in the message; both are checked, because Prisma
+ * surfaces a driver error's code and its message in different places depending
+ * on which path it took, and either one alone identifies it.
+ *
+ * **Two markers, deliberately.** `assert_tenant_serviceable` says
+ * `TENANT_NOT_SERVICEABLE`; `assert_tenant_active`, which it replaced and which
+ * is still in the database until the contract migration drops it, says
+ * `TENANT_NOT_ACTIVE`. Keeping both means a rollback of the application to a
+ * build that still calls the old function is recognised by the new one, which is
+ * the whole point of shipping the rename as expand → migrate → contract.
+ *
+ * The error class and its `kind` discriminator keep the older name —
+ * `TenantNotActiveError`, `TENANT_NOT_ACTIVE_ERROR` — because renaming them
+ * would touch `identity.http.ts`, `prisma.errors.ts` and their tests for no
+ * behavioural gain. The meaning is unchanged: an operator or a timer did this,
+ * it is not a bug, and it reports as `subscription_inactive`.
  */
 const TENANT_NOT_ACTIVE_SQLSTATE = 'TN001';
-const TENANT_NOT_ACTIVE_MARKER = 'TENANT_NOT_ACTIVE';
+const TENANT_NOT_ACTIVE_MARKERS = ['TENANT_NOT_SERVICEABLE', 'TENANT_NOT_ACTIVE'] as const;
 
 /**
  * How each model is reachable through `TenantPrisma`.
@@ -224,11 +237,28 @@ export type TenantPrisma = ReturnType<typeof withTenantScope>;
  * The one statement that puts a tenant in scope, so the GUC name and the
  * deactivation gate are written once rather than once per call path.
  *
- * `assert_tenant_active` is TAR-51's gate
- * (`20260810150000_tenant_deactivation_guard`): it returns the tenant id when
- * that tenant is `active` and raises otherwise. Postgres evaluates it before
- * `set_config`, so a deactivated tenant never sets the GUC that TAR-48's
- * policies read and therefore matches no rows anywhere.
+ * `assert_tenant_serviceable` is the gate (ADR 0009 decision 2, migration
+ * `20260815170000_assert_tenant_serviceable` as amended by `20260815180000`):
+ * it returns the tenant id when that tenant's rows may be touched at all and
+ * raises otherwise. Postgres evaluates it before `set_config`, so a refused
+ * tenant never sets the GUC that TAR-48's policies read and therefore matches no
+ * rows anywhere.
+ *
+ * **It admits `trialing`, `active`, `past_due`, `suspended` and `cancelled`, and
+ * refuses `created` and `deleted` — nothing else.** That is narrower than it
+ * sounds, and the two states it refuses are the two where the question it
+ * answers has the answer "no": provisioning has not finished, or the data is
+ * gone. It replaced TAR-51's `assert_tenant_active`, which refused everything
+ * but `active`, for a reason worth restating here because this is the line that
+ * changed: **a suspended tenant's inbound WhatsApp messages must still be
+ * stored**, and the ingest path writes `conversations` and `messages` through
+ * this client. A gate that refused `suspended` would have forced the
+ * highest-volume write in the product onto the unscoped client.
+ *
+ * The consequence is that this is **not** the layer that decides who may reach
+ * the API. `TenantStatusGuard` at request pipeline stage 4 is, and it is
+ * default-deny. The two gates answer different questions and neither carries a
+ * copy of the other's policy.
  *
  * **Schema-qualified deliberately.** Unqualified, it resolves through the
  * connection's `search_path`, and a connection that does not have `public` on
@@ -252,7 +282,7 @@ function setTenantScope(
   client: Pick<Prisma.TransactionClient, '$executeRaw'>,
   tenantId: string,
 ): Prisma.PrismaPromise<number> {
-  return client.$executeRaw`SELECT set_config(${TENANT_GUC}, public.assert_tenant_active(${tenantId}), true)`;
+  return client.$executeRaw`SELECT set_config(${TENANT_GUC}, public.assert_tenant_serviceable(${tenantId}), true)`;
 }
 
 /**
@@ -275,7 +305,7 @@ function translateDeactivation(
 }
 
 /**
- * True when `error` came from `assert_tenant_active`.
+ * True when `error` came from the tenant gate.
  *
  * Prisma reports a driver failure in one of two shapes depending on how it
  * reached the database — `meta.message` on the engine path,
@@ -289,7 +319,8 @@ function isTenantNotActive(error: unknown): boolean {
   const haystack = describeDatabaseFailure(error);
 
   return (
-    haystack.includes(TENANT_NOT_ACTIVE_MARKER) || haystack.includes(TENANT_NOT_ACTIVE_SQLSTATE)
+    TENANT_NOT_ACTIVE_MARKERS.some((marker) => haystack.includes(marker)) ||
+    haystack.includes(TENANT_NOT_ACTIVE_SQLSTATE)
   );
 }
 
