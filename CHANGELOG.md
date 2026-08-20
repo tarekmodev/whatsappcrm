@@ -169,6 +169,71 @@ change.
 
 ### Added
 
+- **An agent can now hand on the ticket they are working, with a reason, and raise a
+  supervisor without losing it** (TAR-32, TAR-468, TAR-469, TAR-470, TAR-473) — TAR-32 asked
+  for two things a ticket could not do. Neither needed much new machinery, and
+  [ADR 0011](docs/architecture/0011-ticket-reassignment-and-escalation.md) is mostly a set of
+  rulings on what to reuse.
+  **The first was a genuine conflict with a shipped decision.** TAR-32 opens "as an agent",
+  and ADR 0004 grants `ticket:assign` to supervisor and above — so an agent could not move a
+  ticket at all. Widening `ticket:assign` was rejected: it would hand every agent the right to
+  take a ticket _off_ a colleague, which is exactly what ADR 0004 split `conversation:claim`
+  out of `conversation:assign` to prevent. Instead `POST /tickets/{id}/assign` now declares a
+  new **`ticket:handoff`, held by every role**, and the service applies the bound that
+  `ticket:assign` skips: you hold the ticket, the target is a teammate, and somebody still
+  holds it afterwards. Releasing a ticket to nobody is abandonment rather than a handoff and
+  stays supervisor-and-above. The cost is a route whose declared permission is weaker than one
+  of its behaviours — which is where authorization bugs live — so each of the three refusals is
+  asserted against a real database in `ticket-handoff.int-spec.ts` rather than assumed from a
+  comment.
+  **`reason` is now required, but only when the ticket already has a holder.** That asymmetry
+  is the design, not an oversight: a reassignment takes work away from somebody, and that is
+  the case where a ticket has a holder to take it from; a supervisor emptying the flagged queue
+  is placing work nobody held. Always requiring it would put a mandatory free-text field in
+  front of a bulk triage action and break a console already calling the route without one. The
+  rule is published as `ticketAssignRequiresReason` so the form and the API cannot drift, and
+  `reason` gained a trim and a three-character floor, because the empty string satisfied
+  "present" and logged nothing.
+  **Escalation is a signal, not a reassignment upward.** `POST /tickets/{id}/escalate` writes
+  an `escalated` event and notifies; the ticket does not change hands. An escalation that
+  un-assigned the agent would leave the customer with nobody at 02:14 while the supervisor
+  slept, and would make "escalate" the one button that loses your work. Recipients come from
+  `resolveAlertRecipients`, imported unchanged from the SLA module — a breach and an escalation
+  ask the same question, and two answers that drifted would reach different people.
+  **Nobody to notify is a success, not an error**: the event is written, `notifiedUserIds` comes
+  back empty, an operator warning names the ticket, and the console says "recorded, but nobody
+  was notified" rather than showing a green tick that would be a lie or an error the agent
+  cannot fix. Re-escalation is deliberately allowed — a second ask after silence is legitimate,
+  and suppression is magic — so the route takes an **optional `Idempotency-Key`**, the first
+  non-billing route in this API to do so.
+  `GET /tickets/{id}/events` ships alongside them, reserved since TAR-25 and the only reason
+  any of this is visible; it inherits the ticket's visibility rule exactly, so a ticket the
+  caller may not open is `not_found` there too rather than a side channel onto it. The
+  supervisor's `/escalation-alerts` list and acknowledge are narrowed to the calling principal
+  on top of row-level security, and another principal's alert answers `not_found` rather than
+  `forbidden`, because a 403 confirms the id names a real alert somebody else was sent.
+  **What it cost.** ADR 0011 decision 5 specified a parallel `escalation_alerts` table and named
+  the _third_ notification type as the trigger to generalise. TAR-394 reached that point first,
+  at the second type, so TAR-468 shipped escalation as `notifications.type = 'escalation'` and
+  the decision carries an amendment saying so. Nothing downstream noticed — the published
+  contract is ADR 0011's Interfaces section verbatim — but the ADR and the schema now disagree
+  unless you read the amendment, which is a tax on the next reader.
+  ⚠️ **`GET /escalation-alerts` has no console surface.** There is no escalation list, no bell
+  entry and no acknowledge control, and the console maps the `ticket.escalated` socket event to
+  `ignore`. A supervisor is notified in the durable sense the API guarantees — the row exists
+  and the list read returns it — but today they reach it through the API or by opening the
+  ticket's history. Its own story.
+  ⚠️ **A rule-routed ticket carries `assignedTeamId`, so the supervisor's flagged-queue
+  placement now asks for a reason too**, which ADR 0011 decision 1 reads as though it should
+  not. TAR-470 raised it with the architect; it is unresolved, and the docs describe what the
+  code does.
+  ⚠️ **No de-escalation and no "is escalated" state on a ticket.** `acknowledgedAt` on the alert
+  is the supervisor's half; nothing lists open escalations per ticket, and one raised in error
+  stays in the history. Escalations are not rate-limited, and alert retention is still unset —
+  to be settled with `sla_alerts` rather than given a second policy here.
+  Documented in [the tickets API reference](docs/reference/tickets-api.md) and, for agents, in
+  [Hand a ticket on, or ask a supervisor](docs/guides/hand-over-or-escalate-a-ticket.md).
+
 - **An admin can now define the tenant's custom contact fields, and the contract says what a
   value means** (TAR-33, TAR-476) — `custom_field_defs` has existed since the initial
   migration and `CustomFieldDefinitionSchema` has been published since TAR-39, but nothing

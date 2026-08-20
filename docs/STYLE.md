@@ -27,9 +27,10 @@ Nothing under `docs/reference/` targets a tenant user. Tenant-user documentation
 (TAR-295), once TAR-286 shipped a console surface worth describing;
 [Route new tickets to the right team](guides/route-new-tickets-with-rules.md) (TAR-292) is
 the second, [Clear tickets nobody could take](guides/clear-flagged-tickets.md) (TAR-277) the
-third and [Watch tickets that miss their deadline](guides/track-overdue-tickets.md) (TAR-287)
-the fourth. A guide for a tenant user names its reader in the first line and refers to every
-control by its **visible label**, taken from `apps/web/content/en.ts` rather than from a
+third, [Watch tickets that miss their deadline](guides/track-overdue-tickets.md) (TAR-287) the
+fourth and [Hand a ticket on, or ask a supervisor](guides/hand-over-or-escalate-a-ticket.md)
+(TAR-473) the fifth. A guide for a tenant user names its reader in the first line and refers to
+every control by its **visible label**, taken from `apps/web/content/en.ts` rather than from a
 component name.
 
 **A guide that documents a surface should link the reference for the same subject, and the
@@ -76,6 +77,8 @@ Fixed vocabulary. Use the left column; never rotate synonyms.
 | Term                             | Not                                      | Notes                                                                                                                                                              |
 | -------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | tenant                           | organisation, workspace, account, client | One customer business on the platform. **Except in `docs/guides/` written for a tenant user**, which says _workspace_ — the word the console itself uses on screen |
+| handoff                          | transfer, pass on, delegate              | Giving a ticket to somebody else. The console's own word; `ticket:handoff` is the permission                                                                       |
+| escalate                         | raise, flag, bump, elevate               | Asking a supervisor to look. **Never means the ticket changed hands** — it does not                                                                                |
 | platform operator                | admin, superadmin, us                    | Operates the platform; not a user inside any tenant                                                                                                                |
 | agent                            | user, rep, operator                      | A person working inside a tenant. Never means "AI agent"                                                                                                           |
 | provision                        | create, onboard, sign up                 | `POST /api/v1/admin/tenants`                                                                                                                                       |
