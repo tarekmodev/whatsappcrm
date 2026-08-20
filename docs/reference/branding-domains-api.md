@@ -716,7 +716,21 @@ one is how a domain gets attached to the wrong environment's data.
 
 ### `POST /api/v1/admin/tenants/{slug}/domains/{hostname}/deactivate`
 
-The inverse, once the hostname has been removed from the web service. Same statuses.
+The inverse, once the hostname has been removed from the web service. Same statuses, and
+idempotent in the same way.
+
+⚠️ **Deactivating the tenant's primary domain hands primary back to the platform subdomain**,
+in the same transaction (TAR-534). That is not tidying: `is_primary` is the host
+`TenantLinkService.primaryHostname()` mails invite and password-reset links to, so leaving
+the flag on a hostname the edge no longer serves aims every live token at an address with no
+route and no certificate — and nothing fails visibly, because the mail sends. It is the same
+invariant `POST /{id}/primary` enforces on the way in, applied on the way out.
+
+The deactivation audit row carries `primaryRevertedTo` alongside the hostname when that
+happens, so an auditor asking why a tenant's links changed host gets both facts from one row.
+A tenant with no platform subdomain to fall back on is left with no primary and the fact is
+logged, rather than the deactivation being refused — the hostname is gone from the edge
+either way.
 
 ## Configuration
 

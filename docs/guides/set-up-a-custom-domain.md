@@ -124,6 +124,12 @@ password-reset emails.
 is offered only once a domain is live — pointing a password-reset link at an address that is
 not serving yet would send your team a working email to a page that does not load.
 
+**Primary can move back without you doing anything.** If your domain has to be detached at
+our end — during a certificate problem, or a migration — your platform address becomes
+primary again, so invitation and password-reset emails keep working. The **Domains** page
+shows the change. Select **Make primary** on your own domain again once it is back to
+**Live**.
+
 ## Remove a domain
 
 1. On the card, select **Remove**.

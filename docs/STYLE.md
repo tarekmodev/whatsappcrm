@@ -34,8 +34,7 @@ the fifth. [Put your own brand on the workspace](guides/brand-your-workspace.md)
 TAR-423) are the sixth and seventh, and the first pair written for a workspace **admin**
 rather than a supervisor. A guide for a tenant user names its reader in the first line and
 refers to every control by its **visible label**, taken from `apps/web/content/en.ts` rather
-than from a
-component name.
+than from a component name.
 
 One subject splits into two guides when it splits into two permissions. Branding and custom
 domains sit on one settings area and read as one topic, but `branding:write` and
