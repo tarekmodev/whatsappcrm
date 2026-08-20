@@ -48,11 +48,25 @@ screen has shipped, marked with a `TODO(author)` and the instruction to split it
 admin guide once one does. That is the honest form: the alternative is a guide that answers
 half the reader's question and does not admit which half.
 
+**The list stops numbering here.** The ordinals had become the only thing every guide pull
+request needed to edit, so each one conflicted with every other on this one sentence — and the
+losing branch had to renumber rather than resolve. New guides are named and placed by reader
+instead. Two more (TAR-483) cover contacts: [Define the fields your contacts carry](guides/define-custom-contact-fields.md) for
+an admin, and [Find a contact and keep their record up to date](guides/find-and-update-contacts.md)
+for an agent.
+
 One subject splits into two guides when it splits into two permissions. Branding and custom
 domains sit on one settings area and read as one topic, but `branding:write` and
 `domain:write` are deliberately separate authorities — and the second guide asks its reader
 to edit DNS and then wait, which is a different afternoon from picking a colour. One file
-would have served neither reader.
+would have served neither reader. Custom fields split the same way: `tenant:settings`
+defines a field and `contact:write` fills one in, which is two readers on two screens.
+
+**Name what a guide's reader cannot do, under a closing “What this cannot do yet”.** A gap
+the reader discovers by hunting for a button is worse than one the page names — and a guide
+that implies a guarantee the code does not give is worse than both. TAR-483 shipped that
+mistake once: two guides promised concurrent edits were safe while the reference page for
+the same surface carried the open bug.
 
 The inverse also holds: one guide covers several subjects when a reader meets them in one
 sitting. TAR-414's guide runs the setup checklist, plan limits and suspension together because
@@ -100,29 +114,34 @@ one-line pointer — a summary that drifts from the reference is worse than a li
 
 Fixed vocabulary. Use the left column; never rotate synonyms.
 
-| Term                             | Not                                      | Notes                                                                                                                                                                                                 |
-| -------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| tenant                           | organisation, workspace, account, client | One customer business on the platform. **Except in `docs/guides/` written for a tenant user**, which says _workspace_ — the word the console itself uses on screen                                    |
-| handoff                          | transfer, pass on, delegate              | Giving a ticket to somebody else. The console's own word; `ticket:handoff` is the permission                                                                                                          |
-| escalate                         | raise, flag, bump, elevate               | Asking a supervisor to look. **Never means the ticket changed hands** — it does not                                                                                                                   |
-| platform operator                | admin, superadmin, us                    | Operates the platform; not a user inside any tenant                                                                                                                                                   |
-| agent                            | user, rep, operator                      | A person working inside a tenant. Never means "AI agent"                                                                                                                                              |
-| provision                        | create, onboard, sign up                 | `POST /api/v1/admin/tenants`                                                                                                                                                                          |
-| deactivate                       | suspend, disable, delete, offboard       | `POST /api/v1/admin/tenants/{slug}/deactivate`                                                                                                                                                        |
-| WhatsApp Business Account (WABA) | business account, Meta account           | Spell out at first use per document, then `WABA`                                                                                                                                                      |
-| `TenantPrisma` / `SystemPrisma`  | the tenant client / the system client    | Exact casing; they are type and token names                                                                                                                                                           |
-| row-level security (RLS)         | row security, database policies          | Spell out at first use per document                                                                                                                                                                   |
-| tenant-scoped                    | multi-tenant, isolated                   | Carries a non-null `tenant_id` and an RLS policy                                                                                                                                                      |
-| ticket                           | case, issue, request                     | One unit of work on a conversation                                                                                                                                                                    |
-| active queue                     | open queue, active list, the backlog     | `GET /tickets` with no `status`: `open` and `pending`                                                                                                                                                 |
-| auto-reopen                      | reopen, un-resolve                       | `pending → open` written by the customer's reply                                                                                                                                                      |
-| canned response                  | quick reply, snippet, macro, template    | Standing text an agent expands in the composer. **Except in `docs/guides/`**, which says _saved reply_ — the console's own words on screen. Never _template_, which is Meta's approved-message object |
-| shortcut                         | trigger, code, slash command             | The `/hours` token. Both readers use this word; only the engineer's pages call `/` the _trigger_                                                                                                      |
-| lifecycle state                  | lifecycle status, tenant state           | One of the seven `TENANT_STATUSES`. Spell a value in its schema form — `past_due`, not "past due" — outside `docs/guides/`, which uses the console's badge                                            |
-| self-signup                      | sign-up, registration, self-serve signup | The public path a visitor takes to a tenant. The verb is _sign up_; the noun and the adjective are _self-signup_                                                                                      |
-| entitlements                     | plan limits, quotas, caps                | The whole `{ features, limits }` object on `tenant_entitlements`. An individual ceiling inside `limits` is a **cap**                                                                                  |
-| seat                             | licence, user slot                       | Held by an `active` or `suspended` member, **and** by every live pending invite                                                                                                                       |
-| purge                            | hard delete, erase, wipe                 | The batched deletion that runs at `purge_at`. The lifecycle _state_ it lands in is `deleted`                                                                                                          |
+| Term                             | Not                                       | Notes                                                                                                                                                                                                 |
+| -------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| tenant                           | organisation, workspace, account, client  | One customer business on the platform. **Except in `docs/guides/` written for a tenant user**, which says _workspace_ — the word the console itself uses on screen                                    |
+| handoff                          | transfer, pass on, delegate               | Giving a ticket to somebody else. The console's own word; `ticket:handoff` is the permission                                                                                                          |
+| escalate                         | raise, flag, bump, elevate                | Asking a supervisor to look. **Never means the ticket changed hands** — it does not                                                                                                                   |
+| platform operator                | admin, superadmin, us                     | Operates the platform; not a user inside any tenant                                                                                                                                                   |
+| agent                            | user, rep, operator                       | A person working inside a tenant. Never means "AI agent"                                                                                                                                              |
+| provision                        | create, onboard, sign up                  | `POST /api/v1/admin/tenants`                                                                                                                                                                          |
+| deactivate                       | suspend, disable, delete, offboard        | `POST /api/v1/admin/tenants/{slug}/deactivate`                                                                                                                                                        |
+| WhatsApp Business Account (WABA) | business account, Meta account            | Spell out at first use per document, then `WABA`                                                                                                                                                      |
+| `TenantPrisma` / `SystemPrisma`  | the tenant client / the system client     | Exact casing; they are type and token names                                                                                                                                                           |
+| row-level security (RLS)         | row security, database policies           | Spell out at first use per document                                                                                                                                                                   |
+| tenant-scoped                    | multi-tenant, isolated                    | Carries a non-null `tenant_id` and an RLS policy                                                                                                                                                      |
+| ticket                           | case, issue, request                      | One unit of work on a conversation                                                                                                                                                                    |
+| active queue                     | open queue, active list, the backlog      | `GET /tickets` with no `status`: `open` and `pending`                                                                                                                                                 |
+| auto-reopen                      | reopen, un-resolve                        | `pending → open` written by the customer's reply                                                                                                                                                      |
+| canned response                  | quick reply, snippet, macro, template     | Standing text an agent expands in the composer. **Except in `docs/guides/`**, which says _saved reply_ — the console's own words on screen. Never _template_, which is Meta's approved-message object |
+| shortcut                         | trigger, code, slash command              | The `/hours` token. Both readers use this word; only the engineer's pages call `/` the _trigger_                                                                                                      |
+| lifecycle state                  | lifecycle status, tenant state            | One of the seven `TENANT_STATUSES`. Spell a value in its schema form — `past_due`, not "past due" — outside `docs/guides/`, which uses the console's badge                                            |
+| self-signup                      | sign-up, registration, self-serve signup  | The public path a visitor takes to a tenant. The verb is _sign up_; the noun and the adjective are _self-signup_                                                                                      |
+| entitlements                     | plan limits, quotas, caps                 | The whole `{ features, limits }` object on `tenant_entitlements`. An individual ceiling inside `limits` is a **cap**                                                                                  |
+| seat                             | licence, user slot                        | Held by an `active` or `suspended` member, **and** by every live pending invite                                                                                                                       |
+| purge                            | hard delete, erase, wipe                  | The batched deletion that runs at `purge_at`. The lifecycle _state_ it lands in is `deleted`                                                                                                          |
+| contact                          | customer record, person, lead             | One customer the tenant has talked to. **The customer** is the human; the contact is the row                                                                                                          |
+| custom field                     | custom attribute, extra field, property   | A tenant-defined field on every contact. The **definition** is the schema; the **value** is one contact's                                                                                             |
+| tag                              | label, category                           | A shared label on a contact. Never "custom field" — the two are different resources                                                                                                                   |
+| definition                       | field def, schema row, `custom_field_def` | One row of `custom_field_defs`. The **definition list** is `GET /api/v1/custom-fields`                                                                                                                |
+| vocabulary                       | dictionary, lookup set                    | A tenant's complete tag set or definition set, read whole rather than paged. Use it only for that                                                                                                     |
 
 Product entity names take their schema spelling in prose: `conversations`, `tickets`,
 `message_templates`. TypeScript identifiers take theirs: `MessageTemplate`,

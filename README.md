@@ -15,7 +15,12 @@ WhatsApp Business Cloud API.
 > client split with TAR-49, provisioning and deactivation with TAR-50 and TAR-51, the
 > WhatsApp Business Account entity with TAR-52, webhook ingestion with TAR-20, and a
 > two-tenant demo dataset with TAR-46 — so a clean clone now reaches a **populated**
-> database in one command. Everything below works today.
+> database in one command. The CRM core landed with TAR-33: a contact directory searchable by
+> name, phone or email and filterable by tag, tenant-defined **custom fields** an admin
+> creates under Settings and every agent fills in on a contact profile, and the eleven routes
+> behind all three — see
+> [the contacts, tags and custom fields API reference](docs/reference/contacts-api.md).
+> Everything below works today.
 
 ## Stack
 
@@ -78,6 +83,7 @@ the one that produced it.
 | [Public signup API](docs/reference/signup-api.md)                                            | The four unauthenticated routes: verification, slug reservation, rate limits       |
 | [People and teams API](docs/reference/people-api.md)                                         | Managing agents, teams and roles: permissions, invariants, isolation               |
 | [Tickets API](docs/reference/tickets-api.md)                                                 | The queue, the status/priority write, handoff and escalation, the event log        |
+| [Contacts, tags and custom fields API](docs/reference/contacts-api.md)                       | The CRM core: the directory, the tag taxonomy, and admin CRUD on definitions       |
 | [Assignment rules API](docs/reference/assignment-rules-api.md)                               | Routing-rule CRUD, the condition grammar, and how a new ticket is routed           |
 | [Auto-assignment](docs/reference/auto-assignment.md)                                         | Rotation, eligibility, workload caps, and the flagged-ticket fallback              |
 | [SLA timers and supervisor alerts](docs/reference/sla-timers.md)                             | Response windows, breach detection, who is alerted, and the two endpoints          |
@@ -88,6 +94,8 @@ the one that produced it.
 | [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)           | For supervisors writing routing rules in the console                               |
 | [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md)                      | For supervisors emptying the flagged queue in the console                          |
 | [Watch tickets that miss their deadline](docs/guides/track-overdue-tickets.md)               | For supervisors reading the overdue badge and clearing SLA alerts                  |
+| [Define the fields your contacts carry](docs/guides/define-custom-contact-fields.md)         | For admins defining custom contact fields in the console                           |
+| [Find a contact and keep their record up to date](docs/guides/find-and-update-contacts.md)   | For agents searching the directory, filtering by tag and filling in fields         |
 | [Read the performance dashboard](docs/guides/read-the-performance-dashboard.md)              | For supervisors reading the metrics and exporting them as a spreadsheet            |
 | [Put your own brand on the workspace](docs/guides/brand-your-workspace.md)                   | For admins setting the product name, colours, logo and favicon in the console      |
 | [Serve the workspace from your own web address](docs/guides/set-up-a-custom-domain.md)       | For admins adding a custom domain, with the exact DNS records to publish           |
