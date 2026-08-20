@@ -143,15 +143,9 @@ export class WorkflowService {
       await assertUnderWorkflowCap(tx);
       await assertUnderElapsedCap(tx, input.trigger, null);
 
-      const uses = await this.assertReferencesExist(tx, tenantId, definition);
-
-      // Arming and creating are two acts (`isActive` defaults to false), so
-      // this only bites the console that does both in one call — and then it is
-      // the right refusal: a workflow armed against a tag somebody deleted last
-      // week would run and fail on its first ticket.
-      if (input.isActive) {
-        assertNothingBroken(uses, new Set(uses.map((use) => referenceKey(use.kind, use.id))));
-      }
+      // Strict on create: every id was just chosen by the caller, so one that
+      // resolves to nothing is input to fix rather than a reference to repair.
+      const { uses } = await this.assertReferencesExist(tx, definition);
 
       const created = await tx.workflow
         .create({
@@ -222,25 +216,33 @@ export class WorkflowService {
         await assertUnderElapsedCap(tx, input.trigger, workflowId);
       }
 
-      const uses = await this.assertReferencesExist(tx, tenantId, definition);
+      // Resolved, **not** refused. An unresolved reference on an update is the
+      // thing being repaired, not bad input — see `assertReferencesExist`.
+      const { uses, resolved } = await this.resolveDefinitionReferences(tx, definition);
+      // The one question both rules below turn on (0009 decision 6 mechanism 3,
+      // as amended on TAR-399).
+      const everyReferenceResolves = uses.every((use) =>
+        resolved.has(referenceKey(use.kind, use.id)),
+      );
 
+      // Arming is refused when, and only when, some reference does not resolve —
+      // never because `brokenReason` happened to be set.
+      //
+      // The rejected rule read the document's "cannot be re-enabled **until**
+      // every reference resolves" as a conjunction: fix it *in the request that
+      // arms it*. That is a dead end in practice. The console's edit form carries
+      // `isActive` through unchanged — correctly, arming is a deliberate act on
+      // the list rather than a side effect of saving an edit — so the repair
+      // PATCH is always `isActive: false`, and a workflow disarmed by an ordinary
+      // user removal could never be enabled again by any request the UI produces.
+      //
+      // The safety that rule was reaching for is real and is already provided by
+      // something else: `is_active` staying false. Clearing `brokenReason` arms
+      // nothing. A repaired workflow sits disarmed until a human with
+      // `workflow:write` sends `isActive: true`, and that request re-checks
+      // every reference here. There is no path on which a rule nobody looked at
+      // starts running by itself.
       if (willBeActive) {
-        const resolved = new Set(uses.map((use) => referenceKey(use.kind, use.id)));
-
-        // `brokenReason` blocks re-enabling on its own, even when every id now
-        // resolves: the workflow was disarmed because something it named went
-        // away, and clearing that is a decision the supervisor makes by saying
-        // what should happen instead. An id that silently started resolving
-        // again — a user re-invited under the same row — must not re-arm a rule
-        // nobody looked at.
-        if (
-          before.brokenReason !== null &&
-          input.actions === undefined &&
-          input.conditions === undefined
-        ) {
-          throw new WorkflowReferenceBrokenError([]);
-        }
-
         assertNothingBroken(uses, resolved);
       }
 
@@ -260,10 +262,20 @@ export class WorkflowService {
             ...(input.name === undefined ? {} : { name: input.name }),
             ...(input.position === undefined ? {} : { position: input.position }),
             ...(input.isActive === undefined ? {} : { isActive: input.isActive }),
-            // Cleared whenever the supervisor re-arms: the workflow is no longer
-            // the broken one, and leaving the reason set would violate
-            // `workflows_broken_is_inactive` on the very next statement.
-            ...(willBeActive ? { brokenReason: null } : {}),
+            // **Derived state, not a latch.** Cleared whenever the post-patch
+            // references all resolve, regardless of `isActive` — so the two-step
+            // repair the console produces (correct the field with the workflow
+            // still disarmed, then enable it from the list) leaves a healthy row
+            // after step one rather than a permanently broken one.
+            //
+            // The invariant this establishes is what makes the field safe to
+            // render and safe to ignore as a gate: `broken_reason IS NOT NULL`
+            // implies at least one reference does not resolve.
+            //
+            // `workflows_broken_is_inactive` is unaffected — clearing while
+            // inactive is always legal, and the constraint only forbids the
+            // opposite pairing.
+            ...(everyReferenceResolves ? { brokenReason: null } : {}),
             ...(definitionChanged
               ? {
                   triggerType: definition.trigger.type,
@@ -281,7 +293,19 @@ export class WorkflowService {
         });
 
       if (definitionChanged) {
-        await writeReferences(tx, tenantId, workflowId, uses);
+        // Only the references that resolve. `workflow_references` is the reverse
+        // index that makes a *delete* refusable, and a row that is already gone
+        // needs no protection — but its composite foreign key would refuse the
+        // insert outright, so an unresolved id must not reach it. The dangling id
+        // stays in `definition`, which is exactly where 0009 decision 6 puts it:
+        // the response reports `exists: false` and the console shows which field
+        // needs a new value.
+        await writeReferences(
+          tx,
+          tenantId,
+          workflowId,
+          uses.filter((use) => resolved.has(referenceKey(use.kind, use.id))),
+        );
       }
 
       await this.recordChange(tx, AUDIT_ACTIONS.workflowUpdated, updated, definition);
@@ -454,20 +478,45 @@ export class WorkflowService {
    * boundary — 0007's argument for `assertTagIdsExist`, applied to a surface
    * that also writes.
    */
-  private async assertReferencesExist(
+  private async resolveDefinitionReferences(
     tx: Prisma.TransactionClient,
-    tenantId: string,
     definition: WorkflowDefinition,
-  ): Promise<WorkflowReferenceUse[]> {
+  ): Promise<ResolvedReferences> {
     const uses = workflowReferenceUses(definition.conditions, definition.actions);
     const names = await this.namesFor(tx, uses);
-    const unknown = uses.find((use) => !names.has(referenceKey(use.kind, use.id)));
+
+    return { uses, resolved: new Set(names.keys()) };
+  }
+
+  /**
+   * Every id the definition names, refused if any is not in this tenant.
+   *
+   * **Create only**, and the asymmetry with `update` is the point. On a create
+   * every id is one the caller just picked, so an id that resolves to nothing is
+   * a typo or another tenant's row — `validation_failed` naming the field is the
+   * answer, and there is no "it was valid and the row went away" case to
+   * confuse it with.
+   *
+   * On an update there is, and refusing there would make the repair impossible:
+   * a workflow disarmed by an ordinary user removal could not be saved at all,
+   * because the dead id is still in the definition being edited. So `update`
+   * resolves without refusing and gates *arming* instead (0009 decision 6
+   * mechanism 3, as amended on TAR-399).
+   */
+  private async assertReferencesExist(
+    tx: Prisma.TransactionClient,
+    definition: WorkflowDefinition,
+  ): Promise<ResolvedReferences> {
+    const resolution = await this.resolveDefinitionReferences(tx, definition);
+    const unknown = resolution.uses.find(
+      (use) => !resolution.resolved.has(referenceKey(use.kind, use.id)),
+    );
 
     if (unknown !== undefined) {
       throw new UnknownWorkflowReferenceError(unknown.path, unknown.id);
     }
 
-    return uses;
+    return resolution;
   }
 
   private async recordChange(
@@ -492,6 +541,20 @@ export class WorkflowService {
       },
     });
   }
+}
+
+/**
+ * A definition's taxonomy references, and which of them a live read found.
+ *
+ * The pair travels together because every rule in this file is about the
+ * *difference* between them: arming is refused when it is non-empty,
+ * `broken_reason` is cleared when it is empty, and `workflow_references` indexes
+ * only the resolved half.
+ */
+interface ResolvedReferences {
+  readonly uses: readonly WorkflowReferenceUse[];
+  /** `referenceKey` values a live, tenant-scoped read returned a name for. */
+  readonly resolved: ReadonlySet<string>;
 }
 
 /**

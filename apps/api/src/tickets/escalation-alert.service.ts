@@ -20,7 +20,7 @@ import {
   resolveAlertRecipients,
   type AlertCandidate,
   type TicketResponsibility,
-} from '../sla/sla-recipients';
+} from '../people/supervisor-recipients';
 import {
   ESCALATION_ALERT_PROJECTION,
   ESCALATION_ONLY,
@@ -38,17 +38,19 @@ import {
  *
  * ## The recipient rule is imported, not rewritten
  *
- * `resolveAlertRecipients` is ADR 0006 decision 4's rule and already ships in
- * `sla/sla-recipients.ts`. 0011 says in as many words that this module imports
- * it unchanged: an escalation and a breach ask the same question — which of this
- * tenant's supervisors is responsible for this ticket — and two answers that
- * drift would mean a tenant whose breaches reach one group and whose escalations
- * reach another.
+ * `resolveAlertRecipients` is ADR 0006 decision 4's rule, and 0011 says in as
+ * many words that this module imports it unchanged: an escalation and a breach
+ * ask the same question — which of this tenant's supervisors is responsible for
+ * this ticket — and two answers that drift would mean a tenant whose breaches
+ * reach one group and whose escalations reach another.
  *
- * That import crosses a layer: `sla` is L4 and this is L3. It is the category of
- * sharing `SlaBreachResourceService` and `MessageResourceService` document at
- * length — a **pure function over rows the caller has already read**, with no
- * provider, no injection and no module edge. Nothing here imports `SlaModule`.
+ * It lives in `people/supervisor-recipients.ts`, which is **L3, so the import
+ * crosses no layer**. It shipped in `sla/sla-recipients.ts` and moved under
+ * TAR-27, whose `notify` action with `audience: 'supervisors'` became its third
+ * caller: a pure rule that `SlaModule`, `WorkflowsModule` and this file all need
+ * belongs below all three, beside the role and team model it is about. Still a
+ * **pure function over rows the caller has already read**, with no provider, no
+ * injection and no module edge. Nothing here imports `SlaModule`.
  *
  * ## Every read is narrowed to the calling principal, on top of RLS
  *

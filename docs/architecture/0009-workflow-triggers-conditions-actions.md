@@ -467,9 +467,21 @@ same stated reason — "a supervisor should find the rule needing a new target, 
 gone". Inside the removal transaction: deactivate every workflow referencing that user
 (`is_active = false`, `broken_reason = 'reference_removed'`) and delete its reference rows. The
 dangling id stays in the `definition`, so `references` reports `exists: false` and the console shows
-exactly which field needs a new value. A workflow with a `broken_reason` cannot be re-enabled until
-every reference resolves — `validation_failed`, naming the field, which is 0007's
-"name the target, then enable" applied to a second surface.
+exactly which field needs a new value.
+
+`broken_reason` is **derived state, not a latch**: every workflow write recomputes the reference set
+and sets it to `null` when all of them resolve, whatever `is_active` is in that same request.
+Clearing it arms nothing — the workflow stays `is_active = false` until a supervisor enables it
+explicitly, and that request re-checks every reference. Arming is refused with
+`workflow_reference_broken` when, and only when, some reference in the post-patch definition does not
+resolve; `details` names each one by its path. This is what makes the two-step repair the console
+produces — correct the field in the form, then enable from the list — the supported path.
+
+_(Amended by TAR-399. As first published this read "cannot be re-enabled until every reference
+resolves — `validation_failed`", which the API implemented as a conjunction: fix it in the request
+that arms it. Because the console's edit form carries `isActive` through unchanged, that made a
+workflow disarmed by an ordinary user removal permanently un-enableable. The code is also
+`workflow_reference_broken`, not `validation_failed`, per the error tables below.)_
 
 **4. A reference that goes missing at evaluation time fails the run once, loudly.** Belt and braces
 for the paths no foreign key covers — a user removed between the claim and the action, a tag deleted
@@ -1227,10 +1239,10 @@ means the id is simply not visible, so the server cannot distinguish "another te
 Partial update, same field rules. `version` increments whenever `trigger`, `conditions` or `actions`
 change; renaming or reordering does not bump it, because nothing about execution changed.
 
-| Status | Code                        | Cause                                                                             |
-| ------ | --------------------------- | --------------------------------------------------------------------------------- |
-| `400`  | `workflow_reference_broken` | `isActive: true` while `brokenReason` is set or a reference does not resolve      |
-| `404`  | `not_found`                 | Unknown id, or another tenant's. Never `forbidden`, which would confirm it exists |
+| Status | Code                        | Cause                                                                               |
+| ------ | --------------------------- | ----------------------------------------------------------------------------------- |
+| `400`  | `workflow_reference_broken` | `isActive: true` while some reference in the post-patch definition does not resolve |
+| `404`  | `not_found`                 | Unknown id, or another tenant's. Never `forbidden`, which would confirm it exists   |
 
 `position` in a `PATCH` moves one workflow and shifts those between its old and new position by one,
 in a single transaction. Moving many at once is `reorder`, which takes the tenant's **complete** set
