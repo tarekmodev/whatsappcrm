@@ -33,8 +33,14 @@ export const TagCreateInputSchema = z.object({
 
 /**
  * `q` matches the tag name, on `ContactListQuerySchema`'s reasoning: the picker
- * that reads this is a type-ahead, and `tags.name` is `citext`, so the match is
- * case-insensitive at the column.
+ * that reads this is a type-ahead, so the match is case-insensitive.
+ *
+ * It is not the column that makes it so. `tags.name` is plain `text` — unlike
+ * `teams.name` and `contacts.email`, which are `citext` — and the whole
+ * case-insensitivity comes from `mode: 'insensitive'` on the query in
+ * `TagsService.list`. That mode is therefore load-bearing, not redundant. The
+ * same gap means `VIP` and `vip` are two distinct tags on create, because
+ * `(tenant_id, name)` is a case-*sensitive* unique index.
  */
 export const TagListQuerySchema = CursorPageQuerySchema.extend({
   q: z.string().min(1).max(TAG_NAME_LENGTH).optional(),

@@ -33,13 +33,28 @@ interface Recorded {
   updated: Record<string, unknown>[];
   tagsAdded: { tagId: string }[];
   tagsRemoved: { tagId: { in: string[] } }[];
+  /** Raw statements, so the row lock can be asserted on. */
+  raw: { sql: string; values: unknown[] }[];
+  /**
+   * `lock` and `read` in the order they happened. Which statement comes *first*
+   * is the whole point of the lock — see `lockContact` — and only an ordering
+   * assertion can state it.
+   */
+  order: ('lock' | 'read')[];
 }
 
 function buildWorld(options: WorldOptions = {}): {
   contacts: ContactsService;
   recorded: Recorded;
 } {
-  const recorded: Recorded = { created: [], updated: [], tagsAdded: [], tagsRemoved: [] };
+  const recorded: Recorded = {
+    created: [],
+    updated: [],
+    tagsAdded: [],
+    tagsRemoved: [],
+    raw: [],
+    order: [],
+  };
   const stored = options.contact ?? null;
 
   const contactRow = {
@@ -56,9 +71,16 @@ function buildWorld(options: WorldOptions = {}): {
   };
 
   const tx = {
+    $queryRaw: (fragments: TemplateStringsArray, ...values: unknown[]) => {
+      recorded.raw.push({ sql: fragments.join('?'), values });
+      recorded.order.push('lock');
+      return Promise.resolve([]);
+    },
     contact: {
-      findUnique: () =>
-        Promise.resolve(
+      findUnique: () => {
+        recorded.order.push('read');
+
+        return Promise.resolve(
           stored === null
             ? null
             : {
@@ -66,7 +88,8 @@ function buildWorld(options: WorldOptions = {}): {
                 customFields: stored.customFields,
                 tags: stored.tagIds.map((tagId) => ({ tagId })),
               },
-        ),
+        );
+      },
       findUniqueOrThrow: () => Promise.resolve(contactRow),
       create: ({ data }: { data: Record<string, unknown> }) => {
         recorded.created.push(data);
@@ -159,6 +182,42 @@ describe('creating a contact', () => {
 });
 
 describe('updating a contact', () => {
+  /**
+   * TAR-530. The merge is computed in JavaScript from a row read earlier in the
+   * same transaction, so under `READ COMMITTED` the read has to hold the row —
+   * otherwise two agents editing different keys both read the same map and the
+   * second write drops the first one's key.
+   *
+   * What this states is the *ordering*: lock, then read. That the lock actually
+   * serialises two transactions is
+   * `contact-custom-field-concurrency.int-spec.ts`, which needs a real database.
+   */
+  it('locks the contact row before reading it', async () => {
+    const { contacts, recorded } = buildWorld({
+      contact: { customFields: { tier: 'gold' }, tagIds: [] },
+      customFieldKeys: [TIER],
+    });
+
+    await contacts.update(CONTACT, { customFields: { tier: 'silver' } });
+
+    expect(recorded.order).toEqual(['lock', 'read']);
+    // `FOR NO KEY UPDATE`, not `FOR UPDATE`: it excludes every writer that
+    // matters while still letting a conversation or ticket insert take its
+    // `FOR KEY SHARE` on the contact — see `lockContact`.
+    expect(recorded.raw[0]?.sql).toContain('FOR NO KEY UPDATE');
+    // The tenant predicate alongside the id: RLS is the guarantee, and this is
+    // the same belt-and-braces `stripValues` writes for the same reason.
+    expect(recorded.raw[0]?.values).toEqual([TENANT, CONTACT]);
+  });
+
+  it('takes no row lock on a create, which has no row to read', async () => {
+    const { contacts, recorded } = buildWorld({ tags: [] });
+
+    await contacts.create({ phone: '+966501234567', displayName: 'Layla', tagIds: [] });
+
+    expect(recorded.raw).toEqual([]);
+  });
+
   it('merges custom fields rather than replacing them', async () => {
     // The decision amendment 10 names: replacement would make an agent editing
     // one field erase every value their form did not load.
