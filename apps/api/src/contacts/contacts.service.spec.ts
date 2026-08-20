@@ -201,7 +201,10 @@ describe('updating a contact', () => {
     await contacts.update(CONTACT, { customFields: { tier: 'silver' } });
 
     expect(recorded.order).toEqual(['lock', 'read']);
-    expect(recorded.raw[0]?.sql).toContain('FOR UPDATE');
+    // `FOR NO KEY UPDATE`, not `FOR UPDATE`: it excludes every writer that
+    // matters while still letting a conversation or ticket insert take its
+    // `FOR KEY SHARE` on the contact — see `lockContact`.
+    expect(recorded.raw[0]?.sql).toContain('FOR NO KEY UPDATE');
     // The tenant predicate alongside the id: RLS is the guarantee, and this is
     // the same belt-and-braces `stripValues` writes for the same reason.
     expect(recorded.raw[0]?.values).toEqual([TENANT, CONTACT]);

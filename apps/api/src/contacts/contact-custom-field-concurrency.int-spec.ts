@@ -1,6 +1,6 @@
 import type { ContactResponse, CustomFieldValues } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
-import type { PrismaClient } from '../generated/prisma/client';
+import type { Prisma, PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope } from '../prisma/tenant-scope.extension';
 import { ContactsService } from './contacts.service';
@@ -12,7 +12,7 @@ import { ContactsService } from './contacts.service';
  * `ContactsService.update` computes the stored map in JavaScript from a row it
  * read earlier in the same transaction. Under `READ COMMITTED` — which is what
  * `$tenantTransaction` runs at — a read takes a fresh snapshot per statement and
- * takes no lock, so without the `FOR UPDATE` in `lockContact` both writers read
+ * takes no lock, so without the row lock `lockContact` takes both writers read
  * the same map, the second one's `UPDATE` waits on the first one's row lock, and
  * then overwrites it with a map computed before the first write existed. One key
  * disappears and both requests answer `200`.
@@ -25,9 +25,10 @@ import { ContactsService } from './contacts.service';
  * regression test — a `Promise.all` of two requests reproduces the bug only
  * sometimes, and a test that passes by timing is not a test. A competing
  * transaction is held open until the writer under test is provably blocked on
- * its lock (`pg_locks`, no row granted), and only then committed. Without the
- * fix that writer has already taken its stale read by the time it blocks, and
- * the assertion fails every run.
+ * *that* transaction — an ungranted lock naming the holder's own transaction id, not a
+ * cluster-wide "is anyone waiting" — and only then committed. Without the fix
+ * that writer has already taken its stale read by the time it blocks, and the
+ * assertion fails every run.
  *
  * ⚠️ Writes to the database it is pointed at, and commits. One fixture tenant
  * carrying fixed ids, deleted before the run as well as after it, so an
@@ -49,7 +50,7 @@ const SEEDED = { tier: 'gold' } as const;
 /** Definitions the writes below are validated against. `tier` carries the seeded value. */
 const FIELD_KEYS = ['tier', 'plan', 'region', 'owner', 'segment', 'source'] as const;
 
-/** Long enough for a blocked backend to appear in `pg_locks`, short enough to fail fast. */
+/** Long enough for the waiter to register as blocked on us, short enough to fail fast. */
 const BLOCK_WAIT_MS = 5_000;
 const BLOCK_POLL_MS = 25;
 
@@ -81,23 +82,41 @@ describe('concurrent custom-field writes to one contact', () => {
   }
 
   /**
-   * Resolves once some backend is waiting on a lock it has not been granted.
+   * Resolves once somebody is waiting on **this transaction specifically**.
    *
-   * `pg_locks` rather than `pg_stat_activity`: it is readable in full by any
-   * role, while a non-superuser sees another role's activity row with its
-   * columns masked — and the writer under test connects as `whatsappcrm_app`
-   * while this fixture connects as `whatsappcrm_system`.
+   * A row-lock waiter blocks on a `ShareLock` on the holder's transaction id, so
+   * "is anyone queued behind me" is exactly `pg_locks` filtered to an ungranted
+   * `transactionid` lock naming our own xid. `pg_current_xact_id()` is the xid to
+   * compare against — the holder has a real one because it has already written.
+   *
+   * Two cheaper questions are both wrong here, quietly:
+   *
+   *   * `pg_locks WHERE NOT granted` alone counts ungranted locks across the
+   *     whole cluster, so any unrelated waiter — a dev API on the same Postgres,
+   *     a second CI job on a shared container — opens the gate before the writer
+   *     under test has even opened its transaction. The fixture then commits, the
+   *     writer runs uncontended, and the case passes with the lock removed: a
+   *     green regression test that no longer tests the regression.
+   *   * `pg_blocking_pids` over `pg_stat_activity` reads as the obvious phrasing,
+   *     but this fixture connects as `whatsappcrm_system` and the writer as
+   *     `whatsappcrm_app`, and a non-superuser that is not in `pg_read_all_stats`
+   *     does not get the other role's row — the view returns this backend alone,
+   *     so the gate never fires. `pg_locks` carries no such masking.
    *
    * Polled rather than slept on. A fixed sleep would either be flaky on a loaded
    * machine or slow on an idle one, and it would silently stop gating the moment
    * the writer got faster than the sleep.
    */
-  async function waitUntilBlocked(): Promise<void> {
+  async function waitUntilBlockedOnUs(holder: Prisma.TransactionClient): Promise<void> {
     const deadline = Date.now() + BLOCK_WAIT_MS;
 
     while (Date.now() < deadline) {
-      const [blocked] = await systemPrisma.$queryRaw<{ waiting: number }[]>`
-        SELECT count(*)::int AS waiting FROM pg_locks WHERE NOT granted
+      const [blocked] = await holder.$queryRaw<{ waiting: number }[]>`
+        SELECT count(*)::int AS waiting
+        FROM pg_locks
+        WHERE NOT granted
+          AND locktype = 'transactionid'
+          AND transactionid = pg_current_xact_id()::xid
       `;
 
       if ((blocked?.waiting ?? 0) > 0) {
@@ -108,9 +127,46 @@ describe('concurrent custom-field writes to one contact', () => {
     }
 
     throw new Error(
-      'No backend blocked on a lock within ' +
+      'Nothing queued behind this transaction within ' +
         `${String(BLOCK_WAIT_MS)}ms — the writer under test never reached the contact row.`,
     );
+  }
+
+  /**
+   * Holds the contact row with `competingWrite`, starts `writer` against it, and
+   * commits only once that writer is provably blocked on the holding
+   * transaction. That ordering is what makes these cases deterministic instead of
+   * racy — see the file header.
+   */
+  async function whileHoldingContact(
+    competingWrite: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    writer: () => Promise<ContactResponse>,
+  ): Promise<void> {
+    let inFlight: Promise<ContactResponse> | undefined;
+
+    try {
+      await systemPrisma.$transaction(
+        async (tx) => {
+          await competingWrite(tx);
+
+          // Started, deliberately not awaited: it has to be in flight and
+          // blocked on this transaction's row lock before that transaction
+          // commits.
+          inFlight = writer();
+
+          await waitUntilBlockedOnUs(tx);
+        },
+        { timeout: HOLD_TIMEOUT_MS },
+      );
+    } finally {
+      // Absorbed here so that when the gate above throws, the writer's own
+      // rejection cannot surface as an unhandled rejection and bury the
+      // diagnostic. A real writer failure is still reported — the `await` below
+      // re-raises it on the path where the gate succeeded.
+      await inFlight?.catch(() => undefined);
+    }
+
+    await inFlight;
   }
 
   async function removeFixture(): Promise<void> {
@@ -167,27 +223,15 @@ describe('concurrent custom-field writes to one contact', () => {
    * With it, it blocks before reading anything and merges into `{tier, plan}`.
    */
   it('does not lose a write committed while another write was in flight', async () => {
-    let region: Promise<ContactResponse> | undefined;
-
-    await systemPrisma.$transaction(
-      async (tx) => {
-        await tx.$executeRaw`
-          UPDATE contacts
-             SET custom_fields = custom_fields || '{"plan":"pro"}'::jsonb,
-                 updated_at = now()
-           WHERE id = ${CONTACT}::uuid
-        `;
-
-        // Started, deliberately not awaited: it has to be in flight and blocked
-        // on this transaction's row lock before that transaction commits.
-        region = patchCustomFields({ region: 'emea' });
-
-        await waitUntilBlocked();
-      },
-      { timeout: HOLD_TIMEOUT_MS },
+    await whileHoldingContact(
+      (tx) => tx.$executeRaw`
+        UPDATE contacts
+           SET custom_fields = custom_fields || '{"plan":"pro"}'::jsonb,
+               updated_at = now()
+         WHERE id = ${CONTACT}::uuid
+      `,
+      () => patchCustomFields({ region: 'emea' }),
     );
-
-    await region;
 
     expect(await storedCustomFields()).toEqual({ tier: 'gold', plan: 'pro', region: 'emea' });
   });
@@ -217,25 +261,15 @@ describe('concurrent custom-field writes to one contact', () => {
   it('does not resurrect a key that a concurrent write cleared', async () => {
     await patchCustomFields({ plan: 'pro' });
 
-    let cleared: Promise<ContactResponse> | undefined;
-
-    await systemPrisma.$transaction(
-      async (tx) => {
-        await tx.$executeRaw`
-          UPDATE contacts
-             SET custom_fields = custom_fields || '{"region":"emea"}'::jsonb,
-                 updated_at = now()
-           WHERE id = ${CONTACT}::uuid
-        `;
-
-        cleared = patchCustomFields({ plan: null });
-
-        await waitUntilBlocked();
-      },
-      { timeout: HOLD_TIMEOUT_MS },
+    await whileHoldingContact(
+      (tx) => tx.$executeRaw`
+        UPDATE contacts
+           SET custom_fields = custom_fields || '{"region":"emea"}'::jsonb,
+               updated_at = now()
+         WHERE id = ${CONTACT}::uuid
+      `,
+      () => patchCustomFields({ plan: null }),
     );
-
-    await cleared;
 
     expect(await storedCustomFields()).toEqual({ tier: 'gold', region: 'emea' });
   });

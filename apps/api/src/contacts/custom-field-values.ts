@@ -22,8 +22,8 @@ import { CustomFieldValuesInvalidError } from './contacts.errors';
  *     callers that read the same stored map both merge into that same map, and
  *     the second write replaces the first whole. What actually holds there is the
  *     row lock `ContactsService.update` takes before its read (`lockContact`,
- *     `SELECT … FOR UPDATE`) — the merge stops an *unloaded* key being erased, the
- *     lock stops a *concurrently written* one being erased.
+ *     `SELECT … FOR NO KEY UPDATE`) — the merge stops an *unloaded* key being
+ *     erased, the lock stops a *concurrently written* one being erased.
  *   * **An unknown key is refused, never silently dropped.** A typo that stores
  *     nothing and reports success is the same silent-failure shape the amendment
  *     refuses on the definition side.

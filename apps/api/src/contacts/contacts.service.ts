@@ -251,14 +251,28 @@ function searchFilter(q: string): Prisma.ContactWhereInput {
  *
  * Locking first is what closes it: the second transaction waits here, and every
  * statement it runs afterwards is a new snapshot taken once the first has
- * committed, so it merges into the map the first one actually wrote. It also
- * orders this write against `CustomFieldsService.delete`'s value strip, so a
- * value cannot be resurrected under a key whose definition was just deleted.
+ * committed, so it merges into the map the first one actually wrote.
  *
- * One extra round trip per `PATCH`, served by the primary key. `FOR UPDATE`
- * rather than `FOR NO KEY UPDATE`: `contact_tags` reaches this row through
- * `(tenant_id, id)`, and the stronger lock is what stops a tag row being
- * attached to a contact whose tag set is being rewritten concurrently.
+ * It also orders this write against `CustomFieldsService.delete`'s value strip —
+ * but only **for a contact that already holds the deleted key**. `stripValues`
+ * filters on `jsonb_exists(custom_fields, key)`, so a contact with no value under
+ * that key is never matched and never locked, and a `PATCH` writing that key can
+ * still interleave with the definition delete and leave an orphaned value behind.
+ * That race is older than this lock and is not closed here; closing it needs
+ * either an unconditional lock in the strip or `FOR SHARE` on the definition rows
+ * read by `readCustomFieldDefinitions`.
+ *
+ * `FOR NO KEY UPDATE` rather than `FOR UPDATE`, which is the weakest mode that
+ * still does the job. It self-conflicts, so two `update` transactions exclude
+ * each other, and it conflicts with the implicit lock that `tx.contact.update`
+ * and `stripValues` take — every writer that matters. What it deliberately does
+ * *not* block is `FOR KEY SHARE`, which Postgres takes on this row whenever a
+ * `conversations` or `tickets` row referencing it is inserted: `FOR UPDATE` would
+ * make an inbound WhatsApp message wait on any in-flight console `PATCH` of that
+ * contact, coupling the ingest hot path to an editor's save for no isolation this
+ * write actually needs.
+ *
+ * One extra round trip per `PATCH`, served by the primary key.
  *
  * An id that names no contact in this tenant locks nothing and returns nothing —
  * RLS and the explicit `tenant_id` predicate both see to that — and the caller's
@@ -275,7 +289,7 @@ async function lockContact(
     FROM contacts
     WHERE tenant_id = ${tenantId}::uuid
       AND id = ${contactId}::uuid
-    FOR UPDATE
+    FOR NO KEY UPDATE
   `;
 }
 
