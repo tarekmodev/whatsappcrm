@@ -7,8 +7,8 @@ Status: reference companion to
 
 Written for engineers. 0009 is 1 184 lines and answers "why is it this shape"; this page answers
 the two questions a reader has when they arrive at the code — **what are the states and the
-edges**, and **which of them has a writer today**. When the lifecycle engine lands, the
-[As built](#as-built) column is the part that changes and the rest does not.
+edges**, and **which of them has a writer today**. When the lifecycle engine lands, the _As built_
+column in [Every edge](#every-edge) is the part that changes and the rest does not.
 
 The published vocabulary is `TENANT_STATUSES`, `TENANT_STATUS_TRANSITIONS`,
 `TENANT_STATUS_EFFECTS`, `LIFECYCLE_TRIGGERS` and `LIFECYCLE_POLICY` in
@@ -155,9 +155,10 @@ right now".** Neither carries a copy of the other's policy.
 The consequence of only the first one being wired is worth stating plainly, because it is the
 opposite of the shipped design and it is what a reader will observe:
 
-- A **suspended** tenant's inbound WhatsApp webhook writes through `TenantPrisma` and is refused
-  with `TN001`. `TENANT_STATUS_EFFECTS.suspended.inboundAccepted` is `true` and the database
-  disagrees. This is the behaviour TAR-403 shipped deliberately — 0009 records that loosening a
+- A **suspended** tenant's inbound WhatsApp message is accepted and stored, but never reaches the
+  tenant's inbox. The divergence from `TENANT_STATUS_EFFECTS.suspended.inboundAccepted` is real
+  and narrower than "refused" — see [What happens to a suspended tenant's webhook](#what-happens-to-a-suspended-tenants-webhook)
+  below. This is the behaviour TAR-403 shipped deliberately — 0009 records that loosening a
   security gate is not a schema migration's call — and ruling 1 resolves it the other way, in a
   migration that creates the replacement function without moving the call site.
 - A **cancelled** tenant's admin cannot log in, so the seven-day undo window `cancelled → active`
@@ -166,6 +167,41 @@ opposite of the shipped design and it is what a reader will observe:
 Moving the call site is TAR-404's, and it is a hard gate on `TenantStatusGuard` existing:
 `assert_tenant_serviceable` admitting `suspended` with no HTTP gate behind it would give a
 suspended tenant's agents their console back.
+
+### What happens to a suspended tenant's webhook
+
+Nothing is bounced and nothing is lost, and it is worth walking the path because "the gate refuses
+`suspended`" is only true of one hop in it.
+
+1. **Meta gets its `200`.** `WebhookIngestService` verifies the signature, stores the payload and
+   answers, *then* enqueues — in that order, so a queue outage cannot turn into permanent message
+   loss.
+2. **The payload is durable before any tenant is known.** `webhook_events` is written through
+   `SystemPrisma`; it carries no `tenant_isolation` policy and passes no gate.
+3. **Only the projection is gated.** `WhatsAppInboundWriter` writes `conversations` and
+   `messages` through `TenantPrisma`, so that is where `TN001` is raised for a suspended tenant.
+4. **The event is parked, not failed.** `whatsapp-event.processor.ts` catches
+   `TenantNotActiveError` by name and parks the row `failed` with reason `tenantNotActive`,
+   keeping the raw payload — "parking keeps the message replayable if the tenant comes back, and
+   stops the retry budget being spent on a refusal that will not change".
+
+So the customer's message is received, acknowledged and retained; what a suspended tenant loses is
+the projection into its inbox, not the message.
+
+> ⚠️ **Replay is manual, and there is no surface for it.** A parked row is deliberately **not**
+> claimable, so re-enqueueing one does nothing and the sweeper skips it — it scans `received` and
+> `processing` only. Replaying is an explicit operator act against the database:
+>
+> ```sql
+> UPDATE webhook_events
+>    SET status = 'received', attempts = 0, last_error = NULL
+>  WHERE id = $1 AND status = 'failed';
+> ```
+>
+> The next sweep picks it up from there. `WebhookEventsRepository.claim` records that an endpoint
+> for this belongs on the platform-admin surface, where the act can be authorised and audited, and
+> that there is none yet. **A reactivated tenant does not get its parked messages back on its
+> own** — somebody has to run that statement, per event.
 
 ## What is not built, in one list
 

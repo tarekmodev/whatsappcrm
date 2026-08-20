@@ -121,8 +121,15 @@ carries no id.
 **The password is taken here, not on the verify page**, and that is a decision rather than a
 convenience: a verify page that asks for a password is a page an attacker who intercepted the
 link can _complete_, whereas one that only confirms is not. It is hashed with argon2id at the
-same cost parameters as `users.password_hash` before it is stored, and an unconsumed signup is
-removed by the expiry sweep, so an abandoned one leaves no credential behind.
+same cost parameters as `users.password_hash` before it is stored.
+
+> ⚠️ **An abandoned signup is not cleaned up on a timer.** Nothing sweeps `tenant_signups` — the
+> only delete anywhere is inside `POST /signup` itself, scoped to the one slug being claimed. So
+> a row nobody verifies keeps its `password_hash`, `email` and `ip_address` until somebody signs
+> up for that **exact** slug, which may be never. The token expires after `signupTokenTtlMs`; the
+> credential behind it does not. `tenant_signups_expires_at_idx` is a partial index over
+> `(expires_at) WHERE consumed_at IS NULL` — exactly a sweep's predicate — and the sweep it was
+> built for has not been written.
 
 ### `POST /api/v1/signup/verify`
 
@@ -238,8 +245,8 @@ Four behaviours a caller will otherwise discover by experiment:
 - **`expiresAt` does not move.** The deadline belongs to the signup, not to the last email about
   it. Extending it on every resend would make the window renewable at one request a day, and the
   slug reservation rides on that column. A resend near the deadline therefore sends a link with
-  little life left; the way to get another full window is to sign up again, which the expiry
-  sweep has by then made possible.
+  little life left; the way to get another full window is to sign up again for the same slug,
+  which is what deletes the lapsed row and releases the name — nothing else does.
 - **An address with nothing outstanding gets `202` and no mail**, with an `expiresAt` computed as
   though a signup had started now. The alternative is an oracle for which addresses have signed
   up. Past `resendsPerSignup` the answer is the same, for the same reason.
@@ -310,7 +317,7 @@ Three properties, all of them 0005's invite and password-reset mechanism reused 
 | `signupsPerIpPerHour`      | 5     | One machine minting signups or enumerating slugs         | Redis **and** Postgres |
 | `signupsPerEmailPerDay`    | 3     | Mailbox flooding through the form                        | Redis **and** Postgres |
 | `slugChecksPerIpPerMinute` | 30    | The form checking as the user types. A debounce backstop | Redis only             |
-| `resendsPerSignup`         | 3     | Links re-sent for one pending signup                     | Postgres only          |
+| `resendsPerSignup`         | 3     | Links re-sent for one pending signup                     | Redis **and** Postgres |
 
 **The Redis windows fail open**, matching `LoginThrottleService`: failing closed would turn a
 cache outage into "nobody can sign up". What makes that safe is the durable layer — the two
@@ -322,11 +329,25 @@ The two layers count different things on purpose. Redis counts **attempts**, inc
 never became a row — a refused slug, a rejected body — so it catches a caller hammering the
 endpoint without ever succeeding. Postgres counts **rows created**.
 
-`POST /signup/resend` needs its own answer because it creates no row for those counts to see, so
-its ceiling lives on `tenant_signups.resend_count` and is carried in the `UPDATE`'s own predicate
-— the check and the increment are one statement, so two simultaneous resends cannot both pass it.
-Between the two, verification mail to one address is capped at `signupsPerEmailPerDay × (1 +
-resendsPerSignup)` a day with no cache involved.
+`POST /signup/resend` is bounded on both layers too, but they bound different things and the
+numbers differ — the table's value is the Postgres half only:
+
+| Layer                                            | Bounds                       | Ceiling                                        |
+| ------------------------------------------------ | ---------------------------- | ---------------------------------------------- |
+| Redis `signup:resend:<hash(email)>`, 24 h        | Re-sends **per address**     | `resendsPerSignup × signupsPerEmailPerDay` = 9 |
+| Redis `signup:ip:<hash(ip)>`, 1 h                | Shared with `POST /signup`   | `signupsPerIpPerHour` = 5                      |
+| Postgres `tenant_signups.resend_count`           | Re-sends **per signup**      | `resendsPerSignup` = 3                         |
+
+The per-address window is deliberately the *total* rather than the per-signup ceiling: an address
+may hold `signupsPerEmailPerDay` signups and re-send each of them, so anything tighter would
+refuse a legitimate resend for a second signup and — worse — would fire before `resend_count` ever
+bound anything, leaving the durable ceiling unreachable whenever Redis was up.
+
+The durable half is the one that survives an outage, and it exists because a resend creates no row
+for the row counts to see. It is carried in the `UPDATE`'s own predicate, so the check and the
+increment are one statement and two simultaneous resends cannot both pass it. Between that and
+`signupsPerEmailPerDay`, verification mail to one address is capped at `signupsPerEmailPerDay × (1 +
+resendsPerSignup)` = 12 a day with no cache involved.
 
 `slugChecksPerIpPerMinute` is Redis-only and deliberately: an availability check creates no row,
 so there is nothing durable to count, and losing the limit during an outage costs nothing on an

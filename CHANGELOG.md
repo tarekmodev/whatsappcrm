@@ -499,10 +499,10 @@ RETURNING id`. A ticket that stays open for six hours escalates **once**, not on
   index on `(desired_slug) WHERE consumed_at IS NULL`; that predicate cannot also carry
   `AND expires_at > now()` because an index predicate must be `IMMUTABLE`, so the insert path
   deletes expired unconsumed rows for the slug in its own transaction first.
-  `POST /signup/verify` consumes the row with a conditional `UPDATE … WHERE consumed_at IS NULL
-RETURNING`, so the statement is the concurrency control and two clicks on one link provision
-  one tenant, then provisions, creates the first admin and issues a session in that same
-  transaction. The password is taken at the **form**, not on the verify page: a verify page that
+  `POST /signup/verify` consumes the row with a conditional
+  `UPDATE … WHERE consumed_at IS NULL … RETURNING`, so the statement itself is the concurrency
+  control and two clicks on one link provision one tenant. It then provisions, creates the first
+  admin and issues a session in that same transaction. The password is taken at the **form**, not on the verify page: a verify page that
   asks for a password is one an attacker who intercepted the link can complete, where one that
   only confirms is not. `SIGNUP_ENABLED=false` answers `404` on all four rather than `403`,
   because a disabled feature that advertises itself is one somebody probes.
@@ -577,10 +577,17 @@ deleted`, with `pending` renamed to `created` (catalogue-only, no table rewrite)
   cancel, undo, delete, and the four operator routes — are published in `packages/contracts` and
   unimplemented. Nothing writes `lifecycle_events`; its only rows are TAR-403's backfill.
   `assert_tenant_serviceable` exists with no callers, so `assert_tenant_active` is still the live
-  gate and still refuses `suspended` — which means a suspended tenant's inbound webhook is
-  refused, the opposite of what `TENANT_STATUS_EFFECTS` publishes and of what TAR-36 requires.
-  Moving that call site is a hard gate on `TenantStatusGuard` existing, since the wider function
-  with no HTTP gate behind it would hand a suspended tenant's agents their console back.
+  gate and still refuses `suspended`. That is narrower than it sounds and the difference matters:
+  a suspended tenant's inbound message is still **accepted** — Meta gets its `200` and the payload
+  is stored in `webhook_events` through `SystemPrisma`, before any tenant is resolved. What the
+  gate refuses is the *projection* into `conversations` and `messages`, which runs under
+  `TenantPrisma`; the processor catches `TenantNotActiveError` by name and parks the event with
+  its payload intact rather than failing it. So nothing is bounced and nothing is lost — but a
+  parked row is deliberately not claimable, so **a reactivated tenant does not get those messages
+  back on its own**: replay is a hand-run `UPDATE` per event, and the platform-admin endpoint that
+  ought to do it authorised and audited does not exist. Moving that call site is a hard gate on
+  `TenantStatusGuard` existing, since the wider function with no HTTP gate behind it would hand a
+  suspended tenant's agents their console back.
 
 - **A tenant admin can see and change their own workspace, plan and seats** (TAR-36, TAR-409) —
   `/settings/workspace` renders the workspace profile, the plan and its usage, and a lifecycle

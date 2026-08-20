@@ -137,7 +137,8 @@ When a workspace is suspended:
 
 - **Your agents cannot sign in.** Anyone signed in loses access on their next action.
 - **Your customers' messages still arrive and are still stored.** Nothing is dropped and nobody
-  is bounced. You simply cannot reply until access is restored.
+  is bounced. They are held outside your inbox, so you will not see them on screen while the
+  workspace is suspended, and you cannot reply until access is restored.
 - **Nothing is deleted.** Every conversation, contact, ticket and setting stays exactly where it
   is.
 
@@ -150,6 +151,11 @@ A suspended workspace comes back with **all of its data intact and nothing to se
 Your agents sign in and find their conversations, tickets and contacts where they left them.
 
 Settle whatever caused the suspension — usually an outstanding payment — and access is restored.
+
+> ⚠️ **Messages sent to you *during* the suspension do not appear by themselves.** They were kept,
+> not lost, but putting them into your inbox is a manual step someone on the platform team has to
+> run. Ask for it when you ask for the workspace to be reactivated, and tell your team to expect a
+> gap in the thread until it is done.
 
 > **Reactivation is not self-service today.** There is no button in the console for it, and no
 > payment screen behind one. Contact support; someone on the platform team restores access.
