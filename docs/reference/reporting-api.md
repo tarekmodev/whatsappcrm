@@ -72,14 +72,18 @@ between two calls only because the underlying tickets did.
 
 | Parameter        | In    | Type                | Required | Default | Notes                                                        |
 | ---------------- | ----- | ------------------- | -------- | ------- | ------------------------------------------------------------ |
-| `from`           | query | `YYYY-MM-DD`        | yes      | —       | Tenant-local date, inclusive. No default — see below         |
+| `from`           | query | `YYYY-MM-DD`        | yes      | —       | Tenant-local date, inclusive. The API applies no default     |
 | `to`             | query | `YYYY-MM-DD`        | yes      | —       | Tenant-local date, inclusive                                 |
 | `scope`          | query | `assigned` \| `all` | no       | `all`   | Narrowed to `assigned` without `report:read_all`             |
 | `assignedTeamId` | query | uuid                | no       | —       | Restricts to tickets assigned to that team. `404` if unknown |
 
-**`from` and `to` are required and there is no default range.** A dashboard that silently
-picks one shows numbers for a period nobody asked about, and a supervisor quoting them to a
-client would have no way to know which period that was.
+**`from` and `to` are required and the API applies no default.** A range this layer invented
+would be a period nobody asked for, carried into an export and quoted to a client with
+nothing on the response saying where it came from. Choosing a starting range is a
+presentation decision, so it belongs to the caller: the console picks the last 30 days,
+fills its own date fields from that choice and names the resolved range above the figures.
+The API's contribution is that the range is always explicit in the request and echoed in
+`range`.
 
 ```bash
 curl -b cookies.txt \
@@ -385,12 +389,21 @@ tickets. A caller without `report:read_all` asking for `all` is **narrowed to `a
 rather than refused**, and the response echoes `"scope": "assigned"` so the console can say
 so beside the numbers.
 
-Without `report:read_all` the `agents` array additionally contains **exactly one row, the
-caller's own**. ADR 0004 invariant 4 fixes which tickets are aggregated, and `scope` already
-applies it; what is withheld is the breakout by colleague, because an agent's visible set
-includes their team's tickets and a per-agent table over it is a ranking of their teammates.
-The summary and series are unchanged and still cover the visible set. This narrows and can
-never widen, so it cannot become a read channel around the matrix.
+Without `report:read_all` the `agents` array additionally contains **one row, the caller's
+own — plus the unattributed row where there is one**. ADR 0004 invariant 4 fixes which
+tickets are aggregated, and `scope` already applies it; what is withheld is the breakout by
+colleague, because an agent's visible set includes their team's tickets and a per-agent table
+over it is a ranking of their teammates. The summary and series are unchanged and still cover
+the visible set. This narrows and can never widen, so it cannot become a read channel around
+the matrix.
+
+**Do not assert `agents.length === 1` for a narrowed caller.** The unattributed row is
+appended independently of the permission, so an agent whose visible set contains work with no
+recorded responder or resolver receives two rows.
+
+**The row count is decided by the permission, not by `scope`.** A caller holding
+`report:read_all` gets a row per active user whichever `scope` they ask for; the rows their
+narrowed set has no work for come back zero-filled rather than absent.
 
 > **TODO(author):** ADR 0010 open question 1 leaves this as a product call for the PO. It
 > ships as described; it is one branch in one service to reverse.
@@ -413,11 +426,12 @@ responder's row.
 
 ### The roster, and the rows that are not agents
 
-The breakdown carries **every active agent, zero-filled**, not only those with work in the
-range. An agent who resolved nothing is a fact about the range, and their absence would read
-as a loading bug. An _inactive_ user appears only when they have work in the range, so a
-departed contractor's numbers do not vanish out of a closed period; `isActive` is `false` on
-their row.
+The breakdown carries **every active user, zero-filled**, not only those with work in the
+range. The roster query selects on `status: 'active'` with no role predicate, so supervisors
+and admins appear as rows too — "agent" in the field names is the loose sense, not the role.
+Somebody who resolved nothing is a fact about the range, and their absence would read as a
+loading bug. An _inactive_ user appears only when they have work in the range, so a departed
+contractor's numbers do not vanish out of a closed period; `isActive` is `false` on their row.
 
 A final row with `userId: null` and `name: null` is the **unattributed** row: work whose
 responder or resolver was never recorded — a ticket predating the attribution columns, or a

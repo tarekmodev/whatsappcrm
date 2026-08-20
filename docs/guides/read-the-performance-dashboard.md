@@ -12,22 +12,25 @@ away as a spreadsheet.
 ## Before you start
 
 - You are signed in to your workspace.
-- Every role can open **Performance** from the left-hand navigation.
+- Every role can open **Reports** from the left-hand navigation. The page itself is headed
+  **Performance**.
 - Supervisors and admins see the whole workspace. Agents see their own and their teams'
   tickets, and only their own row in the breakdown.
 
 ## Choose a date range
 
-Performance always shows a range you picked. There is no default — you choose before you see
-numbers, so a figure you quote is never for a period you did not ask about.
+**The page opens on the last 30 days.** That is a starting point, not a period you asked
+for — so before you quote any figure from this screen, read the range line above it and
+confirm it covers what you mean.
 
-1. Open **Performance** from the navigation.
+1. Open **Reports** from the navigation.
 2. Under **Date range**, set **From** and **To**, or pick one of the **Quick ranges** —
    **Last 7 days**, **Last 30 days** or **Last 90 days**.
 3. Select **Apply range**.
 
-The line above the figures confirms what you are looking at: _1 August 2026 to 16 August
-2026, in your workspace's time zone_.
+The line above the figures always names what is on screen: _1 Aug 2026 to 16 Aug 2026, in
+your workspace's time zone_. It updates with the range, so it is the one place to check
+before you copy a number into a report.
 
 **Dates are your workspace's dates.** If your workspace is set to Riyadh time, "1 August" runs
 from midnight in Riyadh — not midnight UTC, and not midnight where you happen to be. Everyone
@@ -142,8 +145,10 @@ The Overview and Daily volume cover every ticket that agent can see. **By agent*
 row alone, because a table of their colleagues' response times is a comparison the workspace
 does not put in front of them.
 
-If you are a supervisor and the breakdown shows only your own row, check the **Scope**
-control — it is set to **Assigned to me** rather than **All tickets**.
+**This is decided by your account, not by the Scope control.** Setting **Scope** to
+**Assigned to me** narrows which tickets are counted; it never changes how many rows the
+breakdown has. If you expect to see your colleagues and do not, your account does not have
+workspace-wide reporting — ask an admin.
 
 ## Troubleshooting
 
