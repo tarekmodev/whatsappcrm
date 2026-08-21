@@ -169,6 +169,36 @@ change.
 
 ### Added
 
+- **The notification inbox has a read surface, and suspending an agent disarms their
+  workflows** (TAR-596) — two gaps a post-merge review of the workflow builder found and
+  re-verified against `main`.
+  ADR 0002's REST table and ADR 0009 decision 7 both publish `GET /api/v1/notifications` and
+  `POST /api/v1/notifications/{id}/acknowledge` as the generalised inbox, and no controller
+  existed: a `notify` action and an auto-deactivation each wrote a durable row that nothing
+  listed and nobody could acknowledge, so a workflow could switch itself off with no way for
+  a supervisor to find out. Both routes now exist, on `ticket:read` and narrowed to
+  `recipient_user_id = principal.userId` on top of RLS — somebody else's notification answers
+  **404, not 403** — keyset paginated on `(created_at DESC, id DESC)` against the index that
+  was already there, filterable by `type` and, by default, to what is still unacknowledged.
+  The acknowledge is idempotent and writes the same column as the `/sla-alerts` one, which is
+  point of one table and one unread count. `GET /api/v1/sla-alerts` and
+  `GET /api/v1/escalation-alerts` are untouched and stay as published, as single-type views
+  over the same rows; `escalation` is deliberately not in the generalised list, because its
+  response carries two fields `NotificationResponse` has no home for.
+  The second gap was quieter. A workflow may only name an **active** user —
+  `REFERENCEABLE_USER` is the predicate arming resolves against — and `users.service.ts`
+  disarmed workflows on the removal path only. Suspending somebody therefore left every
+  workflow naming them armed against an actor the executor refuses to use: the first ticket
+  to reach one failed `reference_missing` and auto-deactivated it anyway, so the automation
+  broke on a customer's ticket rather than in front of the admin who caused it. The
+  suspension now disarms in the same transaction as the status change, with its own
+  `reference_suspended` reason — the console's copy points at reinstating the person rather
+  than at replacing them — and the count lands on the `user.status_changed` audit row.
+  Unlike removal it leaves `workflow_references` standing, because the account is still there
+  and the admin still needs to see which field names whom. Reactivating them re-arms nothing:
+  `broken_reason` clears on the next write once every reference resolves, and a human with
+  `workflow:write` sends `isActive: true`.
+
 - **The workflow builder is documented, for both readers** (TAR-401) — TAR-27 shipped a
   trigger → condition → action engine (TAR-395) and the console that writes it (TAR-396), and
   neither had a page. Two documents, split by reader rather than averaged into one.
