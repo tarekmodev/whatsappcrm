@@ -169,6 +169,40 @@ change.
 
 ### Added
 
+- **The workflow builder is documented, for both readers** (TAR-401) — TAR-27 shipped a
+  trigger → condition → action engine (TAR-395) and the console that writes it (TAR-396), and
+  neither had a page. Two documents, split by reader rather than averaged into one.
+  [The workflow automation API reference](docs/reference/workflows-api.md) is the engineer's:
+  all nine routes with their parameters, status codes and error codes, the seven-condition
+  grammar with the operator each type offers, the five actions and what each one writes, the
+  limits and where they are published, and — at length, because it is the design and not a
+  detail — **why the row that records what a workflow did is the row that reserves the right
+  to do it**. It documents what a reader would otherwise have to derive from source: that the
+  dedupe key is namespaced per trigger and why the two ticket-scoped spellings had to diverge;
+  that the run budget is asked _before_ the claim for ticket-scoped triggers, so an escalation
+  is late rather than lost; that a reference is refused on create and resolved-but-not-refused
+  on update, which is what makes the two-step repair possible; and that `brokenReason` is
+  derived state rather than a latch.
+  [Automate what happens to a ticket](docs/guides/automate-tickets-with-workflows.md) is the
+  supervisor's, and refuses all of that vocabulary: how the three parts decide, why every
+  matching workflow runs where a routing rule's first match wins, why a new workflow arrives
+  switched off, what each run status and failure reason means, and how to repair a workflow
+  that switched itself off. Both pages say plainly that **the dry run checks the conditions
+  and not the trigger** — it answers "does this ticket match", not "would this ticket have
+  fired it" — which is the misreading a supervisor testing an unfamiliar workflow makes first.
+  Verified by running `jest src/workflows` (4 suites, 64 tests, all passing) against the
+  commit the pages were written from. The `vitest` suites could not be run here: `vitest@4.1.10`
+  resolves a `#module-evaluator` package import that Node v22.15.0 does not define, so the
+  claims those suites cover are read from the source and labelled as such on the page.
+  ⚠️ Three gaps are stated on the reference rather than left to be discovered, all pre-existing:
+  event triggers have no reconciler, so an enqueue lost to a Redis outage costs that ticket its
+  automation permanently (0009 risk 3); `workflow_runs` publishes a 90-day retention that
+  nothing enforces; and **`workflow_notify` rows have no read surface** — 0009 publishes
+  `GET /api/v1/notifications` and `docs/reference/data-model.md` describes it, but no such
+  controller exists, so a `notify` action writes a durable row nothing lists. That last one is
+  carried as a `TODO(author)` on the reference and stated as a limitation in the guide, because
+  it changes what a supervisor should reach for today.
+
 - **A supervisor can now build trigger → condition → action automations, and they run without
   anybody watching** (TAR-27, TAR-395) — a workflow is one rule: one trigger, one condition
   set, one ordered action list, and the tenant's workflows _are_ the rule list the console

@@ -551,6 +551,12 @@ Each recipient gets **both**:
 - An `sla.breached` realtime event addressed to `user:{recipientId}` — one emit per row that
   was actually inserted, after the transaction commits.
 
+**A breach also raises a workflow trigger.** Once the flip and its alerts commit, the sweep
+enqueues a `ticket_sla_breached` occurrence, so a tenant's own automation can tag, reassign or
+re-prioritise the ticket — [the workflow automation API reference](workflows-api.md). The
+enqueue is logged and swallowed on failure, and `breached` is terminal, so nothing re-derives
+it: this is the one trigger with no reconciler.
+
 If the process dies between commit and emit, the row exists and the supervisor sees it on
 their next page load. **The row is the record; the socket is an accelerator.** The event is
 deliberately not broadcast to a tenant-wide room: the read rule is "you are a named
