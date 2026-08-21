@@ -1740,6 +1740,30 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
 
 ### Fixed
 
+- **A realtime socket can be opened under the local auth stub** (TAR-576) —
+  `StubPrincipalSource` stamped every principal with a literal `sessionId`, and the Socket.IO
+  handshake does not take the ticket's word for who is behind it: it spends the ticket and
+  then re-reads the session through `SessionService.resolveBySessionId`, which is what lets a
+  revocation reach an already-open socket. That id matched no row in `sessions`, so under
+  `AUTH_STUB_ENABLED=true` — what `.env.example` ships and the README tells a developer to
+  use — **every** WebSocket upgrade was refused, with a console warning as the only symptom.
+  Inbox live updates, canned-response propagation and SLA events silently never arrived in a
+  running browser, and TAR-486's "visible in the other session within a few seconds" could not
+  be demonstrated through the product at all.
+  The stub now supplies the session as well as the principal: it upserts a live `sessions`
+  row for the user it resolved and names that row. Deliberately not the smaller diff — teaching
+  the handshake to recognise a magic id would put an `if (stub)` inside the enforcement path,
+  which is what "stub the source of the principal, never the guard" exists to prevent, so the
+  handshake still runs its real ticket spend, its real session read and its real RLS.
+  The id is derived from the tenant and the user rather than being a second literal: `sessions.id`
+  is a primary key shared by every tenant, so one constant would be one row for the whole
+  database and five of the seed's six stub users would resolve to somebody else. The row's
+  `token_hash` is the digest of a token generated and immediately forgotten, so nothing readable
+  in the repository can be presented as a session cookie, and the principal now reports the
+  deadline the row carries instead of a fixed date in 2026. `realtime-stub-handshake.int-spec.ts`
+  covers it end to end — ticket over HTTP, then a real socket — across two tenants and two roles,
+  and asserts that an unissued ticket and a spent one are still refused.
+
 - **Detaching a tenant's primary custom domain no longer leaves invite and password-reset
   links pointing at it** (TAR-534) — `AdminDomainsService.deactivate()` cleared
   `activated_at` and left `is_primary` exactly where it was, so the state TAR-420 blocks on
