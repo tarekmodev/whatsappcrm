@@ -939,11 +939,16 @@ its own, does **not** refresh a branch that has fallen behind. It just waits. Th
 produced the loop TAR-446 was opened for: somebody had to notice each stale pull request
 and ask its author to rebase, repeatedly, faster than merges were landing.
 
-`.github/workflows/pr-autoupdate.yml` closes that gap. On every push to `main` it merges
-`main` into every open pull request that is waiting to auto-merge, which reruns the
-required checks against what is now on `main`. Green plus up to date is what auto-merge
-wants, so it lands the pull request unattended. Branches without auto-merge enabled are
-left alone — asking for auto-merge is what opts a branch into being kept fresh.
+`.github/workflows/pr-autoupdate.yml` closes that gap. On every push to `main` — and
+again the moment a pull request opts in — it merges `main` into every open pull request
+that is waiting to auto-merge, which reruns the required checks against what is now on
+`main`. Green plus up to date is what auto-merge wants, so it lands the pull request
+unattended. Branches without auto-merge enabled are left alone — asking for auto-merge is
+what opts a branch into being kept fresh.
+
+Both triggers matter. Without the second, a pull request that asks for auto-merge while it
+is _already_ behind would wait for the next push to `main` to be noticed — and when nothing
+else is in flight, that push is the one it is itself trying to make.
 
 A merge queue would be the natural fix and is deliberately not used here: it is an
 organization-owned-repository feature, and this repository belongs to a user account, so
