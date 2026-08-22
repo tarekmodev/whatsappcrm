@@ -196,9 +196,16 @@ row reads:
   id or an elapsed-timer measurement, platform forensics rather than something a tenant admin
   needs. Neither is in `TenantLifecycleEventSchema`.
 
-> **Nothing writes this table today.** Its only rows are the ones TAR-403's migration backfilled
-> for the state each tenant was already in, carrying `actor_type = 'unattributed'` and
-> `trigger = 'system'`. Application code never writes `unattributed`.
+A tenant's trail opens with its **genesis row**, written by `TenantProvisioningService` in the
+same transaction that inserts the tenant (TAR-598). It carries `from_state` NULL — the case that
+column is nullable for — `to_state` of whichever status the onboarding path starts on,
+`trigger` and `actor_type` of `system`, and the path itself in `metadata`. `occurred_at` is the
+tenant's own `created_at`. Provisioning is 0009's documented exception to `transition()` owning
+`tenants.status`, and the genesis row is that exception covering the trail as well as the column.
+
+The rows TAR-403's migration backfilled — one per tenant existing when the table was introduced,
+for the state it was already in — carry `actor_type = 'unattributed'` and `trigger = 'system'`.
+Application code never writes `unattributed`.
 
 ## Endpoints
 

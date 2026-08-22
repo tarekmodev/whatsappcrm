@@ -91,7 +91,10 @@ const BILLING_EVENT_TARGETS: Readonly<Partial<Record<BillingEvent['type'], Tenan
  * cancelling, the operator deactivating or reactivating, a billing webhook, and
  * the retention sweep. `TenantProvisioningService` is the single documented
  * exception, and only because its write happens inside the `INSERT` that creates
- * the row — there is no prior state to transition from.
+ * the row — there is no prior state to transition from. It writes the tenant's
+ * genesis `lifecycle_events` row (`from_state IS NULL`) in that same
+ * transaction and hands it to `notifyOfEvent` once it has committed, so a new
+ * tenant has a trail and a `tenant_welcome` notice like every other arrival.
  *
  * ## What one transition does
  *
@@ -164,7 +167,9 @@ export class TenantLifecycleService {
         `(trigger ${input.trigger}, actor ${input.actor.actorType}).`,
     );
 
-    await this.enqueueNotification(result);
+    if (result.eventId !== null) {
+      await this.notifyOfEvent(result.state.id, result.eventId);
+    }
 
     return result;
   }
@@ -235,22 +240,26 @@ export class TenantLifecycleService {
   }
 
   /**
-   * The notification, after the commit.
+   * The notification for one committed `lifecycle_events` row, after the commit.
    *
    * The `lifecycle_events` row id **is** the job id, which is what makes a
    * redelivery a no-op: BullMQ ignores an `add` for an id it already holds. A
    * failure here is not a failure of the transition — `enqueue` never throws,
    * and the row still carries `notified_at IS NULL` for the sweep to find.
+   *
+   * Public because `transition()` is not the only writer of a row this queue has
+   * to carry. `TenantProvisioningService` writes the genesis row inside the
+   * `INSERT` that creates the tenant — 0009's documented exception, and the
+   * producer of `tenant_welcome` — and calls this once that insert's transaction
+   * has committed. **After the commit, never inside it**, for the reason the
+   * class comment gives: a job that starts before its row is visible reads
+   * nothing and stamps nothing.
    */
-  private async enqueueNotification({ state, eventId }: TransitionResult): Promise<void> {
-    if (eventId === null) {
-      return;
-    }
-
+  async notifyOfEvent(tenantId: string, eventId: string): Promise<void> {
     const outcome = await this.queue.enqueue(
       TENANCY_QUEUE,
       NOTIFY_TENANT_LIFECYCLE_JOB,
-      { tenantId: state.id, eventId },
+      { tenantId, eventId },
       // Deterministic on the audit row, so a redelivery of the same transition
       // is a duplicate BullMQ discards rather than a second email to every admin.
       // Retries and retention come from the shared options — without `attempts`
