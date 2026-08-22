@@ -2,7 +2,10 @@ import type { PlanListResponse } from '@whatsappcrm/contracts';
 import { AutoGrid } from '@/components/layout/AutoGrid';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
+import { TextLink } from '@/components/ui/TextLink';
+import { webEnv } from '@/lib/config/env';
 import { useContent } from '@/lib/content';
+import { mailto } from '@/lib/mailto';
 import { PlanCard } from './PlanCard';
 import { PlanCardSkeleton } from './PlanCard.Skeleton';
 import { LazyPlanCheckoutButton } from './billing-widgets.lazy';
@@ -31,9 +34,25 @@ export function PlansGrid({
 
   if (plans.length === 0) {
     return (
+      // `settings` rather than `billing`, which the panel above already uses:
+      // the two can be on screen together, and this is not "you have no plan" —
+      // it is the operator not having put one on sale, the same shape as the
+      // WhatsApp panel with no Meta app configured. Like that one, the copy says
+      // "contact support", so the state offers it where an address is set.
       <EmptyState
-        heading={content.billing.plansEmptyHeading}
-        body={content.billing.plansEmptyBody}
+        icon="settings"
+        title={content.billing.plansEmptyHeading}
+        description={content.billing.plansEmptyBody}
+        action={
+          webEnv.supportEmail === null ? undefined : (
+            <TextLink
+              isExternal
+              href={mailto(webEnv.supportEmail, content.billing.plansEmptySupportSubject)}
+            >
+              {content.billing.plansEmptySupportAction}
+            </TextLink>
+          )
+        }
       />
     );
   }

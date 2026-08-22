@@ -53,6 +53,32 @@ const ICON_PATHS = {
   ],
   info: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18', 'M12 11.5v5', 'M12 8h.01'],
   /**
+   * "Something is wrong with the thing you are looking at" (TAR-515). The
+   * triangle is reserved for exactly that: `alert` is a bell, because a breached
+   * ticket is somebody else's work needing attention rather than a fault, and
+   * `info` is a circle, because an explanation is not a warning.
+   */
+  warning: [
+    'M10.3 4.9 2.7 18a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 4.9a2 2 0 0 0-3.4 0',
+    'M12 10v4',
+    'M12 17.5h.01',
+  ],
+  /**
+   * A narrowing, for the empty state of a list a filter has emptied. Three lines
+   * that taper, deliberately unlike `menu`'s three equal ones — the two never
+   * appear together, but a set in which "filter" and "menu" are the same shape
+   * is a set with one glyph too few.
+   */
+  filter: ['M4 6h16', 'M7 12h10', 'M10 18h4'],
+  /** A custom domain (TAR-29): a hostname, not a link and not a padlock. */
+  globe: [
+    'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18',
+    'M3.5 9.5h17',
+    'M3.5 14.5h17',
+    'M12 3a14 14 0 0 1 0 18',
+    'M12 3a14 14 0 0 0 0 18',
+  ],
+  /**
    * The onboarding checklist (TAR-407). Ticks beside rules rather than the
    * `note` page, which is this set's shape for an internal note — a checklist is
    * a sequence of things to do, not a thing somebody wrote.
@@ -113,7 +139,11 @@ const ICON_PATHS = {
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;
-export const ICON_SIZES = ['sm', 'md'] as const;
+/**
+ * `lg` is the state plate's size and nothing else's — an empty or error state
+ * has no border left to be recognised by, so the icon carries that weight.
+ */
+export const ICON_SIZES = ['sm', 'md', 'lg'] as const;
 export type IconSize = (typeof ICON_SIZES)[number];
 
 /** Icons whose meaning depends on which way the page reads. */
