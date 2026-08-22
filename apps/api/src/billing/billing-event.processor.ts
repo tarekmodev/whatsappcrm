@@ -1,22 +1,58 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BILLING_PROVIDER, type BillingEvent, type BillingProvider } from '@whatsappcrm/contracts';
-import { describeFailure } from '../common/describe-failure';
+import {
+  BILLING_PROVIDER,
+  type BillingEvent,
+  type BillingProvider,
+  type WebhookSubject,
+} from '@whatsappcrm/contracts';
+import { ErrorTrackingService } from '../observability/error-tracking.service';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 import { TenantLifecycleService } from '../tenancy/lifecycle/tenant-lifecycle.service';
 import { WebhookEventsRepository } from '../webhooks/webhook-events.repository';
+import { BILLING_WEBHOOK_PROVIDER } from './billing.constants';
 import { SeatSyncService } from './seat-sync.service';
 import { SubscriptionSyncService } from './subscription-sync.service';
 
 /**
  * Why a billing event was parked. Recorded in `webhook_events.last_error`, which
  * is what an operator greps during an incident, so each one names the fix.
+ *
+ * These are also the **grouping key of the alert** each park raises (TAR-668),
+ * which is the second reason they are fixed tokens: the tracker files one issue
+ * per reason, so "unresolved plan, forty times" is one thing to fix rather than
+ * forty rows to read. Anything variable — a plan key, a parse detail, an id —
+ * goes in the alert's context, never in the token.
  */
 const PARK_REASON = {
   unresolvedTenant: 'unresolved_tenant',
   unrecognisedPayload: 'unrecognised_payload',
   unresolvedPlan: 'unresolved_plan',
+  /**
+   * The retry budget is spent on a fault that never settled. The token is what
+   * makes this line groupable at all — the detail after it is the last error's
+   * own message, which is different on every occurrence.
+   */
+  attemptsExhausted: 'attempts_exhausted',
 } as const;
+
+type ParkReason = (typeof PARK_REASON)[keyof typeof PARK_REASON];
+
+/**
+ * What a park alert can say about the delivery regardless of *why* it parked.
+ *
+ * Assembled once, immediately after the claim, because two of the four park
+ * branches are reached before the payload has been parsed into anything — an
+ * alert is only worth having if it can identify the delivery in every branch,
+ * including the ones where nothing was understood.
+ */
+interface ParkedEvent {
+  readonly webhookEventId: string;
+  /** The provider's own event id — for Standard Webhooks, the `webhook-id` header. */
+  readonly providerEventId: string;
+  /** The provider's name for the event, when its envelope carried one. */
+  readonly eventType: string | null;
+}
 
 /**
  * The worker half of the billing pipeline: take a stored `webhook_events` row,
@@ -69,6 +105,7 @@ export class BillingEventProcessor {
     private readonly subscriptions: SubscriptionSyncService,
     private readonly seats: SeatSyncService,
     private readonly lifecycle: TenantLifecycleService,
+    private readonly errorTracking: ErrorTrackingService,
   ) {
     this.maxAttempts = config.getOrThrow<number>('WEBHOOK_MAX_ATTEMPTS');
   }
@@ -85,13 +122,19 @@ export class BillingEventProcessor {
       return;
     }
 
-    const tenantId = await this.resolveTenant(claimed.payload);
+    const subject = this.provider.readWebhookSubject(claimed.payload);
+    const parked: ParkedEvent = {
+      webhookEventId,
+      providerEventId: claimed.providerEventId,
+      eventType: subject.eventType,
+    };
+    const tenantId = await this.resolveTenant(subject);
 
     if (tenantId === null) {
       // Recorded and parked, and the delivery was still answered 200. A 4xx or
       // 5xx would make the provider retry an event that will never resolve, and
       // ten of those disable the endpoint.
-      await this.events.markFailed(webhookEventId, PARK_REASON.unresolvedTenant);
+      await this.park(parked, PARK_REASON.unresolvedTenant, null);
       this.logger.warn(`Billing event ${webhookEventId} names no tenant we can resolve; parked.`);
 
       return;
@@ -113,11 +156,7 @@ export class BillingEventProcessor {
       // intact — the same treatment `WhatsAppEventProcessor` gives a notification
       // it cannot parse, and the difference TAR-663 turned on: recording this as
       // processed is how a paying tenant went unactivated in silence.
-      await this.events.markFailed(
-        webhookEventId,
-        `${PARK_REASON.unrecognisedPayload}: ${parsed.detail}`,
-        tenantId,
-      );
+      await this.park(parked, PARK_REASON.unrecognisedPayload, tenantId, parsed.detail);
       this.logger.error(
         `Billing event ${claimed.providerEventId} for tenant ${tenantId} could not be read ` +
           `(${parsed.detail}); parked as ${PARK_REASON.unrecognisedPayload}. ` +
@@ -138,27 +177,23 @@ export class BillingEventProcessor {
     }
 
     try {
-      await this.apply(webhookEventId, parsed.event);
+      await this.apply(parked, parsed.event);
     } catch (error: unknown) {
-      await this.handleFailure(webhookEventId, claimed.attempts, error);
+      await this.handleFailure(parked, claimed.attempts, tenantId, error);
     }
   }
 
   /**
    * The two writes, in order, and the seat push that follows a period roll.
    */
-  private async apply(webhookEventId: string, event: BillingEvent): Promise<void> {
+  private async apply(parked: ParkedEvent, event: BillingEvent): Promise<void> {
     const outcome = await this.subscriptions.apply(event);
 
     if (outcome.result === 'unresolved_plan') {
       // A plan this platform does not carry, and no existing subscription to
       // inherit one from. No retry invents a catalogue row, so it is parked with
       // the payload intact for whoever seeds the mapping.
-      await this.events.markFailed(
-        webhookEventId,
-        `${PARK_REASON.unresolvedPlan}: ${outcome.detail}`,
-        event.tenantId,
-      );
+      await this.park(parked, PARK_REASON.unresolvedPlan, event.tenantId, outcome.detail);
       this.logger.error(
         `Billing event ${event.providerEventId} for tenant ${event.tenantId} could not be ` +
           `applied: ${outcome.detail}. Seed provider_product_id on the plan and replay the row.`,
@@ -180,7 +215,7 @@ export class BillingEventProcessor {
       }
     }
 
-    await this.events.markProcessed(webhookEventId, event.tenantId);
+    await this.events.markProcessed(parked.webhookEventId, event.tenantId);
   }
 
   /**
@@ -202,10 +237,12 @@ export class BillingEventProcessor {
    * `SystemPrisma` because there is no tenant in scope yet — establishing which
    * one it is *is* the work. Both lookups are by a unique-or-indexed provider id
    * and select one column.
+   *
+   * Takes the subject rather than reading it, because the caller needs the rest
+   * of it: `eventType` is what a park alert names, and re-reading the payload to
+   * get it would let the two answers drift.
    */
-  private async resolveTenant(payload: unknown): Promise<string | null> {
-    const subject = this.provider.readWebhookSubject(payload);
-
+  private async resolveTenant(subject: WebhookSubject): Promise<string | null> {
     if (subject.tenantId !== null) {
       return subject.tenantId;
     }
@@ -242,28 +279,98 @@ export class BillingEventProcessor {
    * row that has already had every attempt it is going to get, and so the
    * operator's `status = 'failed'` query is a complete list of what needs
    * attention.
+   *
+   * **The failure is described by its message**, as `WhatsAppEventProcessor`
+   * describes its own. This used to call `common/describe-failure`, which is the
+   * health endpoint's helper and deliberately reports only an error's `name` or
+   * its `errno` — that endpoint answers an unauthenticated caller, and a message
+   * there can carry a host name. Neither `webhook_events.last_error` nor the
+   * alert raised beside it is that surface, and the cost of reusing it was a
+   * parked row reading `attempts_exhausted: Error`, which tells whoever is
+   * triaging nothing about what actually failed (TAR-668).
    */
   private async handleFailure(
-    webhookEventId: string,
+    parked: ParkedEvent,
     attempts: number,
+    tenantId: string,
     error: unknown,
   ): Promise<void> {
-    const reason = describeFailure(error);
+    const reason = error instanceof Error ? error.message : String(error);
 
     if (attempts >= this.maxAttempts) {
-      await this.events.markFailed(webhookEventId, reason);
+      await this.park(parked, PARK_REASON.attemptsExhausted, tenantId, reason);
       this.logger.error(
-        `Billing event ${webhookEventId} failed ${attempts} times and was parked: ${reason}`,
+        `Billing event ${parked.webhookEventId} failed ${attempts} times and was parked: ${reason}`,
         error instanceof Error ? error.stack : undefined,
       );
 
       return;
     }
 
-    await this.events.recordAttemptFailure(webhookEventId, reason);
+    await this.events.recordAttemptFailure(parked.webhookEventId, reason);
 
     // Rethrown so BullMQ retries with backoff. The row stays `processing`, which
     // is re-claimable by design.
     throw error;
+  }
+
+  /**
+   * Parks the row **and raises the alert** — the single door every billing park
+   * goes through, which is the point of it existing (TAR-668).
+   *
+   * A parked row nobody queries is only marginally better than a dropped one.
+   * TAR-663 made unreadable billing webhooks park instead of vanish; this makes
+   * the parking audible, so a broken Polar integration surfaces in minutes
+   * rather than when a paying tenant complains that they were never activated.
+   * Four branches park, and a fifth added later gets the alert for free only if
+   * it calls this rather than `markFailed` — that is why the repository method
+   * is no longer reached directly from this class.
+   *
+   * ## What the operator gets, and what is deliberately withheld
+   *
+   * Enough to triage without opening a database: the row id to reset, the
+   * provider's event id to find the delivery in the Polar dashboard, the tenant,
+   * the event type, and the `last_error` exactly as written to the row. **Not
+   * the payload** — a billing payload carries a customer's name, email and
+   * address, `sendDefaultPii` is off for the same reason, and the row itself
+   * keeps the payload intact for whoever is authorised to read it.
+   *
+   * ## Order: the row first, then the alert
+   *
+   * The row is the durable record and the alert is a notification about it. A
+   * tracker outage must not leave a webhook unparked and re-claimable, so the
+   * write goes first. `captureMessage` is non-throwing and a no-op without
+   * `SENTRY_DSN`, so this adds no failure mode to the worker either way — in
+   * local development and CI the log line above each call is the whole record,
+   * as it was before.
+   */
+  private async park(
+    parked: ParkedEvent,
+    reason: ParkReason,
+    tenantId: string | null,
+    detail: string | null = null,
+  ): Promise<void> {
+    const lastError = detail === null ? reason : `${reason}: ${detail}`;
+
+    await this.events.markFailed(parked.webhookEventId, lastError, tenantId);
+
+    this.errorTracking.captureMessage(`Billing webhook parked: ${reason}`, {
+      // Low-cardinality only: these become the tracker's filter dimensions, so
+      // "every park for this tenant" and "every unresolved plan" are one click.
+      tags: {
+        provider: BILLING_WEBHOOK_PROVIDER,
+        reason,
+        tenantId: tenantId ?? 'unresolved',
+      },
+      extra: {
+        webhookEventId: parked.webhookEventId,
+        providerEventId: parked.providerEventId,
+        eventType: parked.eventType ?? 'none',
+        lastError,
+        replayWith:
+          `UPDATE webhook_events SET status = 'received', attempts = 0, last_error = NULL ` +
+          `WHERE id = '${parked.webhookEventId}' AND status = 'failed';`,
+      },
+    });
   }
 }

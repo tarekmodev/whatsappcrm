@@ -276,7 +276,7 @@ export class FakeBillingProvider implements BillingProvider {
   }
 
   readWebhookSubject(payload: unknown): WebhookSubject {
-    const envelope = payload as { data?: { tenantId?: unknown } } | null;
+    const envelope = payload as { type?: unknown; data?: { tenantId?: unknown } } | null;
     const tenantId = envelope?.data?.tenantId;
 
     return {
@@ -285,6 +285,7 @@ export class FakeBillingProvider implements BillingProvider {
       // to and no provider-side row to look up.
       providerSubscriptionId: null,
       providerCustomerId: null,
+      eventType: typeof envelope?.type === 'string' ? envelope.type : null,
     };
   }
 
