@@ -2401,6 +2401,8 @@ export const content = {
     noSubscriptionHeading: 'No paid plan yet',
     noSubscriptionBody:
       'This workspace is running on its trial allowances. Choose a plan below when you are ready — nothing is charged until you do.',
+    /** Jumps to the plans section on the same page (TAR-515). */
+    noSubscriptionAction: 'See the plans',
 
     seatsHeading: 'Agent seats',
     seatsUsage: (used: string, cap: string) => `${used} of ${cap} seats in use`,
@@ -2420,6 +2422,13 @@ export const content = {
     plansEmptyHeading: 'No plans are available',
     plansEmptyBody:
       'No plan is on sale for this workspace right now. Contact support and they can put one in place for you.',
+    /**
+     * The copy instructs "contact support", so the state offers it (TAR-515).
+     * Only rendered where `NEXT_PUBLIC_SUPPORT_EMAIL` is configured — the same
+     * rule the WhatsApp panel follows, for the same reason.
+     */
+    plansEmptySupportAction: 'Contact support',
+    plansEmptySupportSubject: 'Put a plan in place for our workspace',
     currentPlanBadge: 'Current plan',
     currentPlanAction: 'Your current plan',
     choosePlan: (planName: string) => `Choose ${planName}`,
