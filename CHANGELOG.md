@@ -1740,6 +1740,36 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
 
 ### Fixed
 
+- **A new tenant's first admin now gets the welcome email, and the tenant's trail starts
+  where the tenant does** (TAR-598) — `tenant_welcome` is one of ADR 0009 decision 7's ten
+  templates and was mapped in `TenantLifecycleNotifier`, but nothing could ever reach it.
+  The notifier sends off a committed `lifecycle_events` row, and creation was the one
+  arrival that wrote none: `TenantProvisioningService` decides a tenant's first status
+  inside the `INSERT` that creates it — 0009's documented exception to `transition()` being
+  the only writer of `tenants.status` — and stopped there. So the mapping's `trialing`
+  branch was dead in production, a signed-up admin got the verification mail and nothing
+  else, and `GET /tenant/lifecycle/events` opened empty until the tenant's first _later_
+  transition. The unit test covering the mapping passed throughout, because it called the
+  pure function directly.
+  Provisioning now writes the tenant's **genesis row** in the same transaction as the
+  tenant, with `from_state` NULL — the case that column is nullable for, and the shape
+  TAR-403's backfill already gave every tenant that predates the table — carrying
+  `trigger = 'system'`, `actor_type = 'system'` and which of the two onboarding paths ran.
+  `occurred_at` is read back from the tenant's own `created_at` rather than taken from a
+  second clock, so the row and the tenant cannot disagree about when the tenant began.
+  Who queues the notification follows who owns the commit: a call that opened its own
+  transaction queues it itself, and self-signup — which passes its transaction in, because
+  consuming the token, provisioning, creating the first admin and issuing the session are
+  one unit — is handed the row id and queues it after its own commit, when the row and the
+  admin are both visible to a worker. Nothing about the queue's durability changes: a
+  notification lost to a Redis outage is still re-enqueued by the lifecycle sweep's
+  backstop, and `notified_at` still makes a redelivery a no-op.
+  Only the creating call writes a genesis row. Provisioning's repair path deliberately does
+  not: a row written now for a tenant that has been trading for months would be dated now,
+  and the sweep would deliver it a welcome email. An operator-provisioned tenant gets the
+  row and no email — its arrival at `active` maps to no template, because its admin does not
+  exist yet and the operator is the one who knows.
+
 - **Detaching a tenant's primary custom domain no longer leaves invite and password-reset
   links pointing at it** (TAR-534) — `AdminDomainsService.deactivate()` cleared
   `activated_at` and left `is_primary` exactly where it was, so the state TAR-420 blocks on
