@@ -1476,10 +1476,17 @@ The surface built on this table is
 - **Tenant-scoped:** no. Platform-wide product catalogue; every tenant chooses from the
   same one.
 - **Unique:** `key`
+- **Checks:** `plans_key_format` — `key` matches `PLAN_KEY_PATTERN` and is at most 40
+  characters; `plans_entitlements_shape` — the `entitlements` JSON shape
 - **Owned by:** TAR-37
 
 `price_minor_units` is an integer count of the currency's minor unit, never a float.
 `entitlements` is JSONB so adding an entitlement is a data change rather than a migration.
+
+`key` is constrained to the contract's own grammar rather than left as free text (TAR-657).
+The console validates `GET /billing/plans` against `PlanSchema`, so a row whose key the
+contract refuses is a response no client can accept — and because the catalogue is
+platform-wide, one such row is every tenant's billing page, not one tenant's.
 
 #### `subscriptions`
 
