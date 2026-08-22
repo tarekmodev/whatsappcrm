@@ -358,9 +358,13 @@ entirely. The rules that keep it one `--size-bar` row:
   it. The drawer carries the same block pinned to its foot as well, because a control you
   have to scroll a nav list to reach is one you cannot rely on.
 - **The wordmark is the first thing to give way.** It stands down below 30rem, which is
-  the measured width at which the full lockup stops fitting beside the five controls
-  (150px available against 142px needed at 480px, and 67px at 390px). The drawer heads its
-  navigation with the same `BrandLockup`, so the workspace is still named at 320px.
+  the measured width at which the lockup stops fitting beside the five controls (150px
+  available at 480px, 67px at 390px). Above that it **truncates rather than overlapping**:
+  the lockup at its full width is 181px once TAR-521's mark is in front of the wordmark,
+  so the link shrinks and the name ellipsises down to the mark and no further. A lockup
+  that may not shrink does not get narrower, it gets drawn over the control beside it. The
+  drawer heads its navigation with the same `BrandLockup`, so the workspace is still named
+  at 320px.
 - **Order of sacrifice, if a sixth control is ever added.** Wordmark first, then the bell
   and the quick-create move _into_ the account menu. The row is never allowed to wrap and
   nothing is ever silently dropped. The bar's min-content is about 252px today, against
