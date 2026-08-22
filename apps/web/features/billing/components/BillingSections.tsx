@@ -95,7 +95,14 @@ export async function BillingSections({
               // A portal session needs a subscription to be a portal *for*, and
               // the API answers `not_found` without one. Saying so beats offering
               // a button that can only fail.
-              <Notice tone="info">{content.billing.portalUnavailableNotice}</Notice>
+              //
+              // Quiet, like the composer's destination notice in the inbox: it is
+              // guidance, not something that has gone wrong, and a saturated fill
+              // on a page that also carries an allowance warning spends the one
+              // loud register on the smaller message (TAR-711).
+              <Notice tone="info" variant="quiet">
+                {content.billing.portalUnavailableNotice}
+              </Notice>
             ) : (
               <>
                 <p>{content.billing.portalBody}</p>

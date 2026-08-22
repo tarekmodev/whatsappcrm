@@ -1,14 +1,14 @@
 import type { BillingSummaryResponse, SubscriptionStatus } from '@whatsappcrm/contracts';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { DetailList, type DetailListItem } from '@/components/ui/DetailList';
-import { EmptyState } from '@/components/ui/EmptyState';
+import { Notice } from '@/components/ui/Notice';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { TextLink } from '@/components/ui/TextLink';
 import { UsageMeter } from '@/components/ui/UsageMeter';
 import { AutoGrid } from '@/components/layout/AutoGrid';
 import { Stack } from '@/components/layout/Stack';
 import { useContent, type Content } from '@/lib/content';
-import type { UsageReading } from '@/lib/plan/usage-reading';
+import { detailTone, type UsageReading } from '@/lib/plan/usage-reading';
 import { BILLING_SECTION_IDS } from '../constants';
 import { formatCount, formatSeatPrice, type PlanUsageReadings } from '../plan-presentation';
 
@@ -24,8 +24,17 @@ import { formatCount, formatSeatPrice, type PlanUsageReadings } from '../plan-pr
  * **The meters render even when there is no subscription**, and that is the
  * point of splitting `entitlements` from `plan` in the contract: a workspace on
  * trial has bought nothing and still has real limits it can hit. Only the rows
- * that describe a *purchase* — status, price, renewal — are hidden, replaced by
- * an empty state that explains the trial instead of leaving a gap.
+ * that describe a *purchase* — status, price, renewal — are hidden.
+ *
+ * Which is exactly why what replaces them is **a line, not an empty state**
+ * (TAR-711). The card was wearing the full empty-state anatomy, icon and all,
+ * directly above two populated meters: the card is not empty, the plan is unset,
+ * and those are different statements. `EmptyState` is kept for surfaces that
+ * genuinely have nothing to show.
+ *
+ * The meters take `detailTone` rather than the reading's own tone, because this
+ * page has a banner above them that carries the allowance warning — see the rule
+ * for why three amber signals for two facts leave nothing to escalate to.
  */
 export function SubscriptionPanel({
   summary,
@@ -39,19 +48,16 @@ export function SubscriptionPanel({
   return (
     <Stack gap="5">
       {summary.subscription === null ? (
-        <EmptyState
-          icon="billing"
-          title={content.billing.noSubscriptionHeading}
-          description={content.billing.noSubscriptionBody}
-          // The copy says "choose a plan below", so the state offers the jump
-          // rather than leaving it to be found — the grid is under the fold on
-          // a phone. Same page, so the anchor is the whole of the action.
-          action={
-            <TextLink href={`#${BILLING_SECTION_IDS.plans}`}>
-              {content.billing.noSubscriptionAction}
-            </TextLink>
-          }
-        />
+        // Quiet rather than filled: nothing is wrong and nothing needs acting
+        // on. The link is inside the sentence because it *is* the next step —
+        // the grid is under the fold on a phone, and this is the same page, so
+        // the anchor is the whole of the action.
+        <Notice tone="info" variant="quiet">
+          {content.billing.noSubscriptionNotice}{' '}
+          <TextLink href={`#${BILLING_SECTION_IDS.plans}`}>
+            {content.billing.noSubscriptionAction}
+          </TextLink>
+        </Notice>
       ) : (
         <DetailList items={subscriptionDetails(summary, content)} />
       )}
@@ -64,7 +70,9 @@ export function SubscriptionPanel({
             uncapped: content.billing.seatsUsageUnlimited,
           })}
           ratio={readings.seats.ratio}
-          tone={readings.seats.tone}
+          value={readings.seats.used}
+          max={readings.seats.cap ?? undefined}
+          tone={detailTone(readings.seats)}
         >
           {summary.usage.seatsPending === 0
             ? undefined
@@ -78,7 +86,9 @@ export function SubscriptionPanel({
             uncapped: content.billing.conversationsUsageUnlimited,
           })}
           ratio={readings.conversations.ratio}
-          tone={readings.conversations.tone}
+          value={readings.conversations.used}
+          max={readings.conversations.cap ?? undefined}
+          tone={detailTone(readings.conversations)}
         />
       </AutoGrid>
     </Stack>

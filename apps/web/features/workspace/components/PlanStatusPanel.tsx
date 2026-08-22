@@ -42,6 +42,8 @@ export function PlanStatusPanel({ lifecycle }: { lifecycle: TenantLifecycleRespo
             uncapped: content.workspace.seatsUsageUnlimited,
           })}
           ratio={seats.ratio}
+          value={seats.used}
+          max={seats.cap ?? undefined}
           tone={seats.tone}
         >
           {seatNote(lifecycle, seats, content)}
@@ -54,6 +56,8 @@ export function PlanStatusPanel({ lifecycle }: { lifecycle: TenantLifecycleRespo
             uncapped: content.workspace.conversationsUsageUnlimited,
           })}
           ratio={conversations.ratio}
+          value={conversations.used}
+          max={conversations.cap ?? undefined}
           tone={conversations.tone}
         />
       </AutoGrid>

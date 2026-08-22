@@ -2600,11 +2600,14 @@ export const content = {
 
     /**
      * No subscription is the normal state for a workspace on trial, not a
-     * failure, so it explains the trial rather than reading as an error.
+     * failure — and it is not an *empty* card either, because the two usage
+     * meters below it are populated with real numbers. So it is one line of
+     * plain statement rather than the empty-state anatomy it used to wear
+     * (TAR-711): the card is not empty, the plan is unset, and those are
+     * different sentences.
      */
-    noSubscriptionHeading: 'No paid plan yet',
-    noSubscriptionBody:
-      'This workspace is running on its trial allowances. Choose a plan below when you are ready — nothing is charged until you do.',
+    noSubscriptionNotice:
+      'This workspace is on its trial allowances. Nothing is charged until you choose a plan.',
     /** Jumps to the plans section on the same page (TAR-515). */
     noSubscriptionAction: 'See the plans',
 
@@ -2660,8 +2663,11 @@ export const content = {
      * than worked out here. A downgrade below current usage is refused *before*
      * checkout, so the sentence has to say what to change — otherwise the button
      * is simply dead.
+     *
+     * Rendered directly beneath the control it explains and wired to it with
+     * `aria-describedby` (TAR-711), so it reads as this button's reason rather
+     * than as a warning floating above the plan.
      */
-    blockedHeading: 'Not available yet',
     blockedBy: {
       seats:
         'This plan has fewer seats than you are using. Remove an agent or withdraw an invitation first.',
@@ -2671,6 +2677,13 @@ export const content = {
 
     checkoutPending: 'Opening checkout',
     checkoutFailed: 'We could not open the checkout page. Try again in a moment.',
+    /**
+     * The pending state needs designing rather than assuming the redirect always
+     * lands (TAR-711). The browser is on its way to somebody else's origin and
+     * the button stays pending through the navigation, so this says what the
+     * wait is for and why the other tiers stopped responding.
+     */
+    checkoutRedirectNote: 'Taking you to our payment provider — this page stays open.',
 
     // --- Returning from checkout -------------------------------------------
     /**

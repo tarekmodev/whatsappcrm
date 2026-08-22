@@ -1,28 +1,50 @@
 import type { PlanListResponse } from '@whatsappcrm/contracts';
 import { AutoGrid } from '@/components/layout/AutoGrid';
+import { Stack } from '@/components/layout/Stack';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { TextLink } from '@/components/ui/TextLink';
 import { webEnv } from '@/lib/config/env';
 import { useContent } from '@/lib/content';
 import { mailto } from '@/lib/mailto';
+import { planCardIds } from '../constants';
+import { CheckoutCoordinator } from './CheckoutCoordinator';
 import { PlanCard } from './PlanCard';
 import { PlanCardSkeleton } from './PlanCard.Skeleton';
 import { LazyPlanCheckoutButton } from './billing-widgets.lazy';
 
 /**
- * Every tier the tenant may see, as a row of cards. Usage:
+ * Every tier the tenant may see, as a list of cards. Usage:
  * `<PlansGrid plans={plans} canManage={canManage} />`.
  *
- * The grid is `auto-fit` rather than a breakpoint ladder, so it reflows
- * continuously from one card at 320px to four on a wide screen with no media
- * query to keep in step with the tier count.
+ * **Three columns, never four.** `auto-fit` on its own put five tiers out as
+ * four across and one alone underneath at 1,512px, and as 2+2+1 at 1,024px — the
+ * most expensive tier, the one the page most wants to sell, looking like a
+ * layout accident (TAR-711). The track minimum is now narrow enough that three
+ * columns still fit at 64rem with the rail open, and the grid is capped at three
+ * so a wider screen spends the room on wider cards rather than on a fourth
+ * column. Five tiers wrap 3+2 from 64rem up and 2+2+1 only below it, where three
+ * genuinely do not fit.
+ *
+ * A `<ul>`, so a screen reader can be told there are five of these and move
+ * through them; each card names itself with its tier *and* its price.
  *
  * The list renders through **one** item component, and the control inside each
  * card is passed in from here rather than chosen by the card: a reader without
  * `billing:manage` gets the same cards with no buttons, instead of a second
- * near-identical read-only grid.
+ * near-identical read-only grid. That is also what keeps the card's region count
+ * uniform — the control's row is present for every card or for none, never per
+ * tier.
  */
+
+/**
+ * The narrowest a plan card may get before the grid drops a column, and the
+ * ceiling on how many it may draw. The pair is what stops a fifth tier being
+ * orphaned: see `AutoGrid`'s cap rule for the arithmetic that ties them.
+ */
+const PLAN_CARD_MIN_WIDTH = '12rem';
+const PLAN_COLUMNS_MAX = 3;
+
 export function PlansGrid({
   plans,
   canManage,
@@ -57,8 +79,16 @@ export function PlansGrid({
     );
   }
 
-  return (
-    <AutoGrid minItemWidth="17rem" gap="4">
+  const grid = (
+    <AutoGrid
+      as="ul"
+      minItemWidth={PLAN_CARD_MIN_WIDTH}
+      maxColumns={PLAN_COLUMNS_MAX}
+      gap="4"
+      // `list-style: none` drops list semantics in Safari, and the count is the
+      // part a reader comparing tiers needs.
+      role="list"
+    >
       {plans.map((plan) => (
         <PlanCard
           key={plan.key}
@@ -70,6 +100,7 @@ export function PlansGrid({
                 planName={plan.name}
                 isCurrent={plan.isCurrent}
                 isSelectable={plan.isSelectable}
+                reasonId={plan.blockedBy.length === 0 ? undefined : planCardIds(plan.key).blocked}
               />
             ) : undefined
           }
@@ -77,18 +108,29 @@ export function PlansGrid({
       ))}
     </AutoGrid>
   );
+
+  // Nothing to coordinate where there are no controls to press.
+  return canManage ? (
+    <Stack gap="3">
+      <CheckoutCoordinator busyNote={content.billing.checkoutRedirectNote}>
+        {grid}
+      </CheckoutCoordinator>
+    </Stack>
+  ) : (
+    grid
+  );
 }
 
 /**
- * The fallback. The same grid with the same minimum track, holding the card's
- * own skeleton — so the columns land where the real cards will and the page does
- * not reflow when they arrive.
+ * The fallback. The same list with the same track minimum and the same column
+ * cap, holding the card's own skeleton — so the columns land where the real
+ * cards will and the page does not reflow when they arrive.
  *
- * Four cards, matching the tiers a catalogue realistically carries. A count is
- * unavoidable in a skeleton for a list whose length is unknown; four is the one
- * that fills a wide screen's row exactly and wraps the same way a real set does.
+ * Five cards rather than four, matching the catalogue this page actually
+ * carries: a count is unavoidable in a skeleton for a list whose length is
+ * unknown, and five is the one that wraps 3+2 exactly as the real set does.
  *
- * One announcement for the whole grid, not one per card.
+ * One announcement for the whole list, not one per card.
  *
  * Changed in the same commit as the grid it stands in for.
  */
@@ -98,7 +140,13 @@ export function PlansGridSkeleton() {
   return (
     <>
       <LoadingAnnouncement label={content.billing.loading} />
-      <AutoGrid minItemWidth="17rem" gap="4">
+      <AutoGrid
+        as="ul"
+        minItemWidth={PLAN_CARD_MIN_WIDTH}
+        maxColumns={PLAN_COLUMNS_MAX}
+        gap="4"
+        aria-hidden="true"
+      >
         {Array.from({ length: SKELETON_CARD_COUNT }, (_unused, index) => (
           <PlanCardSkeleton key={index} />
         ))}
@@ -107,4 +155,4 @@ export function PlansGridSkeleton() {
   );
 }
 
-const SKELETON_CARD_COUNT = 4;
+const SKELETON_CARD_COUNT = 5;
