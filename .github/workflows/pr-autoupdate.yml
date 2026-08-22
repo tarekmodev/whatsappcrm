@@ -18,11 +18,12 @@ name: Keep ready pull requests up to date
 #     in the same `BEHIND` state, waiting for the update that nobody makes.
 #
 # So this workflow supplies the missing half. Auto-merge decides *whether* a pull
-# request should land; this decides *when its branch needs refreshing* — on every
-# push to `main`, every pull request whose author has already asked for auto-merge
-# gets `main` merged into it, which reruns the required checks against what is
-# actually on `main`. Green plus up to date is exactly the condition auto-merge is
-# waiting for, so it merges on its own. Nobody is asked to rebase anything.
+# request should land; this decides *when its branch needs refreshing* — whenever
+# `main` moves, and whenever a pull request opts in, every pull request whose
+# author has asked for auto-merge gets `main` merged into it, which reruns the
+# required checks against what is actually on `main`. Green plus up to date is
+# exactly the condition auto-merge is waiting for, so it merges on its own.
+# Nobody is asked to rebase anything.
 #
 # The up-to-date protection stays ON. This automates satisfying it rather than
 # weakening it — a pull request still cannot merge without having been tested
@@ -31,6 +32,14 @@ name: Keep ready pull requests up to date
 on:
   push:
     branches: [main]
+  # Opting in is itself an event. Without this, a pull request that asks for
+  # auto-merge when it is ALREADY behind waits for the next push to `main` to be
+  # noticed — and when nothing else is in flight, the push it is waiting for is
+  # the one it is itself trying to make. That is a deadlock the author resolves
+  # the only way left to them: by asking someone for a rebase, which is the loop
+  # this workflow exists to end (TAR-446).
+  pull_request:
+    types: [auto_merge_enabled]
   # For clearing a backlog by hand after this lands, or after the token below is
   # first installed — without it the sweep only runs on the next merge.
   workflow_dispatch:

@@ -915,8 +915,15 @@ silently removes the gate, so update the protection rule in the same change.
 
 ### Landing a pull request
 
-Do not merge by hand, and do not wait to be asked for a rebase. Once the pull request is
-ready, hand it to auto-merge and stop watching it:
+Do not merge by hand, and do not wait to be asked for a rebase. A pull request opened from
+an `agent/` branch against `main` opts itself into auto-merge as soon as it is ready for
+review — `.github/workflows/pr-enable-automerge.yml` does it, so there is nothing to
+remember. Open the pull request, mark it ready, and stop watching it.
+
+That used to be each agent's own job, and it did not hold: when TAR-446 was investigated,
+all 12 open pull requests had `autoMerge=false`, so the sweep below skipped every one of
+them and the rebase loop carried on. If you ever need to arm it by hand — a branch outside
+`agent/`, or a run where the workflow warned — it is still one command:
 
 ```bash
 gh pr merge --auto --squash
@@ -932,11 +939,16 @@ its own, does **not** refresh a branch that has fallen behind. It just waits. Th
 produced the loop TAR-446 was opened for: somebody had to notice each stale pull request
 and ask its author to rebase, repeatedly, faster than merges were landing.
 
-`.github/workflows/pr-autoupdate.yml` closes that gap. On every push to `main` it merges
-`main` into every open pull request that is waiting to auto-merge, which reruns the
-required checks against what is now on `main`. Green plus up to date is what auto-merge
-wants, so it lands the pull request unattended. Branches without auto-merge enabled are
-left alone — asking for auto-merge is what opts a branch into being kept fresh.
+`.github/workflows/pr-autoupdate.yml` closes that gap. On every push to `main` — and
+again the moment a pull request opts in — it merges `main` into every open pull request
+that is waiting to auto-merge, which reruns the required checks against what is now on
+`main`. Green plus up to date is what auto-merge wants, so it lands the pull request
+unattended. Branches without auto-merge enabled are left alone — asking for auto-merge is
+what opts a branch into being kept fresh.
+
+Both triggers matter. Without the second, a pull request that asks for auto-merge while it
+is _already_ behind would wait for the next push to `main` to be noticed — and when nothing
+else is in flight, that push is the one it is itself trying to make.
 
 A merge queue would be the natural fix and is deliberately not used here: it is an
 organization-owned-repository feature, and this repository belongs to a user account, so

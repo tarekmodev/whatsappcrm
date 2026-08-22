@@ -1,0 +1,83 @@
+name: Enable auto-merge on agent pull requests
+
+# `pr-autoupdate.yml` only refreshes branches that have already asked for
+# auto-merge — that opt-in is what tells it a branch is ready to be kept fresh.
+# The README asks every agent to run `gh pr merge --auto --squash` itself, and
+# that instruction did not hold: when TAR-446 was investigated, all 12 open pull
+# requests had `autoMerge=false`, so the sweep skipped every one of them and the
+# rebase-thrash loop carried on exactly as before.
+#
+# Relying on each of a dozen agents to remember one command is the weak link.
+# This closes it: an agent pull request opts itself in the moment it is ready.
+#
+# Auto-merge does not weaken any gate. The four required checks and the
+# up-to-date requirement still have to pass — this only decides *when* the pull
+# request may land once they do, instead of leaving it parked.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  enable:
+    name: Enable
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # Same-repository branches only. A fork pull request has no access to the
+    # secret below anyway, and arming auto-merge on untrusted code would be the
+    # wrong thing to automate even if it did.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'agent/')
+
+    steps:
+      - name: Ask GitHub to merge this pull request once it is green
+        shell: bash
+        env:
+          # Deliberately NOT `github.token`, for the same reason
+          # `pr-autoupdate.yml` avoids it. Auto-merge lands the pull request as
+          # whoever enabled it, and GitHub does not start workflows for pushes
+          # made with `GITHUB_TOKEN` — so a merge armed by the built-in token
+          # would push to `main` without triggering the sweep that refreshes
+          # everything queued behind it, quietly reinstating the very loop this
+          # exists to end.
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::AUTOMERGE_TOKEN is not set — #$PR was not opted into auto-merge."
+            echo "\`AUTOMERGE_TOKEN\` is not set, so #$PR was not opted in." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if out=$(gh pr merge "$PR" --repo "$REPO" --auto --squash 2>&1); then
+            echo "auto-merge enabled on #$PR"
+            echo "Auto-merge (squash) is enabled on #$PR — it lands when the required checks are green and the branch is up to date." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # The one expected failure: GitHub refuses `--auto` on a pull request
+          # that is already fully mergeable, because there is nothing left to
+          # wait for. Not an error — it just means the branch is ready now, and
+          # its own required checks still gate the merge.
+          if grep -qi 'clean status' <<<"$out"; then
+            echo "#$PR is already mergeable; auto-merge not needed."
+            echo "#$PR is already mergeable — auto-merge was unnecessary." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Anything else is worth seeing, but not worth reddening a pull request
+          # whose code may be perfectly fine. The sweep reports the branch as not
+          # waiting to auto-merge, which is the visible symptom.
+          echo "::warning::could not enable auto-merge on #$PR: $out"
+          echo "> [!WARNING]" >> "$GITHUB_STEP_SUMMARY"
+          echo "> Could not enable auto-merge on #$PR. Enable it by hand with \`gh pr merge $PR --auto --squash\`." >> "$GITHUB_STEP_SUMMARY"
