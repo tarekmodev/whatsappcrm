@@ -127,6 +127,10 @@ they gave, under **Reason**.
 An escalation reads **to whoever is covering this ticket** when you left the default, and names
 a person when you chose one.
 
+**Handed over by the chatbot** is not a handover between two people, and nobody chose it. To
+see why the chatbot stopped and what it had already told the customer, read
+[Work with the chatbot in the inbox](work-with-the-chatbot-in-the-inbox.md).
+
 **A customer reopening a ticket appears as Status changed, not as its own entry.** When
 somebody writes back to a ticket that was **Waiting on customer**, the entry reads **Status
 changed** with **Waiting on customer → Open** underneath and **by the system** beside it,

@@ -169,6 +169,70 @@ change.
 
 ### Added
 
+- **A chatbot answers customers from the tenant's own knowledge base, and hands the
+  conversation to a person when it cannot** (TAR-28) — ADR 0010's design, shipped across
+  TAR-402 (schema), TAR-406 (API and worker) and TAR-408 (console). An admin writes entries
+  under **Settings → Chatbot**, and an inbound WhatsApp message is considered by
+  `BotTurnService`: gate → keyword → retrieve → model → score → reply-or-hand-off.
+  **The empty-knowledge-base guarantee is structural rather than behavioural**, and that is
+  the decision the rest of the feature follows from. A tenant with no provider key, no plan,
+  the chatbot switched off or nothing indexed is refused by `BotEligibilityService` before a
+  prompt exists, and a turn whose retrieval returns nothing above `rankFloor` never calls the
+  model either. There is no code path on which the model is invoked without that tenant's own
+  knowledge-base content in the prompt, so TAR-28 AC3 holds by construction rather than by
+  prompt instruction — and the gate is a pure function over a snapshot, so every clause of it
+  is a unit test.
+  Retrieval is lexical, in the database already running: `websearch_to_tsquery` over a
+  generated `search_vector` ranked by `ts_rank_cd`, with a `pg_trgm` `word_similarity` pass as
+  a second retriever when full-text finds nothing. Embeddings were rejected for the property
+  that decides this feature — cosine similarity is never zero, so a floor over it would be a
+  tuning exercise rather than a rule, and it is the refusal that AC3 rests on. The cost is
+  vocabulary mismatch: "can I get my money back" against a policy that says "refund" is what
+  the trigram pass exists to partly recover, and `bot_turns`'s `no_match` share is the signal
+  ADR 0010 names for revisiting `pgvector`.
+  Confidence is `min(modelConfidence, retrievalConfidence)` — **`min`, not an average**,
+  because an average lets a confident model compensate for weak retrieval, which is precisely
+  the hallucination case the feature exists to prevent — plus two preconditions outside the
+  score: every cited chunk id must be one this turn retrieved, and there must be at least one.
+  Every refusal after the chatbot has spoken ends with a human: `low_confidence`, `no_match`,
+  `customer_requested`, `max_turns`, `agent_requested` and `bot_error` all write a
+  `handoff_events` row, move `bot_state`, and re-request routing when nobody holds the ticket.
+  A `no_match` or `low_confidence` on an **opening** message is the one deliberate exception —
+  recorded as `suppressed`, not handed off, because treating an unanswerable "hi" as "a human
+  has been asked for" disabled the chatbot for the real question one message later and made
+  AC1 unreachable through the most ordinary opener there is.
+  "Full context" on handoff (AC2) is defined by what the thread already carries: a bot reply is
+  an ordinary `messages` row, genuinely sent over WhatsApp, so
+  `GET /api/v1/conversations/{id}/handoff` is deliberately not a transcript. It publishes why
+  the chatbot stopped, the composite confidence with both halves it is the `min` of, and the
+  knowledge base entries cited — that last field being what lets an agent see the chatbot
+  answered from the refunds policy when the customer asked about shipping.
+  Two costs stated rather than buried. A successful reply moves the ticket to `pending` and
+  enqueues `sla.evaluate-ticket`, because `SlaTimerService` stops a first-response timer on an
+  outbound message with a non-null sender and a bot reply has none — without it every
+  conversation the chatbot handled perfectly would still breach and page a supervisor. And
+  indexing is asynchronous: a create, and a `PATCH` that changes content, answer `pending` and
+  the entry is not answerable from until the job commits, which the console renders rather than
+  hides.
+  `ai:read` and `ai:write` stay admin-only and no grant moved; the handoff pair is
+  `conversation:read` / `conversation:claim`, because the agent reading the summary is exactly
+  who it is for. `GET /ai/config` is readable without the `ai_chatbot` plan feature so the
+  console can render an upsell instead of a 403; every write is refused.
+  Documented as [the AI chatbot and knowledge base API reference](docs/reference/chatbot-api.md),
+  [Set up the chatbot and its knowledge base](docs/guides/set-up-the-chatbot.md) for an admin,
+  and [Work with the chatbot in the inbox](docs/guides/work-with-the-chatbot-in-the-inbox.md)
+  for an agent (TAR-415).
+  ⚠️ **Nothing re-enqueues a lost indexing job.** `QueueService.enqueue` never throws, so a
+  Redis outage leaves a committed entry parked at `pending`; `POST …/{id}/reindex` is the
+  repair and `readiness.indexedDocumentCount` is what makes the gap visible. ⚠️ **A tenant
+  whose plan explicitly excludes `ai_chatbot` cannot delete the knowledge base they authored
+  under a plan that did** — `delete` sits inside the same write gate, which is the conservative
+  reading of "a write to a feature you do not have" and a one-line change if product wants
+  otherwise. ⚠️ **`AI_MODEL_CATALOG`'s prices are list prices at the time of writing**, shown
+  in the console and not yet re-verified, as ADR 0010 decision 10 records. ⚠️ **No chatbot
+  reporting.** `bot_turns` records outcome, both confidence components, the model, three token
+  counts and latency per turn, and nothing reads them back — the tuning queries are SQL.
+
 - **The notification inbox has a read surface, and suspending an agent disarms their
   workflows** (TAR-596) — two gaps a post-merge review of the workflow builder found and
   re-verified against `main`.
