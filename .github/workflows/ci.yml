@@ -46,6 +46,13 @@ jobs:
       - name: Every migration has a down.sql
         run: pnpm --filter @whatsappcrm/api db:check-migrations
 
+      # A source comment citing an architecture document is the only link between
+      # the code and the decision it implements, and nothing resolves it — so a
+      # renumbered document leaves a pointer into nothing that reads as correct.
+      # TAR-444 found one that had survived eight days and a review (TAR-772).
+      - name: Every cited architecture document exists
+        run: pnpm docs:check-refs
+
   typecheck:
     name: Type-check
     runs-on: ubuntu-latest
