@@ -7,6 +7,7 @@ import { SkeletonLine } from '@/components/ui/Skeleton';
 import { content } from '@/content/en';
 import { loadDashboardMetrics } from '@/features/reports/reports.data';
 import { formatReportDate } from '@/features/reports/presentation';
+import type { AgentSort } from '@/features/reports/agent-sort';
 import type { ReportParams } from '@/features/reports/report-params';
 import { AgentBreakdownTable, AgentBreakdownTableSkeleton } from './AgentBreakdownTable';
 import { DailyVolumeChartSkeleton } from './DailyVolumeChart.Skeleton';
@@ -33,9 +34,17 @@ export interface DashboardSectionsProps {
   params: ReportParams;
   /** True when the caller lacks `report:read_all` (ADR 0009 decision 6). */
   isScopeNarrowed: boolean;
+  /**
+   * The breakdown's order, from the URL. `undefined` is the API's own order,
+   * which is also the export's — see `AgentBreakdownTable`.
+   *
+   * The skeleton takes it too, so its sort controls are the same width as the
+   * real ones and the swap shifts nothing.
+   */
+  sort?: AgentSort;
 }
 
-export async function DashboardSections({ params, isScopeNarrowed }: DashboardSectionsProps) {
+export async function DashboardSections({ params, isScopeNarrowed, sort }: DashboardSectionsProps) {
   const metrics = await loadDashboardMetrics(params);
 
   return (
@@ -78,7 +87,7 @@ export async function DashboardSections({ params, isScopeNarrowed }: DashboardSe
             above it and the chart below it with it (TAR-515).
           */}
           <SectionErrorBoundary>
-            <AgentBreakdownTable rows={metrics.agents} />
+            <AgentBreakdownTable rows={metrics.agents} params={params} sort={sort} />
           </SectionErrorBoundary>
           <p className={styles.note}>{content.reports.mediansDoNotSumNote}</p>
         </Stack>
@@ -108,10 +117,10 @@ export async function DashboardSections({ params, isScopeNarrowed }: DashboardSe
  * and it is one line tall either way.
  */
 export function DashboardSectionsSkeleton({
-  isScopeNarrowed = false,
-}: {
-  isScopeNarrowed?: boolean;
-}) {
+  params,
+  isScopeNarrowed,
+  sort,
+}: DashboardSectionsProps) {
   return (
     <Stack gap="5">
       <SectionCard
@@ -136,7 +145,7 @@ export function DashboardSectionsSkeleton({
         description={content.reports.agentsDescription}
       >
         <Stack gap="3">
-          <AgentBreakdownTableSkeleton />
+          <AgentBreakdownTableSkeleton params={params} sort={sort} />
           <p className={styles.note}>{content.reports.mediansDoNotSumNote}</p>
         </Stack>
       </SectionCard>

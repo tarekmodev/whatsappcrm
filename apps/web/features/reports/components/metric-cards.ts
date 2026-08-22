@@ -5,7 +5,8 @@ import type { Content } from '@/lib/content';
  *
  * The real grid and its skeleton both build from this, which is what keeps the
  * skeleton from drifting: adding a metric changes one array and both stay in
- * step, including how many secondary statistics each card reserves room for.
+ * step, including which secondary figures each tile reserves room for and
+ * whether it carries an info affordance.
  *
  * The order is the order a supervisor reads them in — the three counts say how
  * much work moved, the two durations say how fast. Volume first, because a
@@ -26,47 +27,66 @@ export type MetricCardKey = (typeof METRIC_CARD_KEYS)[number];
 export interface MetricCardMeta {
   readonly key: MetricCardKey;
   readonly label: string;
-  readonly hint: string;
   /**
-   * Secondary statistics the card reserves room for: the average, the p90 and
-   * the sample size. Zero on the three counts, which have nothing beneath them.
+   * How the figure is measured. Rendered behind the label's info affordance
+   * rather than in the tile body (TAR-519): it is what a supervisor quoting the
+   * number needs, and it is not what the tile is for.
    */
-  readonly detailCount: number;
+  readonly methodology: string;
+  /** Names that affordance — "How first response time is measured". */
+  readonly methodologyLabel: string;
+  /**
+   * The secondary figures the tile reserves room for, by their terms: the
+   * average, the p90 and the sample size. Empty on the three counts, which have
+   * nothing beneath them.
+   */
+  readonly detailLabels: readonly string[];
 }
 
-const DURATION_DETAIL_COUNT = 3;
-
 export function metricCardMeta(content: Content): readonly MetricCardMeta[] {
+  const durationDetailLabels = [
+    content.reports.statAverage,
+    content.reports.statP90,
+    content.reports.statSampleLabel,
+  ];
+
   return [
     {
       key: 'created',
       label: content.reports.volumeCreatedLabel,
-      hint: content.reports.volumeCreatedHint,
-      detailCount: 0,
+      methodology: content.reports.volumeCreatedHint,
+      methodologyLabel: content.reports.metricInfoLabel(content.reports.volumeCreatedLabel),
+      detailLabels: [],
     },
     {
       key: 'resolved',
       label: content.reports.volumeResolvedLabel,
-      hint: content.reports.volumeResolvedHint,
-      detailCount: 0,
+      methodology: content.reports.volumeResolvedHint,
+      methodologyLabel: content.reports.metricInfoLabel(content.reports.volumeResolvedLabel),
+      detailLabels: [],
     },
     {
       key: 'closedWithoutResolution',
       label: content.reports.volumeClosedUnresolvedLabel,
-      hint: content.reports.volumeClosedUnresolvedHint,
-      detailCount: 0,
+      methodology: content.reports.volumeClosedUnresolvedHint,
+      methodologyLabel: content.reports.metricInfoLabel(
+        content.reports.volumeClosedUnresolvedLabel,
+      ),
+      detailLabels: [],
     },
     {
       key: 'firstResponse',
       label: content.reports.firstResponseLabel,
-      hint: content.reports.firstResponseHint,
-      detailCount: DURATION_DETAIL_COUNT,
+      methodology: content.reports.firstResponseHint,
+      methodologyLabel: content.reports.metricInfoLabel(content.reports.firstResponseLabel),
+      detailLabels: durationDetailLabels,
     },
     {
       key: 'resolution',
       label: content.reports.resolutionLabel,
-      hint: content.reports.resolutionHint,
-      detailCount: DURATION_DETAIL_COUNT,
+      methodology: content.reports.resolutionHint,
+      methodologyLabel: content.reports.metricInfoLabel(content.reports.resolutionLabel),
+      detailLabels: durationDetailLabels,
     },
   ];
 }

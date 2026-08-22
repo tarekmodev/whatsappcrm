@@ -88,6 +88,31 @@
   --palette-blue-900: #213263;
 
   /*
+   * --- Chart series (TAR-519) ---------------------------------------------
+   *
+   * The two series of the daily-volume chart, and the one colour family in this
+   * file that is deliberately **not** the brand's. TAR-29 lets a tenant replace
+   * the accent, and while one series was taking it, the seeded workspace's blue
+   * rendered `Opened` and `Resolved` as two shades of the same hue — a chart
+   * whose two series cannot be told apart is a chart with no series at all.
+   *
+   * Blue against orange, chosen twice over: it is the pair that survives every
+   * common colour-vision deficiency (the red/green and the blue/yellow
+   * confusions both leave it standing), and the two steps are separated in
+   * *lightness* as well — close to 2:1 against each other in both themes — so
+   * the distinction also survives a greyscale print.
+   *
+   * Both steps clear 3:1 against the surface they are drawn on, which is what
+   * WCAG 2.2 SC 1.4.11 asks of a graphic that carries meaning. See 0001's "Data
+   * visualisation" table; `styles/tokens/tokens.test.ts` asserts all three
+   * ratios, in both themes, and that neither series is the accent.
+   */
+  --palette-chart-blue-500: #1d4ed8;
+  --palette-chart-blue-300: #5b8ce8;
+  --palette-chart-orange-500: #dd6b12;
+  --palette-chart-orange-300: #fdba74;
+
+  /*
    * --- Spacing scale ------------------------------------------------------
    * An 8px rhythm with 4px half-steps: every step from `space-2` up is a
    * multiple of 8, and `space-1`/`space-3` are the half-steps a dense control
@@ -110,6 +135,14 @@
   --scale-font-size-lg: 1.125rem;
   --scale-font-size-xl: clamp(1.25rem, 1.1rem + 0.7vw, 1.5rem);
   --scale-font-size-2xl: clamp(1.5rem, 1.3rem + 1.1vw, 2rem);
+  /*
+   * One step above the largest heading, and it exists for exactly one thing: the
+   * figure on a metric tile. That number has to be unmistakably the largest
+   * element in its card — a heading size reused there made it the same weight as
+   * the label above it, which is a tile that has to be read rather than scanned.
+   * Fluid like the two heading steps, so a phone does not get a 40px figure.
+   */
+  --scale-font-size-3xl: clamp(1.75rem, 1.5rem + 1.4vw, 2.5rem);
 
   --scale-line-height-tight: 1.25;
   --scale-line-height-snug: 1.4;
@@ -151,6 +184,12 @@
   --scale-duration-fast: 120ms;
   --scale-duration-medium: 200ms;
   --scale-duration-slow: 320ms;
+  /*
+   * The gap between one column of a chart beginning its entry animation and the
+   * next. A duration rather than a delay computed in the component, so reduced
+   * motion collapses it in the token layer along with every other timing.
+   */
+  --scale-duration-stagger: 12ms;
   --scale-easing-standard: cubic-bezier(0.2, 0, 0, 1);
   --scale-easing-decelerate: cubic-bezier(0, 0, 0, 1);
 
@@ -241,6 +280,12 @@
    */
   --scale-size-chart-track: 9rem;
   --scale-size-chart-column: 0.75rem;
+  /*
+   * The gutter the y-axis labels occupy beside that track. Wide enough for a
+   * four-figure ticket count at caption size, and fixed rather than intrinsic so
+   * the plotting area does not move as the peak changes between ranges.
+   */
+  --scale-size-chart-gutter: 2.75rem;
 
   /* --- Measure and aspect ratios ------------------------------------------ */
   /* Comfortable line length for running text; longer is measurably harder to read. */

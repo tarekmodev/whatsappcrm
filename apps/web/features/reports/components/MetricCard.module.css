@@ -1,7 +1,12 @@
 /*
- * One metric, in a card that sits inside the summary grid. The card owns nothing
+ * One metric, in a tile that sits inside the summary grid. The tile owns nothing
  * about its own placement — the grid decides how many fit — so it reflows from
  * 320px up with no breakpoint of its own.
+ *
+ * A hairline on `--color-surface`, matching `SectionCard`, rather than a filled
+ * panel: these tiles already sit *inside* a section card, and a second card
+ * treatment nested in the first reads as two levels of importance where there is
+ * one (TAR-519).
  */
 
 .card {
@@ -9,11 +14,14 @@
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  background: var(--color-surface-sunken);
+  background: var(--color-surface);
   border: var(--border-hairline) solid var(--color-border);
-  border-radius: var(--radius-md);
-  /* Equal heights across a row, so a card with no detail list does not shrink. */
-  block-size: 100%;
+  border-radius: var(--radius-lg);
+  /*
+   * No `block-size: 100%`. A tile with no secondary figures simply ends, which
+   * is what removed the dead space the equal-height row used to force into the
+   * three count tiles; the grid aligns them to their start edge instead.
+   */
 }
 
 .headline {
@@ -24,25 +32,34 @@
 }
 
 .label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-inline-size: 0;
   color: var(--color-on-surface-muted);
-  font-size: var(--font-size-body-sm);
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-medium);
 }
 
-.value {
-  font-size: var(--font-size-heading-md);
-  font-weight: var(--font-weight-strong);
-  line-height: var(--line-height-heading);
-  /* A long duration wraps rather than pushing the card wider than its column. */
+.labelText {
+  min-inline-size: 0;
   overflow-wrap: anywhere;
 }
 
-.hint {
-  color: var(--color-on-surface-muted);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-body);
-  /* Pushes the detail list to the bottom edge so cards in a row line up. */
-  margin-block-end: auto;
+/*
+ * The hero. Its own step above the heading scale — see `--font-size-metric` —
+ * because on a tile the number has to win against everything around it, and a
+ * heading size there made it the same weight as the label above it.
+ */
+.value {
+  font-size: var(--font-size-metric);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-heading);
+  /* A column of tiles aligns digit for digit, and a figure that changes between
+     ranges does not shuffle its own width. */
+  font-variant-numeric: tabular-nums;
+  /* A long duration wraps rather than pushing the tile wider than its column. */
+  overflow-wrap: anywhere;
 }
 
 .details {

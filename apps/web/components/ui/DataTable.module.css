@@ -55,6 +55,32 @@
   clip-path: inset(50%);
 }
 
+/*
+ * A sortable header is a link, and this layout hides the header row from the eye
+ * while keeping it for screen readers — which would make those links tab stops
+ * nobody can see. So the row un-hides itself while anything inside it has focus,
+ * exactly the way a skip link does, and sorting stays reachable at 320px instead
+ * of being a keyboard trap-door (TAR-519).
+ */
+.head:focus-within {
+  display: table-header-group;
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip-path: none;
+  padding-block-end: var(--space-2);
+}
+
+.head:focus-within .headerCell {
+  padding-inline-end: var(--space-3);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  text-align: start;
+  white-space: nowrap;
+}
+
 .row {
   display: flex;
   flex-direction: column;
@@ -104,6 +130,46 @@
 }
 
 /*
+ * A sortable header. A link, because the order lives in the URL — so it inherits
+ * the app's focus ring and its middle-click, and there is no state here for a
+ * button to have owned.
+ *
+ * The chevron is drawn on every sortable column rather than appearing on hover:
+ * an affordance that only exists under a pointer is one a touch user never finds,
+ * and one whose arrival changes the column's width.
+ */
+.sortControl {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-block-size: var(--size-touch-target);
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .sortControl:hover {
+    color: var(--color-on-surface);
+  }
+}
+
+.sortMarker {
+  display: inline-flex;
+  transition: rotate var(--duration-fast) var(--easing-standard);
+}
+
+/* The column in force points the way it sorts; the rest keep the glyph at a
+   whisper, so the control is visible and the state still reads at a glance. */
+.sortMarker[data-direction='none'] {
+  opacity: 0.35;
+}
+
+.sortMarker[data-direction='ascending'] {
+  rotate: 180deg;
+}
+
+/*
  * Once the space around it is wide enough, it is a real table again.
  *
  * 40rem rather than the 48rem this was as a media query, because the two numbers
@@ -144,6 +210,22 @@
   .cell[data-narrow='true'] {
     inline-size: 1%;
     white-space: nowrap;
+  }
+
+  /*
+   * Figures align on their last digit. Only once the table is a table: in the
+   * stacked card layout a value sits under its own label with no column to line
+   * up with, and pushing it to the far edge would separate it from that label.
+   */
+  .headerCell[data-numeric='true'],
+  .cell[data-numeric='true'] {
+    text-align: end;
+  }
+
+  .cell[data-numeric='true'] {
+    /* The cell is a table-cell here, so its contents are inline and follow
+       `text-align`; the flex column it is on a phone would not. */
+    font-variant-numeric: tabular-nums;
   }
 
   .row {

@@ -8,6 +8,15 @@
   grid-template-columns: repeat(auto-fit, minmax(min(var(--auto-grid-min-item), 100%), 1fr));
 }
 
+/*
+ * Each item exactly as tall as its own contents. `stretch` is the grid's default
+ * and is not re-declared; this is the opt-out, for a row whose items genuinely
+ * differ in height and would otherwise carry the difference as empty space.
+ */
+.grid[data-align='start'] {
+  align-items: start;
+}
+
 .grid[data-gap='1'] {
   --auto-grid-gap: var(--space-1);
 }

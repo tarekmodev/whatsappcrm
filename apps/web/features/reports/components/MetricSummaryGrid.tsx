@@ -4,30 +4,36 @@ import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { content } from '@/content/en';
 import { METRIC_CARD_MIN_WIDTH } from '@/features/reports/constants';
 import { formatCount, formatDuration } from '@/features/reports/presentation';
+import { MeasuredDuration } from './MeasuredDuration';
 import { MetricCard, MetricCardSkeleton, type MetricCardDetail } from './MetricCard';
 import { metricCardMeta, type MetricCardKey } from './metric-cards';
 
 /**
  * The five headline figures. Usage: `<MetricSummaryGrid metrics={summary} />`.
  *
- * A server component: five formatted strings in an auto-fitting grid, with
- * nothing to hydrate. `AutoGrid` gives it a column count from `auto-fit` rather
- * than from breakpoints, so it reflows continuously from one card wide at 320px
- * to five across on a desktop.
+ * A server component: five formatted strings in an auto-fitting grid, with only
+ * the info affordances hydrating. `AutoGrid` gives it a column count from
+ * `auto-fit` rather than from breakpoints, so it reflows continuously from one
+ * tile wide at 320px to five across on a desktop.
  *
- * The three counts and the two durations are the same card deliberately. They
+ * `align="start"`, so the three tiles with no secondary figures are exactly as
+ * tall as they need to be. Stretching them to match the two that carry a detail
+ * list is what put a hundred pixels of nothing in each of them (TAR-519).
+ *
+ * The three counts and the two durations are the same tile deliberately. They
  * are read together — a median over three tickets means something very different
  * from a median over three hundred — and giving durations their own visual
  * treatment would suggest they are a different kind of claim.
  */
 export function MetricSummaryGrid({ metrics }: { metrics: ReportMetrics }) {
   return (
-    <AutoGrid minItemWidth={METRIC_CARD_MIN_WIDTH} gap="3">
+    <AutoGrid minItemWidth={METRIC_CARD_MIN_WIDTH} gap="3" align="start">
       {metricCardMeta(content).map((meta) => (
         <MetricCard
           key={meta.key}
           label={meta.label}
-          hint={meta.hint}
+          methodology={meta.methodology}
+          methodologyLabel={meta.methodologyLabel}
           value={valueFor(meta.key, metrics)}
           details={detailsFor(meta.key, metrics)}
         />
@@ -37,20 +43,21 @@ export function MetricSummaryGrid({ metrics }: { metrics: ReportMetrics }) {
 }
 
 /**
- * Mirrors the loaded grid exactly — the same five cards, the same labels and
- * hints, the same reserved detail rows — so the swap shifts nothing.
+ * Mirrors the loaded grid exactly — the same five tiles, the same labels,
+ * methodology and detail terms, the same alignment — so the swap shifts nothing.
  */
 export function MetricSummaryGridSkeleton() {
   return (
     <>
       <LoadingAnnouncement label={content.reports.summaryLoading} />
-      <AutoGrid minItemWidth={METRIC_CARD_MIN_WIDTH} gap="3">
+      <AutoGrid minItemWidth={METRIC_CARD_MIN_WIDTH} gap="3" align="start">
         {metricCardMeta(content).map((meta) => (
           <MetricCardSkeleton
             key={meta.key}
             label={meta.label}
-            hint={meta.hint}
-            detailCount={meta.detailCount}
+            methodology={meta.methodology}
+            methodologyLabel={meta.methodologyLabel}
+            detailLabels={meta.detailLabels}
           />
         ))}
       </AutoGrid>
@@ -58,6 +65,11 @@ export function MetricSummaryGridSkeleton() {
   );
 }
 
+/**
+ * The hero figure keeps the **words** for an absent duration rather than the
+ * dash `MeasuredDuration` draws: here the absence is the answer to the question
+ * the tile asks, and a dash as the largest thing in a card says nothing.
+ */
 function valueFor(key: MetricCardKey, metrics: ReportMetrics): string {
   switch (key) {
     case 'created':
@@ -93,12 +105,12 @@ function durationDetails(stats: DurationStats): readonly MetricCardDetail[] {
     {
       id: 'average',
       label: content.reports.statAverage,
-      value: formatDuration(stats.averageSeconds, content),
+      value: <MeasuredDuration seconds={stats.averageSeconds} />,
     },
     {
       id: 'p90',
       label: content.reports.statP90,
-      value: formatDuration(stats.p90Seconds, content),
+      value: <MeasuredDuration seconds={stats.p90Seconds} />,
     },
     {
       id: 'sample',

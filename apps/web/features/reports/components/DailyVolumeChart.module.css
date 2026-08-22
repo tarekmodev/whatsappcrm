@@ -1,10 +1,12 @@
 /*
- * The daily-volume chart, and — deliberately — its skeleton: both render these
- * classes, so the placeholder cannot drift out of the shape it stands in for.
+ * The daily-volume chart, and — deliberately — its skeleton, its legend, its
+ * value axis and its per-day readout: all of them render these classes, so no
+ * part can drift out of the shape it stands beside.
  *
- * There is no charting library behind this. Two bars per day in a grid is
- * something CSS does natively, and the smallest chart dependency in this
- * ecosystem is larger than the entire route's JavaScript budget.
+ * There is no charting library behind this. Two bars per day in a grid, a few
+ * absolutely positioned rules and a panel is something CSS does natively, and
+ * the smallest chart dependency in this ecosystem is larger than the entire
+ * route's JavaScript budget.
  */
 
 .chart {
@@ -12,6 +14,8 @@
   flex-direction: column;
   gap: var(--space-3);
 }
+
+/* --- Legend --------------------------------------------------------------- */
 
 .legend {
   display: flex;
@@ -27,110 +31,352 @@
   font-size: var(--font-size-caption);
 }
 
-/* Never the only thing telling the two series apart — the label beside it is. */
+/*
+ * Never the only thing telling the two series apart. Three carriers: the colour
+ * token, the **shape** — a square against a circle, repeated in the bars' corner
+ * radius — and the label beside it. Colour is the first of the three to fail.
+ */
 .swatch {
   inline-size: var(--space-3);
   block-size: var(--space-3);
-  border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
 
 .swatch[data-series='created'] {
-  background: var(--color-accent);
+  background: var(--color-chart-1);
+  border-radius: var(--radius-sm);
 }
 
 .swatch[data-series='resolved'] {
-  background: var(--color-info);
+  background: var(--color-chart-2);
+  border-radius: var(--radius-pill);
+}
+
+/* --- The plotting area ---------------------------------------------------- */
+
+/*
+ * The gutter holds the value axis's labels; the track holds the columns. Both
+ * come from tokens, so the plotting area is the same width whatever the peak is
+ * and the chart does not shift when a range changes.
+ */
+.plot {
+  position: relative;
+  padding-inline-start: var(--size-chart-gutter);
+  /* A line's worth of room above the track, which the axis's own label stands
+     in. Without it the label lands on the legend above the chart, and the top
+     tick — which is centred on its own rule — lands on the label. */
+  padding-block-start: var(--space-5);
+}
+
+.valueAxis {
+  position: absolute;
+  inset-block-start: var(--space-5);
+  inset-inline: var(--size-chart-gutter) 0;
+  block-size: var(--size-chart-track);
+  /* Behind the columns: a gridline is a measurement, not a decoration on top. */
+  z-index: var(--z-base);
+  pointer-events: none;
+}
+
+/* What the axis counts, said once above it rather than on every tick. */
+.valueAxisLabel {
+  position: absolute;
+  inset-block-end: 100%;
+  inset-inline-start: calc(var(--size-chart-gutter) * -1);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-tight);
+}
+
+.gridline {
+  position: absolute;
+  inset-inline: 0;
+  /* From the baseline up, so a line lands where its value does. */
+  inset-block-end: calc(var(--gridline-fill) * 100%);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}
+
+.gridlineLabel {
+  position: absolute;
+  inset-inline-end: 100%;
+  inset-block-start: 0;
+  padding-inline-end: var(--space-2);
+  /* Centred on its own rule rather than sitting under it. */
+  translate: 0 -50%;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /*
  * The scroller. A quarter's worth of days cannot fit a phone at a legible column
  * width, so the chart scrolls rather than squeezing every day into a hairline.
- * `tabindex` on the element in the markup is what makes that reachable by
- * keyboard; this is only the visible affordance for it.
+ * The days themselves are the tab stops; this is only the visible affordance.
  */
 .scroller {
+  position: relative;
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  /* Reserved rather than overlaid, so the scrollbar appearing does not shorten
+     the track and shift every bar by its own height. */
   scrollbar-gutter: stable;
   padding-block-end: var(--space-1);
 }
 
-.scroller:focus-visible {
-  outline: var(--focus-ring-width) solid var(--color-focus-ring);
-  outline-offset: var(--focus-ring-offset);
-}
-
-.days {
+.days,
+.dayAxis {
   display: grid;
   grid-auto-flow: column;
   /* Share the width when the days fit; stop shrinking — and start scrolling —
      at the point a column stops being readable. */
   grid-auto-columns: minmax(var(--size-chart-column), 1fr);
   gap: var(--space-1);
+  /* A `<ul>` for the semantics, not for the bullets: the UA's marker and its
+     40px inline padding would put a row of dots under the chart and indent the
+     columns away from the axis. */
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.days {
   align-items: end;
   block-size: var(--size-chart-track);
 }
 
 .day {
   display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  gap: var(--border-hairline);
   block-size: 100%;
   min-inline-size: 0;
+  /* Dimmed while a neighbour is read, so the column in question stands out
+     without anything moving. */
+  transition: opacity var(--duration-fast) var(--easing-standard);
+}
+
+.day[data-active='false'] {
+  /* Quiet enough that the day being read stands out, loud enough that the shape
+     of the range is still there to compare it against. */
+  opacity: 0.55;
 }
 
 /*
- * `--bar-fill` is the one thing a component may set inline: it is a per-instance
- * measurement of the data, and the rule that consumes it lives here.
+ * The focusable graphic. A day is not a control — activating it does nothing —
+ * so it is a `role="img"` with its own figures as its accessible name, reachable
+ * by the arrow keys from the chart's one tab stop.
  */
+.dayTarget {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: var(--border-hairline);
+  inline-size: 100%;
+  block-size: 100%;
+  min-inline-size: 0;
+  border-radius: var(--radius-sm);
+}
+
+.dayTarget:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
 .bar {
   flex: 1 1 0;
   min-inline-size: 0;
-  /* A day with one ticket against a peak of two hundred still gets a mark. */
-  block-size: max(calc(var(--bar-fill) * 100%), var(--focus-ring-width));
+  /* A day with one ticket against a ceiling of two hundred still gets a mark,
+     and one that is visibly taller than the zero rule below. */
+  block-size: max(calc(var(--bar-fill) * 100%), var(--space-1));
+  transform-origin: bottom;
+  /*
+   * Grown from the baseline, a few milliseconds apart per column, so the chart
+   * draws itself in the direction it is read. `backwards` holds the first frame
+   * through the delay — without it a staggered bar renders full height, waits,
+   * then snaps to nothing and grows.
+   *
+   * Reduced motion is handled in the token layer: both timings collapse there,
+   * so every column arrives at full height at once and no rule here branches.
+   */
+  animation: grow var(--duration-medium) var(--easing-enter) backwards;
+  animation-delay: calc(var(--bar-column) * var(--duration-stagger));
+}
+
+@keyframes grow {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+.bar[data-series='created'] {
+  background: var(--color-chart-1);
   border-start-start-radius: var(--radius-sm);
   border-start-end-radius: var(--radius-sm);
 }
 
-.bar[data-series='created'] {
-  background: var(--color-accent);
-}
-
 .bar[data-series='resolved'] {
-  background: var(--color-info);
+  background: var(--color-chart-2);
+  /* The legend's circle, repeated: the two series differ in shape as well as in
+     hue, so a reader who cannot use the colour still has an answer. */
+  border-start-start-radius: var(--radius-pill);
+  border-start-end-radius: var(--radius-pill);
 }
 
-/* Keeps its slot so the other series stays half the column wide, and draws
-   nothing: a day with no resolutions is not a day with a very short bar. */
+/*
+ * A day with nothing in it draws a **baseline tick**, not a bar and not a gap.
+ * An empty stretch across a quiet week read as missing data, which is the
+ * opposite of what it means; a neutral rule says "measured, and it was none".
+ * Neutral rather than the series colour so it cannot be read as a very short bar.
+ */
 .bar[data-empty='true'] {
-  background: none;
-  block-size: 0;
+  background: var(--color-border-strong);
+  block-size: var(--focus-ring-width);
+  border-radius: 0;
 }
 
-.axis {
+/* --- The day axis --------------------------------------------------------- */
+
+/*
+ * Inside the scroller and on the same grid as the columns, so a date stays under
+ * the day it names however far the chart is scrolled.
+ */
+.dayAxis {
+  padding-block-start: var(--space-2);
+}
+
+.dayAxisCell {
+  position: relative;
+  min-inline-size: 0;
+  block-size: var(--space-4);
+}
+
+.dayAxisLabel {
+  position: absolute;
+  inset-inline-start: 50%;
+  translate: -50% 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+}
+
+/* The range's first and last labels hug their edge instead of hanging off it. */
+.dayAxisLabel[data-anchor='start'] {
+  inset-inline-start: 0;
+  translate: 0 0;
+}
+
+.dayAxisLabel[data-anchor='end'] {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+  translate: 0 0;
+}
+
+/* --- The per-day readout -------------------------------------------------- */
+
+/*
+ * Positioned over the plot rather than inside the scroller: a scroller with
+ * `overflow-x: auto` clips its block axis too, so a panel drawn in there would
+ * lose its top edge. `--readout-x` is measured from the active column by the
+ * component — physical, so it is already right under `dir="rtl"`.
+ */
+.readoutAnchor {
+  position: absolute;
+  inset-block-start: 0;
+  /*
+   * `left`, not `inset-inline-start`: the offset is measured from the plot's own
+   * box in physical pixels, so it is already correct under `dir="rtl"` and a
+   * logical property would mirror it a second time. Same reasoning as
+   * `MenuButton`'s `--menu-shift`.
+   */
+  left: var(--readout-x, 50%);
+  z-index: var(--z-sticky);
+  translate: -50% 0;
+  /* Inside the track rather than above it, so the panel can never be clipped by
+     the scroller or land on top of the section's own heading. */
+  pointer-events: none;
+}
+
+.readout {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: max-content;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-raised);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay);
+}
+
+.readoutDate {
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-strong);
+}
+
+.readoutList {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: var(--space-1) var(--space-3);
+}
+
+.readoutRow {
+  display: contents;
+}
+
+.readoutTerm {
+  display: flex;
+  align-items: center;
   gap: var(--space-2);
   color: var(--color-on-surface-muted);
   font-size: var(--font-size-caption);
 }
 
+/* The same square and circle the legend uses, so a row of the readout and a key
+   entry are recognisably the same series. */
+.readoutTerm[data-series]::before {
+  content: '';
+  inline-size: var(--space-2);
+  block-size: var(--space-2);
+  flex-shrink: 0;
+}
+
+.readoutTerm[data-series='created']::before {
+  background: var(--color-chart-1);
+  border-radius: var(--radius-sm);
+}
+
+.readoutTerm[data-series='resolved']::before {
+  background: var(--color-chart-2);
+  border-radius: var(--radius-pill);
+}
+
+.readoutValue {
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
 /*
  * Forced colours drop every background, which would leave an empty track. The
  * system's own colours put the bars back, and the two series stay distinct
- * because one is filled and the other is outlined.
+ * because one is filled and the other is outlined — on top of the corner radius,
+ * which survives on its own.
  */
 @media (forced-colors: active) {
   .bar[data-series='created'],
-  .swatch[data-series='created'] {
+  .swatch[data-series='created'],
+  .readoutTerm[data-series='created']::before {
     background: CanvasText;
   }
 
   .bar[data-series='resolved'],
-  .swatch[data-series='resolved'] {
+  .swatch[data-series='resolved'],
+  .readoutTerm[data-series='resolved']::before {
     background: Canvas;
     border: var(--border-hairline) solid CanvasText;
+  }
+
+  .bar[data-empty='true'] {
+    background: GrayText;
   }
 }

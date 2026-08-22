@@ -1,16 +1,21 @@
 import type { AgentReportRow } from '@whatsappcrm/contracts';
+import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { DataTable, DataTableSkeleton, type DataTableColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { content } from '@/content/en';
 import { AGENT_ROWS_SKELETON_COUNT } from '@/features/reports/constants';
-import { agentRowLabel, formatCount, formatDuration } from '@/features/reports/presentation';
-import { agentColumnMeta } from './agent-columns';
+import { sortAgentRows, type AgentSort } from '@/features/reports/agent-sort';
+import { agentRowLabel, formatCount } from '@/features/reports/presentation';
+import type { ReportParams } from '@/features/reports/report-params';
+import { agentColumnMeta, type AgentColumnContext } from './agent-columns';
+import { MeasuredDuration } from './MeasuredDuration';
 import styles from './AgentBreakdownTable.module.css';
 
 /**
- * The per-agent breakdown. Usage: `<AgentBreakdownTable rows={response.agents} />`.
+ * The per-agent breakdown. Usage:
+ * `<AgentBreakdownTable rows={metrics.agents} params={query} sort={sort} />`.
  *
  * A server component, and reusing `DataTable` rather than a chart is the whole
  * decision: the values are medians and counts per person, and a bar chart of
@@ -19,11 +24,23 @@ import styles from './AgentBreakdownTable.module.css';
  * table puts the sample beside the figure and re-flows into stacked cards below
  * the layout breakpoint, so it works at 320px without a horizontal scroller.
  *
- * **Rows arrive in the API's order and are not re-sorted here.** The unattributed
- * row is last by construction, and a second ordering rule in the console is how a
- * table and the export of it start disagreeing about who is top.
+ * **The API's order is the default, and the only order the export knows.** Rows
+ * arrive ranked, with the unattributed row last by construction, and that is what
+ * a supervisor sees until they ask for something else. An explicit sort is theirs:
+ * it lives in the URL, so it survives a refresh and can be sent to somebody, and
+ * it deliberately does not travel to the export — the CSV is the range and the
+ * scope on screen, and a spreadsheet sorts itself.
  */
-export function AgentBreakdownTable({ rows }: { rows: readonly AgentReportRow[] }) {
+
+export interface AgentBreakdownTableProps {
+  rows: readonly AgentReportRow[];
+  /** The applied range and scope, so a sort link changes only the order. */
+  params: ReportParams;
+  /** The order in force, or `undefined` for the API's own. */
+  sort?: AgentSort;
+}
+
+export function AgentBreakdownTable({ rows, params, sort }: AgentBreakdownTableProps) {
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -34,7 +51,10 @@ export function AgentBreakdownTable({ rows }: { rows: readonly AgentReportRow[] 
     );
   }
 
-  const columns: DataTableColumn<AgentReportRow>[] = agentColumnMeta(content).map((meta) => ({
+  const columns: DataTableColumn<AgentReportRow>[] = agentColumnMeta(content, {
+    params,
+    sort,
+  }).map((meta) => ({
     ...meta,
     render: (row) => renderCell(meta.key, row),
   }));
@@ -43,7 +63,7 @@ export function AgentBreakdownTable({ rows }: { rows: readonly AgentReportRow[] 
     <DataTable
       caption={content.reports.agentsHeading}
       columns={columns}
-      rows={rows}
+      rows={sortAgentRows(rows, sort)}
       getRowKey={(row) => row.userId ?? UNATTRIBUTED_ROW_KEY}
     />
   );
@@ -57,7 +77,14 @@ function renderCell(key: string, row: AgentReportRow) {
     case 'agent':
       return (
         <span className={styles.agent}>
-          <span className={styles.name}>{agentRowLabel(row, content)}</span>
+          <span className={styles.identity}>
+            {/* Decorative, and only for a person: the unattributed row is work
+                with no owner, and giving it an initial would invent one. */}
+            {row.userId === null ? null : (
+              <Avatar name={agentRowLabel(row, content)} size="xs" tone="neutral" />
+            )}
+            <span className={styles.name}>{agentRowLabel(row, content)}</span>
+          </span>
           {row.userId === null ? (
             <span className={styles.note}>{content.reports.unattributedHint}</span>
           ) : null}
@@ -69,19 +96,11 @@ function renderCell(key: string, row: AgentReportRow) {
         </span>
       );
     case 'resolved':
-      return <span className={styles.figure}>{formatCount(row.ticketsResolved, content)}</span>;
+      return formatCount(row.ticketsResolved, content);
     case 'firstResponse':
-      return (
-        <span className={styles.figure}>
-          {formatDuration(row.firstResponse.medianSeconds, content)}
-        </span>
-      );
+      return <MeasuredDuration seconds={row.firstResponse.medianSeconds} />;
     case 'resolution':
-      return (
-        <span className={styles.figure}>
-          {formatDuration(row.resolution.medianSeconds, content)}
-        </span>
-      );
+      return <MeasuredDuration seconds={row.resolution.medianSeconds} />;
     default:
       return null;
   }
@@ -89,20 +108,26 @@ function renderCell(key: string, row: AgentReportRow) {
 
 /**
  * Mirrors the loaded table exactly — it *is* the same table, with the same
- * columns and placeholder cells — so the swap to real rows shifts nothing.
+ * columns, the same alignment and the same sort controls — so the swap to real
+ * rows shifts nothing. `DataTable`'s `isPlaceholder` renders those controls as
+ * text rather than as links, because the placeholder table is `aria-hidden` and a
+ * link inside that is a tab stop nobody can see.
  *
  * The row count matches a tenant's active membership rather than a page size:
  * this table is not paginated, and "about as many rows as a team has people" is
  * the honest guess.
  */
-export function AgentBreakdownTableSkeleton() {
+export function AgentBreakdownTableSkeleton({ params, sort }: AgentColumnContext) {
   return (
     <>
       <LoadingAnnouncement label={content.reports.agentsLoading} />
       <DataTableSkeleton
         caption={content.reports.agentsHeading}
         rowCount={AGENT_ROWS_SKELETON_COUNT}
-        columns={agentColumnMeta(content).map((meta) => ({ ...meta, render: () => null }))}
+        columns={agentColumnMeta(content, { params, sort }).map((meta) => ({
+          ...meta,
+          render: () => null,
+        }))}
       />
     </>
   );
