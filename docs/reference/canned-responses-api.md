@@ -15,7 +15,9 @@ database bounds are in
 `apps/api/prisma/migrations/20260816150000_canned_response_shortcut_and_bounds/migration.sql`.
 
 For agents using the picker in the console rather than calling the API, read
-[Answer common questions with saved replies](../guides/use-saved-replies.md).
+[Answer common questions with saved replies](../guides/use-saved-replies.md). The console's
+own write surface is **Settings → Saved replies** (`/settings/saved-replies`, TAR-575), which
+calls the three routes below through `apps/web/features/canned-responses/`.
 
 > **TODO(author):** the design document this surface is built against —
 > `docs/architecture/0011-canned-responses-contract.md` — is cited by
@@ -444,10 +446,6 @@ Two properties this arrangement is built to hold:
 
 Stated rather than left to be discovered.
 
-- **No console surface for writing.** `POST`, `PATCH` and `DELETE` have no screen — there is
-  no settings page for canned responses, and `apps/web/lib/api/canned-responses.ts` exposes
-  only the list. A supervisor or admin manages the library through the API today.
-  > **TODO(author):** which story owns the settings screen for the canned-response library?
 - **No personal responses.** Every row is shared with the whole tenant, enforced by
   `canned_responses_is_shared`.
 - **No interpolation.** Bodies are literal text; there are no merge fields.
