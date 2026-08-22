@@ -7,6 +7,7 @@ import type { PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import type { QueueService } from '../queue/queue.service';
+import { WebhookEventReplayService } from './admin/webhook-event-replay.service';
 import { WEBHOOK_FAILURE_REASON } from './webhook-failure-reasons';
 import { WebhookEventsRepository } from './webhook-events.repository';
 import { WebhookIngestService } from './webhook-ingest.service';
@@ -31,7 +32,9 @@ import { WhatsAppInboundWriter } from './whatsapp-inbound.writer';
  *   * a **status webhook that overtakes its message** creates the row it needs,
  *     and a late `sent` afterwards cannot un-read it;
  *   * an **unknown `phone_number_id`** is parked `failed`, queryable, with its
- *     payload intact;
+ *     payload intact, and **recoverable**: an operator replay resets it, the
+ *     sweep collects it, and the message reaches the tenant that connected the
+ *     number afterwards (TAR-94);
  *   * the **sweeper** re-enqueues an event that was stored but never picked up;
  *   * **one tenant cannot observe the other's** contacts, threads or messages —
  *     asserted through `TenantPrisma`, as the application reaches them.
@@ -65,6 +68,13 @@ const ACCOUNT_B = '67444444-4444-7444-8444-4444444444b2';
 const PHONE_NUMBER_A = 'tar67-pn-a';
 const PHONE_NUMBER_B = 'tar67-pn-b';
 const UNCONNECTED_PHONE_NUMBER = 'tar67-pn-nobody';
+/**
+ * A number whose messages arrive *before* it is connected, and which is then
+ * connected during the run — TAR-94's first realistic trigger, and the only way
+ * to exercise a replay that actually goes on to succeed.
+ */
+const LATE_PHONE_NUMBER = 'tar67-pn-late';
+const LATE_ACCOUNT = '67444444-4444-7444-8444-4444444444b3';
 
 /**
  * One customer number per scenario. Each block therefore owns its own contact
@@ -81,6 +91,7 @@ const CUSTOMER = {
   emitted: '966501110007',
   freshThread: '966501110008',
   metered: '966501110009',
+  replayed: '966501110010',
 } as const;
 
 const ENV: Record<string, unknown> = {
@@ -192,12 +203,24 @@ describe('WhatsApp webhook ingestion, end to end', () => {
   let ingest: WebhookIngestService;
   let processor: WhatsAppEventProcessor;
   let sweeper: WebhookSweeperService;
+  let replays: WebhookEventReplayService;
   let enqueue: jest.Mock;
 
   /** Reads as the application does: through `TenantPrisma`, in one tenant's scope. */
   function asTenant<T>(tenantId: string, work: () => Promise<T>): Promise<T> {
     return tenantContext.run(
       { requestId: REQUEST_ID, tenantId, userId: null },
+      async () => await work(),
+    );
+  }
+
+  /**
+   * Reads as the platform-admin surface does: no tenant, and the label of the
+   * credential `PlatformAdminGuard` matched published on the scope.
+   */
+  function asOperator<T>(label: string, work: () => Promise<T>): Promise<T> {
+    return tenantContext.run(
+      { requestId: REQUEST_ID, tenantId: null, userId: null, platformActorLabel: label },
       async () => await work(),
     );
   }
@@ -255,6 +278,7 @@ describe('WhatsApp webhook ingestion, end to end', () => {
       tenantContext,
     );
     sweeper = new WebhookSweeperService(CONFIG, repository, queue);
+    replays = new WebhookEventReplayService(repository, tenantContext);
 
     await removeFixture();
 
@@ -717,6 +741,159 @@ describe('WhatsApp webhook ingestion, end to end', () => {
       });
 
       expect(parked).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('replaying a parked event', () => {
+    /**
+     * The whole recovery path, in the order it actually happens: messages arrive
+     * for a number nobody has connected, the number is connected, an operator
+     * replays, and the sweep that follows delivers the message to the tenant.
+     *
+     * Run against a real database because every interesting property is one a
+     * mock would grant for free — that the reset and the trail row commit
+     * together, that the trail survives being written by a role with no UPDATE
+     * on the table, and that `findStale` really does pick the row back up.
+     */
+    const parkedAt = new Date('2026-08-10T11:30:00.000Z');
+    const sweptAt = new Date('2026-08-10T13:00:00.000Z');
+
+    let parkedEventId: string;
+
+    it('parks a message for a number that is not connected yet', async () => {
+      parkedEventId = await deliver(
+        inboundPayload({
+          phoneNumberId: LATE_PHONE_NUMBER,
+          from: CUSTOMER.replayed,
+          wamid: 'wamid.tar67.replayed',
+          body: 'sent before the number was connected',
+          at: parkedAt,
+        }),
+      );
+
+      const parked = await systemPrisma.webhookEvent.findUniqueOrThrow({
+        where: { id: parkedEventId },
+        select: { status: true, lastError: true },
+      });
+
+      expect(parked.status).toBe('failed');
+      expect(parked.lastError).toContain(WEBHOOK_FAILURE_REASON.unknownPhoneNumber);
+    });
+
+    it('resets the row and records who replayed it, in one commit', async () => {
+      // TAR-66's half of the story: the number is connected to a tenant, which
+      // is what makes the parked payload routable at all.
+      await systemPrisma.whatsappAccount.create({
+        data: {
+          id: LATE_ACCOUNT,
+          tenantId: TENANT_A,
+          whatsappBusinessAccountId: WABA_A,
+          phoneNumberId: LATE_PHONE_NUMBER,
+          displayPhoneNumber: '+15550003333',
+        },
+      });
+
+      const outcome = await asOperator(
+        'ops-alice',
+        async () => await replays.replay(parkedEventId),
+      );
+
+      expect(outcome.kind).toBe('replayed');
+
+      const reset = await systemPrisma.webhookEvent.findUniqueOrThrow({
+        where: { id: parkedEventId },
+        select: { status: true, attempts: true, lastError: true },
+      });
+
+      // `attempts` back to zero, because the retry budget belongs to the attempt
+      // rather than to the event: a row replayed with its attempts intact would
+      // be parked again by the first transient failure.
+      expect(reset).toEqual({ status: 'received', attempts: 0, lastError: null });
+
+      const trail = await systemPrisma.webhookEventReplay.findMany({
+        where: { webhookEventId: parkedEventId },
+        select: { actorLabel: true, parkedError: true },
+      });
+
+      expect(trail).toHaveLength(1);
+      expect(trail[0]?.actorLabel).toBe('ops-alice');
+      // The reason survives the reset that cleared it from the row itself,
+      // which is the point of copying it onto the trail.
+      expect(trail[0]?.parkedError).toContain(WEBHOOK_FAILURE_REASON.unknownPhoneNumber);
+    });
+
+    it('refuses a second replay, and writes no second trail row for it', async () => {
+      const outcome = await asOperator('ops-bob', async () => await replays.replay(parkedEventId));
+
+      // TAR-94's second criterion. The row is `received` and already in front of
+      // the sweeper; answering "done" again would tell an operator mid-incident
+      // that they had recovered a message twice.
+      expect(outcome).toEqual({ kind: 'not-parked', status: 'received' });
+
+      await expect(
+        systemPrisma.webhookEventReplay.count({ where: { webhookEventId: parkedEventId } }),
+      ).resolves.toBe(1);
+    });
+
+    it('reports an id nobody stored as not found, rather than creating anything', async () => {
+      const outcome = await asOperator(
+        'ops-alice',
+        async () => await replays.replay('67444444-4444-7444-8444-4444444444ff'),
+      );
+
+      expect(outcome).toEqual({ kind: 'not-found' });
+
+      await expect(
+        systemPrisma.webhookEventReplay.count({
+          where: { webhookEventId: '67444444-4444-7444-8444-4444444444ff' },
+        }),
+      ).resolves.toBe(0);
+    });
+
+    it('is collected by the next sweep and delivered to the tenant that owns the number', async () => {
+      // Age it past the threshold rather than waiting a minute for the clock,
+      // exactly as the sweeper's own scenario does.
+      await systemPrisma.webhookEvent.update({
+        where: { id: parkedEventId },
+        data: { receivedAt: new Date('2026-08-10T12:00:00.000Z') },
+      });
+
+      enqueue.mockClear();
+
+      await expect(sweeper.sweep(sweptAt)).resolves.toBeGreaterThanOrEqual(1);
+
+      const requeued = enqueue.mock.calls.map(
+        ([, , job]: [string, string, { webhookEventId: string }]) => job.webhookEventId,
+      );
+
+      expect(requeued).toContain(parkedEventId);
+
+      await tenantContext.run(
+        { requestId: REQUEST_ID, tenantId: null, userId: null },
+        async () => await processor.process(parkedEventId),
+      );
+
+      const { status, tenantId } = await systemPrisma.webhookEvent.findUniqueOrThrow({
+        where: { id: parkedEventId },
+        select: { status: true, tenantId: true },
+      });
+
+      expect(status).toBe('processed');
+      expect(tenantId).toBe(TENANT_A);
+
+      // The point of the whole feature: a real customer message that would have
+      // been lost is in the inbox of the tenant that connected the number.
+      const message = await asTenant(TENANT_A, async () =>
+        tenantPrisma.message.findFirstOrThrow({
+          where: { providerMessageId: 'wamid.tar67.replayed' },
+          select: { body: true, direction: true },
+        }),
+      );
+
+      expect(message).toEqual({
+        body: 'sent before the number was connected',
+        direction: 'inbound',
+      });
     });
   });
 

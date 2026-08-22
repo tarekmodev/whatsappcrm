@@ -1,7 +1,8 @@
 # Platform admin API reference
 
-The tenant provisioning and deactivation endpoints. Written for engineers and for the
-platform operator who runs a provisioning script.
+The tenant provisioning and deactivation endpoints, and the parked-webhook replay. Written for
+engineers and for the platform operator who runs a provisioning script or recovers a message that
+failed ingestion.
 
 Every route here is operated by us, never by a customer. Nothing on this surface is
 reachable by a tenant's own users under any role, and none of it goes through the session
@@ -15,7 +16,8 @@ The operator routes on this page stay the fallback for a deployment with `SIGNUP
 The lifecycle routes 0009 specifies for an operator — reactivate, cancel, delete and the
 lifecycle read — are published and not implemented.
 
-**This page covers the two tenant lifecycle routes only.** `/api/v1/admin/*` also carries
+**This page covers the two tenant lifecycle routes and the webhook replay route.**
+`/api/v1/admin/*` also carries
 `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts` and its
 `{wabaId}/template-sync` sibling, both behind the same `PlatformAdminGuard`. They are
 TAR-66's to document; see `apps/api/src/whatsapp/admin/admin-whatsapp.controller.ts` and
@@ -361,6 +363,129 @@ Both timestamps come from the database clock, read once at transaction start. Tw
 instances a few seconds apart would otherwise be able to order the audit trail
 inconsistently with the row it describes.
 
+## `POST /api/v1/admin/webhook-events/{webhookEventId}/replay`
+
+Put a parked inbound event back in front of the sweeper (TAR-94).
+
+Ingest stores every signed delivery to `webhook_events` before it routes it, and parks the ones
+it cannot apply — an `unknown_phone_number_id`, a deactivated tenant — `failed`, with the raw
+payload intact. A parked row is deliberately **not** claimable, so re-enqueueing one does nothing:
+recovery is a reset back to `received`, which the next sweep collects. This is the authorised way
+to perform that reset. Before it, the only way was an `UPDATE webhook_events` typed into psql,
+with nothing recording that anybody had.
+
+Find what is parked first — the query is in [the README](../../README.md#what-happens-after-the-200):
+
+```sql
+SELECT id, split_part(last_error, ':', 1) AS reason
+FROM webhook_events WHERE status = 'failed' ORDER BY received_at;
+```
+
+**This route names no tenant**, unlike everything else on this surface. That is the case it exists
+for rather than an omission: the event most worth replaying is one whose number was connected
+_after_ its customers messaged it, so its `tenant_id` is still NULL and there is no tenant to
+enter. The tenant boundary is enforced where it always was — the processor re-resolves
+`phone_number_id` → tenant on the next sweep and opens that tenant's scope before writing a
+message.
+
+### Request
+
+No body. The event id is the whole request.
+
+| Parameter        | In   | Rule           |
+| ---------------- | ---- | -------------- |
+| `webhookEventId` | Path | UUID, required |
+
+```bash
+curl -X POST -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+  http://localhost:3001/api/v1/admin/webhook-events/01a02b9d-c0bd-708a-b184-18a7f7cf5eca/replay
+```
+
+### Response
+
+`200`, always — not `202`. What the call does is complete and durable when it answers: the row is
+`received` and the trail row is committed. What happens _next_ is the sweep, and the thing to poll
+for that is `webhook_events.status`, which the operator already has.
+
+```json
+{
+  "id": "01a02b9d-c0bd-708a-b184-18a7f7cf5eca",
+  "provider": "whatsapp",
+  "status": "received",
+  "parkedError": "unknown_phone_number_id: no whatsapp_accounts row for tar94-doc-unconnected",
+  "replayedAt": "2026-08-22T22:36:08.674Z"
+}
+```
+
+| Field         | Meaning                                                                                       |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| `status`      | Always `received`. It is what the sweeper scans for, which is why it is reported              |
+| `parkedError` | The `last_error` the row carried. The reset clears it, so this is the only copy in the answer |
+| `replayedAt`  | When the reset committed — **not** when the event will be reprocessed                         |
+| `provider`    | Which sweeper collects it. Only the WhatsApp sweep runs today (see below)                     |
+
+Reprocessing happens on the next sweep, up to `WEBHOOK_STUCK_AFTER_MS` later. `attempts` goes back
+to zero along with the status: the retry budget belongs to the attempt to apply an event rather
+than to the event, so a row parked with `attempts_exhausted` and replayed with its attempts intact
+would be parked again by the first transient failure.
+
+⚠️ **A `billing` event is reset and then waits.** The sweeper scans `provider = 'whatsapp'` only,
+because each provider has its own queue and worker, and TAR-37's billing worker is not on `main`.
+Replaying one is not refused — the reset is correct and the row is recoverable — but nothing
+collects it until that worker exists. `provider` in the response is how you can tell.
+
+### Errors
+
+| Status | Code                | When                                                                  |
+| ------ | ------------------- | --------------------------------------------------------------------- |
+| `400`  | `validation_failed` | `webhookEventId` is not a UUID                                        |
+| `401`  | `unauthenticated`   | Missing, malformed or wrong bearer token                              |
+| `404`  | `not_found`         | No stored event has that id                                           |
+| `409`  | `conflict`          | The row is `received`, `processing` or `processed` — it is not parked |
+
+The `409` is the one worth stating out loud. A repeat replay has nothing to do, and answering
+`200` would tell an operator mid-incident that they had just recovered a message when they had
+not — the same class of quiet no-op as the sweeper job-id collision TAR-67 fixed. The message
+names the status, because it decides what to do next: `received` and `processing` mean the sweeper
+already has it, `processed` means it succeeded and there is nothing to recover.
+
+```json
+{
+  "error": {
+    "code": "conflict",
+    "message": "This webhook event is received, not parked, so there is nothing to replay. Only an event that failed ingestion can be replayed.",
+    "requestId": "4ab941b1-5723-4da2-93b0-c515761d913e"
+  }
+}
+```
+
+### What it writes
+
+Two statements, one transaction, so an event cannot be replayed with nothing recording who did it
+and a trail row cannot describe a reset that rolled back:
+
+```text
+webhook_events         status → 'received', attempts → 0, last_error → NULL
+                       guarded by WHERE status = 'failed', which is what makes two
+                       concurrent replays produce one reset and one 409
+webhook_event_replays  one row: the event, the operator credential's label, the
+                       last_error being recovered, and when
+```
+
+```sql
+SELECT actor_label, parked_error, replayed_at FROM webhook_event_replays
+WHERE webhook_event_id = $1 ORDER BY replayed_at;
+--  local-dev | unknown_phone_number_id: no whatsapp_accounts row for … | 2026-08-22 22:36:08.674+00
+```
+
+**Not an `audit_logs` row, and that is deliberate.** `audit_logs.tenant_id` is NOT NULL and
+policy-filtered, and the event this exists to recover is precisely the one with no tenant. Filing
+the entry under a tenant the operator asserted would put an invention into the table whose entire
+value is being right about what happened. `webhook_event_replays` therefore takes the posture of
+the table it describes: no `tenant_id`, no RLS policy, no grant for the app role, and append-only
+— the grant withholds UPDATE and DELETE from `SystemPrisma` too, and a trigger refuses the table
+owner on top of that.
+
 ## Verification
 
 Every request and response on this page was executed against a local stack: `pnpm db:up`,
@@ -384,3 +509,9 @@ Two behaviours confirmed rather than assumed:
 - A replay sending a different `name` and different settings returned the **original**
   stored values and changed nothing.
 - A second `deactivate` call returned the **original** `suspendedAt`.
+
+The webhook replay section was executed against the same stack on TAR-94's branch. The parked row
+was produced the way a real one is — a signed delivery to `POST /api/webhooks/whatsapp` naming a
+`phone_number_id` no tenant has connected — and every status code, body and `requestId` above is
+what that run returned, including the `409` from calling replay twice and the `400` from an id
+that is not a UUID.

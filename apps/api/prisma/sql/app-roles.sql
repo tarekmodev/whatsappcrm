@@ -154,8 +154,10 @@ BEGIN
         END IF;
 
         IF t.relname = 'lifecycle_events' THEN
-            -- The one append-only table in the schema (TAR-403), and since ADR
-            -- 0009 Amendment 1 ruling 2 the third that carries no RLS policy.
+            -- The first append-only table in the schema (TAR-403), and since
+            -- ADR 0009 Amendment 1 ruling 2 the third that carries no RLS
+            -- policy. TAR-94's `webhook_event_replays` below is the second of
+            -- each.
             --
             -- **`whatsappcrm_app` is granted nothing at all**, and that is the
             -- half of ruling 2 the ruling itself does not spell out. The table
@@ -223,8 +225,39 @@ BEGIN
             CONTINUE;
         END IF;
 
-        -- SystemPrisma reaches everything, including the three tables that
-        -- carry no policy. That is what it is for.
+        IF t.relname = 'webhook_event_replays' THEN
+            -- The operator replay trail (TAR-94). Append-only, and the fourth
+            -- table with no RLS policy — for the same reason as
+            -- `webhook_events`, which it describes: the parked event being
+            -- recovered may have no tenant at all, so there is nothing for a
+            -- policy to compare against.
+            --
+            -- **`whatsappcrm_app` is granted nothing**, exactly as on
+            -- `lifecycle_events` above and the two tables in the CASE below. The
+            -- grant replaces the policy, and `WebhookEventReplay`
+            -- is `system-only` in `tenant-scope.extension.ts` so a tenant-side
+            -- call names the cause rather than failing with SQLSTATE 42501.
+            --
+            -- Neither role gets UPDATE or DELETE, including SystemPrisma. Who
+            -- replayed which parked customer message is a record of an operator
+            -- action on production state, and SystemPrisma is the credential a
+            -- mistake would run under. `webhook_event_replays_append_only` closes
+            -- the half this cannot: the table owner is bound by neither.
+            --
+            -- DELETE is withheld and the foreign key still cascades — a
+            -- referential action runs as the table owner and is not checked
+            -- against the deleting role's privileges, so removing a
+            -- `webhook_events` row still takes its replay rows with it.
+            EXECUTE format(
+                'GRANT SELECT, INSERT ON TABLE "public".%I TO "whatsappcrm_system"',
+                t.relname
+            );
+
+            CONTINUE;
+        END IF;
+
+        -- SystemPrisma reaches everything, including the tables that carry no
+        -- policy. That is what it is for.
         EXECUTE format(
             'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "public".%I TO "whatsappcrm_system"',
             t.relname
@@ -249,6 +282,8 @@ BEGIN
             WHEN 'webhook_events', 'tenant_signups' THEN
                 -- Both are written before the tenant is known, so neither can
                 -- carry a policy: there is nothing for one to compare against.
+                -- TAR-94's `webhook_event_replays` is handled above, on the same
+                -- reasoning and with UPDATE and DELETE withheld on top of it.
                 -- With no policy to constrain them, the only safe grant is none
                 -- — these are the tables where the grant, rather than RLS, is
                 -- the enforcement.

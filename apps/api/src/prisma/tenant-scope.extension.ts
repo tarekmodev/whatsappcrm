@@ -41,7 +41,7 @@ const TENANT_NOT_ACTIVE_MARKERS = ['TENANT_NOT_SERVICEABLE', 'TENANT_NOT_ACTIVE'
  *
  * Anything absent from this map is `tenant-scoped`: it carries a non-null
  * `tenant_id`, RLS filters it, and the extension needs to do nothing beyond
- * setting the GUC. The five entries are the tables deliberately left without a
+ * setting the GUC. The entries below are the tables deliberately left without a
  * policy, which is exactly why they need one here instead.
  */
 const MODEL_POLICIES = {
@@ -66,6 +66,15 @@ const MODEL_POLICIES = {
    * frames deeper.
    */
   WebhookEvent: 'system-only',
+  /**
+   * The operator replay trail for the table above (TAR-94), and unreachable for
+   * the same reason: a parked event may name no tenant, so no policy could
+   * apply and the app role is granted nothing on it. It is also append-only —
+   * `app-roles.sql` withholds UPDATE and DELETE from `SystemPrisma` too, and
+   * `webhook_event_replays_append_only` refuses an UPDATE from the table owner
+   * on top of that.
+   */
+  WebhookEventReplay: 'system-only',
   /**
    * A self-signup before its tenant exists (TAR-440, ADR 0009 decision 3). Same
    * shape as `WebhookEvent` and for the same reason — written before there is a

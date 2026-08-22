@@ -169,6 +169,31 @@ change.
 
 ### Added
 
+- **A platform operator can replay a parked webhook event** (TAR-94) —
+  `POST /api/v1/admin/webhook-events/{id}/replay`, behind the same `PlatformAdminGuard` as the
+  tenant routes. Ingest has always parked an event it cannot apply — an
+  `unknown_phone_number_id`, a deactivated tenant — `failed` with the raw payload intact, and a
+  parked row is deliberately not claimable, so recovery is a reset back to `received` that the
+  next sweep collects. TAR-67's docblocks and the README promised that reset could be made;
+  what neither said out loud is that making it meant an operator typing
+  `UPDATE webhook_events` into psql, with nothing recording that anybody had. This is that
+  reset, authorised and audited, and it rides the existing sweep rather than adding a second
+  path onto the queue.
+  **A repeat is a `409`, not a quiet `200`.** The second call has nothing to do, and answering
+  "done" would tell an operator mid-incident that they had recovered a message twice — the same
+  class of quiet no-op as the sweeper job-id collision TAR-67 fixed. An unknown id is a `404`,
+  and the guarded `WHERE status = 'failed'` is what makes two concurrent replays produce one
+  reset and one refusal rather than two trail rows.
+  The trail is a new table, `webhook_event_replays`, rather than an `audit_logs` row, because
+  `audit_logs.tenant_id` is NOT NULL and the event this exists to recover is precisely the one
+  with no tenant: a number connected _after_ its customers messaged it. It takes the posture of
+  the table it describes — no `tenant_id`, no RLS policy, nothing granted to the app role — and
+  is append-only, with UPDATE and DELETE withheld from `SystemPrisma` as well and a
+  `BEFORE UPDATE` trigger refusing the table owner on top of that. It records the event, the
+  operator credential's label, the `last_error` being recovered, and when; the reset and the
+  trail row are one transaction. The route is the first on this surface that names no tenant,
+  and [the admin API reference](docs/reference/admin-api.md) says why.
+
 - **A tenant admin can buy a plan, and its allowances take effect the moment the provider
   confirms the payment** (TAR-37) — shipped across TAR-616 (the contract), TAR-617 (schema and
   migrations), TAR-618 (backend), TAR-619 (console) and TAR-622 (these docs). TAR-18's
