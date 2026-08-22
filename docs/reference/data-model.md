@@ -57,7 +57,7 @@ not, each deliberately:
 | `lifecycle_events` | It outlives the tenant it describes, so `tenant_id` is a recorded identifier and not a reference (ADR 0009)      | `SystemPrisma` only. The app role is granted nothing on it                  |
 
 `TenantPrisma` applies its own rule to all five, because there is no policy to do it —
-see [`tenancy.md`](tenancy.md#the-four-tables-with-no-rls-policy).
+see [`tenancy.md`](tenancy.md#the-five-tables-with-no-rls-policy).
 
 On the last three the **grant, not RLS, is the enforcement**, and `pnpm db:verify:rls`
 asserts all three by name rather than inferring them from the catalog. `lifecycle_events`
@@ -624,9 +624,21 @@ deletes a custom field, on account of one unrelated contact row. Merge-on-write 
 
 `tags` is the one taxonomy and it now has two join tables: `contact_tags` (a permanent
 property of a customer) and [`ticket_tags`](#ticket_tags) (a fact about one incident, written
-by automation). A tag a workflow references **cannot be deleted** — the foreign key out of
-[`workflow_references`](#workflow_references) refuses it, and `ContactsModule` turns that into
-a `conflict` naming the workflows.
+by automation).
+
+**Nothing deletes a tag today.** `TagsController` publishes list and create only
+([reference](contacts-api.md#the-tag)), so the foreign key out of
+[`workflow_references`](#workflow_references) — which would refuse a delete while a workflow
+names the tag — is a guarantee waiting for a caller rather than a refusal any route can
+produce. Whichever story adds the route owns turning that constraint into a `conflict` naming
+the workflows, rather than letting it surface as a constraint violation.
+
+`tags.name` is plain `text`, not `citext` — unlike `teams.name` and `assignment_rules.name`.
+`(tenant_id, name)` is therefore case-**sensitive**, and `VIP` and `vip` are two tags one
+tenant can hold. `GET /api/v1/tags?q=` supplies the case-insensitivity a type-ahead needs from
+the query, not from the column; do not remove that as redundant. Retyping the column is a
+change on a table `contact_tags`, `ticket_tags` and `workflow_references` all reference, so it
+is its own release.
 
 #### `custom_field_defs`
 
@@ -954,8 +966,9 @@ acknowledge endpoints, and a supervisor who has to look in two places.
 
 **The published API contract is unaffected.** `GET /api/v1/escalation-alerts` and its
 acknowledge are a `type = 'escalation'` view over `notifications`, which is the same
-arrangement TAR-394 kept for `sla-alerts`. See [`notifications`](#notifications) for the
-columns, and 0011 for the flow.
+arrangement TAR-394 kept for `sla-alerts`. See
+[`notifications`](#notifications--sla_alerts-until-tar-394) for the columns, and 0011 for the
+flow.
 
 ### Assignment — TAR-23 / TAR-24
 

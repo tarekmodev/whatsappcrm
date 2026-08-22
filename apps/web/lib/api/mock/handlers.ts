@@ -3876,6 +3876,10 @@ function sendMessage({ principal, params, body, headers }: RouteContext): Messag
     attachments: [],
     sentByUserId: principal.userId,
     sentByAutomation: false,
+    // An agent typed this one, which is what `origin` records (TAR-28, 0010
+    // decision 14). The database's own CHECK ties it to `direction`, so an
+    // outbound message may be anything except `contact`.
+    origin: 'agent',
     providerMessageId: null,
     failureReason: null,
     sentAt,

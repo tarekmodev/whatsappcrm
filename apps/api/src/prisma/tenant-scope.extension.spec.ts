@@ -70,17 +70,23 @@ describe('withTenantScope', () => {
       // Interpolating the id into the SQL instead of binding it would be an
       // injection hole reachable from a session claim.
       //
-      // The nesting is the deactivation gate (TAR-51) and its order is the
-      // mechanism: Postgres evaluates `assert_tenant_active` first, so a
-      // deactivated tenant raises before `set_config` runs and the GUC is never
+      // The nesting is the tenant gate (ADR 0009 decision 2) and its order is
+      // the mechanism: Postgres evaluates `assert_tenant_serviceable` first, so
+      // a refused tenant raises before `set_config` runs and the GUC is never
       // set. Checking after setting it would leave a window in which the
       // statement batched behind it could still run.
+      //
+      // The **function name** is asserted, not merely the shape, because this is
+      // the single call site the expand → migrate → contract rename moved: it
+      // was `assert_tenant_active`, which refused every status but `active`, and
+      // the widened gate is what lets a suspended tenant's inbound WhatsApp
+      // messages still be stored.
       //
       // The schema qualifier is load-bearing too: unqualified, the call
       // resolves through the connection's `search_path`, and a connection
       // without `public` on it fails every tenant statement.
       expect(fragments.join('?')).toBe(
-        'SELECT set_config(?, public.assert_tenant_active(?), true)',
+        'SELECT set_config(?, public.assert_tenant_serviceable(?), true)',
       );
       expect(values).toEqual([TENANT_GUC, TENANT_ID]);
     });

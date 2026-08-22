@@ -5,6 +5,7 @@ import { ResponseOriginService } from '../common/response-origin.service';
 import { EntitlementsModule } from '../entitlements/entitlements.module';
 import { MediaModule } from '../media/media.module';
 import { WhatsAppModule } from '../whatsapp/whatsapp.module';
+import { AutomatedMessageSender } from './automated-message.sender';
 import { ConversationCommandService } from './conversation-command.service';
 import { ConversationQueryService } from './conversation-query.service';
 import { ConversationsController } from './conversations.controller';
@@ -64,11 +65,19 @@ import { OutboundMessageDispatcher } from './outbound-message.dispatcher';
     ConversationCommandService,
     MessageQueryService,
     MessageSendService,
+    AutomatedMessageSender,
     InternalNotesService,
     OutboundMessageDispatcher,
     ConversationsQueueRunner,
     ResponseOriginService,
     ApiExceptionFilter,
   ],
+  // The two providers this module publishes, for the two things an L4 module
+  // legitimately needs from the inbox (TAR-28): sending a message nobody typed,
+  // and asking the one question RLS cannot answer — may *this principal* see
+  // this thread. The visibility rule is exported rather than re-implemented
+  // precisely because a second copy of it is how a route becomes the one that
+  // leaks which conversation ids exist. Everything else stays private.
+  exports: [AutomatedMessageSender, ConversationQueryService],
 })
 export class ConversationsModule {}

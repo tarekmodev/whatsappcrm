@@ -1,6 +1,7 @@
 import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { AiModule } from './ai/ai.module';
 import { AssignmentModule } from './assignment/assignment.module';
 import { AuditModule } from './audit/audit.module';
 import { CannedResponsesModule } from './canned-responses/canned-responses.module';
@@ -94,9 +95,9 @@ import { WorkflowsModule } from './workflows/workflows.module';
     // (0011, decision 1), so nothing in the send path imports it.
     CannedResponsesModule,
     WebhooksModule,
-    // L4, and last: it may import the domain modules below it, and nothing below
-    // may import it. Every trigger reaching it is a queue job for exactly that
-    // reason, so it needs no `imports` of its own.
+    // L4, and last: they may import the domain modules below them, and nothing
+    // below may import them. Every trigger reaching either is a queue job for
+    // exactly that reason.
     SlaModule,
     // L4 as well, and after `SlaModule` only for readability — it imports
     // nothing and nothing imports it. Reporting is a synchronous read over
@@ -110,6 +111,10 @@ import { WorkflowsModule } from './workflows/workflows.module';
     // status, priority and assignment through the one implementation of those
     // writes.
     WorkflowsModule,
+    // Imports `ConversationsModule` for the send path and `EntitlementsModule`
+    // for the plan gate — both declared above it, so the ordering here matches
+    // the dependency rather than only reading well.
+    AiModule,
   ],
 })
 export class AppModule implements NestModule {

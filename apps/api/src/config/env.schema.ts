@@ -159,6 +159,28 @@ const envShape = z.object({
     .default(15 * 60_000),
 
   /**
+   * How often the tenant-lifecycle sweep runs (TAR-404, ADR 0009 decision 4).
+   *
+   * Five minutes, which is the interval the ADR names. It is the upper bound on
+   * how late a timer fires, and every window it watches is measured in days — so
+   * the value is chosen for the cost of the pass rather than for its precision:
+   * two indexed scans over `tenants` and one over `lifecycle_events`, whether or
+   * not anything is due.
+   *
+   * It is also the notification backstop's latency. A transition committed while
+   * Redis was unavailable is re-enqueued on the next pass, so this is how long a
+   * tenant can be suspended without being told.
+   *
+   * Configurable mainly so a test environment can make an expiry observable in
+   * seconds rather than waiting out a real interval.
+   */
+  LIFECYCLE_SWEEP_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .default(5 * 60_000),
+
+  /**
    * Upper bound on one DNS lookup during ownership verification.
    *
    * Every outbound call has one, and this one sits on a request path a tenant is
@@ -553,6 +575,32 @@ const envShape = z.object({
    * `DATABASE_URL` already sets.
    */
   META_EMBEDDED_SIGNUP_CONFIG_ID: MetaIdSchema.optional(),
+
+  // ---------------------------------------------------------------------------
+  // AI chatbot (TAR-28, ADR 0010 decision 11)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The Anthropic API key the chatbot answers with.
+   *
+   * **One platform key, not per-tenant credentials.** Per-tenant bring-your-own
+   * keys are deferred; when they land, `AccessTokenCipher` is the existing
+   * pattern and the column would be `ai_configs.api_key_encrypted`. Nothing in
+   * this design forecloses it.
+   *
+   * Optional here and **absent means no tenant gets automated replies** — every
+   * tenant reads `readiness.ready = false` with blocker `provider_not_configured`
+   * and no path calls the provider. The same fail-closed shape
+   * `WHATSAPP_TOKEN_ENCRYPTION_KEY` and `PLATFORM_ADMIN_TOKEN` already use: an
+   * environment that was never configured refuses rather than half-works.
+   * Requiring it outright would instead stop the API booting everywhere the
+   * feature is not in use, trading a local refusal for a global outage.
+   *
+   * It belongs in the platform's secret store. Exactly one class reads it —
+   * `ClaudeClient` — and its value never reaches a DTO, a log line, an error
+   * message, a `bot_turns` row or an issue body.
+   */
+  ANTHROPIC_API_KEY: z.string().min(1).optional(),
 
   // ---------------------------------------------------------------------------
   // Media pipeline (TAR-20e)

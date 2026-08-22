@@ -21,6 +21,7 @@ function row(overrides: Partial<MessageRow> = {}): MessageRow {
     status: 'received',
     body: 'Where is my order?',
     senderUserId: null,
+    origin: 'contact',
     providerMessageId: 'wamid.1',
     errorCode: null,
     errorMessage: null,
@@ -54,10 +55,25 @@ describe('toMessageResponse', () => {
   });
 
   it('calls an outbound message with no sender automation', () => {
-    // The chatbot, a workflow, or the placeholder a status webhook creates.
+    // The placeholder a status webhook creates when it overtakes its own
+    // message: outbound, no sender, and completed as `system` by the trigger.
+    // `origin` moves with `direction` because the database's own CHECK requires
+    // it — a message is `contact`-authored if and only if it is inbound.
     expect(
-      toMessageResponse(row({ direction: 'outbound', status: 'sent' }), ORIGIN).sentByAutomation,
+      toMessageResponse(row({ direction: 'outbound', status: 'sent', origin: 'system' }), ORIGIN)
+        .sentByAutomation,
     ).toBe(true);
+  });
+
+  it('calls a bot reply automation, and publishes the origin that identifies it', () => {
+    // `sentByAutomation` cannot tell TAR-28's chatbot from TAR-27's workflows or
+    // from a delivery placeholder, which is the whole reason `origin` exists.
+    const reply = toMessageResponse(
+      row({ direction: 'outbound', status: 'queued', origin: 'bot' }),
+      ORIGIN,
+    );
+
+    expect(reply).toMatchObject({ sentByAutomation: true, origin: 'bot' });
   });
 
   it('attributes an agent reply to the agent', () => {
@@ -66,6 +82,7 @@ describe('toMessageResponse', () => {
         direction: 'outbound',
         status: 'queued',
         senderUserId: '68444444-4444-7444-8444-4444444444a1',
+        origin: 'agent',
       }),
       ORIGIN,
     );

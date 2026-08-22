@@ -16,6 +16,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import { MESSAGE_CREATED_EVENT, type MessageCreatedEvent } from '../events/domain-events';
 import type { Prisma } from '../generated/prisma/client';
 import {
+  ConversationBotState,
   MediaDownloadState,
   MessageContentType,
   MessageDirection,
@@ -158,6 +159,25 @@ export class MessageSendService {
       await tx.conversation.updateMany({
         where: { id: conversationId, lastMessageAt: { lt: draft.sentAt } },
         data: { lastMessageAt: draft.sentAt },
+      });
+
+      // A person has replied, so the bot is done with this thread (TAR-28, 0010
+      // decision 5). One statement, inside the transaction that was already
+      // open, and no dependency on `AiModule` — `bot_state` is a plain column
+      // rather than an AI API precisely so this can be written here.
+      //
+      // A separate statement from the one above because the two have different
+      // guards: `last_message_at` moves only forward, and this moves only when
+      // the thread is not already `human_active`. Folding them together would
+      // make an out-of-order timestamp silently skip the state change.
+      //
+      // `human_active` is terminal for the conversation's active life: a bot
+      // that resumes after an agent has spoken talks over a colleague in front
+      // of the customer. The reset to `off` on resolve/close is in
+      // `ConversationCommandService`.
+      await tx.conversation.updateMany({
+        where: { id: conversationId, botState: { not: ConversationBotState.human_active } },
+        data: { botState: ConversationBotState.human_active },
       });
 
       // Read back rather than assembled by hand, so the response and every

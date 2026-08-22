@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PlanFeaturesService } from './plan-features.service';
 import { PlanLimitsService } from './plan-limits.service';
 import { UsageCounterService } from './usage-counter.service';
 import { UsagePeriodResolver } from './usage-period.resolver';
@@ -13,15 +14,17 @@ import { UsagePeriodResolver } from './usage-period.resolver';
  * whichever module happened to need it first would have to be found in three
  * places instead.
  *
- * `PlanLimitsService` holds no state and reads `TenantPrisma` from the global
- * `PrismaModule`, so there is nothing to import.
+ * `PlanLimitsService` answers the numeric ceilings (seats today);
+ * `PlanFeaturesService` answers the boolean capability gates `PLAN_FEATURES`
+ * names, which TAR-28 is the first story to need. Both hold no state and read
+ * `TenantPrisma` from the global `PrismaModule`, so there is nothing to import.
  */
 @Module({
-  providers: [PlanLimitsService, UsageCounterService, UsagePeriodResolver],
+  providers: [PlanLimitsService, PlanFeaturesService, UsageCounterService, UsagePeriodResolver],
   // `UsageCounterService` is exported as well as consumed here: the ingest path
   // meters conversations without reading any limit, and metering is
   // unconditional whether or not a cap exists — `usage.ts` records counters from
   // day one whether or not anything reads them.
-  exports: [PlanLimitsService, UsageCounterService],
+  exports: [PlanLimitsService, PlanFeaturesService, UsageCounterService],
 })
 export class EntitlementsModule {}

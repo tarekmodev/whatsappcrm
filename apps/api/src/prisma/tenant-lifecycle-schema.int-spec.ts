@@ -809,14 +809,32 @@ describe('tenant lifecycle schema', () => {
     });
   });
 
-  describe('the deactivation gate', () => {
+  describe('the gate, as TenantPrisma actually calls it', () => {
     it.each([
       ['created', false],
       ['trialing', true],
       ['active', true],
       ['past_due', true],
-      ['suspended', false],
-      ['cancelled', false],
+      // Both were `false` until TAR-404 moved the call site onto
+      // `assert_tenant_serviceable` — step 2 of the expand → migrate → contract
+      // rename that `20260815170000` opened. This table is the observable half
+      // of that switch, so it is where the change has to be recorded.
+      //
+      // `suspended` is admitted because a suspended tenant's **inbound WhatsApp
+      // messages must still be stored** (TAR-36's fourth acceptance criterion):
+      // the ingest path writes `conversations` and `messages` through this very
+      // client, and refusing here would force the highest-volume write in the
+      // product onto the unscoped one.
+      //
+      // `cancelled` is admitted because `auth.service.ts` and
+      // `session.service.ts` both read through `TenantPrisma`, so refusing it
+      // makes the seven-day undo window unreachable from inside the product.
+      //
+      // Neither is a relaxation of the lockout. Refusing the *principal* is
+      // `TenantStatusGuard`'s job one layer up, where the caller's role and the
+      // route are known — see `tenant-status.guard.spec.ts` for that matrix.
+      ['suspended', true],
+      ['cancelled', true],
     ])('%s is admitted: %s', async (status, admitted) => {
       await setStatus(TENANT, status, null);
 
@@ -942,16 +960,23 @@ describe('tenant lifecycle schema', () => {
       await expect(serviceable('not-a-uuid')).rejects.toThrow(/is not a uuid/);
     });
 
-    it('leaves the old gate alone, so nothing changes until the call site moves', async () => {
+    it('leaves the old gate alone, so step 2 can be rolled back on its own', async () => {
       await setStatus(TENANT, 'suspended', null);
 
-      // The two coexist on purpose. Applying the migration is inert; the
-      // behaviour changes in the deploy that switches TenantPrisma over, and
-      // that deploy is revertible on its own.
+      // The two coexist on purpose, and this is what that buys once TAR-404 has
+      // moved the call site: `assert_tenant_active` is still in the database,
+      // still refusing everything but `active`, so rolling the *application*
+      // back to a build that calls it restores the old behaviour with no
+      // migration. Dropping it is the contract step, and it is deliberately not
+      // taken here.
       await expect(
         systemPrisma.$queryRaw`SELECT public.assert_tenant_active(${TENANT})`,
       ).rejects.toThrow(/TENANT_NOT_ACTIVE/);
-      await expect(asTenant(TENANT, () => tenantPrisma.contact.findMany())).rejects.toThrow();
+
+      // And this is the switch itself: the client no longer calls it, so a
+      // suspended tenant reads its own rows. If this ever starts rejecting
+      // again, `tenant-scope.extension.ts` has been reverted without this file.
+      await expect(asTenant(TENANT, () => tenantPrisma.contact.findMany())).resolves.toEqual([]);
     });
   });
 });

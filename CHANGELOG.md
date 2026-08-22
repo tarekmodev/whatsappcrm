@@ -169,6 +169,40 @@ change.
 
 ### Added
 
+- **The workflow builder is documented, for both readers** (TAR-401) — TAR-27 shipped a
+  trigger → condition → action engine (TAR-395) and the console that writes it (TAR-396), and
+  neither had a page. Two documents, split by reader rather than averaged into one.
+  [The workflow automation API reference](docs/reference/workflows-api.md) is the engineer's:
+  all nine routes with their parameters, status codes and error codes, the seven-condition
+  grammar with the operator each type offers, the five actions and what each one writes, the
+  limits and where they are published, and — at length, because it is the design and not a
+  detail — **why the row that records what a workflow did is the row that reserves the right
+  to do it**. It documents what a reader would otherwise have to derive from source: that the
+  dedupe key is namespaced per trigger and why the two ticket-scoped spellings had to diverge;
+  that the run budget is asked _before_ the claim for ticket-scoped triggers, so an escalation
+  is late rather than lost; that a reference is refused on create and resolved-but-not-refused
+  on update, which is what makes the two-step repair possible; and that `brokenReason` is
+  derived state rather than a latch.
+  [Automate what happens to a ticket](docs/guides/automate-tickets-with-workflows.md) is the
+  supervisor's, and refuses all of that vocabulary: how the three parts decide, why every
+  matching workflow runs where a routing rule's first match wins, why a new workflow arrives
+  switched off, what each run status and failure reason means, and how to repair a workflow
+  that switched itself off. Both pages say plainly that **the dry run checks the conditions
+  and not the trigger** — it answers "does this ticket match", not "would this ticket have
+  fired it" — which is the misreading a supervisor testing an unfamiliar workflow makes first.
+  Verified by running `jest src/workflows` (4 suites, 64 tests, all passing) against the
+  commit the pages were written from. The `vitest` suites could not be run here: `vitest@4.1.10`
+  resolves a `#module-evaluator` package import that Node v22.15.0 does not define, so the
+  claims those suites cover are read from the source and labelled as such on the page.
+  ⚠️ Three gaps are stated on the reference rather than left to be discovered, all pre-existing:
+  event triggers have no reconciler, so an enqueue lost to a Redis outage costs that ticket its
+  automation permanently (0009 risk 3); `workflow_runs` publishes a 90-day retention that
+  nothing enforces; and **`workflow_notify` rows have no read surface** — 0009 publishes
+  `GET /api/v1/notifications` and `docs/reference/data-model.md` describes it, but no such
+  controller exists, so a `notify` action writes a durable row nothing lists. That last one is
+  carried as a `TODO(author)` on the reference and stated as a limitation in the guide, because
+  it changes what a supervisor should reach for today.
+
 - **A supervisor can now build trigger → condition → action automations, and they run without
   anybody watching** (TAR-27, TAR-395) — a workflow is one rule: one trigger, one condition
   set, one ordered action list, and the tenant's workflows _are_ the rule list the console
@@ -465,6 +499,57 @@ RETURNING id`. A ticket that stays open for six hours escalates **once**, not on
   today and the planner picks between them by tag selectivity. Reasoning and numbers are in
   the migration.
 
+- **Contacts have a directory, a profile whose custom fields agents fill in, and a tag filter
+  that answers "who are all our VIP customers"** (TAR-33, TAR-479, TAR-480) — the contract
+  half of this story shipped as amendment 10 above; this is the surface behind it. There was
+  no `ContactsModule` and no `TagsModule` in `apps/api`, and contacts were readable only
+  through the inbox's `ConversationResponse`. Eleven routes now exist:
+  `GET/POST /api/v1/contacts` and `GET/PATCH /api/v1/contacts/{id}` on `contact:read` /
+  `contact:write`, `GET/POST /api/v1/tags` on the same pair, and the five
+  `/api/v1/custom-fields` routes with **`tenant:settings` to mutate and `contact:read` to
+  list** — the split that is this story's first acceptance criterion, since every agent holds
+  `contact:write` and carrying definition writes on it would let any of them redefine the
+  tenant's contact record. `rbac.ts` is unchanged and there is no migration. The console gains
+  `/contacts` (search by name, phone or email, filter by one tag, both in the URL so a
+  filtered view is a link), a profile whose **Custom fields** card is rendered from the
+  definition list in `position` order and sends only the keys the agent actually changed, and
+  `/settings/custom-fields` where an admin defines, renames and deletes a field.
+  **Tenant isolation is asserted rather than assumed**: `contacts-tenant-isolation.int-spec.ts`
+  runs two tenants whose fixtures are identical in shape — same tag name `VIP`, same field key
+  `tier`, same stored value `gold` — so a leak is visible rather than plausible, and cross-tenant
+  reads and writes are refused on all three resources under all three roles including admin.
+  Two things the integration run corrected, both now documented rather than assumed:
+  **`tags.name` is plain `text`, not `citext`** unlike `teams.name` and `assignment_rules.name`,
+  so `VIP` and `vip` are two tags a tenant can genuinely hold and the list filter supplies the
+  case-insensitivity the column does not; and amendment 10's delete-strip SQL gained
+  `jsonb_exists` and a `jsonb_typeof(...) = 'object'` guard, because `custom_fields - 'key'`
+  removes an _element_ from an array and _raises_ on a scalar — one contact row from an old
+  import would otherwise turn an admin's settings action into a 500 that aborts the whole
+  delete. Contract changes are additive: `TagCreateInputSchema` and `TagListQuerySchema`, which
+  0002 never published because nothing implemented `POST /tags`.
+  `contact.mapper.ts` moved from `conversations/` to `contacts/` and the inbox imports it, so
+  the inbox and the profile cannot show different tags for the same person.
+  Deliberately out of scope, each for a reason rather than for time: `DELETE /contacts`
+  (erasing a customer touches conversations, tickets and retention), `PATCH`/`DELETE` on tags
+  (deleting one has to reckon with `workflow_references` refusing it), and contact creation in
+  the console (a contact is created by the ingest pipeline the first time somebody messages the
+  tenant, and a screen that invents one is a route into the product nobody designed).
+  One thing this shipped wrong and TAR-530 has since fixed, recorded because the reasoning is
+  worth keeping: the merge was credited with making two agents editing different fields on one
+  contact safe. It is not — it is a pure function over a map its caller already read, so both
+  callers merged into the same stored map and the second write replaced the first whole, with
+  both answering `200`. `PATCH` now takes `SELECT … FOR NO KEY UPDATE` on the contact row
+  before that read. The merge stops an _unloaded_ key being erased; the lock stops a
+  _concurrently written_ one being erased, and conflating the two is how the concurrent case
+  went unnoticed through implementation, review and a first pass of these docs.
+  ⚠️ **The console cannot reorder definitions.** `POST /custom-fields/reorder` is implemented
+  and tested; the admin table renders in `position` order with no drag handle, deliberately,
+  rather than shipping a control that could not call the endpoint. Console admins get creation
+  order until a screen exists.
+  ⚠️ **Tags have no server-side cap** while definitions are capped at 50, so a tenant past 100
+  tags gets a partial vocabulary in the console. The console says so on screen rather than
+  mislabelling a tag as deleted, but the asymmetry is unresolved.
+
 - **A new tenant admin now lands in a guided setup checklist they can skip and come back to**
   (TAR-36, TAR-407) — `/onboarding` walks an admin through connecting a WhatsApp number,
   inviting agents and setting branding, gated on `tenant:settings`. The rule that shapes the
@@ -483,6 +568,152 @@ RETURNING id`. A ticket that stays open for six hours escalates **once**, not on
   checklist's own state among its non-goals. The two routes sit alongside 0009's tenant surface
   and share its `tenant:settings` gate. `set_branding` links nowhere until TAR-29 builds the
   editor — the step says so and offers the skip rather than pointing at a route that would 404.
+
+- **A visitor can now sign themselves up and reach a working workspace, with no operator in the
+  loop** (TAR-36, TAR-405, TAR-440) — TAR-19 provisioned tenants admin-only, which for a
+  resellable SaaS meant a human on our side for every customer who arrived. Four public routes
+  close that: `POST /api/v1/signup`, `POST /api/v1/signup/verify`, `POST /api/v1/signup/resend`
+  and `GET /api/v1/signup/slug-available`, the only routes in the product that are both outside
+  tenancy and unauthenticated (`@PublicPlatformRoute()`, a third posture rather than composing
+  `@Public()` and `@PlatformRoute()`, so `route-posture.spec.ts` keeps its one-posture-per-route
+  invariant). Verification comes **before** provisioning, and that ordering is the whole design:
+  provisioning on the form POST would let anything that can send one burn platform subdomains —
+  `tenant_domains.hostname` is globally unique, so a squatted slug is permanently unavailable to
+  the customer who wanted it — and fill `tenants` with a row per bot. The cost is that the slug
+  has to be held between the two calls, which `tenant_signups` does through a partial unique
+  index on `(desired_slug) WHERE consumed_at IS NULL`; that predicate cannot also carry
+  `AND expires_at > now()` because an index predicate must be `IMMUTABLE`, so the insert path
+  deletes expired unconsumed rows for the slug in its own transaction first.
+  `POST /signup/verify` consumes the row with a conditional
+  `UPDATE … WHERE consumed_at IS NULL … RETURNING`, so the statement itself is the concurrency
+  control and two clicks on one link provision one tenant. It then provisions, creates the first
+  admin and issues a session in that same transaction. The password is taken at the **form**, not on the verify page: a verify page that
+  asks for a password is one an attacker who intercepted the link can complete, where one that
+  only confirms is not. `SIGNUP_ENABLED=false` answers `404` on all four rather than `403`,
+  because a disabled feature that advertises itself is one somebody probes.
+  What signup will and will not confirm is decided once. The **slug** is answered — a platform
+  subdomain is public DNS, so the same answer is already available to anyone who looks — and the
+  **address** never is: request and resend both answer `202` whether the address is new, has a
+  signup in flight, or already runs a tenant. Rate limits are `SIGNUP_POLICY`, and each of the two
+  signup-creating ones is enforced **twice**, in Redis and against `tenant_signups` itself, so a
+  cache outage loosens them rather than removing them; `resend` creates no row for those counts to
+  see, so its **durable** ceiling is `tenant_signups.resend_count` carried in the `UPDATE`'s own
+  predicate, behind a Redis per-address window of its own.
+  A resend rotates the token and deliberately does **not** move `expires_at` — the deadline
+  belongs to the signup, and a renewable one would let an address hold a slug indefinitely.
+  ⚠️ There is no `/signup` and no `/verify` screen in the console. The API is complete and
+  nothing a customer can use reaches it yet.
+
+- **A workspace's plan caps are enforced at the write, not shown on a screen** (TAR-36, TAR-405) —
+  TAR-36's second acceptance criterion is "enforced, not merely displayed", and the limits now
+  live in `tenant_entitlements`: one RLS-scoped row per tenant holding the whole
+  `PlanEntitlements` shape, read by both the refusal and the console so a "3 of 3" and the error
+  an admin just got cannot come from different stores. Nothing is hardcoded — swapping the trial
+  placeholder for real plan data when TAR-37 lands is an update to those rows, not a code change
+  and not an API change. Two of the five limits have a write path today. **Seats** are checked at
+  invitation creation _and_ at acceptance, deliberately: creation is where the admin finds out,
+  acceptance is the guarantee, and enforcing only one either surprises them a week later or lets
+  two simultaneous acceptances overshoot. A seat is held by an `active` **or `suspended`** member
+  plus every live pending invite — releasing a suspended member's seat would let a workspace park
+  staff to dodge the cap, which is what `UserResponse.occupiesSeat` has published since TAR-166.
+  The check takes a transaction-scoped advisory lock per tenant, because it is read-then-write.
+  **Conversation volume** is metered on the inbound writer and refused at the **outbound send**,
+  never at ingest: a customer's message is accepted and stored whatever the counter says, and what
+  a spent allowance withholds is the tenant's ability to reply. That one takes no lock — it gates
+  and warns and never bills, and serialising every send on one lock is the wrong trade on the
+  busiest path in the product. The period is resolved in one place, and anchored on
+  `tenants.created_at` rather than `trial_ends_at`, because the lifecycle clears `trial_ends_at`
+  on `trialing → active` and `period_start` is part of a unique key — moving it would fork a row
+  and hand the tenant a fresh allowance mid-period.
+  A tenant with **no** entitlements row is uncapped, which is the correct failure direction for a
+  billing ceiling rather than a security boundary; provisioning writes the row on both paths so
+  that branch stays unreachable. ⚠️ `whatsappNumbers`, `teams`, `knowledgeDocuments` and the
+  feature list are stored and **not** enforced — no write path refuses them yet. And the trial's
+  caps are enforced before anything can be bought, so a workspace that reaches one has no route to
+  a larger plan until TAR-37 ships; the refusal names a support contact rather than a checkout
+  page.
+
+- **The tenant lifecycle has one vocabulary, a schema and an audit trail — and no engine yet**
+  (TAR-36, TAR-397, TAR-403, TAR-404) — three status vocabularies had been drifting since TAR-47:
+  the `tenant_status` enum, `TENANT_STATUSES` in the contract package, and `admin.ts`'s
+  `PROVISIONED_TENANT_STATUSES`, with a comment recording the drift as deliberate and deferred to
+  this story. There is now one: `created | trialing | active | past_due | suspended | cancelled |
+deleted`, with `pending` renamed to `created` (catalogue-only, no table rewrite) and
+  `contract.test.ts`'s drift assertion replaced by an equality assertion so the two cannot
+  separate again. Alongside it: `TENANT_STATUS_TRANSITIONS` and its seventeen legal edges,
+  `LIFECYCLE_TRIGGERS`, `LIFECYCLE_POLICY`'s seven windows, `lifecycle_events` (append-only,
+  platform-level, no foreign keys and no `tenant_isolation` policy, so it survives the purge and
+  stays readable after the tenant it describes is shut off), `tenant_signups`, the four retention
+  columns on `tenants`, their two partial sweeper indexes, and `assert_tenant_serviceable`.
+  Two shapes are worth recording because they were arrived at the hard way.
+  `lifecycle_events` is deliberately **not** rows in `audit_logs`: `from_state` and `to_state` are
+  typed columns where `audit_logs` could only carry them inside free-form JSON, and a state
+  machine whose history is untyped JSON cannot be reconstructed by a query. It shipped
+  tenant-scoped and had to be un-scoped, because a composite foreign key to `users` made the purge
+  impossible to finish — the purge deletes every `users` row and keeps the `tenants` row as the
+  slug tombstone, so a retained event carrying `actor_user_id` blocked that delete with SQLSTATE
+  23503 and could not be repaired on the way past, since the append-only trigger refuses the
+  UPDATE and neither role holds DELETE. And `tenant_entitlements` replaced a narrower
+  `tenant_plan_limits` that held two of the five limits and no features, and so could not populate
+  the response the console was already built against.
+  ⚠️ **The engine that drives all of this does not exist.** TAR-404's merged pull request
+  delivered the vocabulary the engine was to be written against, not the engine:
+  `TenantLifecycleService`, `TenantStatusGuard`, the five-minute sweep, the batched purge, eight
+  of the nine notification templates, and every lifecycle endpoint — `GET /tenant/lifecycle`,
+  cancel, undo, delete, and the four operator routes — are published in `packages/contracts` and
+  unimplemented. Nothing writes `lifecycle_events`; its only rows are TAR-403's backfill.
+  `assert_tenant_serviceable` exists with no callers, so `assert_tenant_active` is still the live
+  gate and still refuses `suspended`. That is narrower than it sounds and the difference matters:
+  a suspended tenant's inbound message is still **accepted** — Meta gets its `200` and the payload
+  is stored in `webhook_events` through `SystemPrisma`, before any tenant is resolved. What the
+  gate refuses is the _projection_ into `conversations` and `messages`, which runs under
+  `TenantPrisma`; the processor catches `TenantNotActiveError` by name and parks the event with
+  its payload intact rather than failing it. So nothing is bounced and nothing is lost — but a
+  parked row is deliberately not claimable, so **a reactivated tenant does not get those messages
+  back on its own**: replay is a hand-run `UPDATE` per event, and the platform-admin endpoint that
+  ought to do it authorised and audited does not exist. Moving that call site is a hard gate on
+  `TenantStatusGuard` existing, since the wider function with no HTTP gate behind it would hand a
+  suspended tenant's agents their console back.
+
+- **A tenant admin can see and change their own workspace, plan and seats** (TAR-36, TAR-409) —
+  `/settings/workspace` renders the workspace profile, the plan and its usage, and a lifecycle
+  banner for `past_due`, `suspended` and `cancelled`. The slug is shown as text rather than a
+  disabled input, and says why: it is baked into the platform subdomain and into every session
+  cookie scoped to that host, so changing it would break every saved link. Seat usage names its
+  two parts — members and outstanding invitations — because "5 of 5 seats in use" on its own hides
+  that withdrawing an invitation is the cheapest way to free one. Every lifecycle state carries a
+  sentence beside its badge, so a badge never has to carry the meaning alone; `created` is written
+  for a reader who should never see it, because rendering it at all means provisioning stopped
+  half-way. ⚠️ The panel reads `TenantLifecycleResponse` from the mock transport, which is what
+  this story was scoped to do, and the endpoint behind it is not built — see the lifecycle entry
+  above. The branding fields are read-only until TAR-29 ships the editor, and the page says so
+  rather than showing a colour picker that writes nowhere.
+
+- **The tenant lifecycle, self-signup and workspace setup are documented** (TAR-36, TAR-414) —
+  three new pages and a guide.
+  [0012 — lifecycle state machine](docs/architecture/0012-tenant-lifecycle-state-machine.md) sits
+  beside ADR 0009 and decides nothing: it holds the diagram, every edge with its trigger, the
+  retention windows, the two gates, and an **as-built** column saying which edges have a writer
+  today — which is the thing 0009 could not know, because it was written before the build.
+  [The lifecycle reference](docs/reference/tenant-lifecycle.md) covers the two provisioning paths,
+  entitlements and where each limit is enforced, what the trail records and why it is not
+  `audit_logs`, and the endpoint surface split into available and published-not-implemented.
+  [The signup API reference](docs/reference/signup-api.md) documents the four public routes with
+  their parameters, error codes and both layers of rate limiting.
+  [Set up your workspace](docs/guides/set-up-your-workspace.md) is the tenth tenant-user guide and
+  the third written for an **admin**: the setup checklist, seats and the invitation that takes one
+  before it is accepted, what suspension means for agents, and how reactivation works.
+  The style guide gains five terminology rows — _lifecycle state_, _self-signup_, _entitlements_,
+  _seat_, _purge_ — so the next writer does not have to re-decide them.
+  Every page marks what is built and what is only published, because the gap between the two is
+  currently large enough that a reader who assumed otherwise would write against endpoints that
+  return 404. Three questions are recorded as open rather than answered: whether
+  `purgeAfterSuspendedDays = 30` is confirmed, which story owns the missing `/signup` and
+  `/verify` screens, and the contradiction below.
+  ⚠️ Found while writing and **not fixed**, because documentation does not change application
+  behaviour: `apps/web/content/en.ts` tells an admin on the People page that "Invited agents do
+  not use a seat until they accept", while the seat check counts every live pending invite and
+  the Workspace page says so. One of the two is wrong.
 
 - **A tenant's own hostname can now be given TLS and pointed at the platform, and the
   operator steps for it are written down** (TAR-419) — TAR-416 settled how a custom domain

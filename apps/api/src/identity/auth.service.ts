@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
+  TENANT_STATUS_EFFECTS,
   permissionsForRole,
   type LoginInput,
   type SessionPrincipal,
@@ -7,6 +8,7 @@ import {
 } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Prisma } from '../generated/prisma/client';
+import { TenantNotActiveError } from '../prisma/prisma.errors';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { AccountLockedError, InvalidCredentialsError } from './identity.errors';
 import { LoginThrottleService } from './login-throttle.service';
@@ -150,7 +152,53 @@ export class AuthService {
       throw new InvalidCredentialsError();
     }
 
+    this.assertTenantAdmitsRole(candidate.role);
+
     return await this.issueSession(tenantId, candidate, input.password, context);
+  }
+
+  /**
+   * The lifecycle half of login, and **the order it runs in is the security
+   * property** (ADR 0009 decision 2).
+   *
+   * TAR-36 says a suspended tenant's agents cannot log in. A blanket refusal
+   * would lock the admin out too, and reactivation at v1 is driven by a payment
+   * webhook or an operator — neither of which an admin can trigger from outside
+   * the product. So a `suspended` or `cancelled` tenant admits an `admin` to a
+   * session, confined afterwards by `TenantStatusGuard`'s recovery allowlist,
+   * and refuses an `agent` or a `supervisor` outright.
+   *
+   * This runs **after** the entire authentication flow — the IP window, the
+   * lockout, the user lookup, the fixed dummy verify on a miss, and the real
+   * verify — and not before. Checking the status first would turn the endpoint
+   * into a role oracle: an unauthenticated caller could learn, per email
+   * address, whether that address is an admin of the tenant, by watching which
+   * of two errors comes back. Authenticating first means the answer only differs
+   * for somebody who already holds the password.
+   *
+   * It reads the status `HostTenantGuard` resolved rather than issuing its own
+   * query, and it reads `TENANT_STATUS_EFFECTS` rather than restating which
+   * states are closed — the contract's table is the one the console renders
+   * against, and a second copy here is one that drifts from it.
+   *
+   * A queue worker or a fixture reaching this code has no status in scope, and
+   * that reads as "no lifecycle objection". It is not a hole: nothing calls
+   * `login` outside a request, and `PrincipalGuard` plus `TenantStatusGuard`
+   * stand between any session it issues and every route.
+   */
+  private assertTenantAdmitsRole(role: TenantRole): void {
+    const status = this.tenantContext.tenantStatus;
+
+    if (status === null || TENANT_STATUS_EFFECTS[status].apiAccess || role === 'admin') {
+      return;
+    }
+
+    this.logger.warn(
+      `Login refused for a ${role} of a ${status} tenant: only an administrator may sign in to ` +
+        'restore it.',
+    );
+
+    throw new TenantNotActiveError(this.tenantContext.requireTenantId(), 'login');
   }
 
   /**

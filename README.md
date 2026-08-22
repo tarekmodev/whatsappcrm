@@ -15,7 +15,12 @@ WhatsApp Business Cloud API.
 > client split with TAR-49, provisioning and deactivation with TAR-50 and TAR-51, the
 > WhatsApp Business Account entity with TAR-52, webhook ingestion with TAR-20, and a
 > two-tenant demo dataset with TAR-46 — so a clean clone now reaches a **populated**
-> database in one command. Everything below works today.
+> database in one command. The CRM core landed with TAR-33: a contact directory searchable by
+> name, phone or email and filterable by tag, tenant-defined **custom fields** an admin
+> creates under Settings and every agent fills in on a contact profile, and the eleven routes
+> behind all three — see
+> [the contacts, tags and custom fields API reference](docs/reference/contacts-api.md).
+> Everything below works today.
 
 ## Stack
 
@@ -73,11 +78,16 @@ the one that produced it.
 | [Data model reference](docs/reference/data-model.md)                                         | Every entity, which are tenant-scoped, which constraints and indexes matter        |
 | [Tenant isolation contract](docs/reference/tenancy.md)                                       | Which Prisma client to inject, and what the database refuses                       |
 | [Platform admin API](docs/reference/admin-api.md)                                            | Provisioning and deactivation: request, response, errors, retention                |
+| [Tenant lifecycle state machine](docs/architecture/0012-tenant-lifecycle-state-machine.md)   | The seven states, every edge and its trigger, and which of them is built           |
+| [Tenant lifecycle reference](docs/reference/tenant-lifecycle.md)                             | Starting states, plan entitlements and where they are enforced, the trail          |
+| [Public signup API](docs/reference/signup-api.md)                                            | The four unauthenticated routes: verification, slug reservation, rate limits       |
 | [People and teams API](docs/reference/people-api.md)                                         | Managing agents, teams and roles: permissions, invariants, isolation               |
 | [Tickets API](docs/reference/tickets-api.md)                                                 | The queue, the status/priority write, handoff and escalation, the event log        |
+| [Contacts, tags and custom fields API](docs/reference/contacts-api.md)                       | The CRM core: the directory, the tag taxonomy, and admin CRUD on definitions       |
 | [Assignment rules API](docs/reference/assignment-rules-api.md)                               | Routing-rule CRUD, the condition grammar, and how a new ticket is routed           |
 | [Auto-assignment](docs/reference/auto-assignment.md)                                         | Rotation, eligibility, workload caps, and the flagged-ticket fallback              |
 | [SLA timers and supervisor alerts](docs/reference/sla-timers.md)                             | Response windows, breach detection, who is alerted, and the two endpoints          |
+| [Workflow automation API](docs/reference/workflows-api.md)                                   | Workflow CRUD, the trigger/condition/action grammar, and how a run is claimed      |
 | [Reporting dashboard and export](docs/reference/reporting-api.md)                            | The four metrics, the date range, scope and attribution, and export parity         |
 | [Branding and custom domains API](docs/reference/branding-domains-api.md)                    | The white-label surface: branding, hostnames, DNS verification, the operator queue |
 | [Canned responses API](docs/reference/canned-responses-api.md)                               | The quick-reply library: CRUD, the shortcut grammar, the picker, the relay         |
@@ -85,11 +95,15 @@ the one that produced it.
 | [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)           | For supervisors writing routing rules in the console                               |
 | [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md)                      | For supervisors emptying the flagged queue in the console                          |
 | [Watch tickets that miss their deadline](docs/guides/track-overdue-tickets.md)               | For supervisors reading the overdue badge and clearing SLA alerts                  |
+| [Define the fields your contacts carry](docs/guides/define-custom-contact-fields.md)         | For admins defining custom contact fields in the console                           |
+| [Find a contact and keep their record up to date](docs/guides/find-and-update-contacts.md)   | For agents searching the directory, filtering by tag and filling in fields         |
 | [Read the performance dashboard](docs/guides/read-the-performance-dashboard.md)              | For supervisors reading the metrics and exporting them as a spreadsheet            |
 | [Put your own brand on the workspace](docs/guides/brand-your-workspace.md)                   | For admins setting the product name, colours, logo and favicon in the console      |
 | [Serve the workspace from your own web address](docs/guides/set-up-a-custom-domain.md)       | For admins adding a custom domain, with the exact DNS records to publish           |
 | [Hand a ticket on, or ask a supervisor](docs/guides/hand-over-or-escalate-a-ticket.md)       | For agents reassigning a ticket or escalating one, and reading the history         |
 | [Answer common questions with saved replies](docs/guides/use-saved-replies.md)               | For agents inserting a saved reply in the composer by typing a shortcut            |
+| [Set up your workspace](docs/guides/set-up-your-workspace.md)                                | For a new admin: the setup checklist, seats, and what suspension means             |
+| [Automate what happens to a ticket](docs/guides/automate-tickets-with-workflows.md)          | For supervisors building trigger → condition → action workflows in the console     |
 | [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                             |
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                             |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                           |
@@ -291,10 +305,13 @@ expresses the entity table in `docs/architecture/0002-architecture-and-api-contr
 (TAR-39) — read that first for _why_ the entities are shaped this way; the schema file
 carries the per-model reasoning next to each model.
 
-41 models. 38 are tenant-scoped: they carry a non-null `tenant_id`, and row-level security
-filters them. Three are not — `tenants`, `plans` and `webhook_events`, each deliberately.
-Six conventions hold across every model, starting with a non-null `tenant_id` on every
-scoped table and composite `(tenant_id, <parent_id>)` foreign keys.
+Most models are tenant-scoped: they carry a non-null `tenant_id`, and row-level security
+filters them. Five are not — `tenants`, `plans`, `webhook_events`, `tenant_signups` and
+`lifecycle_events`, each deliberately, and
+[the tenant isolation contract](docs/reference/tenancy.md#the-five-tables-with-no-rls-policy)
+says what `TenantPrisma` does with each instead. Six conventions hold across every model,
+starting with a non-null `tenant_id` on every scoped table and composite
+`(tenant_id, <parent_id>)` foreign keys.
 
 **[Data model reference](docs/reference/data-model.md)** — every entity, its constraints,
 its load-bearing indexes and the story that owns it, plus the six conventions in full and
@@ -1208,6 +1225,25 @@ own half — eligibility, the selection order, the workload caps and the three d
 — is [the auto-assignment reference](docs/reference/auto-assignment.md). The supervisor's
 versions are [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)
 and [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md).
+
+### Workflows: the same list shape, and every match runs
+
+`/settings/workflows` (TAR-396) renders the tenant's workflows as an ordered rule list, and
+it deliberately does **not** reuse the routing-rule copy. A routing rule decides where a
+conversation goes and the first match wins; a workflow writes to a ticket that already
+exists, and **every** matching workflow runs. Sharing the vocabulary would flatten a
+difference a supervisor has to understand, so `content.workflows` is its own block in
+`apps/web/content/en.ts`.
+
+The builder's option lists come from `GET /api/v1/workflow-catalog` rather than from a
+transcribed constant, so the console cannot offer an action the API would refuse. The
+taxonomy behind the pickers — tags, teams, agents — is read live on every render and never
+cached beside the workflow: a definition stores ids only, and the response resolves names at
+read time, so renaming a team needs no republish and a deleted one renders as visibly broken.
+
+The endpoints, the grammar and the exactly-once claim are in
+[the workflow automation API reference](docs/reference/workflows-api.md); the supervisor's
+version is [Automate what happens to a ticket](docs/guides/automate-tickets-with-workflows.md).
 
 ### Onboarding: the checklist describes the workspace, it is not a to-do list
 

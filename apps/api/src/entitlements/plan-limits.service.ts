@@ -1,8 +1,56 @@
 import { Injectable } from '@nestjs/common';
-import type { PlanLimits } from '@whatsappcrm/contracts';
+import {
+  PLAN_FEATURES,
+  PlanEntitlementsSchema,
+  type PlanEntitlements,
+  type PlanLimits,
+} from '@whatsappcrm/contracts';
 import type { Prisma } from '../generated/prisma/client';
 import { PlanLimitExceededError } from './entitlements.errors';
 import { UsageCounterService } from './usage-counter.service';
+
+/**
+ * The two populations that hold a seat, kept apart on the wire as well as in the
+ * count — `TenantLifecycleResponse.usage` names both, so the console can render
+ * "4 of 5, one invitation outstanding" rather than arithmetic the reader has to
+ * do.
+ */
+export interface SeatUsage {
+  /** Members whose status is `active` or `suspended`, per `occupiesSeat`. */
+  seatsUsed: number;
+  /** Invitations sent, not accepted, not revoked, not lapsed. */
+  seatsPending: number;
+}
+
+export interface EffectiveEntitlements {
+  key: string;
+  name: string;
+  entitlements: PlanEntitlements;
+}
+
+/**
+ * What a tenant with no `tenant_entitlements` row reads as: every feature on,
+ * every ceiling absent.
+ *
+ * It is the same shape `TenantProvisioningService` writes for an
+ * operator-provisioned tenant, and it exists here for the rows written before
+ * that did — a tenant nobody sold a cap has no cap, and the display has to say
+ * so rather than render an empty panel.
+ */
+const UNCAPPED_ENTITLEMENTS: EffectiveEntitlements = {
+  key: 'unlimited',
+  name: 'Unlimited',
+  entitlements: {
+    features: [...PLAN_FEATURES],
+    limits: {
+      seats: null,
+      conversationsPerPeriod: null,
+      whatsappNumbers: null,
+      teams: null,
+      knowledgeDocuments: null,
+    },
+  },
+};
 
 /**
  * The tenant's effective plan limits, and the write-time checks that enforce
@@ -84,11 +132,62 @@ export class PlanLimitsService {
     // count for a ceiling it does not have.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${SEAT_LOCK_PREFIX + tenantId}))`;
 
-    const used = await countSeatsHeld(tx);
+    const { seatsUsed, seatsPending } = await this.seatUsage(tx);
+    const used = seatsUsed + seatsPending;
 
     if (used >= cap) {
       throw PlanLimitExceededError.seats(cap, used);
     }
+  }
+
+  /**
+   * The two halves of the seat count, for the caller that displays them as well
+   * as the one that enforces against them.
+   *
+   * ADR 0009 Amendment 1 ruling 4 is explicit that this is **one** function:
+   * `GET /tenant/lifecycle` calls it rather than re-deriving, so the console's
+   * "3 of 3" and the refusal the admin just received cannot disagree. That
+   * failure — a number from one store and a refusal from another — is what
+   * "enforced, not merely displayed" exists to prevent, and two implementations
+   * of the same count is the shape it takes.
+   */
+  async seatUsage(tx: Prisma.TransactionClient): Promise<SeatUsage> {
+    return await countSeatsHeld(tx);
+  }
+
+  /**
+   * The tenant's effective entitlements, as the console renders them.
+   *
+   * Read through the caller's transaction on the **tenant** connection, so the
+   * row row-level security admits is the one this tenant was sold. A tenant with
+   * no row at all reads as unlimited, for the reason the class comment gives at
+   * length — a billing ceiling is not a security boundary, and failing closed
+   * here would refuse work for tenants nobody ever capped.
+   */
+  async effectiveEntitlements(tx: Prisma.TransactionClient): Promise<EffectiveEntitlements> {
+    const row = await tx.tenantEntitlements.findFirst({
+      select: { planKey: true, planName: true, entitlements: true },
+    });
+
+    if (row === null) {
+      return UNCAPPED_ENTITLEMENTS;
+    }
+
+    const parsed = PlanEntitlementsSchema.safeParse(row.entitlements);
+
+    if (!parsed.success) {
+      // Unreachable in practice — `tenant_entitlements_shape` refuses every
+      // malformed shape at write time — and reported rather than thrown for the
+      // same reason `limitOf` narrows silently: a hand-edited row must not be
+      // able to take a tenant's settings screen down.
+      return {
+        key: row.planKey,
+        name: row.planName,
+        entitlements: UNCAPPED_ENTITLEMENTS.entitlements,
+      };
+    }
+
+    return { key: row.planKey, name: row.planName, entitlements: parsed.data };
   }
 
   /**
@@ -194,7 +293,7 @@ function limitOf(entitlements: unknown, name: keyof PlanLimits): number | null {
  * transaction on one connection, so there is nothing to win by issuing them
  * together and a clearer read to lose.
  */
-async function countSeatsHeld(tx: Prisma.TransactionClient): Promise<number> {
+async function countSeatsHeld(tx: Prisma.TransactionClient): Promise<SeatUsage> {
   const members = await tx.user.count({ where: { status: { in: ['active', 'suspended'] } } });
   // Live invitations only: an accepted one has already become a member and would
   // otherwise be counted twice, and a revoked or lapsed one is a seat the tenant
@@ -208,5 +307,5 @@ async function countSeatsHeld(tx: Prisma.TransactionClient): Promise<number> {
     where: { acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
   });
 
-  return members + pending;
+  return { seatsUsed: members, seatsPending: pending };
 }

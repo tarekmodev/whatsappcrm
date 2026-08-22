@@ -21,6 +21,11 @@ differences are called out under [Deviations from 0007](#deviations-from-0007).
 For supervisors writing rules in the console rather than calling the API, read
 [Route new tickets to the right team](../guides/route-new-tickets-with-rules.md).
 
+**Not to be confused with a workflow.** A routing rule places a _new_ ticket and the first
+match wins; a workflow changes a ticket that already exists, and every matching workflow
+runs. The two surfaces share a shape and deliberately not a vocabulary —
+[the workflow automation API reference](workflows-api.md).
+
 ## Conventions
 
 | Concern           | Rule                                                                              |

@@ -353,6 +353,56 @@ export const SessionParamsSchema = z.object({
 });
 
 /**
+ * Every transactional message the product sends, in one list.
+ *
+ * A `const` array rather than a bare union type because two callers need the set
+ * at runtime: `contract.test.ts` pins it against ADR 0009's notification table,
+ * and `TenantLifecycleNotifier` maps a `to_status` onto a member of it and has
+ * to fail loudly for a status nobody gave a template.
+ *
+ * The lifecycle nine (`tenant_welcome` onwards) all fire from a committed
+ * `lifecycle_events` row, after the transaction that wrote it. A mailer outage
+ * that rolled back a suspension would leave a tenant that should have been
+ * locked out still running, which is the wrong failure — so the transition
+ * commits first and the email is enqueued behind it (ADR 0009 decision 7).
+ */
+export const OUTBOUND_EMAIL_TEMPLATES = [
+  // TAR-53 — identity.
+  'invite',
+  'password_reset',
+  'password_changed',
+  'account_locked',
+
+  // TAR-405 — self-signup, before any tenant exists.
+  'signup_verification',
+
+  // TAR-404 — the lifecycle set (ADR 0009 decision 7).
+  /** `created → trialing`. To the first admin, on the tenant host. */
+  'tenant_welcome',
+  /** `trial_ends_at` − `trialEndingReminderDays`. A timer, not a transition. */
+  'trial_ending',
+  /** `trialing → past_due`. */
+  'trial_expired',
+  /** `active → past_due`. Carries `gracePeriodEndsAt`. */
+  'payment_failed',
+  /** `* → cancelled`. Carries `gracePeriodEndsAt` and how to undo it. */
+  'tenant_cancelled',
+  /** `* → suspended`. Carries `purgeAt`. */
+  'tenant_suspended',
+  /** `purge_at` − `deletionReminderDays`. A timer, not a transition. */
+  'deletion_reminder',
+  /**
+   * `* → deleted`. Addressed to recipients read **before** the purge begins —
+   * the job is about to destroy the table those addresses live in.
+   */
+  'tenant_deleted',
+  /** `suspended | past_due | cancelled → active`. */
+  'tenant_reactivated',
+] as const;
+
+export type OutboundEmailTemplate = (typeof OUTBOUND_EMAIL_TEMPLATES)[number];
+
+/**
  * The transactional-email seam.
  *
  * Invites and password resets are undeliverable without one, and no provider has
@@ -371,9 +421,15 @@ export interface OutboundEmail {
    * `account_locked` from the login failure that *crosses* the lockout
    * threshold — once per lockout, not once per failed attempt, which is what
    * bounds it as an unauthenticated caller's ability to send mail.
+   *
+   * The ten from `signup_verification` onwards are the lifecycle set (ADR 0009
+   * decision 7). Nine of them have exactly one producer too, and it is the same
+   * one: `TenantLifecycleNotifier`, driven off a committed `lifecycle_events`
+   * row. That is why they are a flat union here rather than a nested one — the
+   * mailer's job is identical for all of them, and the only thing that varies is
+   * which transition wrote the row.
    */
-  template:
-    'invite' | 'password_reset' | 'password_changed' | 'account_locked' | 'signup_verification';
+  template: OutboundEmailTemplate;
   /**
    * **Null only for `signup_verification`**, where there is no tenant yet — that
    * is the entire premise of self-signup (TAR-405, ADR 0009 decision 3). The
