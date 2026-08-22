@@ -14,19 +14,20 @@ validated at the boundary. Enforcement lives in `apps/api/src/canned-responses/`
 database bounds are in
 `apps/api/prisma/migrations/20260816150000_canned_response_shortcut_and_bounds/migration.sql`.
 
-For agents using the picker in the console rather than calling the API, read
-[Answer common questions with saved replies](../guides/use-saved-replies.md). The console's
-own write surface is **Settings → Saved replies** (`/settings/saved-replies`, TAR-575), which
-calls the three routes below through `apps/web/features/canned-responses/`.
+The design document this surface is built against — every "0011, decision N" below — is
+[0011 — canned responses: where a shortcut is resolved, and what carries an edit](../architecture/0011-canned-responses-contract.md).
+It is the same document `packages/contracts/src/canned-responses.ts`,
+`canned-responses.service.ts`, `canned-response-schema.int-spec.ts` and TAR-475's migration
+cite by name. It shares its number with
+[0011 — ticket reassignment and escalation](../architecture/0011-ticket-reassignment-and-escalation.md),
+so cite it by its full filename rather than by `0011` alone.
 
-> **TODO(author):** the design document this surface is built against —
-> `docs/architecture/0011-canned-responses-contract.md` — is cited by
-> `packages/contracts/src/canned-responses.ts`, `canned-responses.service.ts`,
-> `canned-response-schema.int-spec.ts` and TAR-475's migration, but it is not in this
-> repository. Everything those files cite as "0011, decision N" is transcribed here from
-> their own comments rather than read from the contract. Was the document dropped before
-> merge, and which story owns landing it? Note also that `0011` is already taken by
-> `docs/architecture/0011-ticket-reassignment-and-escalation.md`, so it needs a new number.
+For agents using the picker in the console rather than calling the API, read
+[Answer common questions with saved replies](../guides/use-saved-replies.md); for the
+supervisor or admin who writes the library,
+[Keep the workspace's saved replies up to date](../guides/manage-saved-replies.md). The
+console's own write surface is **Settings → Saved replies** (`/settings/saved-replies`,
+TAR-575), which calls the three routes below through `apps/web/features/canned-responses/`.
 
 ## Conventions
 

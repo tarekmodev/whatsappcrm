@@ -103,6 +103,7 @@ the one that produced it.
 | [Serve the workspace from your own web address](docs/guides/set-up-a-custom-domain.md)       | For admins adding a custom domain, with the exact DNS records to publish           |
 | [Hand a ticket on, or ask a supervisor](docs/guides/hand-over-or-escalate-a-ticket.md)       | For agents reassigning a ticket or escalating one, and reading the history         |
 | [Answer common questions with saved replies](docs/guides/use-saved-replies.md)               | For agents inserting a saved reply in the composer by typing a shortcut            |
+| [Keep the workspace's saved replies up to date](docs/guides/manage-saved-replies.md)         | For supervisors and admins adding, editing and deleting saved replies              |
 | [Set up your workspace](docs/guides/set-up-your-workspace.md)                                | For a new admin: the setup checklist, seats, and what suspension means             |
 | [Automate what happens to a ticket](docs/guides/automate-tickets-with-workflows.md)          | For supervisors building trigger → condition → action workflows in the console     |
 | [Set up the chatbot and its knowledge base](docs/guides/set-up-the-chatbot.md)               | For admins writing the knowledge base and deciding when the chatbot answers        |
