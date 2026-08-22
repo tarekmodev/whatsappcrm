@@ -1499,7 +1499,10 @@ environment; `.env.example` turns both on, and its comments say why:
   itself; server rendering and server actions do not, so the transport translates it to the
   API's `x-dev-role` header on every server-side call (`lib/session/role-stub-request.ts`).
   Without that the switcher moved the chrome and nothing else, and every call resolved as
-  the tenant's default admin (TAR-366). What the stub replaces is the source of the
+  the tenant's default admin (TAR-366). The API half also upserts a live `sessions` row for
+  the user it resolves and names it on the principal, because the realtime handshake re-reads
+  the session behind a ticket rather than trusting it — without a row, every WebSocket upgrade
+  was refused and no live update arrived (TAR-576). What the stub replaces is the source of the
   principal, never a guard — see
   [Driving this surface locally](docs/reference/people-api.md#driving-this-surface-locally).
 
