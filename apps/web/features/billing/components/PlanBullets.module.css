@@ -1,0 +1,30 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* The marker is the icon in each row, so the list's own column and indent go. */
+  padding-inline-start: 0;
+  list-style: none;
+  /* A long allowance wraps rather than pushing the card past its grid track. */
+  min-inline-size: 0;
+}
+
+.item {
+  display: flex;
+  align-items: start;
+  gap: var(--space-2);
+  font-size: var(--font-size-body-sm);
+  overflow-wrap: anywhere;
+}
+
+.marker {
+  /* Holds its size beside a line that wraps to two, so markers stay in a column. */
+  flex: none;
+  /*
+   * Centred against the *first line* rather than the whole item, derived from
+   * the tokens either side of it: `1em` is this item's own font size, so the
+   * offset follows the type scale instead of being measured off one screenshot.
+   */
+  margin-block-start: calc((var(--line-height-body) * 1em - var(--size-icon-sm)) / 2);
+  color: var(--color-success);
+}

@@ -69,6 +69,29 @@ export function readThreshold(reading: UsageReading): UsageThreshold {
   return reading.ratio >= USAGE_WARNING_RATIO ? 'approaching' : 'under';
 }
 
+/**
+ * The tone a meter draws in on a surface whose **banner** already carries the
+ * warning (TAR-711).
+ *
+ * The billing page raised three amber signals for two facts: a banner saying the
+ * conversation allowance was running out, and both meters colouring themselves
+ * amber for crossing the same line. Three warnings at once leave nothing louder
+ * to escalate to on the day a workspace is actually over its limit.
+ *
+ * So on that page the banner is the escalation and the meters are the detail:
+ * they stay neutral until a count is genuinely at or past its ceiling, and only
+ * then take `danger`. Note what does *not* change — `isAtCap` is the same
+ * reading here as in `reading.tone`, so no two surfaces disagree about whether a
+ * limit has been reached. What differs is which element on each page says so,
+ * and that is a property of the page, not of the number.
+ *
+ * `reading.tone` stays the right choice on a surface with no banner above it —
+ * the workspace panel, where the meter is the only thing that can warn.
+ */
+export function detailTone(reading: UsageReading): UsageMeterTone {
+  return reading.isAtCap ? 'danger' : 'accent';
+}
+
 function toneFor(ratio: number): UsageMeterTone {
   if (ratio >= 1) {
     return 'danger';

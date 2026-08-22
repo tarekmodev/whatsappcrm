@@ -1,27 +1,39 @@
+/*
+ * The card is a **subgrid** rather than a stack (TAR-711).
+ *
+ * Its four or five regions take their heights from the grid row every card in
+ * the row shares, so the price block, both bullet blocks and the control each
+ * land on one baseline across the row. Stretching content-height cards to equal
+ * heights — which is all `block-size: 100%` did — levels the bottom edge and
+ * leaves everything between it ragged, which is the half that matters when the
+ * whole point of the layout is reading across.
+ *
+ * No `gap` here on purpose: a subgrid with no gutter of its own takes the
+ * parent's, which is the only value guaranteed to keep its tracks on the
+ * parent's lines.
+ */
 .card {
-  display: flex;
-  flex-direction: column;
-  /*
-   * Stretched by the grid track, so every card in a row ends level whatever its
-   * feature list holds — which is what lets the action row below sit on one line
-   * across the whole row rather than stepping.
-   */
-  block-size: 100%;
+  display: grid;
+  grid-template-rows: subgrid;
+  /* Name, price, allowances, includes. */
+  grid-row: span 4;
+  min-inline-size: 0;
   padding: var(--space-5);
   border: var(--border-hairline) solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
+  list-style: none;
+}
+
+/* The control's row, present or absent for every card in the grid together. */
+.card[data-has-action='true'] {
+  grid-row: span 5;
 }
 
 /* The plan the tenant is on already, marked by more than the badge's colour. */
 .card[data-current='true'] {
   border-color: var(--color-accent);
   background: var(--color-surface-selected);
-}
-
-/* Fills the card, so the action's `margin-block-start: auto` has room to push into. */
-.body {
-  flex: 1;
 }
 
 .header {
@@ -38,22 +50,60 @@
   overflow-wrap: anywhere;
 }
 
+/*
+ * The number, then what it is per — stacked rather than side by side, so the
+ * amount is the thing the eye lands on and the qualifier is a caption under it
+ * instead of competing on the same line.
+ */
+/*
+ * A container, so the amount below can size itself against the card it is in.
+ * Declared on this cell rather than on the card: `container-type` brings layout
+ * containment with it, and a *subgrid* that is contained stops taking its rows
+ * from the parent — which would trade the row alignment for the type scale.
+ */
 .price {
+  /*
+   * `--font-size-metric` wherever the card is wide enough for it, stepping down
+   * with the *card* where it is not. The metric scales with the viewport, and a
+   * wide viewport is exactly where this grid draws its narrowest card — three
+   * columns at 64rem — so `US$19.00` came out broken across two lines, which is
+   * the one thing a headline number must never do. Container units rather than a
+   * breakpoint, because what the number has to fit is the track, and the track
+   * depends on the column count as much as on the viewport.
+   *
+   * The divisor is the longest price this catalogue can produce, in ems: a
+   * three-letter currency prefix, five digits and a separator come to roughly
+   * nine glyphs at about 0.6em of advance each.
+   *
+   * Declared as a property so the skeleton's placeholder can reserve the same
+   * height from the same expression. Container units resolve where they are
+   * *used*, so both readings land inside this container rather than outside it.
+   */
+  --plan-price-size: min(var(--font-size-metric), calc(100cqi / 5.4));
+
+  container-type: inline-size;
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2);
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: start;
 }
 
 .amount {
-  font-size: var(--font-size-heading-md);
+  font-size: var(--plan-price-size);
   font-weight: var(--font-weight-strong);
   line-height: var(--line-height-tight);
+  /* Last resort, for a currency the measure above was not written for. */
+  overflow-wrap: anywhere;
+}
+
+/* The skeleton's stand-in for the amount, measured by the rule above. */
+.amountPlaceholder {
+  --skeleton-height: calc(var(--plan-price-size) * var(--line-height-tight));
 }
 
 .cadence {
   color: var(--color-on-surface-muted);
-  font-size: var(--font-size-body-sm);
+  font-size: var(--font-size-caption);
 }
 
 .groupHeading {
@@ -62,40 +112,30 @@
   font-weight: var(--font-weight-medium);
 }
 
-.list {
+/*
+ * The control's region, last in the subgrid and therefore on the card's bottom
+ * edge. The row is as tall as the tallest control in it — a tier carrying a
+ * reason line — and every control sits at its top, so the buttons align.
+ */
+.action {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  list-style: none;
-}
-
-.item {
-  display: flex;
-  align-items: start;
-  gap: var(--space-2);
-  font-size: var(--font-size-body-sm);
-}
-
-.tick {
-  /* Holds its size beside a line that wraps to two, so ticks stay in a column. */
-  flex: none;
-  /*
-   * Centred against the *first line* rather than the whole item, derived from
-   * the tokens either side of it: `1em` is this item's own font size, so the
-   * offset follows the type scale instead of being measured off one screenshot.
-   */
-  margin-block-start: calc((var(--line-height-body) * 1em - var(--size-icon-sm)) / 2);
-  color: var(--color-success);
+  align-self: start;
 }
 
 /*
- * Pushed to the bottom of the card so the buttons line up across a row of cards
- * with different-length feature lists. `margin-block-start: auto` rather than a
- * fixed height, which would clip the longest list.
+ * Why this control cannot be pressed, wired to it with `aria-describedby`.
+ *
+ * The warning role at caption size rather than a `Notice`'s tint: this is an
+ * explanation of one button, not a banner about the plan, and a filled amber
+ * block inside the card was loud enough to read as the loudest thing on a page
+ * that already had a warning banner on it. Measured against both grounds a card
+ * can have in `tokens.test.ts`.
  */
-.action {
-  margin-block-start: auto;
-  padding-block-start: var(--space-4);
+.reason {
+  color: var(--color-on-warning-subtle);
+  font-size: var(--font-size-caption);
 }
 
 @media (forced-colors: active) {

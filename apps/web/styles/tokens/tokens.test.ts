@@ -346,6 +346,67 @@ describe('the drawn form controls', () => {
 });
 
 /**
+ * The billing surface's warning pairs and its unavailable control (TAR-711).
+ *
+ * Two things landed on that page that nothing here had measured. The first is a
+ * **warning role on a plain card** rather than on its own tint: the sentence
+ * explaining why a plan cannot be chosen sits under the control at caption size,
+ * and a caption is body text as far as SC 1.4.3 is concerned. It is measured
+ * against both grounds a plan card can have, because the current tier's card is
+ * accent-tinted and that is exactly the card whose control is inert.
+ *
+ * The second is the **unavailable control's ground**. It is deliberately not
+ * asserted against 4.5:1 or even 3:1 for legibility — SC 1.4.3 and SC 1.4.11
+ * both exempt an inactive component, and the reason it is inactive is the
+ * measured line above. What must hold is that it cannot be mistaken for the
+ * enabled control beside it, which is the whole bug: `Choose Solo` was rendering
+ * the accent at reduced opacity and reading as a button mid-press.
+ */
+describe('the plans surface', () => {
+  /** WCAG 2.2 SC 1.4.11 — telling two component states apart. */
+  const GRAPHIC_CONTRAST = 3;
+
+  describe.each(THEMES)('%s theme', (theme) => {
+    it.each(['--color-surface', '--color-surface-selected'])(
+      'keeps a blocked plan’s reason readable on %s',
+      (ground) => {
+        expect(
+          contrastRatio(token(theme, '--color-on-warning-subtle'), token(theme, ground)),
+        ).toBeGreaterThanOrEqual(AA_TEXT_CONTRAST);
+      },
+    );
+
+    it('keeps an unavailable control off the accent it would otherwise wear', () => {
+      expect(
+        contrastRatio(token(theme, '--color-surface-sunken'), token(theme, '--color-accent')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    /*
+     * The meters stopped colouring themselves amber for merely approaching a
+     * cap, so `danger` is now the only tone that moves a bar off the accent —
+     * which makes it the one that has to be visible against the track.
+     */
+    it.each(['--color-accent', '--color-danger'])('draws a %s meter fill on its track', (role) => {
+      expect(
+        contrastRatio(token(theme, role), token(theme, '--color-surface-sunken')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    /*
+     * A quiet `Notice` drops the tint and keeps the tone in a leading marker, so
+     * the marker is the only thing carrying it and is a graphic on the card's
+     * own surface.
+     */
+    it('shows a quiet notice’s warning marker against the surface', () => {
+      expect(
+        contrastRatio(token(theme, '--color-warning'), token(theme, '--color-surface')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+  });
+});
+
+/**
  * One role's value in one theme. Throws rather than returning `undefined`: a
  * role this file asks for and the token layer does not declare is the failure
  * these tests exist to catch, and it should not arrive as `NaN` in a ratio.

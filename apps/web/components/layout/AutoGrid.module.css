@@ -2,10 +2,50 @@
   display: grid;
   gap: var(--auto-grid-gap);
   /*
+   * `as="ul"` brings a list's own marker column and indent with it, and a grid
+   * places its items itself. Left in, the indent is subtracted from the tracks —
+   * enough at 64rem to cost a whole column, and enough at 320px to push the grid
+   * past the viewport.
+   */
+  padding-inline-start: 0;
+  list-style: none;
+  /*
    * `min()` keeps the track from exceeding the viewport on a 320px screen, which
    * a bare `minmax(18rem, 1fr)` would do and would cause horizontal scroll.
    */
   grid-template-columns: repeat(auto-fit, minmax(min(var(--auto-grid-min-item), 100%), 1fr));
+}
+
+/*
+ * A ceiling on the column count (TAR-711).
+ *
+ * `auto-fit` counts columns off the width it is given, so the only way to cap
+ * the count is to cap the width. The count is `floor((width + gap) / (min + gap))`,
+ * so one more column appears the moment the grid reaches `(n + 1) * min + n * gap`
+ * — and this holds it one step below that. The step is the smallest space token:
+ * far narrower than the track it is keeping out, and wide enough to survive
+ * sub-pixel rounding.
+ *
+ * Both operands are the same custom properties the tracks are built from, so
+ * retuning `minItemWidth` or the gap cannot leave the cap behind.
+ *
+ * Centred rather than left against the edge: a capped grid inside a wider section
+ * is a deliberate measure, not a short row.
+ *
+ * `inline-size: 100%` is load-bearing, not decoration. Auto inline margins take
+ * a flex item out of `stretch`, which leaves it sized to its own content — and a
+ * grid asked to size itself against an indefinite width resolves its tracks
+ * against nothing and comes out *wider* than the space it was given. Asking for
+ * the full width first, then capping it, keeps the cap a ceiling instead of a
+ * floor.
+ */
+.grid[data-max-columns] {
+  inline-size: 100%;
+  max-inline-size: calc(
+    (var(--auto-grid-max-columns) + 1) * var(--auto-grid-min-item) + var(--auto-grid-max-columns) *
+      var(--auto-grid-gap) - var(--space-1)
+  );
+  margin-inline: auto;
 }
 
 /*

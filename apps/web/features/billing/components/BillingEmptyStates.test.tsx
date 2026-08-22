@@ -60,15 +60,37 @@ describe('SubscriptionPanel, with nothing bought yet', () => {
       />,
     );
 
-    expect(screen.getByText(content.billing.noSubscriptionHeading)).toBeInTheDocument();
-    expect(
-      screen.getByRole('link', { name: content.billing.noSubscriptionAction }),
-    ).toHaveAttribute('href', `#${BILLING_SECTION_IDS.plans}`);
+    const link = screen.getByRole('link', { name: content.billing.noSubscriptionAction });
+
+    expect(link).toHaveAttribute('href', `#${BILLING_SECTION_IDS.plans}`);
+    // The next step sits inside the sentence that explains it, rather than
+    // underneath a state's own action row.
+    expect(link.closest('p')).toHaveTextContent(content.billing.noSubscriptionNotice);
   });
 
   /**
-   * The meters are the reason this is an empty state rather than a hidden
-   * section: a trial has bought nothing and still has real limits to hit.
+   * TAR-711. The card renders two populated meters directly beneath this line,
+   * so it is not an empty region — the *plan* is unset, which is a different
+   * statement and does not get the empty-state anatomy. `EmptyState` puts its
+   * icon in a disc, and a disc above live numbers is the card saying it has
+   * nothing to show while showing something.
+   */
+  it('states the trial as a line, not as an empty state', () => {
+    const data = summary();
+
+    const { container } = render(
+      <SubscriptionPanel
+        summary={data}
+        readings={readPlanUsage(data.usage, ENTITLEMENTS.limits)}
+      />,
+    );
+
+    expect(container.querySelector('svg')).toBeNull();
+  });
+
+  /**
+   * The meters are the reason this is a line rather than a hidden section: a
+   * trial has bought nothing and still has real limits to hit.
    */
   it('still renders both meters', () => {
     const data = summary();

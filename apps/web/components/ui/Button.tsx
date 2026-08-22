@@ -46,6 +46,18 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   pendingLabel?: string;
   /** Renders at full width; used by the drawer and sheet layouts. */
   isBlock?: boolean;
+  /**
+   * Inert, but **still reachable**: `aria-disabled` and a click guard rather
+   * than the native attribute, so a keyboard or screen-reader user can land on
+   * the control and hear the reason wired to it through `aria-describedby`.
+   *
+   * `disabled` stays the right prop where there is nothing to explain — a submit
+   * with an empty form. This one is for a control whose whole problem is that
+   * somebody wants to press it and cannot: a plan the workspace's current usage
+   * puts out of reach (TAR-711). A natively disabled button cannot be focused,
+   * so its description is never announced.
+   */
+  isUnavailable?: boolean;
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
@@ -56,6 +68,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     isPending = false,
     pendingLabel,
     isBlock = false,
+    isUnavailable = false,
     className,
     disabled,
     type = 'button',
@@ -65,6 +78,21 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   ref,
 ) {
   const content = useContent();
+  /*
+   * Busy and unavailable are drawn differently and must not be conflated: one is
+   * a control mid-flight that keeps its own colour and dims, the other is a
+   * control that cannot be pressed at all and drops the variant's ground
+   * entirely. Before TAR-711 both were one blanket `opacity`, which is why a
+   * plan a workspace could not choose read as a button that was still loading.
+   *
+   * Pending wins where both are true: the press already happened.
+   */
+  const state = isPending
+    ? 'pending'
+    : isUnavailable || disabled === true
+      ? 'unavailable'
+      : undefined;
+  const isInert = isPending || isUnavailable;
   /*
    * A pending button normally hides its label and centres a spinner over it, so
    * the button keeps its width and the row around it does not shift. A **block**
@@ -84,13 +112,15 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       data-variant={variant}
       data-size={size}
       data-block={isBlock ? 'true' : undefined}
-      // A pending button keeps its place in the tab order and its accessible
-      // name, so it is `aria-disabled` plus a click guard rather than `disabled`
-      // — which would move focus to the body mid-submit.
+      data-state={state}
+      // A pending or unavailable button keeps its place in the tab order and its
+      // accessible name, so it is `aria-disabled` plus a click guard rather than
+      // `disabled` — which would move focus to the body mid-submit, and would
+      // hide an unavailable control's explanation from the reader who needs it.
       disabled={disabled}
-      aria-disabled={isPending || disabled === true ? true : undefined}
+      aria-disabled={isInert || disabled === true ? true : undefined}
       onClick={(event) => {
-        if (isPending) {
+        if (isInert) {
           // Also stops a `type="submit"` from double-submitting the form.
           event.preventDefault();
           return;

@@ -110,7 +110,47 @@
 .button[aria-disabled='true'],
 .button:disabled {
   cursor: not-allowed;
+}
+
+/*
+ * Working, not unavailable. The control keeps its variant's ground and dims,
+ * which is what a spinner sitting over a primary button should look like.
+ */
+.button[data-state='pending'] {
   opacity: 0.6;
+}
+
+/*
+ * Genuinely unavailable (TAR-711).
+ *
+ * A blanket `opacity` over the accent is what made `Choose Solo` read as a
+ * pressed or loading button rather than one that could not be pressed —
+ * measured, its background was byte-identical to the enabled buttons beside it.
+ * So the ground goes rather than fading: the control leaves the accent's
+ * vocabulary entirely and takes the sunken/muted pair every other inert surface
+ * in the console uses.
+ *
+ * Below AA as a text pair, and deliberately so: WCAG 2.2 SC 1.4.3 exempts an
+ * inactive component, and the reason the control cannot be pressed is a separate
+ * line beside it in a role that is measured. What *is* asserted in
+ * `tokens.test.ts` is the 3:1 SC 1.4.11 needs between this ground and the
+ * enabled one, because telling the two apart is the whole job.
+ */
+.button[data-state='unavailable'] {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+  color: var(--color-on-surface-muted);
+}
+
+/*
+ * Colours are dropped in forced-colors mode, so the state has to be spelled in
+ * the one property that survives.
+ */
+@media (forced-colors: active) {
+  .button[data-state='unavailable'] {
+    color: GrayText;
+    border-color: GrayText;
+  }
 }
 
 /* A row, so a button that pairs an icon with a word spaces the two the way the

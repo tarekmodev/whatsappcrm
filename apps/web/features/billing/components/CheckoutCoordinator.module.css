@@ -1,0 +1,10 @@
+/*
+ * What the wait is for while a hosted session is being minted. A caption below
+ * the grid rather than a banner: nothing is wrong, the page is simply about to
+ * leave, and this surface already reserves its loud roles for the allowance
+ * warning.
+ */
+.note {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
