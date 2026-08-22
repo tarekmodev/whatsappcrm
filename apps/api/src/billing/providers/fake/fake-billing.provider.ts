@@ -5,6 +5,7 @@ import type {
   BillingEvent,
   BillingProvider,
   HostedSession,
+  ParsedWebhookEvent,
   WebhookSubject,
 } from '@whatsappcrm/contracts';
 
@@ -297,19 +298,24 @@ export class FakeBillingProvider implements BillingProvider {
     payload: unknown,
     headers: Record<string, string | undefined>,
     tenantId: string,
-  ): BillingEvent | null {
+  ): ParsedWebhookEvent {
     const providerEventId = headers['webhook-id'];
     const envelope = payload as { data?: unknown } | null;
 
-    if (
-      providerEventId === undefined ||
-      typeof envelope?.data !== 'object' ||
-      envelope.data === null
-    ) {
-      return null;
+    if (providerEventId === undefined) {
+      return { outcome: 'unreadable', detail: 'no webhook-id to key the event on' };
     }
 
-    return { ...(envelope.data as BillingEvent), tenantId, providerEventId };
+    if (typeof envelope?.data !== 'object' || envelope.data === null) {
+      // Every envelope this adapter emits carries a `data` object, so one that
+      // does not is a payload worth parking rather than an event to skip.
+      return { outcome: 'unreadable', detail: 'envelope carries no data object' };
+    }
+
+    return {
+      outcome: 'event',
+      event: { ...(envelope.data as BillingEvent), tenantId, providerEventId },
+    };
   }
 
   resolveCheckout(input: { tenantId: string; checkoutId: string }): Promise<BillingEvent | null> {

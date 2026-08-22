@@ -1,5 +1,10 @@
 import type { ConfigService } from '@nestjs/config';
-import type { BillingEvent, BillingProvider, WebhookSubject } from '@whatsappcrm/contracts';
+import type {
+  BillingEvent,
+  BillingProvider,
+  ParsedWebhookEvent,
+  WebhookSubject,
+} from '@whatsappcrm/contracts';
 import type { SystemPrisma } from '../prisma/prisma.tokens';
 import type { TenantLifecycleService } from '../tenancy/lifecycle/tenant-lifecycle.service';
 import type { WebhookEventsRepository } from '../webhooks/webhook-events.repository';
@@ -26,7 +31,7 @@ const EVENT: BillingEvent = {
 interface Harness {
   claimed?: { id: string; providerEventId: string; payload: unknown; attempts: number } | null;
   subject?: WebhookSubject;
-  parsed?: BillingEvent | null;
+  parsed?: ParsedWebhookEvent;
   outcome?: SubscriptionSyncOutcome;
   findUnique?: jest.Mock;
   findFirst?: jest.Mock;
@@ -53,7 +58,7 @@ function processorWith(options: Harness) {
   );
   const parseWebhookEvent = jest
     .fn()
-    .mockReturnValue(options.parsed === undefined ? EVENT : options.parsed);
+    .mockReturnValue(options.parsed ?? ({ outcome: 'event', event: EVENT } as const));
 
   const apply = jest
     .fn()
@@ -185,12 +190,42 @@ describe('BillingEventProcessor', () => {
    * noise that hides the rows that matter.
    */
   it('records an unsubscribed event as processed rather than parking it', async () => {
-    const { processor, markProcessed, markFailed, apply } = processorWith({ parsed: null });
+    const { processor, markProcessed, markFailed, apply } = processorWith({
+      parsed: { outcome: 'ignored' },
+    });
 
     await processor.process(ROW_ID);
 
     expect(markProcessed).toHaveBeenCalledWith(ROW_ID, TENANT);
     expect(markFailed).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The other half of that distinction, and the whole of TAR-663: a subscribed
+   * event whose shape the adapter cannot read is **not** an event we did not ask
+   * for. Recording it as processed is how every real Polar subscription webhook
+   * disappeared silently and a paying tenant was never activated — so it is
+   * parked, with the payload intact, for replay once the mapping is fixed.
+   */
+  it('parks a payload it cannot read, and never records it as processed', async () => {
+    const { processor, markFailed, markProcessed, apply } = processorWith({
+      parsed: { outcome: 'unreadable', detail: 'subscription.active carries no readable id' },
+    });
+
+    await processor.process(ROW_ID);
+
+    expect(markFailed).toHaveBeenCalledWith(
+      ROW_ID,
+      expect.stringContaining('unrecognised_payload'),
+      TENANT,
+    );
+    expect(markFailed).toHaveBeenCalledWith(
+      ROW_ID,
+      expect.stringContaining('subscription.active'),
+      TENANT,
+    );
+    expect(markProcessed).not.toHaveBeenCalled();
     expect(apply).not.toHaveBeenCalled();
   });
 

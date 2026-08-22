@@ -1973,6 +1973,41 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
 
 ### Fixed
 
+- **A real Polar webhook activates the tenant that paid, and one we cannot read is parked
+  rather than swallowed** (TAR-663) — with `BILLING_PROVIDER_DRIVER=polar`, every
+  subscription-lifecycle delivery parsed to nothing and was recorded as `processed`. A
+  tenant that completed checkout was never activated, no row carried a failure, and nothing
+  logged it. Invisible so far only because every environment still runs the `fake` driver,
+  which never touches this path — it would have surfaced on the day the real credentials
+  arrived and the driver was flipped.
+  The cause was **one vocabulary read in the wrong spelling**. Polar's JSON is snake_case
+  (`customer_id`, `current_period_start`, `cancel_at_period_end`); its SDK's `Subscription`
+  type is the camelCase object its deserializer produces from that JSON. The receiver
+  stores the raw signed bytes — correctly, so that what is stored is provably what was
+  signed — and the worker reads them back, but `polar-event.mapper.ts` was written against
+  the SDK spelling and only ever tested against a fixture in it. `asSubscription` therefore
+  rejected every genuine payload, and the signature was never at fault. The mapper's readers
+  now accept **both** spellings and normalise to one shape, which is also what keeps the
+  nightly reconciliation read comparable with what a webhook would have written; the whole
+  mapping suite runs twice, once per spelling. The two provider-id tenant fallbacks, dead
+  against real payloads for the same reason, come back with it.
+  The silence was a **second defect and the more dangerous one**: `parseWebhookEvent`
+  answered `null` both for an event we do not subscribe to and for one we could not read,
+  and the worker recorded both as processed. It now answers a three-way
+  `ParsedWebhookEvent` — `event`, `ignored`, `unreadable` — and an `unreadable` payload is
+  parked `failed` with `unrecognised_payload` and a reason naming the event type and the
+  keys it carried, logged at error, and left replayable by the status reset on
+  `WebhookEventsRepository.claim`. That is the treatment `WhatsAppEventProcessor` has always
+  given a notification it cannot parse; billing had the constant for it and never used it.
+  Third, `validateEvent` turns out to verify the signature and _then_ parse the body against
+  the event schemas pinned in `@polar-sh/sdk`, and the adapter rethrew that second failure —
+  so an authentic delivery of an event type newer than the pinned SDK became a 500, and ten
+  non-2xx responses in a row disable the endpoint at Polar. It is now accepted and stored,
+  with a warn naming the upgrade; the signature check it is there for is unchanged.
+  Verified against a fixture built from the SDK's own inbound schema for `Subscription` —
+  Polar's real wire shape, no credentials required — driven through the shipping adapter and
+  worker end to end.
+
 - **A checkout on the fake billing driver can complete again** (TAR-658) — every environment
   runs `BILLING_PROVIDER_DRIVER=fake` until Polar credentials are provisioned, and on that
   driver a checkout had nothing left that could finish it. TAR-619 chose webhook-plus-refresh
