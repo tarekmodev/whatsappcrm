@@ -74,6 +74,27 @@ export const routes = {
    */
   settingsWorkspace: () => '/settings/workspace',
   /**
+   * Plans, usage against them, and the way out to the provider's customer portal
+   * (TAR-37, TAR-619).
+   *
+   * `checkout` rides in the URL because it is not console state at all — it is
+   * where the *provider* sends the browser back to. `successPath` and
+   * `cancelPath` are what `CheckoutRequestSchema` accepts, the API composes them
+   * against the tenant's own origin, and the value it carries has to survive a
+   * full page load from a third-party host. There is nowhere else it could live.
+   *
+   * Separate from `settingsWorkspace`, which shows the same seat meter: that page
+   * is the workspace's *profile* and is gated on `tenant:settings` /
+   * `branding:write`, while this one spends money and is gated on `billing:read`
+   * / `billing:manage`. Merging them would mean one of the two audiences is
+   * refused the whole page.
+   */
+  settingsBilling: (query?: BillingQuery) =>
+    withQuery('/settings/billing', {
+      [searchParamKeys.billingCheckout]: query?.checkout,
+      [searchParamKeys.billingPlan]: query?.planKey,
+    }),
+  /**
    * Where an admin defines the tenant's contact schema — 0002 amendment 10's
    * `custom_field_defs` surface (TAR-33, TAR-476).
    *
@@ -223,9 +244,49 @@ export const searchParamKeys = {
    * shared link is read by people.
    */
   onboardingStep: 'step',
+  /**
+   * How the hosted checkout page sent the browser back. `checkout`, not
+   * `checkoutOutcome`: it is read by a person in a URL bar, and the two values
+   * it takes say the rest.
+   */
+  billingCheckout: 'checkout',
+  /**
+   * Which plan the checkout that is coming back was *for*.
+   *
+   * Load-bearing rather than decorative: without it, "the subscription is
+   * active" cannot tell a completed upgrade from the plan the tenant was already
+   * on, and the page would congratulate somebody on a change that has not landed
+   * yet. With it, "active **and** on this plan" is the only thing that counts as
+   * confirmed.
+   */
+  billingPlan: 'plan',
   /** Where sign-in sends the user afterwards. Read through `parseRedirectPath`. */
   redirectTo: 'next',
 } as const;
+
+/**
+ * How a hosted checkout ended, as the provider hands it back.
+ *
+ * `succeeded` is deliberately **not** "the plan is active". The redirect races
+ * the subscription webhook and usually wins it, so this value says only which
+ * button the user pressed on the provider's page; whether the plan actually
+ * changed is read from `GET /billing/subscription` and nowhere else. A console
+ * that congratulated somebody on a plan the API has not confirmed would be
+ * announcing a payment it has no evidence of.
+ */
+export const CHECKOUT_OUTCOMES = ['succeeded', 'cancelled'] as const;
+export type CheckoutOutcome = (typeof CHECKOUT_OUTCOMES)[number];
+
+export interface BillingQuery {
+  checkout?: CheckoutOutcome;
+  /** The plan the checkout was for; omitted on the cancel path, which bought nothing. */
+  planKey?: string;
+}
+
+/** Narrows an untrusted `?checkout=` value; anything else is no outcome at all. */
+export function parseCheckoutOutcome(value: string | undefined): CheckoutOutcome | undefined {
+  return CHECKOUT_OUTCOMES.find((outcome) => outcome === value);
+}
 
 export interface OnboardingQuery {
   /** Omitted means "open the first step still pending" — see `nextOnboardingStep`. */

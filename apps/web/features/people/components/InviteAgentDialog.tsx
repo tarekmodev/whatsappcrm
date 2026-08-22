@@ -8,11 +8,14 @@ import {
 } from '@whatsappcrm/contracts';
 import { Field } from '@/components/ui/Field';
 import { FormDialog } from '@/components/ui/FormDialog';
+import { Notice } from '@/components/ui/Notice';
 import { Select } from '@/components/ui/Select';
 import { TextInput } from '@/components/ui/TextInput';
+import { TextLink } from '@/components/ui/TextLink';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useActionForm } from '@/lib/hooks/useActionForm';
 import { useContent } from '@/lib/content';
+import { routes } from '@/lib/routes';
 import { inviteAgentAction } from '../people.actions';
 import { roleOptions } from '../presentation';
 import { invitableRoles, type PeopleCaller } from '../role-assignment';
@@ -62,7 +65,10 @@ export function InviteAgentDialog({
     [content, onClose, showToast],
   );
 
-  const { submit, isPending, formError, requestId } = useActionForm({ perform, onSuccess });
+  const { submit, isPending, formError, requestId, errorCode } = useActionForm({
+    perform,
+    onSuccess,
+  });
 
   return (
     <FormDialog
@@ -95,6 +101,25 @@ export function InviteAgentDialog({
         submit();
       }}
     >
+      {/*
+       * The upgrade path, and only after the API has actually refused. TAR-37
+       * requires the seat cap to be enforced on the invite endpoint rather than
+       * in the console, and this renders *from that refusal*: `FormError` above
+       * has already shown the API's own message, which states the numbers, and
+       * this adds the thing a message cannot — somewhere to go.
+       *
+       * Deliberately not a pre-check. The console does not hold the
+       * authoritative seat count, so a dialog that disabled its own submit
+       * button from a stale one would refuse invitations the API would have
+       * allowed the moment somebody accepted or withdrew one in another tab.
+       */}
+      {errorCode === 'plan_limit_exceeded' ? (
+        <Notice tone="warning">
+          {content.people.seatLimitUpgradeBody}{' '}
+          <TextLink href={routes.settingsBilling()}>{content.people.seatLimitUpgradeLink}</TextLink>
+        </Notice>
+      ) : null}
+
       <Field label={content.people.inviteEmailLabel} error={emailError ?? undefined} isRequired>
         {({ controlId, describedBy, isInvalid }) => (
           <TextInput

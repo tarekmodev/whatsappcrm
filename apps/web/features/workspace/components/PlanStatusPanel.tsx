@@ -3,10 +3,12 @@ import { Badge } from '@/components/ui/Badge';
 import { DetailList, type DetailListItem } from '@/components/ui/DetailList';
 import { Notice } from '@/components/ui/Notice';
 import { RelativeTime } from '@/components/ui/RelativeTime';
+import { TextLink } from '@/components/ui/TextLink';
 import { UsageMeter } from '@/components/ui/UsageMeter';
 import { AutoGrid } from '@/components/layout/AutoGrid';
 import { Stack } from '@/components/layout/Stack';
 import { useContent, type Content } from '@/lib/content';
+import { routes } from '@/lib/routes';
 import { readConversationUsage, readSeatUsage, type UsageReading } from '../plan-usage';
 import { TENANT_STATUS_TONES } from '../presentation';
 
@@ -57,7 +59,12 @@ export function PlanStatusPanel({ lifecycle }: { lifecycle: TenantLifecycleRespo
       </AutoGrid>
 
       {seats.isAtCap || conversations.isAtCap ? (
-        <Notice tone="warning">{content.workspace.upgradeUnavailableNotice}</Notice>
+        <Notice tone="warning">
+          {content.workspace.upgradeUnavailableNotice}{' '}
+          {/* TAR-37 replaced ADR 0009 risk 4's "contact support" with a real
+              checkout, so this names the page that raises the limit. */}
+          <TextLink href={routes.settingsBilling()}>{content.workspace.upgradeLink}</TextLink>
+        </Notice>
       ) : null}
     </Stack>
   );

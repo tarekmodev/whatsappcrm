@@ -1425,13 +1425,74 @@ on-screen word even though the issue that asked for it said "organization profil
 `TenantLifecycleResponse` is what the plan panel renders, and it is deliberately not
 `BillingSummaryResponse` — that one describes a subscription, and a workspace on a trial has
 none. Pending invitations count towards the seat cap alongside active agents, because ADR
-0009 enforces the cap at invite creation as well as acceptance; `features/workspace/plan-usage.ts`
-owns that arithmetic so a second surface cannot re-derive it differently.
+0009 enforces the cap at invite creation as well as acceptance; `lib/plan/usage-reading.ts`
+owns that arithmetic — `features/workspace/plan-usage.ts` and `features/billing` both read
+through it — so a second surface cannot re-derive it differently.
 
 Two primitives came out of this page and are reusable: `components/ui/DetailList` (term and
 value pairs as a real `<dl>`, two columns above a container-query threshold) and
 `components/ui/UsageMeter` (an allowance gauge whose bar is `aria-hidden` decoration over a
 sentence that states the numbers).
+
+### Plans and billing: the redirect is not the confirmation
+
+`/settings/billing` (TAR-37) is where a tenant admin compares plans, starts a checkout and
+reaches the payment provider's own customer portal. Same two-gate shape as Workspace above:
+`billing:read` reaches the plans and the meters, `billing:manage` is what starts a checkout
+or opens the portal, and the nav entry names both.
+
+**Nothing in `apps/web` names the payment provider.** The console asks for a plan list, a
+checkout session and a portal session; which rail answers is decided behind
+`BillingProvider` in `apps/api/src/billing/providers/`, and every provider identifier that
+reaches this tier is an opaque string inside a URL. That is what let this surface be built
+and reviewed before any of it existed.
+
+Five routes, exactly as the contract publishes them, all through `lib/api/billing.ts`:
+
+| Route                              | Permission       | Notes                             |
+| ---------------------------------- | ---------------- | --------------------------------- |
+| `GET /api/v1/billing/plans`        | `billing:read`   | tiers plus this tenant's position |
+| `GET /api/v1/billing/subscription` | `billing:read`   | current plan, dates, usage        |
+| `GET /api/v1/billing/usage`        | `billing:read`   | counters against their ceilings   |
+| `POST /api/v1/billing/checkout`    | `billing:manage` | requires an `Idempotency-Key`     |
+| `POST /api/v1/billing/portal`      | `billing:manage` | short-lived; minted on the click  |
+
+Four rules are worth knowing before you touch this page:
+
+1. **The redirect back from a hosted checkout is not evidence of anything.** It routinely
+   beats the provider's own subscription webhook, so `reportCheckout` has **three**
+   outcomes, not two: `succeeded` only when the subscription is active _and_ on the plan the
+   checkout was for, `cancelled`, and `confirming` for the gap in between. The page never
+   congratulates somebody on a plan change the API cannot see. The plan rides in the URL
+   (`?checkout=succeeded&plan=growth`) precisely so an upgrade between two paid tiers cannot
+   be mistaken for the tier the tenant was already on.
+2. **Whether a plan can be chosen is the API's answer, never the console's.** `isSelectable`
+   and `blockedBy` depend on live usage the console does not hold. A card whose ceilings sit
+   below current usage says _which_ ceiling blocks it, in words — a control that silently
+   will not press is not an explanation.
+3. **The seat cap is rendered from the refusal, not from a count.** `InviteAgentDialog`
+   shows its upgrade path only after the invite endpoint answers `plan_limit_exceeded`; it
+   never pre-checks. A dialog that disabled its own submit from a stale count would refuse
+   invitations the API would have allowed. That is what `ActionResult.code` and
+   `useActionForm`'s `errorCode` exist for — branch on the code, never on the message, which
+   is server-owned copy.
+4. **A requested cancellation is not a closed workspace.** The provider reports one the
+   moment it is asked for and the tenant has paid through the period, so `cancelsAt` drives a
+   "closing on…" banner and no lifecycle transition at all.
+
+Cancellation, plan changes, invoices and the payment method all live in the provider's
+portal rather than here: it owns the confirmation, the effective date and the receipt, and
+two places that can end a subscription is one too many.
+
+One primitive came out of this page and is reusable: `components/ui/AlertBanner` — a
+page-level `role="status"` message with a heading, a body and a slot for the way out of it.
+`Notice` stays the right choice for a single sentence inside a card.
+
+In mock mode the fixture transport stands in for the hosted pages as well as for the API: it
+applies the subscription immediately and hands back the console's own return URL on
+`http://localhost:3000`, so the whole loop is walkable with no provider account. Against a
+real provider the redirect races the webhook, which is why the `confirming` branch exists
+and is covered by unit test rather than by clicking.
 
 ### The chatbot: silence is a state the console has to explain
 

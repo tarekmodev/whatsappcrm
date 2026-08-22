@@ -13,6 +13,8 @@ import {
   CUSTOM_FIELD_LIMITS,
   CannedResponseCreateInputSchema,
   CannedResponseUpdateInputSchema,
+  CheckoutRequestSchema,
+  PortalRequestSchema,
   ContactListQuerySchema,
   ContactUpdateInputSchema,
   ConversationAssignInputSchema,
@@ -79,6 +81,14 @@ import {
   type AiReadinessBlocker,
   type ApiError,
   type AssignmentRuleListResponse,
+  type BillingSummaryResponse,
+  type HostedSession,
+  type Plan,
+  type PlanEntitlements,
+  type PlanListResponse,
+  type Subscription,
+  type UsagePeriod,
+  type UsageSummaryResponse,
   type AssignmentRuleResponse,
   type CannedResponseListResponse,
   type CannedResponseResponse,
@@ -130,7 +140,7 @@ import { ApiRequestError, type ApiRequest } from '@/lib/api/http';
 import { dashboardMetrics } from '@/lib/api/mock/reporting';
 import { dashboardCsv } from '@/lib/api/mock/report-csv';
 import { mockState, nextMockId } from '@/lib/api/mock/store';
-import { MOCK_IDS } from '@/lib/api/mock/fixtures';
+import { MOCK_CONVERSATION_BASELINE, MOCK_IDS } from '@/lib/api/mock/fixtures';
 import type {
   MockAiConfigRecord,
   MockAssignmentRule,
@@ -156,6 +166,7 @@ import type {
   TenantScoped,
 } from '@/lib/api/mock/fixtures';
 import { resolveStubPrincipal } from '@/lib/session/stub-principal';
+import { routes } from '@/lib/routes';
 
 /**
  * The mock transport: a small router over TAR-39's endpoint surface, standing in
@@ -733,6 +744,41 @@ const ROUTES: readonly Route[] = [
     permission: 'tenant:settings',
     handle: getTenantLifecycle,
   },
+  // --- Billing, plans and usage (TAR-37) -----------------------------------
+  {
+    method: 'GET',
+    pattern: /^\/v1\/billing\/plans$/,
+    permission: 'billing:read',
+    handle: listBillingPlans,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/billing\/subscription$/,
+    permission: 'billing:read',
+    handle: getBillingSummary,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/billing\/usage$/,
+    permission: 'billing:read',
+    handle: getBillingUsage,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/billing\/checkout$/,
+    // `billing:manage`, not `billing:read`: this one spends money.
+    permission: 'billing:manage',
+    handle: createBillingCheckout,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/billing\/portal$/,
+    // The portal is where a plan is changed and a subscription cancelled, so
+    // reaching it is a manage action even though minting the link changes
+    // nothing on our side.
+    permission: 'billing:manage',
+    handle: createBillingPortal,
+  },
   {
     method: 'GET',
     pattern: /^\/v1\/tenant\/onboarding$/,
@@ -883,6 +929,8 @@ function inviteUser({ principal, body }: RouteContext): UserResponse {
       MOCK_REQUEST_ID,
     );
   }
+
+  assertSeatAvailable(principal);
 
   const teams = assertTeamsInTenant(principal, teamIds);
   const created: MockUser = {
@@ -2579,19 +2627,461 @@ function getTenantLifecycle({ principal }: RouteContext): TenantLifecycleRespons
     throw notFound();
   }
 
-  const users = tenantUsers(principal);
-
   return {
     // Scoping column stripped before anything leaves the transport, exactly as
     // `stripTenant` does for every other record here.
     ...stripTenant(lifecycle),
-    usage: {
-      seatsUsed: users.filter((user) => user.status === 'active' && user.occupiesSeat).length,
-      seatsPending: users.filter((user) => user.status === 'invited').length,
-      conversationsThisPeriod: tenantConversations(principal).length,
-    },
+    // The same helper the billing routes read. Two endpoints that answered
+    // different numbers for one tenant's seats would be a bug a reviewer could
+    // only find by holding two pages side by side.
+    usage: tenantUsageCounts(principal),
   };
 }
+
+// --- Billing, plans and usage (TAR-37) --------------------------------------
+
+/**
+ * Seats and conversations for one tenant, counted from this store.
+ *
+ * Counted rather than stored, so a reviewer who sends an invitation watches the
+ * seat meter move and then watches the next invitation be refused. The rules are
+ * ADR 0009's and TAR-37's contract restates them:
+ *
+ *   - a seat is held by an **active** member *plus* every invitation still
+ *     outstanding — counting only active members would let an admin mint
+ *     unlimited invitations and blow past the cap the moment a mailout landed;
+ *   - `occupiesSeat` narrows the active half only. An invited user carries
+ *     `occupiesSeat: false` — they are not billable until they accept — and
+ *     filtering the pending half on it would count exactly nobody.
+ *
+ * The conversation count adds a fixed baseline (`MOCK_CONVERSATION_BASELINE`) to
+ * the seeded threads, because five threads against a four-figure allowance would
+ * leave the volume-threshold banner unreachable by clicking.
+ */
+function tenantUsageCounts(principal: SessionPrincipal): BillingSummaryResponse['usage'] {
+  const users = tenantUsers(principal);
+
+  return {
+    seatsUsed: users.filter((user) => user.status === 'active' && user.occupiesSeat).length,
+    seatsPending: users.filter((user) => user.status === 'invited').length,
+    conversationsThisPeriod:
+      (MOCK_CONVERSATION_BASELINE[principal.tenantId] ?? 0) + tenantConversations(principal).length,
+  };
+}
+
+/**
+ * Refuses an invitation that would take the tenant past its seat allowance.
+ *
+ * **Enforced here, on the API side of the transport, and nowhere else.** TAR-37
+ * is explicit that the seat cap is enforced on the invite endpoint rather than
+ * in the console, and the console's upgrade path is rendered *from this
+ * refusal*. A dialog that pre-checked a count of its own would disagree with the
+ * server the moment an invitation was accepted in another tab — refusing
+ * invitations the API would have allowed, and allowing ones it then refuses.
+ *
+ * 409, per the contract's error table: the request is well formed and the
+ * conflict is with the tenant's current state, not with what was typed.
+ *
+ * The message names the way out. `PlanLimitExceededError.seats` on the API says
+ * the same thing for the same reason — a refusal that does not say what to do
+ * next leaves an admin re-pressing a button that can never work.
+ */
+function assertSeatAvailable(principal: SessionPrincipal): void {
+  const cap = tenantEntitlements(principal).limits.seats;
+
+  if (cap === null) {
+    return;
+  }
+
+  const { seatsUsed, seatsPending } = tenantUsageCounts(principal);
+  const held = seatsUsed + seatsPending;
+
+  if (held < cap) {
+    return;
+  }
+
+  throw refused(
+    'plan_limit_exceeded',
+    `Every seat on your plan is in use (${held} of ${cap}). Move to a larger plan, withdraw an outstanding invitation, or remove an agent.`,
+    HTTP_CONFLICT,
+  );
+}
+
+/** At most one per tenant, like the real table's partial unique index. */
+function tenantSubscription(principal: SessionPrincipal): Subscription | undefined {
+  return [...mockState().subscriptions.values()].find(
+    (subscription) => subscription.tenantId === principal.tenantId,
+  );
+}
+
+/**
+ * What the tenant is actually entitled to, which is **not** the same thing as
+ * the plan it is subscribed to.
+ *
+ * The contract's decision 4 makes `tenant_entitlements` the enforcement truth
+ * and `plans` the catalogue: activation copies one into the other. That split is
+ * why a trialing tenant with no subscription row still has real limits, and why
+ * an operator can grandfather a single tenant without editing a plan everybody
+ * else is on. The lifecycle record is this transport's `tenant_entitlements`.
+ */
+function tenantEntitlements(principal: SessionPrincipal): PlanEntitlements {
+  const lifecycle = mockState().tenantLifecycles.get(principal.tenantId);
+
+  if (lifecycle === undefined) {
+    throw notFound();
+  }
+
+  return lifecycle.plan.entitlements;
+}
+
+/**
+ * `GET /v1/billing/plans` — every tier on sale, plus this tenant's position in
+ * each one.
+ *
+ * `isSelectable` and `blockedBy` are computed **here**, on the server side of
+ * the transport, for the reason the contract gives for computing them on the
+ * API: they depend on live usage the console does not hold. A console that
+ * derived them itself would disable a button from a stale count, or offer one
+ * the API then refuses after the user has typed their card in.
+ *
+ * A non-public plan is listed only when the tenant is already on it —
+ * `PlanSchema.isPublic`'s "hidden from the pricing page but still honoured".
+ * Dropping it outright would leave a trialing tenant looking at a plans page
+ * that does not contain the plan it is on.
+ */
+function listBillingPlans({ principal }: RouteContext): PlanListResponse {
+  const usage = tenantUsageCounts(principal);
+  const currentPlanKey = tenantSubscription(principal)?.planKey ?? currentTrialPlanKey(principal);
+
+  const plans = [...mockState().plans.values()]
+    .filter((plan) => plan.isPublic || plan.key === currentPlanKey)
+    .map((plan) => {
+      const isCurrent = plan.key === currentPlanKey;
+      const blockedBy = ceilingsBelowUsage(plan, usage);
+
+      return {
+        ...plan,
+        isCurrent,
+        // A tenant is never blocked from the plan it is already on: the ceilings
+        // it is over are the ones it was granted, and offering "not available"
+        // for your own plan reads as a fault rather than as a refusal.
+        isSelectable: !isCurrent && blockedBy.length === 0,
+        blockedBy: isCurrent ? [] : blockedBy,
+      };
+    });
+
+  return { plans, usage };
+}
+
+/** Which of a plan's ceilings sit below what the tenant is already using. */
+function ceilingsBelowUsage(
+  plan: Plan,
+  usage: BillingSummaryResponse['usage'],
+): ('seats' | 'conversationsPerPeriod')[] {
+  const blocked: ('seats' | 'conversationsPerPeriod')[] = [];
+  const { seats, conversationsPerPeriod } = plan.entitlements.limits;
+
+  if (seats !== null && usage.seatsUsed + usage.seatsPending > seats) {
+    blocked.push('seats');
+  }
+
+  if (conversationsPerPeriod !== null && usage.conversationsThisPeriod > conversationsPerPeriod) {
+    blocked.push('conversationsPerPeriod');
+  }
+
+  return blocked;
+}
+
+/**
+ * The plan key a tenant with no subscription is on.
+ *
+ * Matched by name against the catalogue rather than assumed to be `trial`: the
+ * lifecycle record carries the entitlements, and a deployment whose free tier is
+ * called something else should still light up the right card.
+ */
+function currentTrialPlanKey(principal: SessionPrincipal): string | undefined {
+  return mockState().tenantLifecycles.get(principal.tenantId)?.plan.key;
+}
+
+/** `GET /v1/billing/subscription` — what the billing page renders above the tiers. */
+function getBillingSummary({ principal }: RouteContext): BillingSummaryResponse {
+  const subscription = tenantSubscription(principal);
+  const plan = subscription === undefined ? undefined : mockState().plans.get(subscription.planKey);
+
+  return {
+    subscription: subscription ?? null,
+    plan: plan ?? null,
+    entitlements: tenantEntitlements(principal),
+    usage: tenantUsageCounts(principal),
+    /*
+     * Non-null only for a cancellation that has been *requested*. The contract's
+     * decision 5 turns on this: the provider reports a cancellation the moment
+     * the customer asks for one, and the tenant stays fully serviceable until
+     * the period it has already paid for runs out.
+     */
+    cancelsAt:
+      subscription !== undefined && subscription.cancelAtPeriodEnd
+        ? subscription.currentPeriodEnd
+        : null,
+  };
+}
+
+/**
+ * `GET /v1/billing/usage` — every counter against its ceiling, for the current
+ * billing period.
+ *
+ * The period is the *subscription's*, and only falls back to a calendar month
+ * anchored on the tenant's creation date when there is no subscription — which
+ * is `UsagePeriodResolver`'s rule, and the reason a counter can never straddle
+ * two invoices.
+ *
+ * `seats_active` reports seats **held**, not seats accepted: it is the number
+ * pushed to the provider as the billed quantity, and the contract defines that
+ * as `seatsUsed + seatsPending`.
+ */
+function getBillingUsage({ principal }: RouteContext): UsageSummaryResponse {
+  const usage = tenantUsageCounts(principal);
+  const limits = tenantEntitlements(principal).limits;
+  const messages = tenantMessages(principal);
+
+  return {
+    period: currentUsagePeriod(principal),
+    counters: [
+      { metric: 'seats_active', value: usage.seatsUsed + usage.seatsPending, limit: limits.seats },
+      {
+        metric: 'conversations_opened',
+        value: usage.conversationsThisPeriod,
+        limit: limits.conversationsPerPeriod,
+      },
+      // Recorded from day one and billed by nothing, per TAR-18: the counters
+      // are what make per-conversation overage a pricing change later rather
+      // than a migration.
+      {
+        metric: 'messages_sent',
+        value: messages.filter((message) => message.direction === 'outbound').length,
+        limit: null,
+      },
+      {
+        metric: 'messages_received',
+        value: messages.filter((message) => message.direction === 'inbound').length,
+        limit: null,
+      },
+      { metric: 'ai_replies', value: tenantHandoffs(principal).length, limit: null },
+    ],
+  };
+}
+
+/**
+ * The subscription's own period, or a monthly one anchored on the tenant's
+ * creation date. Computed against the clock rather than fixed, because a
+ * hard-coded period would read as "last April" forever.
+ */
+function currentUsagePeriod(principal: SessionPrincipal): UsagePeriod {
+  const subscription = tenantSubscription(principal);
+
+  if (subscription !== undefined) {
+    return { start: subscription.currentPeriodStart, end: subscription.currentPeriodEnd };
+  }
+
+  const anchor = new Date(currentTenant(principal).createdAt);
+  const now = new Date();
+  const start = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      anchor.getUTCDate(),
+      anchor.getUTCHours(),
+      anchor.getUTCMinutes(),
+    ),
+  );
+
+  // Before this month's anniversary, the period that is running started last month.
+  if (start.getTime() > now.getTime()) {
+    start.setUTCMonth(start.getUTCMonth() - 1);
+  }
+
+  const end = new Date(start.getTime());
+
+  end.setUTCMonth(end.getUTCMonth() + 1);
+
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+/**
+ * `POST /v1/billing/checkout` — opens a hosted checkout page.
+ *
+ * Three refusals, all reachable so the console's branches can be walked without
+ * a provider account:
+ *
+ *   * a missing or malformed `Idempotency-Key` — `validation_failed`;
+ *   * a key already spent on a *different* body — `idempotency_key_reused`;
+ *   * a plan whose ceilings are below current usage — `plan_limit_exceeded`,
+ *     409, which is the refusal that stops a downgrade stranding a tenant over
+ *     its own new cap *after* it has paid.
+ *
+ * **This transport stands in for the hosted page as well as for the API**, which
+ * is the one place it cannot be faithful. It applies the subscription
+ * immediately — the plan copy into `tenant_entitlements` that decision 4 puts on
+ * activation — and hands back the console's own return URL, so the whole loop is
+ * walkable locally. Against a real provider the redirect races the webhook and
+ * usually wins it, which is why the console renders a "confirming" state from
+ * the subscription rather than from the redirect; that branch is covered by unit
+ * test rather than by clicking, because no fixture can produce a race.
+ */
+function createBillingCheckout({ principal, body, headers }: RouteContext): HostedSession {
+  const idempotencyKey = headers[IDEMPOTENCY_KEY_HEADER];
+
+  if (idempotencyKey === undefined || !IdSchema.safeParse(idempotencyKey).success) {
+    throw validationFailed();
+  }
+
+  const parsed = CheckoutRequestSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const input = parsed.data;
+  const payload = JSON.stringify(input);
+  const state = mockState();
+  const spent = state.checkoutsByIdempotencyKey.get(idempotencyKey);
+
+  if (spent !== undefined) {
+    if (spent.payload !== payload) {
+      throw refused(
+        'idempotency_key_reused',
+        'That idempotency key was already used to open a different checkout.',
+        HTTP_CONFLICT,
+      );
+    }
+
+    return { url: spent.url, expiresAt: spent.expiresAt };
+  }
+
+  const plan = state.plans.get(input.planKey);
+
+  // A plan nobody may buy is indistinguishable from one that does not exist —
+  // and saying which would tell a caller what is in the catalogue.
+  if (plan === undefined || !plan.isPublic) {
+    throw notFound();
+  }
+
+  const usage = tenantUsageCounts(principal);
+  const blockedBy = ceilingsBelowUsage(plan, usage);
+
+  if (blockedBy.length > 0) {
+    throw refused(
+      'plan_limit_exceeded',
+      `${plan.name} allows less than this workspace is already using. Free up what it does not cover before moving to it.`,
+      HTTP_CONFLICT,
+    );
+  }
+
+  applyMockSubscription(principal, plan, input.seats ?? usage.seatsUsed + usage.seatsPending);
+
+  const url = `${MOCK_CONSOLE_ORIGIN}${input.successPath ?? routes.settingsBilling({ checkout: 'succeeded' })}`;
+  const expiresAt = new Date(Date.now() + MOCK_HOSTED_SESSION_TTL_MS).toISOString();
+
+  state.checkoutsByIdempotencyKey.set(idempotencyKey, { payload, url, expiresAt });
+
+  return { url, expiresAt };
+}
+
+/**
+ * `POST /v1/billing/portal` — a short-lived link into the provider's own portal.
+ *
+ * `not_found` without a subscription, per the contract's error table: a portal
+ * session needs a customer to be a portal *for*, and a trialing tenant has never
+ * been one.
+ *
+ * No idempotency key, deliberately and per the contract: a portal session is
+ * free to mint and safe to repeat, and demanding a key on the "manage billing"
+ * button would be friction for nothing.
+ */
+function createBillingPortal({ principal, body }: RouteContext): HostedSession {
+  const parsed = PortalRequestSchema.safeParse(body ?? {});
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  if (tenantSubscription(principal) === undefined) {
+    throw notFound();
+  }
+
+  return {
+    url: `${MOCK_CONSOLE_ORIGIN}${parsed.data.returnPath ?? routes.settingsBilling()}`,
+    expiresAt: new Date(Date.now() + MOCK_HOSTED_SESSION_TTL_MS).toISOString(),
+  };
+}
+
+/**
+ * What the provider's `subscription.active` webhook would do, applied inline.
+ *
+ * Both halves matter and the second is the one that is easy to forget: the
+ * subscription row is what billing reads, and the **entitlement copy** is what
+ * enforcement reads. A transport that wrote only the first would show a tenant
+ * on Growth while still refusing its sixth invitation.
+ */
+function applyMockSubscription(principal: SessionPrincipal, plan: Plan, seats: number): void {
+  const state = mockState();
+  const now = new Date();
+  const periodEnd = new Date(now.getTime());
+
+  periodEnd.setUTCMonth(periodEnd.getUTCMonth() + (plan.interval === 'year' ? 12 : 1));
+
+  const existing = tenantSubscription(principal);
+  const subscription: Subscription = {
+    id: existing?.id ?? nextMockId(),
+    tenantId: principal.tenantId,
+    planKey: plan.key,
+    status: 'active',
+    seats,
+    currentPeriodStart: now.toISOString(),
+    currentPeriodEnd: periodEnd.toISOString(),
+    cancelAtPeriodEnd: false,
+    trialEndsAt: null,
+    createdAt: existing?.createdAt ?? now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+
+  state.subscriptions.set(subscription.id, subscription);
+
+  const lifecycle = state.tenantLifecycles.get(principal.tenantId);
+
+  if (lifecycle !== undefined) {
+    state.tenantLifecycles.set(principal.tenantId, {
+      ...lifecycle,
+      status: 'active',
+      trialEndsAt: null,
+      gracePeriodEndsAt: null,
+      purgeAt: null,
+      plan: {
+        key: plan.key,
+        name: plan.name,
+        entitlements: {
+          features: [...plan.entitlements.features],
+          limits: { ...plan.entitlements.limits },
+        },
+      },
+    });
+  }
+}
+
+/**
+ * Where the fixture transport sends a browser that would have gone to the
+ * provider's hosted page.
+ *
+ * The console's own dev origin, so checkout and the portal both land back on the
+ * page that opened them and the flow is walkable end to end with no account.
+ * `next dev` binds this port in `package.json`, and nothing about the real flow
+ * depends on the value — the URL is the *provider's* to choose, and this
+ * transport is only standing in for one.
+ */
+const MOCK_CONSOLE_ORIGIN = 'http://localhost:3000';
+
+/** Provider-hosted sessions are short-lived; 30 minutes is a realistic stand-in. */
+const MOCK_HOSTED_SESSION_TTL_MS = 30 * 60 * 1000;
 
 /**
  * The tenant row, with `domains` recomposed from the live domain map rather than

@@ -257,6 +257,36 @@ export interface HostedSession {
 }
 
 /**
+ * The wire schema for `HostedSession`, so the console can validate what
+ * `POST /billing/checkout` and `POST /billing/portal` answer before it sends a
+ * browser there.
+ *
+ * It exists because this is the one response in the contract the console does
+ * not *render* — it **navigates to it**. A `url` that arrived malformed, or as
+ * `javascript:` or `data:`, would be a redirect the user is maximally primed to
+ * trust, on the one page where they are about to type card details. Parsing it
+ * is the same control `CheckoutRequestSchema` applies in the other direction
+ * when it refuses an absolute `successPath`.
+ *
+ * The **scheme is the control**, and it is the whole point of the schema: bare
+ * `z.url()` accepts any scheme, so it would pass a `javascript:` or `data:`
+ * target. The host is deliberately left alone — `z.httpUrl()` was the obvious
+ * choice and is wrong here, because it also pins the hostname to a dotted
+ * domain, which refuses a perfectly legitimate self-hosted or intranet
+ * provider endpoint. Provider-agnostic by construction: this constrains the
+ * *shape*, and says nothing about which host a session may live on, because
+ * that is the adapter's business.
+ *
+ * Declared alongside the interface rather than replacing it: nothing that
+ * already implements `BillingProvider` changes, and the annotation below ties
+ * the two together, so they cannot drift without failing `typecheck`.
+ */
+export const HostedSessionSchema: z.ZodType<HostedSession> = z.object({
+  url: z.url({ protocol: /^https?$/ }),
+  expiresAt: TimestampSchema.nullable(),
+});
+
+/**
  * The **only** surface through which the platform talks to a payment provider.
  *
  * Every method is deliberately expressed in our vocabulary (`planKey`, `seats`,
