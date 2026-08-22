@@ -27,6 +27,15 @@
   overflow-wrap: anywhere;
 }
 
+/*
+ * `isTitleVisible={false}`: off the screen, still in the document outline and
+ * still the region's accessible name. Same clip as `VisuallyHidden`, applied to
+ * the heading itself because a `<span>` cannot wrap one.
+ */
+.headingHidden {
+  composes: visuallyHidden from '../layout/VisuallyHidden.module.css';
+}
+
 .description {
   color: var(--color-on-surface-muted);
   font-size: var(--font-size-body-sm);

@@ -129,3 +129,29 @@ export function assigneeLabelFor(
 
   return content.common.unassigned;
 }
+
+/**
+ * The same answer, plus whether it names a *holder* — which is what decides
+ * between an `Avatar` and plain muted text in the queue row (TAR-520). 0001's
+ * status vocabulary makes assignment a face rather than a text pill, and a circle
+ * with a "U" in it for "Unassigned" would read as a person called that.
+ *
+ * Derived from the label rather than from the ids, deliberately. `assigneeLabelFor`
+ * answers "Unassigned" for one case the ids call held — a team the reader's page
+ * of the directory could not resolve — and an avatar drawn from the ids would then
+ * put a face beside the word "Unassigned".
+ */
+export interface TicketAssignee {
+  readonly label: string;
+  readonly isHeld: boolean;
+}
+
+export function ticketAssignee(
+  ticket: Pick<TicketResponse, 'assignedUserId' | 'assignedTeamId'>,
+  userNames: ReadonlyMap<string, string>,
+  teamNames: ReadonlyMap<string, string>,
+): TicketAssignee {
+  const label = assigneeLabelFor(ticket, userNames, teamNames);
+
+  return { label, isHeld: label !== content.common.unassigned };
+}

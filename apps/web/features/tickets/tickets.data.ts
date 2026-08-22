@@ -26,6 +26,13 @@ export interface TicketQueueData extends Directory {
    * copy of it in the console is how a list and its cursor drift apart.
    */
   readonly tickets: readonly TicketResponse[];
+  /**
+   * There is a page after this one, so the queue header's count is a floor
+   * rather than a total ("25+ tickets"). The list read carries no `count(*)` —
+   * `take: limit + 1` is the whole of what the API can honestly say about size —
+   * so this is the only alternative to a number that quietly under-reports.
+   */
+  readonly hasMore: boolean;
 }
 
 export async function loadTicketQueue(query: TicketQueueParams): Promise<TicketQueueData> {
@@ -40,7 +47,7 @@ export async function loadTicketQueue(query: TicketQueueParams): Promise<TicketQ
     loadDirectory(),
   ]);
 
-  return { tickets: page.items, ...directory };
+  return { tickets: page.items, hasMore: page.nextCursor !== null, ...directory };
 }
 
 export interface TicketDetailData extends Directory {

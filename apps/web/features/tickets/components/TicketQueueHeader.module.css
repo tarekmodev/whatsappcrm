@@ -1,0 +1,42 @@
+/*
+ * The bar between the filter row and the table: the count at the inline start,
+ * the order at the inline end, a hairline under both. It sits on the card's own
+ * surface rather than in a box of its own — it is the top of the table, not a
+ * second card.
+ *
+ * Below 40rem, where `DataTable` stacks each row into a card, the two halves
+ * stack too: "25 tickets" and "Sorted by urgent first, then newest" do not share
+ * a line at 320px.
+ */
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  min-block-size: var(--size-control-md);
+  padding-block-end: var(--space-2);
+  border-block-end: var(--border-hairline) solid var(--color-border);
+}
+
+.count {
+  min-inline-size: 0;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+/*
+ * Metadata, not a control — there is no sort parameter to offer (see the
+ * component). Muted and at the same size as the count, so the bar reads as one
+ * line of context rather than as a header with a button in it.
+ */
+.order {
+  min-inline-size: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+/* The order is the answer; "Sorted by" is only what makes it a sentence. */
+.orderValue {
+  font-weight: var(--font-weight-medium);
+}

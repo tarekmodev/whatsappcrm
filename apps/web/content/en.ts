@@ -580,11 +580,23 @@ export const content = {
     queueHeading: 'Ticket queue',
     queueLoading: 'Loading tickets',
     /**
-     * Says what the order *is*, because it is not a control: the queue has one
-     * order and no sort picker, so an agent who cannot see why a ticket is at
-     * the top would otherwise have to guess.
+     * The queue header's two halves (TAR-520): how many rows are in front of the
+     * reader, and what order they are in.
+     *
+     * The count is the *page's*, exactly as the inbox's is — the ticket list read
+     * carries no `count(*)` — so a page with a cursor behind it says "25+"
+     * rather than claiming to be the whole queue.
      */
-    queueOrderNotice: 'Urgent tickets come first, then the most recently opened.',
+    queueCount: (count: number) => (count === 1 ? '1 ticket' : `${String(count)} tickets`),
+    queueCountAtLeast: (count: number) => `${String(count)}+ tickets`,
+    /**
+     * Stated, not chosen. `GET /tickets` has no `sort` parameter and that is the
+     * contract (ADR 0006 §6): the queue has one order, so this is a label in the
+     * header rather than a menu offering a second one the API cannot serve. It
+     * replaced a full sentence sitting under the card title.
+     */
+    queueOrderLabel: 'Sorted by',
+    queueOrder: 'Urgent first, then newest',
     emptyHeading: 'Nothing waiting',
     emptyBody: 'Tickets assigned to you or your teams appear here as customers write in.',
     emptyFilteredHeading: 'Nothing matches this filter',
@@ -614,6 +626,14 @@ export const content = {
      * customers quote anyway.
      */
     untitled: (number: number) => `Ticket #${String(number)}`,
+    /**
+     * The queue row's stand-in for a missing subject. `untitled` above names the
+     * same ticket in a *sentence* — a toast, a dialog title, the detail heading —
+     * where "Ticket #1044" is what an agent quotes. In a row the reference is
+     * already on the line beneath it, so borrowing that label printed "#1044"
+     * twice (TAR-520).
+     */
+    noSubject: 'No subject',
     reference: (number: number) => `#${String(number)}`,
     openTicket: (label: string) => `Open ${label}`,
     openedAt: 'Opened',

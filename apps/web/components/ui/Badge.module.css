@@ -81,6 +81,24 @@
 }
 
 /*
+ * A mark that lost its row's chip budget (TAR-520). Not a chip any more: no
+ * pill, no tint, no border, and `tone` deliberately ignored — a queue where
+ * three cells in every row are coloured has emphasised nothing. The word stays,
+ * because a table column cannot be left blank the way a conversation row's
+ * single chip slot can.
+ *
+ * It matches the `--color-on-surface-muted` metadata beside it — the assignee,
+ * the opened-at time — so a row reads as one loud thing and several quiet ones.
+ */
+.badge[data-variant='quiet'] {
+  padding-inline: var(--space-0);
+  background: none;
+  border-color: transparent;
+  color: var(--color-on-surface-muted);
+  font-weight: var(--font-weight-regular);
+}
+
+/*
  * A number, not a sentence. `tabular-nums` and a min-width keep `1` and `99` the
  * same shape, so a column of counts does not jitter as they change.
  */
@@ -142,6 +160,12 @@
 @media (forced-colors: active) {
   .badge {
     border-color: CanvasText;
+  }
+
+  /* Not a discrete object to begin with — giving it a border here would turn the
+     mark this variant exists to quieten back into the loudest thing on the row. */
+  .badge[data-variant='quiet'] {
+    border-color: transparent;
   }
 
   .badge[data-variant='dot'] {

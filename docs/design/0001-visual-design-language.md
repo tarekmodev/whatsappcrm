@@ -386,6 +386,24 @@ most-actionable first and take the top one. `apps/web/features/inbox/conversatio
 is the worked example, and it is a pure module with its own test rather than a rule living
 inside a component.
 
+### A table row is the one place the budget is two (TAR-520)
+
+A ticket row answers two questions a conversation row does not have to — **how urgent** and
+**how late** — in two separate columns, and folding them into one slot would hide whichever
+lost. So the ticket queue’s budget is two, ranked breach → priority → status → running
+timer, in `apps/web/features/tickets/ticket-chips.ts`. Three pills (`Urgent` `Open`
+`Overdue`) is three things competing for one glance and none of them winning.
+
+**A mark that loses the budget goes quiet; it does not disappear.** `Badge`’s `quiet`
+variant keeps the word and drops the pill, the tint and the tone. This is the difference a
+table makes: a conversation row can simply omit the chip it did not pick, but a column
+header stays whether or not its cell has anything in it, and below 40rem `DataTable`
+repeats that header beside the value — so an omitted mark is a labelled blank, which reads
+as missing data. The reader loses the emphasis, never the fact.
+
+**Nothing the filter has already named is loud**, priority or status: under `?priority=high`
+a `High` pill on every row is the filter repeated once per ticket.
+
 ### The chip itself
 
 `components/ui/Badge.tsx`, in two sizes — `sm` for a row or a cell, `md` for a detail
@@ -483,21 +501,62 @@ figure, where the absence _is_ the answer to the question the tile asks.
 a refresh and can be sent to somebody. `aria-sort` reports what is true now; the link's
 accessible name says what pressing it will do.
 
+**Relative time has an upper bound.** `RelativeTime` phrases anything inside
+`RELATIVE_TIME_MAX_DAYS` (30) as "3 days ago" or "in 7 days", and everything past it as the
+absolute date. "in 26,430 days" is arithmetic rather than an answer — a reader converts it
+back into a year before it means anything — and the ticket queue’s SLA column is where that
+showed up. The rule lives in the component so every surface inherits it, and the server
+still renders the absolute value first: computing "now" during render is a hydration
+mismatch, not a feature.
+
 ## Structural patterns
 
 ### List views
 
 Contacts, Tickets, and the agents table today:
 
-1. `PageHeader` — the `<h1>` and the one primary action.
+1. `PageHeader` — the `<h1>` and the one primary action, **where there is one**.
 2. A filter row — `FilterBar`, and the rules below.
-3. `DataTable` inside a `SectionCard`.
-4. Row actions **inline in the last column**, as real buttons or links. Never hover-only:
+3. A queue header — the count and the order, and the rules below.
+4. `DataTable` inside a `SectionCard`.
+5. Row actions **inline in the last column**, as real buttons or links. Never hover-only:
    a touch device has no hover, and a keyboard user has no way to reveal one.
+
+**A list with nothing to create has no header action, and that is finished rather than
+unfinished.** Tickets are never opened by an agent pressing a button ("Ticket status"
+below), so the ticket queue’s header is the `<h1>` and its subtitle and nothing else. The
+empty trailing slot is not filled with a secondary control to balance it — a page whose
+only action is an export gains nothing by promoting the export.
 
 Every filter lives in the URL, never in component state. A refresh, a copied link and the
 back button must reproduce the same list. Below 48rem `DataTable` re-flows each row into a
 stacked card with its column headers repeated per cell — the same markup, no second table.
+
+#### The queue header (TAR-520)
+
+A list that scrolls owes the reader two facts before the rows start, and both belong **in a
+bar at the top of the list** rather than in prose beside its title:
+
+- **The count**, at the inline start. It is the _page’s_, never a tenant total — none of
+  these reads carries a `count(*)` — so a page with a cursor behind it says "25+ tickets"
+  and a complete one says "6 tickets".
+- **The order**, at the inline end. Where the API can serve more than one order it is a
+  `MenuButton` whose entries are real links and whose value is in the URL, as the inbox’s
+  is. Where it can serve only one — the ticket queue, whose order is `priority DESC,
+createdAt DESC, id DESC` and which has no `sort` parameter by decision (ADR 0006 §6) — it
+  is a **label in the same slot**, not a menu with a single entry. A control that offers no
+  choice is worse than a statement, and re-sorting a cursor page in the browser is a list
+  that lies about what is at the top of the queue.
+
+The bar replaced a card description reading "Urgent tickets come first, then the most
+recently opened." A sentence under a card title is a paragraph doing a control’s job, and
+it sat where the count should have been.
+
+**Where the card’s title only restates the `<h1>`, hide it** — `SectionCard`’s
+`isTitleVisible={false}`, which keeps the heading for the document outline and for the
+region’s accessible name. "Ticket queue" under "Tickets" is the same word twice, and the
+visible top of that card is the queue header. This is for a route with **one** card; a page
+of several needs each of them named.
 
 #### The filter row (TAR-516)
 
