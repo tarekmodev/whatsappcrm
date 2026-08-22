@@ -1115,6 +1115,78 @@ describe('MetaCloudApiClient', () => {
       });
     });
 
+    describe('registerPhoneNumber', () => {
+      const PIN = '000042';
+
+      function register() {
+        return client.registerPhoneNumber({
+          phoneNumberId: PHONE_NUMBER_ID,
+          accessToken: BUSINESS_TOKEN,
+          pin: PIN,
+        });
+      }
+
+      it("posts the PIN to the number's register edge with the business token", async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { success: true }));
+
+        await expect(register()).resolves.toBeUndefined();
+
+        const [url, init] = callArgs();
+
+        expect(url.startsWith(`${BASE_URL}/${VERSION}/${PHONE_NUMBER_ID}/register`)).toBe(true);
+        expect(init.method).toBe('POST');
+        expect(init.headers).toMatchObject({ authorization: `Bearer ${BUSINESS_TOKEN}` });
+        expect(JSON.parse(init.body as string)).toEqual({
+          messaging_product: 'whatsapp',
+          // A string, so a leading zero survives: `000042` is a valid PIN and a
+          // number type would send `42`.
+          pin: PIN,
+        });
+      });
+
+      it('keeps the PIN out of the query string, where a failure log would find it', async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { success: true }));
+
+        await register();
+
+        const [url] = callArgs();
+
+        expect(url).not.toContain(PIN);
+      });
+
+      it('refuses to claim a registration Meta did not acknowledge', async () => {
+        // A number reported as sendable when it is not is exactly the silent
+        // failure this whole call exists to remove.
+        fetchMock.mockResolvedValue(metaResponds(200, { success: false }));
+
+        await expect(register()).rejects.toBeInstanceOf(MetaUnavailableError);
+      });
+
+      it('reports a refusal as a rejection the caller records rather than retries', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(400, {
+            error: { message: 'Phone number already registered', code: 133_005 },
+          }),
+        );
+
+        await expect(register()).rejects.toBeInstanceOf(MetaRequestRejectedError);
+      });
+
+      it('reports a dead credential as an authentication failure', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(401, { error: { message: 'Invalid OAuth access token', code: 190 } }),
+        );
+
+        await expect(register()).rejects.toBeInstanceOf(MetaAuthenticationError);
+      });
+
+      it('reports throttling as throttling, which means later rather than no', async () => {
+        fetchMock.mockResolvedValue(metaResponds(429, { error: { message: 'Too many calls' } }));
+
+        await expect(register()).rejects.toBeInstanceOf(MetaRateLimitedError);
+      });
+    });
+
     describe('appsecret_proof', () => {
       it.each([
         [
@@ -1128,6 +1200,15 @@ describe('MetaCloudApiClient', () => {
         [
           'subscribeApp',
           () => client.subscribeApp({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ],
+        [
+          'registerPhoneNumber',
+          () =>
+            client.registerPhoneNumber({
+              phoneNumberId: PHONE_NUMBER_ID,
+              accessToken: BUSINESS_TOKEN,
+              pin: '000042',
+            }),
         ],
       ])('proves the app secret on %s, which Meta may require', async (_name, call) => {
         // Meta accepts the proof whether or not "Require App Secret" is on, and

@@ -195,6 +195,25 @@ enum UserAvailability {
   @@map("user_availability")
 }
 
+/// Whether a phone number may **send** (TAR-170). Deliberately a second axis to
+/// `WhatsappAccountStatus`: Cloud API refuses every send from a number that was
+/// never registered while inbound messages arrive normally, so a number can be
+/// `connected` and `unregistered` at once — which one enum cannot say. Adding a
+/// `connected_unregistered` value to the other would also break every existing
+/// `=== 'connected'` reader.
+///
+/// `unregistered` is the default because every row written before this shipped
+/// was never attempted; `failed` would claim a Meta rejection that never
+/// happened, and the two call for different console copy.
+enum WhatsappRegistrationStatus {
+  unregistered
+  pending
+  registered
+  failed
+
+  @@map("whatsapp_registration_status")
+}
+
 enum WhatsappAccountStatus {
   connected
   disconnected
@@ -1650,6 +1669,28 @@ model WhatsappAccount {
   /// Meta says so. Not on the WABA — Meta rates and throttles per number.
   qualityRating             WhatsappQualityRating? @map("quality_rating")
   status                    WhatsappAccountStatus  @default(disconnected)
+  /// Whether this number may **send** (TAR-170). Independent of `status`: a
+  /// number can be attached and receiving while Cloud API refuses every send
+  /// from it, and that is the state the whole registration story exists to make
+  /// visible rather than leave as a silent inbox.
+  registrationStatus        WhatsappRegistrationStatus @default(unregistered) @map("registration_status")
+  /// The six-digit Cloud API registration PIN, encrypted at rest by the same
+  /// cipher and key as the access token and bound to `phone_number_id` as AAD —
+  /// the PIN lives on the number, so a ciphertext moved between two numbers of
+  /// one WABA must fail to authenticate. Read back only to re-register. Never
+  /// selected into a response projection.
+  registrationPinEncrypted  String?                @map("registration_pin_encrypted")
+  /// Why the last attempt failed, from `WHATSAPP_REGISTRATION_FAILURE_REASONS`.
+  /// Text rather than an enum type: the vocabulary grows as Meta's failure codes
+  /// are mapped, and it is only ever written from a closed TS constant — the
+  /// arrangement `sessions.revoked_reason` already uses.
+  registrationFailureReason String?                @map("registration_failure_reason")
+  /// When Meta last accepted this number. Set on every success, never cleared.
+  registeredAt              DateTime?              @map("registered_at") @db.Timestamptz(3)
+  /// When an attempt last started. Also the in-flight lease: a `pending` row
+  /// older than `META_GRAPH_API_TIMEOUT_MS` is an attempt that died without an
+  /// answer, and the next one takes it over.
+  registrationAttemptedAt   DateTime?              @map("registration_attempted_at") @db.Timestamptz(3)
   createdAt                 DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                 DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
 

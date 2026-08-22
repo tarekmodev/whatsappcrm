@@ -2529,6 +2529,12 @@ function connectWhatsAppBusinessAccount({
         // Meta has not rated a number nobody has messaged yet.
         qualityRating: null,
         status: 'connected',
+        // The happy path: the registration that follows the connection succeeded,
+        // so this number can send as well as receive (TAR-170).
+        registrationStatus: 'registered',
+        registrationFailureReason: null,
+        registeredAt: MOCK_CREATED_AT,
+        registrationAttemptedAt: MOCK_CREATED_AT,
         createdAt: MOCK_CREATED_AT,
         updatedAt: MOCK_CREATED_AT,
       },

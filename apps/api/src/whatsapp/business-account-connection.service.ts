@@ -9,7 +9,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { isUniqueViolationOn } from '../prisma/unique-violation';
-import { WhatsAppAccessTokenCipher } from './access-token.cipher';
+import { WhatsAppCredentialCipher } from './whatsapp-credential.cipher';
 import { WhatsAppIdentityTakenError } from './whatsapp.errors';
 
 /**
@@ -48,6 +48,15 @@ const WABA_PROJECTION = {
   updatedAt: true,
 } as const;
 
+/**
+ * The number's own columns the response is built from. Four of them are the
+ * registration axis (TAR-170) — whether the number may *send*, which `status`
+ * does not answer — so a connection reports both halves without a second call.
+ *
+ * `registration_pin_encrypted` is **not** among them, and its absence is the
+ * point: the PIN has exactly one projection in the codebase, in the registration
+ * service, so widening a `select` here cannot pull it into a response.
+ */
 const ACCOUNT_PROJECTION = {
   id: true,
   whatsappBusinessAccountId: true,
@@ -56,6 +65,10 @@ const ACCOUNT_PROJECTION = {
   verifiedName: true,
   qualityRating: true,
   status: true,
+  registrationStatus: true,
+  registrationFailureReason: true,
+  registeredAt: true,
+  registrationAttemptedAt: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -117,7 +130,7 @@ export class WhatsAppBusinessAccountConnectionService {
   constructor(
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly tenantContext: TenantContextService,
-    private readonly cipher: WhatsAppAccessTokenCipher,
+    private readonly cipher: WhatsAppCredentialCipher,
     private readonly audit: AuditService,
   ) {}
 

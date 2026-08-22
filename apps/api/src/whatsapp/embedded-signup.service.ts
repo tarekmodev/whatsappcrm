@@ -1,13 +1,27 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PhoneE164Schema } from '@whatsappcrm/contracts';
+import { PhoneE164Schema, type WhatsAppRegistrationFailureReason } from '@whatsappcrm/contracts';
 import {
   WhatsAppBusinessAccountConnectionService,
   type ConnectBusinessAccountResult,
   type ConnectPhoneNumberCommand,
+  type ConnectedPhoneNumber,
 } from './business-account-connection.service';
 import { MetaCloudApiClient, type MetaPhoneNumber } from './meta-cloud-api.client';
 import { MetaAuthenticationError, MetaRequestRejectedError } from './meta-cloud-api.errors';
+import { WhatsAppPhoneNumberRegistrationService } from './phone-number-registration.service';
 import { WhatsAppSignupFailedError } from './whatsapp.errors';
+
+/**
+ * The two registration outcomes that mean *Meta is not answering us right now*,
+ * as against *Meta answered about this number*. They stop the registration loop:
+ * continuing would spend the request's remaining time on calls that fail
+ * identically, and leave every number `failed` for a condition that belongs to
+ * the moment rather than to the number.
+ */
+const META_IS_NOT_ANSWERING = new Set<WhatsAppRegistrationFailureReason>([
+  'rate_limited',
+  'upstream_unavailable',
+]);
 
 /**
  * Meta's OAuth sub-code for a code that outlived its ~30-second window. A spent
@@ -77,6 +91,7 @@ export class WhatsAppEmbeddedSignupService {
   constructor(
     private readonly meta: MetaCloudApiClient,
     private readonly connection: WhatsAppBusinessAccountConnectionService,
+    private readonly registration: WhatsAppPhoneNumberRegistrationService,
   ) {}
 
   async connect(command: ConnectViaEmbeddedSignupCommand): Promise<ConnectBusinessAccountResult> {
@@ -143,13 +158,144 @@ export class WhatsAppEmbeddedSignupService {
 
     // From here on the request is a connection like any other, and the service
     // that owns it does not learn that a signup produced it.
-    return this.connection.connect({
+    const connected = await this.connection.connect({
       wabaId: account.wabaId,
       name: account.name ?? undefined,
       accessToken: token.accessToken,
       verificationStatus: account.verificationStatus ?? undefined,
       phoneNumbers,
     });
+
+    return this.registerForSending(connected, token.accessToken);
+  }
+
+  /**
+   * Registers every number the connection produced, so the tenant can send
+   * (TAR-170, 0002 amendment 12).
+   *
+   * ## Why it runs *after* the transaction rather than inside it
+   *
+   * `connect()`'s stated property — it does not call Meta — is load-bearing: its
+   * transaction holds a WABA-wide advisory lock, and a Graph round trip inside it
+   * would put a Postgres connection and that lock at the mercy of Meta's latency
+   * while every concurrent connect on the same WABA queued behind it.
+   *
+   * It cannot run *before* the transaction with the other Meta calls either. It
+   * sends a PIN this platform invents, so a registration that succeeded against a
+   * transaction that then rolled back would leave Meta holding a secret nobody
+   * here could reproduce. The PIN has to be durable before it reaches Meta, which
+   * puts this one call on the other side of the transaction from all the others.
+   *
+   * ## Registration never fails the connection
+   *
+   * A number that could not be registered still receives, and the WABA row still
+   * exists — the outcome rides back in the per-number fields of the response, so
+   * the console can say "connected — sending unavailable" with a reason rather
+   * than leaving a silent inbox. Rolling the connection back would trade a
+   * working inbound channel for a send-side failure that is usually transient,
+   * always retryable, and needs the very row a rollback would discard.
+   *
+   * **That holds for a fault as well as for a refusal.** By this point the
+   * connection has committed and the code is spent, so answering `500` would
+   * report a connection that exists as one that failed, and send the tenant back
+   * through Embedded Signup with a code that cannot be exchanged again. A fault
+   * is logged at `error` and the number is reported as `connect()` left it,
+   * which reads as "cannot send yet" — true either way, and the state a retry
+   * repairs.
+   *
+   * ## Why throttling and outages stop the loop
+   *
+   * `MetaRateLimitedError` and `MetaUnavailableError` mean Meta is not answering
+   * us right now, so the remaining numbers would spend the request's time failing
+   * identically. They stay `unregistered` — never attempted, honestly recorded —
+   * and are retryable. A rejection or an authentication failure is about *that*
+   * number and does not stop the loop: Meta answered, quickly.
+   *
+   * Sequential rather than `Promise.all`, and bounded at 20 by
+   * `ConnectWhatsAppBusinessAccountInputSchema`. In practice Embedded Signup
+   * onboards one number.
+   */
+  private async registerForSending(
+    connected: ConnectBusinessAccountResult,
+    accessToken: string,
+  ): Promise<ConnectBusinessAccountResult> {
+    const numbers = connected.businessAccount.accounts;
+    const accounts: ConnectedPhoneNumber[] = [];
+
+    for (const [index, account] of numbers.entries()) {
+      const state = await this.registration
+        .register({
+          whatsappAccountId: account.id,
+          phoneNumberId: account.phoneNumberId,
+          wabaId: connected.businessAccount.wabaId,
+          accessToken,
+        })
+        .catch((error: unknown) => this.reportRegistrationFault(account.phoneNumberId, error));
+
+      if (state === null) {
+        // Reported as `connect()` wrote it. If the fault landed after the row
+        // was claimed it actually reads `pending` rather than `unregistered`;
+        // both say "cannot send yet" to a console, and a retry repairs either.
+        accounts.push(account);
+        continue;
+      }
+
+      accounts.push({
+        ...account,
+        registrationStatus: state.registrationStatus,
+        registrationFailureReason: state.registrationFailureReason,
+        registeredAt: state.registeredAt,
+        registrationAttemptedAt: state.registrationAttemptedAt,
+      });
+
+      if (
+        state.registrationFailureReason !== null &&
+        META_IS_NOT_ANSWERING.has(state.registrationFailureReason)
+      ) {
+        const untried = numbers.slice(index + 1);
+
+        if (untried.length > 0) {
+          this.logger.warn(
+            `Meta answered ${state.registrationFailureReason} while registering phone number ` +
+              `${account.phoneNumberId} for sending, so the remaining ${untried.length} number(s) ` +
+              'on WABA ' +
+              `${connected.businessAccount.wabaId} were not attempted. They stay unregistered and ` +
+              'can be registered on retry.',
+          );
+        }
+
+        // As `connect()` left them: `unregistered`, which is the truthful record
+        // of "not attempted" rather than a failure Meta never gave.
+        accounts.push(...untried);
+        break;
+      }
+    }
+
+    return {
+      ...connected,
+      businessAccount: { ...connected.businessAccount, accounts },
+    };
+  }
+
+  /**
+   * A fault while registering one number: the registration service records every
+   * failure Meta *answered* with on the row itself, so anything escaping it is a
+   * bug, a database failure, or a dependency this environment does not have.
+   *
+   * `error` rather than `warn`, because nothing else will report it — the
+   * response is a success — and it is not a state a tenant can act on. The
+   * number is left as the connection wrote it and the loop moves on: each number
+   * is registered independently, so one fault says nothing about the next.
+   */
+  private reportRegistrationFault(phoneNumberId: string, error: unknown): null {
+    this.logger.error(
+      `Registering WhatsApp phone number ${phoneNumberId} for sending failed before Meta ` +
+        'answered. The connection stands and the number still receives; it cannot send until a ' +
+        'retry succeeds.',
+      error instanceof Error ? error.stack : undefined,
+    );
+
+    return null;
   }
 
   /**

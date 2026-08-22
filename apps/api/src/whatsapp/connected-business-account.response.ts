@@ -1,5 +1,6 @@
 import type { ConnectedWhatsAppBusinessAccountResponse } from '@whatsappcrm/contracts';
 import type { ConnectBusinessAccountResult } from './business-account-connection.service';
+import { readRegistrationFailureReason } from './registration-failure-reason';
 
 /**
  * The one mapping from a connected WABA onto the published response.
@@ -33,6 +34,14 @@ export function toConnectedBusinessAccountResponse({
       verifiedName: account.verifiedName,
       qualityRating: account.qualityRating,
       status: account.status,
+      // The second axis (TAR-170): whether this number may *send*. Published
+      // here so the console can say "connected — sending unavailable" with a
+      // reason on the same response that reports the connection, rather than
+      // leaving a silent inbox to be discovered on the first reply.
+      registrationStatus: account.registrationStatus,
+      registrationFailureReason: readRegistrationFailureReason(account.registrationFailureReason),
+      registeredAt: account.registeredAt?.toISOString() ?? null,
+      registrationAttemptedAt: account.registrationAttemptedAt?.toISOString() ?? null,
       createdAt: account.createdAt.toISOString(),
       updatedAt: account.updatedAt.toISOString(),
     })),

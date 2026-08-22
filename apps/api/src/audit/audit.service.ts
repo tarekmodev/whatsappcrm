@@ -12,6 +12,8 @@ export interface AuditEntry {
     | 'team'
     | 'invite'
     | 'whatsapp_business_account'
+    /** One phone number, targeted by our uuid for the `whatsapp_accounts` row (TAR-170). */
+    | 'whatsapp_account'
     | 'assignment_rule'
     | 'custom_field'
     | 'canned_response'

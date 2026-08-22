@@ -10,7 +10,7 @@ import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.exten
 import { QueueService } from '../queue/queue.service';
 import { TenantLifecycleService } from '../tenancy/lifecycle/tenant-lifecycle.service';
 import { TenantProvisioningService } from '../tenancy/tenant-provisioning.service';
-import { WhatsAppAccessTokenCipher } from '../whatsapp/access-token.cipher';
+import { WhatsAppCredentialCipher } from '../whatsapp/whatsapp-credential.cipher';
 import {
   DEMO_ACCESS_TOKEN,
   DEMO_PLANS,
@@ -158,7 +158,7 @@ async function main(): Promise<void> {
     new QueueService({ get: () => undefined } as unknown as ConfigService, tenantContext),
   );
   const provisioning = new TenantProvisioningService(systemPrisma, lifecycle, config);
-  const cipher = new WhatsAppAccessTokenCipher(config);
+  const cipher = new WhatsAppCredentialCipher(config);
 
   const dataset = demoDataset(new Date());
   const summaries: SeededTenantSummary[] = [];
@@ -235,7 +235,7 @@ async function main(): Promise<void> {
  */
 async function writeTenantData(
   tenantPrisma: TenantPrisma,
-  cipher: WhatsAppAccessTokenCipher,
+  cipher: WhatsAppCredentialCipher,
   tenant: DemoTenant,
   tenantId: string,
 ): Promise<void> {

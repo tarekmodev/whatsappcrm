@@ -78,6 +78,13 @@ const CONNECTED: ConnectBusinessAccountResult = {
         verifiedName: null,
         qualityRating: null,
         status: 'connected',
+        // The operator paste-token path does not register: an operator running
+        // it is standing in Meta's UI anyway, and its rows become sendable
+        // through the retry route (TAR-170, 0002 amendment 12).
+        registrationStatus: 'unregistered',
+        registrationFailureReason: null,
+        registeredAt: null,
+        registrationAttemptedAt: null,
         createdAt: TIMESTAMP,
         updatedAt: TIMESTAMP,
       },

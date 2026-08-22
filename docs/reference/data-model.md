@@ -514,7 +514,8 @@ Meta scopes its WhatsApp objects at **three** levels, and since TAR-52 so does t
 
 ```text
 tenants ──< whatsapp_business_accounts       waba_id, access token, verification status
-                ├──< whatsapp_accounts        phone_number_id, display number, quality rating
+                ├──< whatsapp_accounts        phone_number_id, display number, quality rating,
+                │                             registration status and its encrypted PIN
                 └──< message_templates        name, language, approval status
 ```
 
@@ -527,6 +528,11 @@ middle level exists:
   secrets.
 - **Template approval is per WABA.** One tenant can hold `order_update`/`en` approved
   separately under two WABAs, with different content and different status.
+
+- **Registration for sending is per number** (TAR-170). Meta registers a phone number, not a
+  business, so two numbers under one WABA are registered independently and hold different
+  PINs — which is why the registration columns sit on `whatsapp_accounts` and not beside the
+  token.
 
 Quality rating and messaging limits stay on the phone number, where Meta puts them.
 
@@ -573,6 +579,28 @@ One phone number, child of a WABA.
 is a value Meta itself returns. The two are not the same thing. Messaging limits are not
 modelled yet — Meta's tier vocabulary is version-dependent, and TAR-20 adds the column once
 it has confirmed it.
+
+`registration_status` is a **second axis to `status`**, added by TAR-170 (0002, amendment 12).
+Cloud API refuses every send from a number that was never registered while inbound messages
+arrive normally, so a number can be `connected` and `unregistered` at the same time — which
+one enum cannot say, and which a `connected_unregistered` label on `status` would have broken
+every `= 'connected'` reader to express. It defaults to `unregistered`: every row written
+before registration shipped was never attempted, and `failed` would claim a rejection Meta
+never made. `registration_failure_reason` is `TEXT` rather than an enum type because the
+vocabulary grows as Meta's failure codes are mapped and only this codebase writes it — the
+arrangement `sessions.revoked_reason` already uses. `registration_attempted_at` doubles as the
+in-flight lease: a `pending` row older than `META_GRAPH_API_TIMEOUT_MS` is an attempt that died
+without an answer.
+
+`registration_pin_encrypted` is a credential of the same class as the WABA's access token —
+same AES-256-GCM cipher, same `WHATSAPP_TOKEN_ENCRYPTION_KEY`, same envelope — with one
+deliberate difference: its additional authenticated data is `phone_number_id`, not `waba_id`,
+because Meta registers a _number_ and two numbers under one WABA hold different PINs. It is
+never selected into a response projection, a log line or an audit row.
+
+No index on the registration columns. The table is bounded by numbers-per-tenant and every
+access is by primary key or `phone_number_id`; a `(tenant_id, registration_status)` index
+would serve a "list every unregistered number" query nothing asks for yet.
 
 #### `message_templates`
 

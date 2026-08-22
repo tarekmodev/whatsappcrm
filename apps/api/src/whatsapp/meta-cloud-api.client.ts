@@ -307,6 +307,16 @@ export interface SubscribeAppCommand {
   accessToken: string;
 }
 
+export interface RegisterPhoneNumberCommand {
+  phoneNumberId: string;
+  accessToken: string;
+  /**
+   * Six digits as a **string**: `000042` is a valid PIN and a number type would
+   * silently send `42`.
+   */
+  pin: string;
+}
+
 /**
  * Meta's CDN hosts that a media URL may point at.
  *
@@ -674,6 +684,44 @@ export class MetaCloudApiClient {
       // subscription we cannot claim was made, and claiming it is how a tenant
       // ends up with a connected WABA and a silent inbox.
       throw new MetaUnavailableError(200, null, 'the app subscription was not acknowledged');
+    }
+  }
+
+  /**
+   * Registers one phone number for Cloud API use, which is what makes it able to
+   * **send** (TAR-170).
+   *
+   * A number that was never registered receives normally and refuses every send,
+   * so this is part of connecting rather than a setting somebody finds later —
+   * the failure it prevents is a WABA that looks healthy while every reply from
+   * the inbox bounces.
+   *
+   * Returns nothing: Meta answers `{ "success": true }` and there is no id to
+   * carry back. A 200 saying anything else is a registration this platform
+   * cannot claim was made, and claiming it is how a number ends up marked
+   * sendable when it is not.
+   *
+   * **The PIN goes in the JSON body, never in the query string.** `path` and the
+   * query are split in `request()` precisely so that a failure's log line —
+   * which `classify()` writes from `path` — cannot carry a secret.
+   */
+  async registerPhoneNumber(command: RegisterPhoneNumberCommand): Promise<void> {
+    const payload = await this.request(
+      `${command.phoneNumberId}/register`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messaging_product: 'whatsapp', pin: command.pin }),
+      },
+      { accessToken: command.accessToken, query: this.signed(command.accessToken, {}) },
+    );
+
+    if (asRecord(payload)?.success !== true) {
+      throw new MetaUnavailableError(
+        200,
+        null,
+        'the phone number registration was not acknowledged',
+      );
     }
   }
 

@@ -1,5 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
-import { WhatsAppAccessTokenCipher } from './access-token.cipher';
+import { WhatsAppCredentialCipher } from './whatsapp-credential.cipher';
 import {
   WhatsAppEncryptionUnavailableError,
   WhatsAppTokenUndecryptableError,
@@ -20,15 +20,21 @@ const WABA_ID = '102290129340398';
 const OTHER_WABA_ID = '987654321098765';
 const TOKEN = 'EAAG...a-meta-access-token-shaped-string';
 
-function cipherWith(key: string | undefined): WhatsAppAccessTokenCipher {
+/** Two numbers of the **same** WABA, which is the binding the PIN needs (TAR-170). */
+const PHONE_NUMBER_ID = '15550001111';
+const SIBLING_PHONE_NUMBER_ID = '15550002222';
+/** Leading zeros are significant, and a number type would lose them. */
+const PIN = '000042';
+
+function cipherWith(key: string | undefined): WhatsAppCredentialCipher {
   const config = {
     get: (name: string) => (name === 'WHATSAPP_TOKEN_ENCRYPTION_KEY' ? key : undefined),
   } as unknown as ConfigService;
 
-  return new WhatsAppAccessTokenCipher(config);
+  return new WhatsAppCredentialCipher(config);
 }
 
-describe('WhatsAppAccessTokenCipher', () => {
+describe('WhatsAppCredentialCipher', () => {
   const cipher = cipherWith(KEY);
 
   it('round-trips a token', () => {
@@ -51,6 +57,31 @@ describe('WhatsAppAccessTokenCipher', () => {
     const payload = cipher.encrypt(TOKEN, WABA_ID);
 
     expect(() => cipher.decrypt(payload, OTHER_WABA_ID)).toThrow(WhatsAppTokenUndecryptableError);
+  });
+
+  describe('the registration PIN (TAR-170)', () => {
+    it('round-trips through the same cipher and key as the token', () => {
+      // The point of the assertion is the *path*: one construction, one key, one
+      // envelope for both credentials. A second cipher for the PIN would be a
+      // second key to rotate and a second envelope to get subtly wrong.
+      expect(cipher.decrypt(cipher.encrypt(PIN, PHONE_NUMBER_ID), PHONE_NUMBER_ID)).toBe(PIN);
+    });
+
+    it('keeps a PIN with leading zeros exactly as it was given', () => {
+      expect(cipher.decrypt(cipher.encrypt(PIN, PHONE_NUMBER_ID), PHONE_NUMBER_ID)).toBe('000042');
+    });
+
+    it('refuses a PIN moved to a sibling number under the same WABA', () => {
+      // Why the PIN binds to `phone_number_id` and not `waba_id`: Meta registers
+      // a number, so two numbers of one WABA hold different PINs. Bound to the
+      // WABA, this copy would authenticate and register a number with a PIN Meta
+      // was never given for it.
+      const payload = cipher.encrypt(PIN, PHONE_NUMBER_ID);
+
+      expect(() => cipher.decrypt(payload, SIBLING_PHONE_NUMBER_ID)).toThrow(
+        WhatsAppTokenUndecryptableError,
+      );
+    });
   });
 
   it('refuses a payload encrypted under a different key', () => {

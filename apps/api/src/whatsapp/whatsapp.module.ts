@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { PlatformAdminGuard } from '../tenancy/admin/platform-admin.guard';
 import { TenancyModule } from '../tenancy/tenancy.module';
-import { WhatsAppAccessTokenCipher } from './access-token.cipher';
+import { WhatsAppCredentialCipher } from './whatsapp-credential.cipher';
 import { AdminWhatsAppController } from './admin/admin-whatsapp.controller';
 import { WhatsAppBusinessAccountConnectionService } from './business-account-connection.service';
 import { WhatsAppBusinessAccountsController } from './business-accounts.controller';
@@ -13,6 +13,7 @@ import { MessageTemplateQueryService } from './message-template-query.service';
 import { MessageTemplateSyncService } from './message-template-sync.service';
 import { MessageTemplatesController } from './message-templates.controller';
 import { MetaCloudApiClient } from './meta-cloud-api.client';
+import { WhatsAppPhoneNumberRegistrationService } from './phone-number-registration.service';
 import { WhatsAppCredentialResolver } from './whatsapp-credential.resolver';
 import { WhatsAppMediaService } from './whatsapp-media.service';
 import { WhatsAppSenderService } from './whatsapp-sender.service';
@@ -50,9 +51,16 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
  * projection, the ordering and cursor, the component derivation, the exclusion
  * predicate — is shared as a module, so the split duplicates no behaviour.
  *
- * `WhatsAppAccessTokenCipher` and `WhatsAppCredentialResolver` stay **private**.
+ * `WhatsAppCredentialCipher` and `WhatsAppCredentialResolver` stay **private**.
  * They are the only two places a Meta access token is encrypted or decrypted,
  * and the value of that property is entirely in nobody else being able to.
+ *
+ * `WhatsAppPhoneNumberRegistrationService` stays private for the same reason
+ * one layer down: it is the only place the registration PIN is generated,
+ * encrypted, read back or attempted against Meta (TAR-170). Its one caller today
+ * is the signup flow beside it; the retry route will be its second, and both
+ * drive the same method so the two paths cannot produce different state or
+ * different reasons.
  *
  * ## Layering
  *
@@ -80,10 +88,11 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
     MessageTemplateAdministrationController,
   ],
   providers: [
-    WhatsAppAccessTokenCipher,
+    WhatsAppCredentialCipher,
     WhatsAppCredentialResolver,
     MetaCloudApiClient,
     WhatsAppBusinessAccountConnectionService,
+    WhatsAppPhoneNumberRegistrationService,
     WhatsAppEmbeddedSignupService,
     MessageTemplateSyncService,
     MessageTemplateQueryService,

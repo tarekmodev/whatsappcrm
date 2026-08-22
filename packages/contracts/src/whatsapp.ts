@@ -67,6 +67,58 @@ export const WhatsAppQualityRatingSchema = z.enum(WHATSAPP_QUALITY_RATINGS);
 export const WHATSAPP_ACCOUNT_STATUSES = ['connected', 'disconnected', 'error'] as const;
 export const WhatsAppAccountStatusSchema = z.enum(WHATSAPP_ACCOUNT_STATUSES);
 
+/**
+ * Whether a number may **send** (TAR-170). A deliberate second axis to
+ * `status`: Cloud API refuses every send from a number that was never
+ * registered, while inbound messages arrive normally, so a number can be
+ * `connected` and `unregistered` at the same time — which one enum cannot say.
+ *
+ *   * `unregistered` — never attempted. Every number connected before
+ *     registration shipped, and every number attached through the operator
+ *     paste-token route.
+ *   * `pending` — an attempt is in flight, or died without an answer.
+ *   * `registered` — Meta accepted the number. It may send.
+ *   * `failed` — Meta answered and refused, or was unavailable.
+ *     `registrationFailureReason` says which.
+ *
+ * `unregistered` and `failed` are kept apart because "nobody has tried yet" and
+ * "Meta said no" call for different console copy and different next actions.
+ */
+export const WHATSAPP_REGISTRATION_STATUSES = [
+  'unregistered',
+  'pending',
+  'registered',
+  'failed',
+] as const;
+export const WhatsAppRegistrationStatusSchema = z.enum(WHATSAPP_REGISTRATION_STATUSES);
+
+/**
+ * Why the last registration attempt failed. Published in the resource body
+ * rather than in an error envelope: a failed registration is a *state on the
+ * number*, not a failed request — the connection that carries it succeeded.
+ *
+ * The same vocabulary is written by the automatic attempt that follows a
+ * connection and by an explicit retry, so a console renders one set of strings
+ * whichever produced the row.
+ */
+export const WHATSAPP_REGISTRATION_FAILURE_REASONS = [
+  /** Registered already, by us or elsewhere. Nothing to do, or a support conversation. */
+  'already_registered',
+  /** Meta refused the PIN — the number holds a two-step PIN this platform does not have. */
+  'pin_rejected',
+  /** The stored access token is expired, revoked, or lacks the permission. Re-connect the WABA. */
+  'credential_rejected',
+  /** Meta is throttling us. The number is unchanged; retry later. */
+  'rate_limited',
+  /** Meta did not answer usefully — timeout, 5xx, unparseable body. Retry later. */
+  'upstream_unavailable',
+  /** Meta answered and refused for a reason this build does not model. */
+  'rejected',
+] as const;
+export const WhatsAppRegistrationFailureReasonSchema = z.enum(
+  WHATSAPP_REGISTRATION_FAILURE_REASONS,
+);
+
 /** One connected phone number, child of a WABA. */
 export const WhatsAppAccountResponseSchema = z.object({
   id: IdSchema,
@@ -83,6 +135,17 @@ export const WhatsAppAccountResponseSchema = z.object({
   verifiedName: z.string().nullable(),
   qualityRating: WhatsAppQualityRatingSchema.nullable(),
   status: WhatsAppAccountStatusSchema,
+  /**
+   * Whether this number may send, which `status` does not answer: a number can
+   * be attached and receiving while Cloud API refuses every send from it.
+   */
+  registrationStatus: WhatsAppRegistrationStatusSchema,
+  /** Why the last attempt failed. NULL whenever `registrationStatus` is not `failed`. */
+  registrationFailureReason: WhatsAppRegistrationFailureReasonSchema.nullable(),
+  /** When Meta last accepted this number. Set on every success, never cleared. */
+  registeredAt: TimestampSchema.nullable(),
+  /** When an attempt last started. NULL until one has. */
+  registrationAttemptedAt: TimestampSchema.nullable(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });
@@ -561,6 +624,10 @@ export type WhatsAppBusinessVerificationStatus = z.infer<
 export type WhatsAppBusinessAccountResponse = z.infer<typeof WhatsAppBusinessAccountResponseSchema>;
 export type WhatsAppQualityRating = z.infer<typeof WhatsAppQualityRatingSchema>;
 export type WhatsAppAccountStatus = z.infer<typeof WhatsAppAccountStatusSchema>;
+export type WhatsAppRegistrationStatus = z.infer<typeof WhatsAppRegistrationStatusSchema>;
+export type WhatsAppRegistrationFailureReason = z.infer<
+  typeof WhatsAppRegistrationFailureReasonSchema
+>;
 export type WhatsAppAccountResponse = z.infer<typeof WhatsAppAccountResponseSchema>;
 export type MessageTemplateStatus = z.infer<typeof MessageTemplateStatusSchema>;
 export type MessageTemplateHeaderFormat = z.infer<typeof MessageTemplateHeaderFormatSchema>;

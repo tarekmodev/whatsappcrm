@@ -1,10 +1,15 @@
 import { Logger } from '@nestjs/common';
+import type { WhatsAppRegistrationFailureReason } from '@whatsappcrm/contracts';
 import type {
   ConnectBusinessAccountResult,
   WhatsAppBusinessAccountConnectionService,
 } from './business-account-connection.service';
 import { WhatsAppEmbeddedSignupService } from './embedded-signup.service';
 import type { MetaCloudApiClient } from './meta-cloud-api.client';
+import type {
+  NumberRegistrationState,
+  WhatsAppPhoneNumberRegistrationService,
+} from './phone-number-registration.service';
 import {
   MetaAuthenticationError,
   MetaRateLimitedError,
@@ -29,18 +34,67 @@ const CODE = 'AQD-an-exchangeable-token-code';
 const BUSINESS_TOKEN = 'EAAG-a-business-integration-system-user-token';
 const TIMESTAMP = new Date('2026-08-11T09:00:00.000Z');
 
+const WABA_ROW_ID = '60444444-4444-7444-8444-444444444401';
+const ACCOUNT_ROW_ID = '70444444-4444-7444-8444-444444444401';
+
+/** As `connect()` writes a number: attached, receiving, and not yet able to send. */
+function connectedNumber(id: string, phoneNumberId: string) {
+  return {
+    id,
+    whatsappBusinessAccountId: WABA_ROW_ID,
+    phoneNumberId,
+    displayPhoneNumber: '+966501234567',
+    verifiedName: "Jasper's Market",
+    qualityRating: 'green' as const,
+    status: 'connected' as const,
+    registrationStatus: 'unregistered' as const,
+    registrationFailureReason: null,
+    registeredAt: null,
+    registrationAttemptedAt: null,
+    createdAt: TIMESTAMP,
+    updatedAt: TIMESTAMP,
+  };
+}
+
 const CONNECTED: ConnectBusinessAccountResult = {
   created: true,
   businessAccount: {
-    id: '60444444-4444-7444-8444-444444444401',
+    id: WABA_ROW_ID,
     wabaId: WABA_ID,
     name: "Jasper's Market",
     verificationStatus: 'verified',
     createdAt: TIMESTAMP,
     updatedAt: TIMESTAMP,
-    accounts: [],
+    accounts: [connectedNumber(ACCOUNT_ROW_ID, PHONE_NUMBER_ID)],
   },
 };
+
+/** What `WhatsAppPhoneNumberRegistrationService.register` answers, per outcome. */
+function registered(whatsappAccountId: string, phoneNumberId: string): NumberRegistrationState {
+  return {
+    whatsappAccountId,
+    phoneNumberId,
+    registrationStatus: 'registered',
+    registrationFailureReason: null,
+    registeredAt: TIMESTAMP,
+    registrationAttemptedAt: TIMESTAMP,
+  };
+}
+
+function registrationFailed(
+  whatsappAccountId: string,
+  phoneNumberId: string,
+  reason: WhatsAppRegistrationFailureReason,
+): NumberRegistrationState {
+  return {
+    whatsappAccountId,
+    phoneNumberId,
+    registrationStatus: 'failed',
+    registrationFailureReason: reason,
+    registeredAt: null,
+    registrationAttemptedAt: TIMESTAMP,
+  };
+}
 
 function metaRejects(subcode: number | null, status = 400): MetaRequestRejectedError {
   return new MetaRequestRejectedError(status, {
@@ -57,6 +111,7 @@ describe('connecting a WABA through Embedded Signup', () => {
   let listPhoneNumbers: jest.Mock;
   let subscribeApp: jest.Mock;
   let connect: jest.Mock;
+  let register: jest.Mock;
   let service: WhatsAppEmbeddedSignupService;
   let warn: jest.SpyInstance;
 
@@ -82,6 +137,7 @@ describe('connecting a WABA through Embedded Signup', () => {
     });
     subscribeApp = jest.fn().mockResolvedValue(undefined);
     connect = jest.fn().mockResolvedValue(CONNECTED);
+    register = jest.fn().mockResolvedValue(registered(ACCOUNT_ROW_ID, PHONE_NUMBER_ID));
     warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
 
     service = new WhatsAppEmbeddedSignupService(
@@ -92,6 +148,7 @@ describe('connecting a WABA through Embedded Signup', () => {
         subscribeApp,
       } as unknown as MetaCloudApiClient,
       { connect } as unknown as WhatsAppBusinessAccountConnectionService,
+      { register } as unknown as WhatsAppPhoneNumberRegistrationService,
     );
   });
 
@@ -109,7 +166,10 @@ describe('connecting a WABA through Embedded Signup', () => {
   }
 
   it('exchanges the code, verifies the WABA, hydrates from Meta and only then connects', async () => {
-    await expect(run()).resolves.toBe(CONNECTED);
+    await expect(run()).resolves.toMatchObject({
+      created: true,
+      businessAccount: { id: WABA_ROW_ID, wabaId: WABA_ID },
+    });
 
     expect(exchangeSignupCode).toHaveBeenCalledWith({ code: CODE });
     expect(describeBusinessAccount).toHaveBeenCalledWith({
@@ -334,5 +394,147 @@ describe('connecting a WABA through Embedded Signup', () => {
     await run();
 
     expect(warned().join('\n')).toContain('more phone numbers than one page');
+  });
+
+  /**
+   * Registering the number for sending (TAR-170). The assertions that carry
+   * weight are the ordering one — it runs *after* the row exists, so the PIN is
+   * durable before Meta ever sees it — and that no outcome of it can cost the
+   * tenant the inbound connection.
+   */
+  describe('registering the connected numbers for sending', () => {
+    const SECOND_ACCOUNT_ROW_ID = '70444444-4444-7444-8444-444444444402';
+    const SECOND_PHONE_NUMBER_ID = '15550002222';
+
+    function connectTwoNumbers(): void {
+      connect.mockResolvedValue({
+        ...CONNECTED,
+        businessAccount: {
+          ...CONNECTED.businessAccount,
+          accounts: [
+            connectedNumber(ACCOUNT_ROW_ID, PHONE_NUMBER_ID),
+            connectedNumber(SECOND_ACCOUNT_ROW_ID, SECOND_PHONE_NUMBER_ID),
+          ],
+        },
+      });
+    }
+
+    it('registers each connected number with the token the exchange just produced', async () => {
+      await run();
+
+      expect(register).toHaveBeenCalledWith({
+        whatsappAccountId: ACCOUNT_ROW_ID,
+        phoneNumberId: PHONE_NUMBER_ID,
+        wabaId: WABA_ID,
+        accessToken: BUSINESS_TOKEN,
+      });
+    });
+
+    it('registers only after the row exists, so the PIN is durable before Meta sees it', async () => {
+      // The ordering constraint the whole design rests on: a register that
+      // succeeded against a transaction that then rolled back would leave Meta
+      // holding a PIN this platform cannot reproduce.
+      await run();
+
+      expect(connect.mock.invocationCallOrder[0]).toBeLessThan(
+        register.mock.invocationCallOrder[0] as number,
+      );
+    });
+
+    it('reports a registered number as able to send', async () => {
+      const result = await run();
+
+      expect(result.businessAccount.accounts[0]).toMatchObject({
+        status: 'connected',
+        registrationStatus: 'registered',
+        registrationFailureReason: null,
+        registeredAt: TIMESTAMP,
+      });
+    });
+
+    it('keeps the connection and reports the reason when registration fails', async () => {
+      // "Connected — sending unavailable", not a rolled-back connection: the
+      // number still receives, and the row the retry hangs off still exists.
+      register.mockResolvedValue(
+        registrationFailed(ACCOUNT_ROW_ID, PHONE_NUMBER_ID, 'credential_rejected'),
+      );
+
+      const result = await run();
+
+      expect(result.businessAccount.accounts[0]).toMatchObject({
+        status: 'connected',
+        registrationStatus: 'failed',
+        registrationFailureReason: 'credential_rejected',
+      });
+    });
+
+    it('carries on to the next number when Meta refuses one of them', async () => {
+      // A rejection is about *that* number: Meta answered, and quickly.
+      connectTwoNumbers();
+      register
+        .mockResolvedValueOnce(registrationFailed(ACCOUNT_ROW_ID, PHONE_NUMBER_ID, 'rejected'))
+        .mockResolvedValueOnce(registered(SECOND_ACCOUNT_ROW_ID, SECOND_PHONE_NUMBER_ID));
+
+      const result = await run();
+
+      expect(register).toHaveBeenCalledTimes(2);
+      expect(result.businessAccount.accounts.map((account) => account.registrationStatus)).toEqual([
+        'failed',
+        'registered',
+      ]);
+    });
+
+    it.each(['rate_limited' as const, 'upstream_unavailable' as const])(
+      'stops at the first %s and leaves the rest honestly unregistered',
+      async (reason) => {
+        // Both mean Meta is not answering us right now, so every call after this
+        // one would fail identically and spend the request's remaining time.
+        connectTwoNumbers();
+        register.mockResolvedValueOnce(registrationFailed(ACCOUNT_ROW_ID, PHONE_NUMBER_ID, reason));
+
+        const result = await run();
+
+        expect(register).toHaveBeenCalledTimes(1);
+        expect(
+          result.businessAccount.accounts.map((account) => account.registrationStatus),
+        ).toEqual(['failed', 'unregistered']);
+        expect(warned().join('\n')).toContain('were not attempted');
+      },
+    );
+
+    it('keeps the connection when registration faults, rather than failing a spent code', async () => {
+      // By this point the connection has committed and Meta's code is spent, so
+      // a 500 would report a connection that exists as one that failed and send
+      // the tenant back through a flow that cannot succeed.
+      const error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      register.mockRejectedValue(new Error('the database is unreachable'));
+
+      const result = await run();
+
+      expect(result.businessAccount.accounts[0]).toMatchObject({
+        status: 'connected',
+        registrationStatus: 'unregistered',
+      });
+      expect(error).toHaveBeenCalled();
+
+      error.mockRestore();
+    });
+
+    it('registers the next number even when one of them faults', async () => {
+      const error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      connectTwoNumbers();
+      register
+        .mockRejectedValueOnce(new Error('the database is unreachable'))
+        .mockResolvedValueOnce(registered(SECOND_ACCOUNT_ROW_ID, SECOND_PHONE_NUMBER_ID));
+
+      const result = await run();
+
+      expect(result.businessAccount.accounts.map((account) => account.registrationStatus)).toEqual([
+        'unregistered',
+        'registered',
+      ]);
+
+      error.mockRestore();
+    });
   });
 });
