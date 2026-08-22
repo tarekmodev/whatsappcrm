@@ -81,14 +81,30 @@
  * that the lockup is the first thing to stand down. The drawer heads its own
  * navigation with the same lockup, so the workspace is still named at 320px.
  *
- * Where it is shown it does not shrink. The wordmark inside truncates with an
- * ellipsis when it has to, and a flex item that may shrink freely truncates it to
- * *nothing* on a narrow bar — which is how the product's name silently
- * disappeared from the one place below 48rem that carries it.
+ * Where it is shown it **truncates rather than overlapping**, and that needs both
+ * of the declarations below.
+ *
+ * `flex: 0 0 auto` was wrong. TAR-522 measured the lockup at 142px against the
+ * 150px this slot has at 480px, and TAR-521 then put a 32px mark and its gap in
+ * front of the wordmark — 181px into 150px. An item that may not shrink does not
+ * answer that by getting narrower; it draws over the search icon beside it,
+ * which is an overlap rather than an overflow and so invisible to a
+ * scroll-width check.
+ *
+ * `min-inline-size: 0` is what lets it. Without it the automatic minimum is the
+ * content's min-content, and the wordmark is `nowrap` — so its min-content is
+ * the *whole* name and the lockup cannot give up a pixel. `overflow: hidden` on
+ * the wordmark does not help here: it zeroes that span's own automatic minimum,
+ * not the contribution it makes to the width of the box around it.
+ *
+ * What stops it collapsing to nothing is inside the lockup, where it belongs:
+ * the mark is `flex: 0 0 auto`, so shrinking eats the wordmark's ellipsis first
+ * and stops at the mark. The product is never nameless in the one place below
+ * 48rem that carries it.
  */
 .brand {
   display: none;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   align-items: center;
   min-inline-size: 0;
   /* A link home is a tap like the four beside it, whatever the wordmark's own
