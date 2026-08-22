@@ -266,6 +266,9 @@
   --focus-ring-offset: var(--scale-size-focus-ring);
   --size-icon-sm: var(--scale-size-icon-sm);
   --size-icon-md: var(--scale-size-icon-md);
+  --size-icon-lg: var(--scale-size-icon-lg);
+  /* The disc an empty or error state draws its icon in. */
+  --size-state-plate: var(--scale-size-state-plate);
   --size-rail: var(--scale-size-rail);
   --size-rail-collapsed: var(--scale-size-rail-collapsed);
   --size-bar: var(--scale-size-bar);

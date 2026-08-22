@@ -27,8 +27,9 @@ export async function AssignmentSections() {
       >
         {unassigned.length === 0 ? (
           <EmptyState
-            heading={content.assignment.unassignedEmptyHeading}
-            body={content.assignment.unassignedEmptyBody}
+            icon="ticket"
+            title={content.assignment.unassignedEmptyHeading}
+            description={content.assignment.unassignedEmptyBody}
           />
         ) : (
           <p>{content.assignment.unassignedCount(unassigned.length)}</p>

@@ -36,8 +36,9 @@ export function DailyVolumeChart({ series }: { series: readonly DailyPoint[] }) 
   if (peak === 0) {
     return (
       <EmptyState
-        heading={content.reports.seriesEmptyHeading}
-        body={content.reports.seriesEmptyBody}
+        icon="reports"
+        title={content.reports.seriesEmptyHeading}
+        description={content.reports.seriesEmptyBody}
       />
     );
   }

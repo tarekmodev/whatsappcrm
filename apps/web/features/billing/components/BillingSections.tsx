@@ -7,6 +7,7 @@ import { SkeletonLine } from '@/components/ui/Skeleton';
 import { content } from '@/content/en';
 import type { CheckoutOutcome } from '@/lib/routes';
 import { loadBilling } from '../billing.data';
+import { BILLING_SECTION_IDS } from '../constants';
 import { readPlanUsage, reportCheckout } from '../plan-presentation';
 import { CancellationBanner } from './CancellationBanner';
 import { CheckoutOutcomeBanner } from './CheckoutOutcomeBanner';
@@ -68,7 +69,7 @@ export async function BillingSections({
       {canManage ? null : <Notice tone="info">{content.billing.readOnlyNotice}</Notice>}
 
       <SectionCard
-        id="billing-current"
+        id={BILLING_SECTION_IDS.current}
         title={content.billing.currentHeading}
         description={content.billing.currentDescription}
       >
@@ -76,7 +77,7 @@ export async function BillingSections({
       </SectionCard>
 
       <SectionCard
-        id="billing-plans"
+        id={BILLING_SECTION_IDS.plans}
         title={content.billing.plansHeading}
         description={content.billing.plansDescription}
       >
@@ -85,7 +86,7 @@ export async function BillingSections({
 
       {canManage ? (
         <SectionCard
-          id="billing-portal"
+          id={BILLING_SECTION_IDS.portal}
           title={content.billing.portalHeading}
           description={content.billing.portalDescription}
         >
@@ -134,21 +135,21 @@ export function BillingSectionsSkeleton() {
   return (
     <Stack gap="5">
       <SectionCard
-        id="billing-current"
+        id={BILLING_SECTION_IDS.current}
         title={content.billing.currentHeading}
         description={content.billing.currentDescription}
       >
         <SubscriptionPanelSkeleton />
       </SectionCard>
       <SectionCard
-        id="billing-plans"
+        id={BILLING_SECTION_IDS.plans}
         title={content.billing.plansHeading}
         description={content.billing.plansDescription}
       >
         <PlansGridSkeleton />
       </SectionCard>
       <SectionCard
-        id="billing-portal"
+        id={BILLING_SECTION_IDS.portal}
         title={content.billing.portalHeading}
         description={content.billing.portalDescription}
       >

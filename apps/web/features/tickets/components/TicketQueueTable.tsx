@@ -4,6 +4,7 @@ import { DataTable, DataTableSkeleton, type DataTableColumn } from '@/components
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { RelativeTime } from '@/components/ui/RelativeTime';
+import { TextLink } from '@/components/ui/TextLink';
 import { content } from '@/content/en';
 import { routes } from '@/lib/routes';
 import { TICKETS_PAGE_SIZE } from '@/features/tickets/constants';
@@ -52,10 +53,24 @@ export function TicketQueueTable({
   isFiltered,
 }: TicketQueueTableProps) {
   if (tickets.length === 0) {
-    return (
+    // Two states, not one heading with two bodies: "this filter has nothing in
+    // it" is answerable — widen it — and "nothing is waiting" is not.
+    return isFiltered ? (
       <EmptyState
-        heading={content.tickets.emptyHeading}
-        body={isFiltered ? content.tickets.emptyFilteredBody : content.tickets.emptyBody}
+        icon="filter"
+        title={content.tickets.emptyFilteredHeading}
+        description={content.tickets.emptyFilteredBody}
+        action={
+          <TextLink href={routes.tickets({ scope: 'all' })}>
+            {content.tickets.emptyFilteredAction}
+          </TextLink>
+        }
+      />
+    ) : (
+      <EmptyState
+        icon="ticket"
+        title={content.tickets.emptyHeading}
+        description={content.tickets.emptyBody}
       />
     );
   }

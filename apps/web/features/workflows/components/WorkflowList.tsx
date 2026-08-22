@@ -113,7 +113,7 @@ export function WorkflowList({
   }
 
   if (workflows.length === 0) {
-    return <EmptyState heading={copy.emptyHeading} body={copy.emptyBody} />;
+    return <EmptyState icon="automation" title={copy.emptyHeading} description={copy.emptyBody} />;
   }
 
   return (

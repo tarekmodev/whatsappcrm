@@ -177,6 +177,14 @@
   --scale-size-focus-ring: 2px;
   --scale-size-icon-sm: 1rem;
   --scale-size-icon-md: 1.25rem;
+  /*
+   * The icon an empty or error state draws inside its plate. The only place the
+   * set is drawn above control size: it carries the whole visual weight of a
+   * state that no longer has a border to be recognised by.
+   */
+  --scale-size-icon-lg: 2.5rem;
+  /* The disc that icon sits in, sized around it rather than measured from it. */
+  --scale-size-state-plate: 4.5rem;
   /* The console frame: a fixed rail beside a fixed bar. */
   --scale-size-rail: 15rem;
   --scale-size-rail-collapsed: 4.25rem;

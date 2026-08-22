@@ -44,8 +44,9 @@ export function AgentLoadTable({ rows }: { rows: readonly AgentLoadRow[] }) {
   if (rows.length === 0) {
     return (
       <EmptyState
-        heading={content.assignment.agentLoadEmptyHeading}
-        body={content.assignment.agentLoadEmptyBody}
+        icon="people"
+        title={content.assignment.agentLoadEmptyHeading}
+        description={content.assignment.agentLoadEmptyBody}
       />
     );
   }

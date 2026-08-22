@@ -25,7 +25,13 @@ export function WorkflowRunList({ runs }: { runs: readonly WorkflowRunResponse[]
   const copy = content.workflows;
 
   if (runs.length === 0) {
-    return <EmptyState heading={copy.runsEmptyHeading} body={copy.runsEmptyBody} />;
+    return (
+      <EmptyState
+        icon="automation"
+        title={copy.runsEmptyHeading}
+        description={copy.runsEmptyBody}
+      />
+    );
   }
 
   return (

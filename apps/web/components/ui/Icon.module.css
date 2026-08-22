@@ -10,6 +10,14 @@
   block-size: var(--size-icon-sm);
 }
 
+.icon[data-size='lg'] {
+  inline-size: var(--size-icon-lg);
+  block-size: var(--size-icon-lg);
+  /* Drawn twice the size of a control's icon, so the 1.75 stroke it inherits
+     would read as a hairline. Kept optically equal to the rest of the set. */
+  stroke-width: 1.4;
+}
+
 /* A "forward" chevron points the other way when the page reads right to left. */
 [dir='rtl'] .icon[data-directional='true'] {
   scale: -1 1;

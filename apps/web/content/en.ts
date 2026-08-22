@@ -114,7 +114,9 @@ export const content = {
     submit: 'Search',
     clear: 'Clear search',
     resultsFor: (term: string) => `Conversations matching “${term}”`,
-    emptyHeading: 'Nothing matches that search',
+    /** Quotes the term back, so a search that matched nothing cannot be mistaken
+        for a filter that is empty or a list that has never had anything in it. */
+    emptyHeading: (term: string) => `No matches for “${term}”`,
     emptyBody: 'Try a different name, number or phrase — search covers this filter only.',
   },
 
@@ -265,9 +267,27 @@ export const content = {
     scopeAll: 'All conversations',
     statusLabel: 'Status',
     loadingConversations: 'Loading conversations',
-    emptyHeading: 'No conversations here yet',
-    emptyBody: 'Conversations assigned to you or your teams appear in this list.',
-    emptyAllBody: 'Nothing in the workspace matches this filter.',
+    /**
+     * Three empty states, not one (TAR-515). "Nothing has ever arrived", "this
+     * filter has nothing in it" and "that search matched nothing" are different
+     * answers, and the one string they used to share made a working search look
+     * broken to whoever had just typed into it.
+     */
+    emptyHeading: 'No conversations yet',
+    emptyBody:
+      'Conversations appear here as customers message your WhatsApp number. Connect one to start receiving them.',
+    /** Only offered to a principal holding `channel:manage`; see `ConversationList`. */
+    emptyConnectAction: 'Connect a WhatsApp number',
+    filteredEmptyHeading: (filterName: string) => `Nothing in ${filterName}`,
+    filteredEmptyBody: 'Conversations move in and out of this filter as they are worked.',
+    /**
+     * A URL can name a scope and status combination the filter column has no
+     * entry for — reachable by hand and from an older link — so the heading
+     * cannot always name the filter.
+     */
+    filteredEmptyUnnamedHeading: 'Nothing matches this filter',
+    /** The `all-open` entry: the widest view that is still the day’s work. */
+    filteredEmptyAction: 'View all open',
     /**
      * The word beside the number in a `Badge variant="count"`. The chip shows
      * the digits and nothing else — a count is a count, not the sentence "2
@@ -401,8 +421,12 @@ export const content = {
     // --- The two-pane layout ------------------------------------------------
     threadHeading: 'Conversation',
     backToList: 'Back to conversations',
-    noThreadHeading: 'No conversation open',
-    noThreadBody: 'Pick a conversation from the list to read it and reply.',
+    /**
+     * Instructional, not empty: nothing is wrong with the thread column before a
+     * conversation is picked, so it is one quiet line rather than a state with a
+     * title, a body and an action (TAR-515). The list beside it is the action.
+     */
+    noThreadHeading: 'Pick a conversation to read it and reply',
     /**
      * The API answers `not_found` for a thread the reader may not see — never
      * `forbidden`, so nothing can be enumerated. A shared supervisor link opened
@@ -487,7 +511,16 @@ export const content = {
     queueOrderNotice: 'Urgent tickets come first, then the most recently opened.',
     emptyHeading: 'Nothing waiting',
     emptyBody: 'Tickets assigned to you or your teams appear here as customers write in.',
-    emptyFilteredBody: 'Nothing matches this filter. Try a wider scope, status or priority.',
+    emptyFilteredHeading: 'Nothing matches this filter',
+    emptyFilteredBody: 'Tickets move in and out of this filter as they are worked.',
+    /**
+     * Widens the scope to everything the principal may read and drops the
+     * status, priority and overdue narrowing. Not "all tickets": the queue's
+     * default status filter is the *active* queue (`open` and `pending`, ADR
+     * 0006 §6), and a label promising every ticket would overclaim by two
+     * statuses.
+     */
+    emptyFilteredAction: 'View the whole queue',
     scopeNarrowedNotice:
       'You are seeing your own and your teams’ tickets, not every ticket in the workspace.',
 
@@ -1386,7 +1419,8 @@ export const content = {
     flaggedEmptyHeading: 'Nothing is stuck',
     flaggedEmptyBody: 'Every ticket in this workspace reached an agent.',
     flaggedFilteredEmptyHeading: 'No tickets for that reason',
-    flaggedFilteredEmptyBody: 'Other tickets may still be flagged — clear the filter to see them.',
+    flaggedFilteredEmptyBody: 'Other tickets may still be flagged.',
+    flaggedFilteredEmptyAction: 'Show every reason',
     flaggedCount: (count: number) =>
       count === 1 ? '1 ticket flagged' : `${count} tickets flagged`,
     /**
@@ -1951,9 +1985,18 @@ export const content = {
     connectingBody:
       'Meta has authorised the connection and we are setting it up. Stay on this page — it only takes a moment.',
 
-    unconfiguredHeading: 'Self-service connection is not set up',
+    unconfiguredHeading: 'Self-service connection isn’t available',
     unconfiguredBody:
       'This console has no Meta app configured for connecting WhatsApp yourself. Contact support and they can connect your WhatsApp Business Account for you.',
+    /**
+     * The copy instructs "contact support", so the state offers it as a real
+     * link rather than leaving the reader to find an address (TAR-515). Only
+     * rendered when `NEXT_PUBLIC_SUPPORT_EMAIL` is configured: a button that
+     * opened a blank mail draft would be worse than the sentence alone.
+     */
+    unconfiguredSupportAction: 'Contact support',
+    /** Prefills the subject, so the operator knows which console and which ask. */
+    unconfiguredSupportSubject: 'Connect our WhatsApp Business Account',
 
     connectedHeading: 'Connected account',
     connectedToast: (name: string) => `${name} connected`,
@@ -2358,6 +2401,8 @@ export const content = {
     noSubscriptionHeading: 'No paid plan yet',
     noSubscriptionBody:
       'This workspace is running on its trial allowances. Choose a plan below when you are ready — nothing is charged until you do.',
+    /** Jumps to the plans section on the same page (TAR-515). */
+    noSubscriptionAction: 'See the plans',
 
     seatsHeading: 'Agent seats',
     seatsUsage: (used: string, cap: string) => `${used} of ${cap} seats in use`,
@@ -2377,6 +2422,13 @@ export const content = {
     plansEmptyHeading: 'No plans are available',
     plansEmptyBody:
       'No plan is on sale for this workspace right now. Contact support and they can put one in place for you.',
+    /**
+     * The copy instructs "contact support", so the state offers it (TAR-515).
+     * Only rendered where `NEXT_PUBLIC_SUPPORT_EMAIL` is configured — the same
+     * rule the WhatsApp panel follows, for the same reason.
+     */
+    plansEmptySupportAction: 'Contact support',
+    plansEmptySupportSubject: 'Put a plan in place for our workspace',
     currentPlanBadge: 'Current plan',
     currentPlanAction: 'Your current plan',
     choosePlan: (planName: string) => `Choose ${planName}`,

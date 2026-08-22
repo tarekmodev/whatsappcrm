@@ -37,12 +37,17 @@ export function ContactsTable({
   if (contacts.length === 0) {
     return isFiltered ? (
       <EmptyState
-        heading={content.contacts.filteredEmptyHeading}
-        body={content.contacts.filteredEmptyBody}
+        icon="filter"
+        title={content.contacts.filteredEmptyHeading}
+        description={content.contacts.filteredEmptyBody}
         action={<TextLink href={routes.contacts()}>{content.contacts.clearFilters}</TextLink>}
       />
     ) : (
-      <EmptyState heading={content.contacts.emptyHeading} body={content.contacts.emptyBody} />
+      <EmptyState
+        icon="contact"
+        title={content.contacts.emptyHeading}
+        description={content.contacts.emptyBody}
+      />
     );
   }
 

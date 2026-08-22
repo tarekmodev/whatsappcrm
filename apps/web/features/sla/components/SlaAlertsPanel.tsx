@@ -31,7 +31,7 @@ export function SlaAlertsPanel({ onCountChange }: { onCountChange: SlaAlertCount
   if (state.status === 'failed') {
     return (
       <div className={styles.panel}>
-        <ErrorState onRetry={retry} body={state.message} />
+        <ErrorState onRetry={retry} description={state.message} />
       </div>
     );
   }
@@ -39,7 +39,11 @@ export function SlaAlertsPanel({ onCountChange }: { onCountChange: SlaAlertCount
   if (state.alerts.length === 0) {
     return (
       <div className={styles.panel}>
-        <EmptyState heading={content.sla.emptyHeading} body={content.sla.emptyBody} />
+        <EmptyState
+          icon="alert"
+          title={content.sla.emptyHeading}
+          description={content.sla.emptyBody}
+        />
       </div>
     );
   }
