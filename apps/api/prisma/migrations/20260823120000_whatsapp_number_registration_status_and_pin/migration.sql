@@ -1,0 +1,145 @@
+-- Registration status and the encrypted registration PIN, per number (TAR-767).
+--
+-- Storage half of TAR-170: a number connected through Embedded Signup can
+-- receive but cannot **send**, because Cloud API requires
+-- `POST /{phone-number-id}/register` with a six-digit `pin` first and amendment
+-- 2 deferred that call. Tarek ruled Option 1 on 2026-08-22 — Multica generates
+-- the PIN and stores it, encrypted at rest like the access token — and the
+-- architecture contract (TAR-766) fixes the shape this
+-- migration writes. No service code lands with it: the columns exist first so
+-- TAR-768's registration service has somewhere to write.
+--
+-- ---------------------------------------------------------------------------
+-- On whatsapp_accounts, not whatsapp_business_accounts
+-- ---------------------------------------------------------------------------
+--
+-- Meta registers a *number*. Two numbers under one WABA are registered
+-- independently, can hold different PINs, and can sit at different outcomes —
+-- the same reasoning that already put `quality_rating` here rather than on the
+-- parent (20260810160000_whatsapp_business_account_entity). The access token
+-- stays on the WABA because Meta issues it to the business; the PIN cannot
+-- follow it up a level without collapsing two numbers into one secret.
+--
+-- ---------------------------------------------------------------------------
+-- Four columns, and why the status is its own enum rather than a widening of
+-- whatsapp_account_status
+-- ---------------------------------------------------------------------------
+--
+--   registration_status         Whether the number may send.
+--   registration_pin_encrypted  The PIN, under the access token's cipher.
+--   registration_failure_reason Why the last attempt failed. TEXT, see below.
+--   registered_at               When Meta last accepted the number.
+--   registration_attempted_at   When an attempt last started; also the lease.
+--
+-- `whatsapp_account_status` keeps its `connected | disconnected | error`
+-- meaning. Adding a `connected_unregistered` label to it would break every
+-- existing `= 'connected'` check — the webhook ingest path and the send path
+-- both make one — and would fold two independent facts into a column that can
+-- only hold one of them. A number that is attached and receiving while unable to
+-- send is a true and ordinary state, so it gets a second axis.
+--
+-- **`unregistered` is the default, and `failed` is not.** Every row in this
+-- table predates registration, so every one of them was never attempted. Marking
+-- them `failed` would print a Meta rejection that never happened on every
+-- connection made before today, and send the tenant to a support conversation
+-- about an error nobody caused. The console's copy differs for the two ("set up
+-- sending" against "sending failed: …"), which is the visible consequence.
+--
+-- `pending` exists for the process killed between the Meta call and the outcome
+-- write. That row may be registered at Meta under the PIN it holds, and is only
+-- recoverable because the PIN is stored — which is why the column is a hard
+-- requirement rather than a convenience.
+--
+-- `registration_failure_reason` is TEXT and not an enum type: the vocabulary
+-- (`WHATSAPP_REGISTRATION_FAILURE_REASONS` in `@whatsappcrm/contracts`) grows as
+-- Meta's numeric failure codes are confirmed and mapped, it is only ever written
+-- from a closed TS constant, and a reason a rolled-back build does not recognise
+-- has to read as `rejected` rather than fail a deserialise. `sessions.
+-- revoked_reason` is the same arrangement for the same reasons. An enum type
+-- here would make every vocabulary addition an `ALTER TYPE` and every rollback
+-- across one a data repair.
+--
+-- ---------------------------------------------------------------------------
+-- Why CREATE TYPE and a column defaulting to one of its labels may share this
+-- transaction
+-- ---------------------------------------------------------------------------
+--
+-- `20260816150000_notification_type_escalation` and
+-- `20260822120000_workflow_broken_reason_suspended` both isolate an enum change
+-- into a directory of its own, because PostgreSQL refuses to *use* a label added
+-- by `ALTER TYPE ... ADD VALUE` in the transaction that added it, and Prisma
+-- runs a migration file as one transaction.
+--
+-- That hazard is specific to `ADD VALUE` on a pre-existing type.
+-- `whatsapp_registration_status` does not exist until the statement below
+-- creates it, and a type created in the current transaction is fully usable
+-- within it — there is no other session that could be mid-scan of it. So the
+-- `CREATE TYPE` and the `DEFAULT 'unregistered'` belong together, and splitting
+-- them would leave a directory whose down migration cannot drop the type it
+-- created because a column in the next one depends on it.
+--
+-- ---------------------------------------------------------------------------
+-- Row-level security
+-- ---------------------------------------------------------------------------
+--
+-- Unchanged, and deliberately so. `whatsapp_accounts` already carries its
+-- `tenant_isolation` policy and its `system_unrestricted` policy from
+-- 20260810140000_tenant_isolation_rls and prisma/sql/app-roles.sql, and both
+-- predicate on `tenant_id` alone — they are column-agnostic, so four new columns
+-- are covered the moment they exist. No new table, so no `pnpm db:roles` run is
+-- needed after this one; running it anyway is harmless.
+--
+-- This is worth stating rather than leaving implied, because the new column is
+-- the second-most sensitive value in the schema: `registration_pin_encrypted`
+-- is a credential of the same class as `access_token_encrypted`, and it is
+-- protected by the same two things — the cipher, and this policy.
+--
+-- ---------------------------------------------------------------------------
+-- No new index
+-- ---------------------------------------------------------------------------
+--
+-- Every access to this table is by primary key, by `(tenant_id, id)`, or by the
+-- globally unique `phone_number_id`, and the registration service adds no
+-- fourth. A `(tenant_id, registration_status)` index would serve a "list every
+-- unregistered number" query that nothing asks for yet, at the cost of write
+-- throughput on a table the webhook path updates. The monitoring query the
+-- contract names — count by `registration_status` — is an operator running a
+-- count over a table bounded by numbers-per-tenant, which is a sequential scan
+-- of a few hundred rows and does not justify one either.
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+--   Duration     Milliseconds, independent of row count. `ADD COLUMN` with a
+--                non-volatile default has not rewritten the table since
+--                PostgreSQL 11 — the default is recorded in `pg_attribute` and
+--                materialised on the next write of each row — and this database
+--                is pinned to 16. Nothing is backfilled, so there is no batching
+--                to do.
+--   Locks        ACCESS EXCLUSIVE on `whatsapp_accounts`, held to commit because
+--                Prisma runs the file in one transaction. Nothing else is
+--                touched. The type does not exist yet, so nothing can be waiting
+--                on it.
+--   Blocking     Capped at three seconds by `lock_timeout`: a conflicting
+--                long-running transaction aborts this migration cleanly rather
+--                than queueing every new query on `whatsapp_accounts` behind it.
+--                Re-run once it clears. Worth knowing which transactions those
+--                are — the webhook ingest path writes this table on every
+--                inbound message.
+--   Data loss    None. Purely additive; no existing column changes and no row is
+--                rewritten.
+--   Rollback     `down.sql` beside this file, which is a clean reversal — read
+--                its header for the one thing it destroys.
+
+SET LOCAL lock_timeout = '3s';
+
+-- CreateEnum
+CREATE TYPE "whatsapp_registration_status" AS ENUM ('unregistered', 'pending', 'registered', 'failed');
+
+-- AlterTable
+ALTER TABLE "whatsapp_accounts" ADD COLUMN     "registered_at" TIMESTAMPTZ(3),
+ADD COLUMN     "registration_attempted_at" TIMESTAMPTZ(3),
+ADD COLUMN     "registration_failure_reason" TEXT,
+ADD COLUMN     "registration_pin_encrypted" TEXT,
+ADD COLUMN     "registration_status" "whatsapp_registration_status" NOT NULL DEFAULT 'unregistered';

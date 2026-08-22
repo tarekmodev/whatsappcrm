@@ -568,12 +568,44 @@ One phone number, child of a WABA.
   that does not change with several WABAs behind it); `(tenant_id, id)`
 - **Indexes:** `(tenant_id, whatsapp_business_account_id)`
 - **Relations:** `whatsapp_business_accounts` → this on `(tenant_id, whatsapp_business_account_id)`, `Cascade`
-- **Owned by:** TAR-52, consumed by TAR-20
+- **Owned by:** TAR-52, consumed by TAR-20; registration columns added by TAR-767
 
 `quality_rating` is Meta's per-number rating. NULL means it has never been read; `unknown`
 is a value Meta itself returns. The two are not the same thing. Messaging limits are not
 modelled yet — Meta's tier vocabulary is version-dependent, and TAR-20 adds the column once
 it has confirmed it.
+
+**Registration is a second axis to `status`, not part of it** (TAR-170, contract TAR-766).
+Cloud API requires `POST /{phone-number-id}/register` with a six-digit PIN before a number
+may **send**; a number that was never registered still receives normally. So a row can read
+`status = 'connected'` and `registration_status = 'unregistered'` at once, which one enum
+cannot say — and adding a `connected_unregistered` value to `whatsapp_account_status` would
+have broken every existing `= 'connected'` check.
+
+`registration_status` is `unregistered`/`pending`/`registered`/`failed`, defaulting to
+`unregistered`. `unregistered` ("never attempted") and `failed` ("Meta answered and
+refused") are kept apart deliberately: every row predating TAR-767 was never attempted, and
+every row the operator paste-token path creates still is, so a `failed` default would report
+a rejection that never happened. `pending` is an attempt in flight, leased by
+`registration_attempted_at` so an attempt that died without an answer is recoverable rather
+than stuck.
+
+`registration_pin_encrypted` is a credential of the same class as `access_token_encrypted`:
+the same AES-256-GCM cipher, the same key, the same `v1.<iv>.<tag>.<ciphertext>` payload. It
+is bound to `phone_number_id` as AAD rather than to `waba_id` — the number, not the
+business, because Meta registers a number and a PIN copied between two numbers of one WABA
+must fail to authenticate. It lives here rather than beside the token because two numbers
+under one WABA register independently and can hold different PINs. Never selected into a
+response projection, never logged, never written to an audit row.
+
+`registration_failure_reason` is TEXT rather than an enum type, holding a value from
+`WHATSAPP_REGISTRATION_FAILURE_REASONS`. The vocabulary grows as Meta's failure codes are
+confirmed, and a reason a rolled-back build does not recognise has to read as `rejected`
+rather than fail a deserialise — the same arrangement as `sessions.revoked_reason`.
+
+There is deliberately no `(tenant_id, registration_status)` index: every access to this
+table is by primary key, by `(tenant_id, id)` or by `phone_number_id`, and the monitoring
+query — count by status — scans a table bounded by numbers-per-tenant.
 
 #### `message_templates`
 
