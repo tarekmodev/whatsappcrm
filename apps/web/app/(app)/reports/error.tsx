@@ -17,7 +17,8 @@ export default function ReportsError({
 }) {
   useEffect(() => {
     // Never swallowed. The digest is what correlates this with the server log
-    // line, and with the `requestId` on a timed-out report (ADR 0009).
+    // line, and with the `requestId` on a timed-out report — ADR 0010
+    // (reporting dashboard and export).
     console.error('Reports route failed', error.digest ?? error.message);
   }, [error]);
 

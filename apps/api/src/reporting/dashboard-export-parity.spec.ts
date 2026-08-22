@@ -46,10 +46,11 @@ import { ReportsController } from './reports.controller';
  * range's length. An export that dropped a filter, widened a range or reordered
  * the parameters produces a different response, and the comparison fails.
  *
- * ADR 0009 makes the property structural — there is one query layer, one filter
- * parse and no SQL on the export path — so this is a regression test for
- * something the design already guarantees, rather than the only thing holding
- * it up. That is the point: it fails the day somebody adds a second path.
+ * ADR 0010 (reporting dashboard and export) makes the property structural — there
+ * is one query layer, one filter parse and no SQL on the export path — so this is
+ * a regression test for something the design already guarantees, rather than the
+ * only thing holding it up. That is the point: it fails the day somebody adds a
+ * second path.
  */
 
 const TENANT_ID = '9c0c1f60-3a41-7a2e-8f0e-0b3d5a1c0100';

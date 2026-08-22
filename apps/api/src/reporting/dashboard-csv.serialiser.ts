@@ -7,7 +7,8 @@ import type {
 } from '@whatsappcrm/contracts';
 
 /**
- * `DashboardMetricsResponse` → CSV bytes (TAR-430, ADR 0009 decision 7).
+ * `DashboardMetricsResponse` → CSV bytes — TAR-430, ADR 0010 (reporting dashboard
+ * and export) decision 7.
  *
  * **This module touches no database and takes no query parameters.** That is
  * the property the whole export design rests on: the export is a second
@@ -73,10 +74,10 @@ const FORMULA_LEAD_CHARACTERS = ['=', '+', '-', '@', '\t', '\r'];
  * What the `row` column of the `agents` section says about the row it starts.
  *
  * A discriminator column rather than a bare `TOTAL` in the name field, which is
- * what 0009 describes: an agent may legitimately be called `TOTAL`, and a file
+ * what 0010 describes: an agent may legitimately be called `TOTAL`, and a file
  * whose last row is only distinguishable by a display name is one rename away
  * from being misread by whatever consumes it. It also gives the unattributed
- * row a name — 0009 requires it to be rendered rather than hidden, and a row
+ * row a name — 0010 requires it to be rendered rather than hidden, and a row
  * with no id and no name is otherwise indistinguishable from a blank line.
  */
 const AGENT_ROW_KINDS = {
