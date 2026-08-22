@@ -568,7 +568,10 @@ Three outcomes, all of which answer the provider `200`:
 | Parked  | No resolvable tenant, no resolvable plan, or attempts exhausted     | `failed`                |
 
 A parked row keeps its raw payload and stays queryable, so it can be replayed once the cause
-is fixed — `last_error` names the reason (`unresolved_tenant`, `unresolved_plan: …`, or the
+is fixed — through
+[`POST /api/v1/admin/webhook-events/{id}/replay`](admin-api.md#post-apiv1adminwebhook-eventswebhookeventidreplay),
+with the caveat that the sweep which collects a reset row scans `provider = 'whatsapp'` only,
+so a billing row goes back to `received` and waits for the worker this integration adds — `last_error` names the reason (`unresolved_tenant`, `unresolved_plan: …`, or the
 transient failure's description). Nothing is ever dropped. An event we did not subscribe to
 is recorded as `processed` rather than parked, because parking every unsubscribed delivery
 would fill the operator's `status = 'failed'` list with noise that hides the rows that

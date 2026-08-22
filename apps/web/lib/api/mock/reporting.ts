@@ -15,9 +15,9 @@ import type { MockTicket, MockUser } from '@/lib/api/mock/fixtures';
 
 /**
  * The dashboard aggregate, standing in for TAR-428's `ReportingQueryService`
- * until it lands (ADR 0009).
+ * until it lands — ADR 0010 (reporting dashboard and export).
  *
- * It is a mirror of the four statements in 0009's Interfaces section rather than
+ * It is a mirror of the four statements in 0010's Interfaces section rather than
  * a convenient fake, because each rule it copies is something the screen above it
  * claims to be true:
  *
@@ -41,7 +41,7 @@ import type { MockTicket, MockUser } from '@/lib/api/mock/fixtures';
  * Two honest departures from the real thing, both consequences of there being no
  * database here: the range is bucketed in **UTC**, because the mock has no
  * `tenant_settings` row to read a timezone from — which is the same fallback
- * 0009 specifies for a tenant that has none — and percentiles are computed in
+ * 0010 specifies for a tenant that has none — and percentiles are computed in
  * TypeScript rather than by `percentile_cont`, with the same linear
  * interpolation.
  */
@@ -54,7 +54,7 @@ export interface DashboardMetricsInput {
   readonly users: readonly MockUser[];
 }
 
-/** What the mock reports when it has no `tenant_settings` row to read (0009). */
+/** What the mock reports when it has no `tenant_settings` row to read (0010). */
 const FALLBACK_TIMEZONE = 'UTC';
 
 const MS_PER_DAY = 86_400_000;

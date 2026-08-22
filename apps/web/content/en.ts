@@ -3436,7 +3436,7 @@ export const content = {
     scopeAll: 'All tickets',
     scopeAssigned: 'Assigned to me',
     /**
-     * 0009 decision 6: without `report:read_all` the totals still cover
+     * 0010 decision 6: without `report:read_all` the totals still cover
      * everything the caller can see, and the breakdown is narrowed to their own
      * row rather than the request being refused. Saying so is what stops an
      * agent reading a supervisor's shared link as a broken table.
@@ -3465,7 +3465,7 @@ export const content = {
     resolutionLabel: 'Resolution time',
     resolutionHint:
       'Median, from the ticket opening to its resolution, for tickets resolved in this range.',
-    /** Wall-clock, not business hours — 0009 risk 2, stated rather than assumed. */
+    /** Wall-clock, not business hours — 0010 risk 2, stated rather than assumed. */
     durationBasisNote: 'Durations are wall-clock, including nights and weekends.',
 
     statAverage: 'Average',

@@ -189,20 +189,20 @@ Nothing is bounced and nothing is lost, and it is worth walking the path because
 So the customer's message is received, acknowledged and retained; what a suspended tenant loses is
 the projection into its inbox, not the message.
 
-> ⚠️ **Replay is manual, and there is no surface for it.** A parked row is deliberately **not**
-> claimable, so re-enqueueing one does nothing and the sweeper skips it — it scans `received` and
-> `processing` only. Replaying is an explicit operator act against the database:
+> ⚠️ **Replay is an explicit operator act, one event at a time.** A parked row is deliberately
+> **not** claimable, so re-enqueueing one does nothing and the sweeper skips it — it scans
+> `received` and `processing` only. Recovery is a reset back to `received`, which the next sweep
+> picks up:
 >
-> ```sql
-> UPDATE webhook_events
->    SET status = 'received', attempts = 0, last_error = NULL
->  WHERE id = $1 AND status = 'failed';
+> ```bash
+> curl -X POST -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+>   https://api.example.com/api/v1/admin/webhook-events/<event id>/replay
 > ```
 >
-> The next sweep picks it up from there. `WebhookEventsRepository.claim` records that an endpoint
-> for this belongs on the platform-admin surface, where the act can be authorised and audited, and
-> that there is none yet. **A reactivated tenant does not get its parked messages back on its
-> own** — somebody has to run that statement, per event.
+> TAR-94 moved that from an `UPDATE webhook_events` an operator typed into psql onto the
+> platform-admin surface, where it is authenticated by `PlatformAdminGuard` and writes a
+> `webhook_event_replays` row naming the credential that did it. **A reactivated tenant still
+> does not get its parked messages back on its own** — somebody has to make that call, per event.
 
 ## What is not built, in one list
 

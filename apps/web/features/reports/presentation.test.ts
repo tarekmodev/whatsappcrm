@@ -3,9 +3,9 @@ import { content } from '@/content/en';
 import { formatCount, formatDuration, formatReportDate } from './presentation';
 
 /**
- * The console owns the only duration formatter in the system — ADR 0009 keeps the
- * API on integer seconds precisely so there is nowhere else for one to appear.
- * These assertions are what stops it drifting.
+ * The console owns the only duration formatter in the system — ADR 0010 (reporting
+ * dashboard and export) keeps the API on integer seconds precisely so there is
+ * nowhere else for one to appear. These assertions are what stops it drifting.
  *
  * The distinction the whole file exists for: **null is not zero.** "No ticket was
  * answered" and "every ticket was answered instantly" are different facts, and

@@ -756,6 +756,12 @@ PATCH /api/v1/users/{id}            → maxConcurrentTickets on the body  assign
 
 Until they exist, the tenant default is the column default, which is a working system.
 
+**TAR-384 claims this surface** (2026-08-22), and its contract keeps the split above rather than
+folding the per-agent cap into `/assignment-settings`. It is not built or merged yet; when it
+lands it belongs here as a numbered amendment, alongside the two additions it makes that this
+section does not specify — an agent's own read-only capacity view, and a permission-gated
+capacity field on the people list.
+
 ### Realtime
 
 `ticket.updated` already exists as a `ServerEvent` carrying a whole `TicketResponse`, so a routing

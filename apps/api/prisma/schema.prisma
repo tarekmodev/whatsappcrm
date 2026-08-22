@@ -3507,7 +3507,8 @@ model WebhookEvent {
   receivedAt      DateTime           @default(now()) @map("received_at") @db.Timestamptz(3)
   processedAt     DateTime?          @map("processed_at") @db.Timestamptz(3)
 
-  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  tenant  Tenant?              @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  replays WebhookEventReplay[]
 
   /// What makes a Meta retry a no-op: the ingest insert is
   /// `ON CONFLICT (provider, provider_event_id) DO NOTHING`.
@@ -3517,6 +3518,42 @@ model WebhookEvent {
   @@index([status, receivedAt])
   @@index([tenantId])
   @@map("webhook_events")
+}
+
+/// One row per operator-triggered replay of a parked `webhook_events` row
+/// (TAR-94). Append-only: no `updated_at`, and no grant that could rewrite it.
+///
+/// **Why this is not an `audit_logs` row.** `audit_logs.tenant_id` is NOT NULL
+/// and carries the `tenant_isolation` policy, and the parked event this feature
+/// exists to recover is precisely the one with no tenant: an
+/// `unknown_phone_number_id` is a number connected *after* its messages arrived,
+/// so nothing on the row names a tenant to file the entry under. Attributing it
+/// to a tenant the operator asserted would put an invention in the table whose
+/// entire value is being right about what happened.
+///
+/// So it takes the posture of the table it describes: no `tenant_id`, no policy,
+/// and no grant at all for the application role — `SystemPrisma` alone reaches
+/// it, and `WebhookEventsRepository` is the only class that does.
+model WebhookEventReplay {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  webhookEventId String   @map("webhook_event_id") @db.Uuid
+  /// The **label** half of the `PLATFORM_ADMIN_TOKEN` entry that authenticated
+  /// the request, never the secret half — the same value
+  /// `audit_logs.actor_label` carries for an operator action inside a tenant
+  /// (TAR-166).
+  actorLabel     String   @map("actor_label")
+  /// The `last_error` the row was parked with, captured because the reset
+  /// clears it. Without this the trail records that an event was replayed and
+  /// not what was being recovered, which is the question an incident asks.
+  parkedError    String?  @map("parked_error")
+  replayedAt     DateTime @default(now()) @map("replayed_at") @db.Timestamptz(3)
+
+  event WebhookEvent @relation(fields: [webhookEventId], references: [id], onDelete: Cascade)
+
+  /// "Has this event been replayed before, and how often" — what an operator
+  /// asks before replaying it again, and what a reviewer asks afterwards.
+  @@index([webhookEventId, replayedAt])
+  @@map("webhook_event_replays")
 }
 
 /// Replay protection for unsafe POSTs that cause external side effects

@@ -9,8 +9,8 @@ import type {
 
 /**
  * The CSV standing in for TAR-430's `DashboardCsvSerialiser` until it lands
- * (ADR 0009 decision 7), exactly as `mock/reporting.ts` stands in for TAR-428's
- * query service.
+ * — ADR 0010 (reporting dashboard and export) decision 7 — exactly as
+ * `mock/reporting.ts` stands in for TAR-428's query service.
  *
  * **It takes the dashboard response and nothing else.** That is the whole point
  * rather than a convenience: the mock export route hands it the object the mock
@@ -43,7 +43,10 @@ export function dashboardCsv(
   return BOM + toCsv(rowsFor(response, section));
 }
 
-/** `report-<section>-<from>-<to>.csv`, per ADR 0009 decision 7. */
+/**
+ * `report-<section>-<from>-<to>.csv`, per ADR 0010 (reporting dashboard and
+ * export) decision 7.
+ */
 export function dashboardCsvFileName(
   range: DashboardMetricsResponse['range'],
   section: ReportExportSection,
