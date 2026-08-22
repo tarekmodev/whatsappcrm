@@ -1288,20 +1288,128 @@ risk 8) — and surfaced as `TicketResponse.tags`.
 
 ### AI — TAR-28
 
+The five tables behind the chatbot. The surface built on them is
+[the AI chatbot and knowledge base API reference](chatbot-api.md).
+
 #### `ai_configs`
 
+One per tenant. A tenant with no row reads the column defaults; the row is created on first
+write.
+
 - **Unique:** `tenant_id`
-- **Owned by:** TAR-28
+- **Model:** `AiConfig`
+- **Owned by:** TAR-28. Table from TAR-47; the chatbot columns and constraints from TAR-402
 
 `handoff_keywords` are phrases that force an immediate handover to a human agent.
 
+`model` is free text here and an allowlist at the API boundary (`AI_MODELS`). A CHECK would
+make adding a model id a migration, and model ids change on the provider's schedule rather
+than ours. Null means "the platform default", so a tenant that never chooses is not pinned to
+whatever was current the day their row was written.
+
+**Two CHECK constraints live only in the migration**, for the reason `canned_responses` states
+above: `ai_configs_min_confidence_range` bounds `min_confidence` 0..1 and
+`ai_configs_max_bot_turns_range` bounds `max_bot_turns` 1..20. zod guards the one handler that
+writes this row today; the CHECKs guard every writer there will ever be.
+
 #### `knowledge_documents`
 
-- **Indexes:** `(tenant_id, status)`
-- **Owned by:** TAR-28
+One piece of tenant-authored material the chatbot may answer from. Written, not uploaded.
 
-There is deliberately no embedding column. Whether that is `pgvector`, an external index or
-nothing at all is TAR-28's decision, and adding the column here would make it look settled.
+- **Unique:** `(tenant_id, id)` — referenced by `knowledge_chunks`
+- **Indexes:** `(tenant_id, status)` — the readiness check and the status filter;
+  `(tenant_id, created_at DESC, id DESC)` — the console's keyset-paginated list
+- **Model:** `KnowledgeDocument`
+- **Relations:** `knowledge_documents` → `knowledge_chunks`, cascade
+- **Owned by:** TAR-28. Table from TAR-47; the chatbot columns and constraints from TAR-402
+
+`status` is `pending` until the indexer commits, `indexed` when it has, `failed` with the
+reason in `index_error`. Only `indexed` documents are retrievable, so a document whose chunks
+describe content the tenant has since replaced is not citable while the re-index is queued.
+
+`chunk_count` is denormalised from `knowledge_chunks`, maintained in the same transaction as
+the delete-and-insert reindex, so the console renders "indexed, 14 chunks" without a count
+query per row.
+
+**There is deliberately no embedding column, and that is now a decision rather than a
+deferral.** Retrieval is lexical — see `knowledge_chunks` — and ADR 0010 names the `no_match`
+share of `bot_turns` as the signal for revisiting `pgvector`.
+
+`language` is BCP 47, stored for the console and for a future per-language partial index. It
+is **not** consulted by retrieval: the search vector is generated with the `'simple'`
+configuration, which a generated column forces to be a literal.
+
+#### `knowledge_chunks`
+
+One retrievable unit of a document — what the chatbot ranks and cites. Paragraph-packed to
+roughly 1200 characters with one paragraph of overlap.
+
+- **Unique:** `(tenant_id, id)`; `(tenant_id, document_id, ordinal)`
+- **Indexes:** `knowledge_chunks_search_idx` GIN over `search_vector` — full-text retrieval;
+  `knowledge_chunks_content_trgm_idx` GIN `gin_trgm_ops` over `content` — the fallback
+  retriever; `(tenant_id, document_id)`
+- **Model:** `KnowledgeChunk`
+- **Owned by:** TAR-28, shipped by TAR-402
+
+`search_vector` is `to_tsvector('simple', content)`, `GENERATED ALWAYS ... STORED`, so it is
+written once at index time and cannot drift from `content`. Prisma has no syntax for a
+generated column, so it is declared `Unsupported` and optional and the two GIN indexes are
+created in the migration's raw SQL — that is not drift.
+
+**Reindexing is delete-and-insert in one transaction, keyed on the document.** A retrieval
+running alongside an edit sees the old chunk set or the new one, never a mixture: a partially
+reindexed document is exactly a confidently wrong answer.
+
+#### `bot_turns`
+
+One inbound message considered by the chatbot, and its outcome — `replied`, `handed_off` or
+`suppressed`.
+
+- **Unique:** `(tenant_id, inbound_message_id)` — **the guard that makes a double reply
+  impossible**; `(tenant_id, id)` — referenced by `handoff_events`
+- **Indexes:** `(tenant_id, conversation_id, created_at DESC, id DESC)` — the handoff-context
+  read; `(tenant_id, outcome, created_at DESC)` — the outcome mix over time, and the
+  `no_match` share ADR 0010 names as the `pgvector` revisit signal
+- **Model:** `BotTurn`
+- **Relations:** `reply_message` is `NoAction` — a cascade would delete the idempotency guard
+  and the audit of why the chatbot answered, because the reply it produced was removed
+- **Owned by:** TAR-28, shipped by TAR-402
+
+The row is inserted **before** the model call and claimed pessimistically as
+`handed_off`/`bot_error`. A deterministic queue job id de-duplicates a re-enqueue; it does not
+de-duplicate a worker that crashed after sending, and a second WhatsApp message to a customer
+is visible and unrecoverable. If the process dies between the claim and the outcome, the row
+says the turn failed — which is the truth: nothing was sent.
+
+`score`, `model_confidence` and `retrieval_score` are stored separately so a re-tune is a
+query rather than a re-derivation from an aggregate. Each is nullable independently: a
+`no_match` turn records a retrieval score with no model confidence at all.
+
+`error` is a classified failure label, never a prompt, never a provider key, never customer
+content. `bot_turns_handoff_reason_matches_outcome` holds `handoff_reason` set exactly when
+`outcome = handed_off`, both directions.
+
+#### `handoff_events`
+
+The chatbot releasing a conversation to a human.
+
+- **Indexes:** `(tenant_id, conversation_id, created_at DESC, id DESC)`
+- **Model:** `HandoffEvent`
+- **Relations:** `ticket` and `bot_turn` are `NoAction`; `conversation` and `trigger_message`
+  cascade
+- **Owned by:** TAR-28, shipped by TAR-402
+
+**Not unique per conversation, deliberately.** A conversation can be resolved, reopened by a
+later question, handled by the chatbot again and handed off again.
+`GET /api/v1/conversations/{id}/handoff` returns the most recent row, which is what the index
+is for.
+
+`bot_turn_id` is null for `customer_requested` and `no_match` — the model was never called, so
+there is no scored turn to point at. `bot_engaged_at` is null when the chatbot never replied;
+`handoff_events_engagement_matches_replies` holds the other direction.
+
+The bot-state columns this feature added to `conversations` (`bot_state`, `bot_engaged_at`) and
+`messages` (`origin`) came with the same migration.
 
 ### Canned responses — TAR-31
 
