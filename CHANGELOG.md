@@ -1931,6 +1931,32 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
   disagree. Reloading a settled page is absorbed by the receiver, because the event id is
   derived from the checkout id.
 
+- **One malformed plan can no longer take the billing page down for every tenant**
+  (TAR-657) — `GET /billing/plans` returns every active row of the platform-wide plan
+  catalogue, and the console validates that response against `PlanListResponseSchema`. So a
+  single row whose `key` the contract refuses was not a bad plan card: it failed the parse
+  for the whole response, and `/settings/billing` rendered its error boundary — plans,
+  usage, seat messaging and the portal link together — for every tenant on the platform,
+  with nothing on screen to recover from. The row that proved it was a test fixture keyed
+  `tar405-cap-plan`: `plans` is global rather than tenant-scoped, so it did not cascade
+  away with the fixture's tenants and survived every later `pnpm test:db`.
+  Fixed on both sides, because either alone leaves the hole open. `plans.key` now carries
+  **`plans_key_format`**, character for character the `tenant_entitlements_plan_key_format`
+  that has guarded the _copy_ of this value since TAR-403 — the source of it was the half
+  that was never constrained, which is how a seed, a fixture or an admin tool could write a
+  key the API then published and no client could accept. The migration repairs any row
+  already there by renaming it deterministically rather than deleting a catalogue row a
+  tenant may be subscribed to. And `getBillingPlans` now validates the plans **one at a
+  time**, dropping and logging only the row that fails: a pricing page missing a tier is a
+  bad page, a pricing page that will not render is no page. The envelope's `usage` is still
+  parsed strictly, because those are the numbers the seat and volume messaging is computed
+  from and inventing them would be worse than failing.
+  The fixture that wrote the row is fixed too — it uses a conforming key and removes it in
+  `removeFixture`, so the leak cannot recur — and `plan-catalogue-schema.int-spec.ts` pins
+  the constraint's body against the contract's own `PLAN_KEY_PATTERN`, which nothing else in
+  the toolchain would notice disappearing: Prisma cannot express a CHECK and does not
+  describe one.
+
 - **Acknowledging a broken-workflow notification no longer silences every later break of
   that workflow** (TAR-605) — `WorkflowTriggerService.deactivate` keyed its
   `workflow_broken` rows on `workflow-broken:${workflowId}` against
