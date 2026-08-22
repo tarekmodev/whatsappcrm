@@ -17,6 +17,7 @@
     "lint:fix": "turbo run build --filter=./packages/* && eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "docs:check-refs": "node scripts/check-doc-references.mjs",
     "db:generate": "pnpm --filter @whatsappcrm/api run generate",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
