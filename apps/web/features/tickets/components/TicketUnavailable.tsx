@@ -16,8 +16,9 @@ import { routes } from '@/lib/routes';
 export function TicketUnavailable() {
   return (
     <EmptyState
-      heading={content.tickets.unavailableHeading}
-      body={content.tickets.unavailableBody}
+      icon="warning"
+      title={content.tickets.unavailableHeading}
+      description={content.tickets.unavailableBody}
       action={<TextLink href={routes.tickets()}>{content.tickets.backToQueue}</TextLink>}
     />
   );

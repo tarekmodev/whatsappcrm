@@ -27,6 +27,8 @@ interface StubWebEnv {
   metaAppId: string | null;
   metaEmbeddedSignupConfigId: string | null;
   metaGraphApiVersion: string;
+  /** The unconfigured state's "Contact support" link, absent unless a test sets it. */
+  supportEmail: string | null;
 }
 
 const env = vi.hoisted((): { webEnv: StubWebEnv } => ({
@@ -34,6 +36,7 @@ const env = vi.hoisted((): { webEnv: StubWebEnv } => ({
     metaAppId: '1234567890',
     metaEmbeddedSignupConfigId: '9876543210',
     metaGraphApiVersion: 'v23.0',
+    supportEmail: null,
   },
 }));
 
@@ -147,6 +150,7 @@ beforeEach(() => {
     metaAppId: '1234567890',
     metaEmbeddedSignupConfigId: '9876543210',
     metaGraphApiVersion: 'v23.0',
+    supportEmail: null,
   };
   window.FB = { init, login };
   transport.connect.mockResolvedValue({ status: 'success', account: CONNECTED });
@@ -350,6 +354,33 @@ describe('EmbeddedSignupPanel', () => {
     expect(
       screen.queryByRole('button', { name: content.whatsapp.connectButton }),
     ).not.toBeInTheDocument();
+  });
+
+  /**
+   * TAR-515: the copy tells an admin to contact support, so the state offers it
+   * rather than leaving them to find an address.
+   */
+  it('offers the configured support address as a real mailto link', () => {
+    env.webEnv = { ...env.webEnv, metaAppId: null, supportEmail: 'help@operator.example' };
+    renderPanel();
+
+    expect(
+      screen.getByRole('link', { name: content.whatsapp.unconfiguredSupportAction }),
+    ).toHaveAttribute(
+      'href',
+      `mailto:help@operator.example?subject=${encodeURIComponent(content.whatsapp.unconfiguredSupportSubject)}`,
+    );
+  });
+
+  it('keeps the explanation and drops the link where no address is configured', () => {
+    env.webEnv = { ...env.webEnv, metaAppId: null, supportEmail: null };
+    renderPanel();
+
+    expect(screen.getByText(content.whatsapp.unconfiguredBody)).toBeInTheDocument();
+    // A mailto to nowhere is worse than a sentence telling somebody to ask.
+    expect(
+      screen.queryByRole('link', { name: content.whatsapp.unconfiguredSupportAction }),
+    ).toBeNull();
   });
 
   /**

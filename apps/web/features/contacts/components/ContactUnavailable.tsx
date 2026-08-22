@@ -14,8 +14,9 @@ import { routes } from '@/lib/routes';
 export function ContactUnavailable() {
   return (
     <EmptyState
-      heading={content.contacts.unavailableHeading}
-      body={content.contacts.unavailableBody}
+      icon="warning"
+      title={content.contacts.unavailableHeading}
+      description={content.contacts.unavailableBody}
       action={<TextLink href={routes.contacts()}>{content.contacts.backToContacts}</TextLink>}
     />
   );

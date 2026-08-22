@@ -1,0 +1,127 @@
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  /*
+   * Fills the container when that container has a definite height — the inbox's
+   * four regions do, since TAR-513 gave them the fixed geometry — and collapses
+   * to its own content height when it does not, which is every section card. One
+   * rule, both behaviours, no variant prop.
+   */
+  min-block-size: 100%;
+  padding-block: var(--space-6);
+  padding-inline: var(--space-4);
+  text-align: center;
+  /* The state arrives rather than appearing. `--duration-fast` is 1ms under
+     `prefers-reduced-motion`, and the rule below removes it outright. */
+  animation: state-enter var(--duration-fast) var(--easing-enter) both;
+}
+
+/*
+ * The whole visual weight of the state. `--color-on-surface-subtle` is decoration
+ * only — around 2.6:1 — and this is the one place it is legitimate, because the
+ * icon says nothing a screen reader or a low-vision reader needs: the title does.
+ */
+.plate {
+  display: grid;
+  place-items: center;
+  inline-size: var(--size-state-plate);
+  block-size: var(--size-state-plate);
+  margin-block-end: var(--space-2);
+  background: var(--color-surface-sunken);
+  /*
+   * The ring is what makes the disc a disc on *both* surfaces. The inbox's list
+   * column is itself `surface-sunken` (0001, "The inbox"), so a disc that was
+   * only a fill vanished there and left the icon floating in the column. This is
+   * not the bordered box the old empty state was — it is the outline of the one
+   * shape that carries the state.
+   */
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-pill);
+  color: var(--color-on-surface-subtle);
+}
+
+.state[data-tone='danger'] .plate {
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+/*
+ * Instructional rather than empty: the thread column before a conversation is
+ * picked has nothing wrong with it, so it gets the icon without the disc that
+ * makes the other two read as a state the user landed in.
+ */
+.state[data-tone='quiet'] .plate {
+  inline-size: auto;
+  block-size: auto;
+  margin-block-end: var(--space-1);
+  background: none;
+  border: none;
+}
+
+.title {
+  color: var(--color-on-surface);
+  font-size: var(--font-size-heading-sm);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-heading);
+}
+
+.state[data-tone='quiet'] .title {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-on-surface-muted);
+}
+
+.description {
+  max-inline-size: var(--measure-body);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+.note {
+  color: var(--color-on-surface-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: center;
+  margin-block-start: var(--space-2);
+}
+
+@keyframes state-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state {
+    animation: none;
+  }
+}
+
+/*
+ * In forced colours a background-only disc disappears entirely, taking the one
+ * shape that identifies the state with it.
+ */
+@media (forced-colors: active) {
+  .plate {
+    border: var(--border-hairline) solid CanvasText;
+  }
+
+  .state[data-tone='quiet'] .plate {
+    border: none;
+  }
+}

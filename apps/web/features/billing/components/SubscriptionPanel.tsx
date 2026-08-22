@@ -3,11 +3,13 @@ import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { DetailList, type DetailListItem } from '@/components/ui/DetailList';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { RelativeTime } from '@/components/ui/RelativeTime';
+import { TextLink } from '@/components/ui/TextLink';
 import { UsageMeter } from '@/components/ui/UsageMeter';
 import { AutoGrid } from '@/components/layout/AutoGrid';
 import { Stack } from '@/components/layout/Stack';
 import { useContent, type Content } from '@/lib/content';
 import type { UsageReading } from '@/lib/plan/usage-reading';
+import { BILLING_SECTION_IDS } from '../constants';
 import { formatCount, formatSeatPrice, type PlanUsageReadings } from '../plan-presentation';
 
 /**
@@ -38,8 +40,17 @@ export function SubscriptionPanel({
     <Stack gap="5">
       {summary.subscription === null ? (
         <EmptyState
-          heading={content.billing.noSubscriptionHeading}
-          body={content.billing.noSubscriptionBody}
+          icon="billing"
+          title={content.billing.noSubscriptionHeading}
+          description={content.billing.noSubscriptionBody}
+          // The copy says "choose a plan below", so the state offers the jump
+          // rather than leaving it to be found — the grid is under the fold on
+          // a phone. Same page, so the anchor is the whole of the action.
+          action={
+            <TextLink href={`#${BILLING_SECTION_IDS.plans}`}>
+              {content.billing.noSubscriptionAction}
+            </TextLink>
+          }
         />
       ) : (
         <DetailList items={subscriptionDetails(summary, content)} />

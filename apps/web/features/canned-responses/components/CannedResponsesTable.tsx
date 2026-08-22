@@ -95,8 +95,9 @@ export function CannedResponsesTable({ responses, canManage }: CannedResponsesTa
   if (responses.length === 0) {
     return (
       <EmptyState
-        heading={content.cannedResponses.emptyHeading}
-        body={content.cannedResponses.emptyBody}
+        icon="note"
+        title={content.cannedResponses.emptyHeading}
+        description={content.cannedResponses.emptyBody}
       />
     );
   }

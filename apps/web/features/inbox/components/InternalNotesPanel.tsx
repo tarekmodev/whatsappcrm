@@ -57,7 +57,11 @@ export function InternalNotesPanel({
       <Notice tone="info">{content.notes.privacyNotice}</Notice>
 
       {notes.length === 0 ? (
-        <EmptyState heading={content.notes.emptyHeading} body={content.notes.emptyBody} />
+        <EmptyState
+          icon="note"
+          title={content.notes.emptyHeading}
+          description={content.notes.emptyBody}
+        />
       ) : (
         <ol className={styles.list}>
           {notes.map((note) => (

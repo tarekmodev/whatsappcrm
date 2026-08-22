@@ -27,8 +27,9 @@ export function AgentBreakdownTable({ rows }: { rows: readonly AgentReportRow[] 
   if (rows.length === 0) {
     return (
       <EmptyState
-        heading={content.reports.agentsEmptyHeading}
-        body={content.reports.agentsEmptyBody}
+        icon="reports"
+        title={content.reports.agentsEmptyHeading}
+        description={content.reports.agentsEmptyBody}
       />
     );
   }

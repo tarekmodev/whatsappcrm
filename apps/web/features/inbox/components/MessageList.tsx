@@ -36,7 +36,11 @@ export function MessageList({ messages, senderNames, hasOlderMessages }: Message
   if (messages.length === 0) {
     return (
       <div className={styles.emptyState}>
-        <EmptyState heading={content.thread.emptyHeading} body={content.thread.emptyBody} />
+        <EmptyState
+          icon="conversation"
+          title={content.thread.emptyHeading}
+          description={content.thread.emptyBody}
+        />
       </div>
     );
   }

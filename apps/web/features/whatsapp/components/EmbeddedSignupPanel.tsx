@@ -7,9 +7,12 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Notice } from '@/components/ui/Notice';
+import { TextLink } from '@/components/ui/TextLink';
 import { useToast } from '@/components/ui/ToastProvider';
 import { Stack } from '@/components/layout/Stack';
+import { webEnv } from '@/lib/config/env';
 import { useContent } from '@/lib/content';
+import { mailto } from '@/lib/mailto';
 import { META_SDK_SRC } from '../embedded-signup';
 import {
   connectFailureCopy,
@@ -57,10 +60,25 @@ export function EmbeddedSignupPanel() {
     // No Meta app on this deployment. An explanation and a way forward, rather
     // than a button that can only ever fail — and rather than silence, which
     // leaves an admin looking for a feature the console appears not to have.
+    //
+    // The copy instructs "contact support", so the state offers it. The link
+    // appears only where the deployment configured an address: a mailto to
+    // nowhere is worse than the sentence on its own.
     return (
       <EmptyState
-        heading={content.whatsapp.unconfiguredHeading}
-        body={content.whatsapp.unconfiguredBody}
+        icon="settings"
+        title={content.whatsapp.unconfiguredHeading}
+        description={content.whatsapp.unconfiguredBody}
+        action={
+          webEnv.supportEmail === null ? undefined : (
+            <TextLink
+              isExternal
+              href={mailto(webEnv.supportEmail, content.whatsapp.unconfiguredSupportSubject)}
+            >
+              {content.whatsapp.unconfiguredSupportAction}
+            </TextLink>
+          )
+        }
       />
     );
   }
@@ -199,8 +217,8 @@ function ConnectFailure({
 
   return (
     <ErrorState
-      heading={copy.heading}
-      body={report.detail ?? copy.body}
+      title={copy.heading}
+      description={report.detail ?? copy.body}
       requestId={report.requestId}
       onRetry={isConnectFailureRetryable(report.failure) ? onRetry : undefined}
     />

@@ -91,8 +91,9 @@ export function ContactCustomFieldsCard({
     return (
       <SectionCard id="custom-fields" title={content.contacts.customFieldsHeading}>
         <EmptyState
-          heading={content.contacts.customFieldsEmptyHeading}
-          body={
+          icon="settings"
+          title={content.contacts.customFieldsEmptyHeading}
+          description={
             canManageDefinitions
               ? content.contacts.customFieldsEmptyBody
               : content.contacts.customFieldsEmptyBodyReadOnly

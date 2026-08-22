@@ -63,8 +63,9 @@ export function DomainList({ domains }: { domains: readonly TenantDomain[] }) {
 
       {countCustomDomains(domains) === 0 ? (
         <EmptyState
-          heading={content.domains.emptyHeading}
-          body={content.domains.emptyBody}
+          icon="globe"
+          title={content.domains.emptyHeading}
+          description={content.domains.emptyBody}
           action={
             <Button
               variant="primary"

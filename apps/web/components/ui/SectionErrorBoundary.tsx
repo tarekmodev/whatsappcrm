@@ -71,8 +71,9 @@ export class SectionErrorBoundary extends Component<
         return (
           <ErrorState
             onRetry={this.reload}
-            heading={content.errors.staleBundleHeading}
-            body={content.errors.staleBundleBody}
+            retryLabel={content.errors.reload}
+            title={content.errors.staleBundleHeading}
+            description={content.errors.staleBundleBody}
           />
         );
       }

@@ -33,7 +33,11 @@ export function TeamsList({
 
   if (teams.length === 0) {
     return (
-      <EmptyState heading={content.people.teamsEmptyHeading} body={content.people.teamsEmptyBody} />
+      <EmptyState
+        icon="people"
+        title={content.people.teamsEmptyHeading}
+        description={content.people.teamsEmptyBody}
+      />
     );
   }
 

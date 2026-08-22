@@ -75,6 +75,20 @@ export interface WebEnv {
    * versions of one API is a difference nobody would think to look for.
    */
   readonly metaGraphApiVersion: string;
+  /**
+   * Where the console tells a workspace admin to write when something needs the
+   * *operator* of this deployment (TAR-515) — not the tenant's own customer
+   * support address, which is `branding.supportEmail` and points the other way.
+   *
+   * `null` when unset, which is a real state rather than a fault: every surface
+   * that reads it drops the action and keeps the sentence, because a "Contact
+   * support" link that opens a blank draft is worse than none.
+   *
+   * Public, and correctly so: it is an address the console is asking people to
+   * write to. Malformed throws for the same reason a malformed Meta id does — a
+   * fat-fingered paste should fail where somebody is looking at the deploy.
+   */
+  readonly supportEmail: string | null;
   readonly isProduction: boolean;
 }
 
@@ -146,6 +160,28 @@ function readOptionalMetaId(name: string, rawValue: string | undefined): string 
   return value;
 }
 
+/**
+ * Deliberately the same loose shape `branding-draft.ts` validates the tenant's
+ * own address against: something, an `@`, something with a dot. Anything
+ * stricter rejects addresses that are legal and deliverable.
+ */
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function readOptionalEmail(name: string, rawValue: string | undefined): string | null {
+  const value = (rawValue ?? '').trim();
+
+  if (value.length === 0) {
+    return null;
+  }
+
+  if (!EMAIL_SHAPE.test(value)) {
+    // Name only. Echoing the value would put whatever was misconfigured in a log.
+    throw new Error(`Invalid web environment configuration: ${name} must be an email address.`);
+  }
+
+  return value;
+}
+
 const GRAPH_API_VERSION_PATTERN = /^v\d+\.\d+$/;
 
 function readGraphApiVersion(name: string, rawValue: string | undefined, fallback: string): string {
@@ -190,6 +226,10 @@ function readWebEnv(): WebEnv {
       process.env.NEXT_PUBLIC_META_GRAPH_API_VERSION,
       // The same default `META_GRAPH_API_VERSION` carries on the API side.
       'v23.0',
+    ),
+    supportEmail: readOptionalEmail(
+      'NEXT_PUBLIC_SUPPORT_EMAIL',
+      process.env.NEXT_PUBLIC_SUPPORT_EMAIL,
     ),
     isProduction,
   };
