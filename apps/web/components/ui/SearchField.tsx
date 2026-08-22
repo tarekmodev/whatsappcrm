@@ -34,6 +34,14 @@ export interface SearchFieldProps {
   placeholder?: string;
   /** The query parameter this box drives, for a browser's form autofill. */
   name?: string;
+  /**
+   * A native character ceiling, where the query parameter this box drives has
+   * one. Native rather than a counter and an error: the parser behind the URL
+   * drops an over-long term silently, so a box that cannot produce one is the
+   * only way the two behaviours agree — and a filter that counts characters at
+   * the reader reads as a form field.
+   */
+  maxLength?: number;
   className?: string;
 }
 
@@ -44,6 +52,7 @@ export function SearchField({
   isLabelVisible = false,
   placeholder,
   name = 'q',
+  maxLength,
   className,
 }: SearchFieldProps) {
   const content = useContent();
@@ -62,6 +71,7 @@ export function SearchField({
               type="search"
               name={name}
               autoComplete="off"
+              maxLength={maxLength}
               placeholder={placeholder}
               value={value}
               className={styles.input}

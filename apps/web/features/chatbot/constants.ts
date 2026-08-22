@@ -1,3 +1,17 @@
+import type { Permission } from '@whatsappcrm/contracts';
+
+/**
+ * The permissions this surface’s controls are gated on, named once.
+ *
+ * Here rather than beside one of the sections, because three components now
+ * read them: the settings form, the knowledge base’s `Add entry` gate and the
+ * page’s own route guard, each in a different boundary.
+ */
+export const CHATBOT_PERMISSIONS = {
+  read: 'ai:read',
+  write: 'ai:write',
+} as const satisfies Record<string, Permission>;
+
 /**
  * How many knowledge base entries one page of the table holds.
  *
@@ -8,6 +22,27 @@
  * see the bottom of.
  */
 export const KNOWLEDGE_DOCUMENTS_PAGE_SIZE = 10;
+
+/**
+ * How many rows the table’s skeleton draws while a *filtered* read is in
+ * flight (TAR-613).
+ *
+ * Three rather than the page size. A narrowed search usually returns one or
+ * two entries, and ten skeleton rows collapsing to one is a bigger jolt than a
+ * short placeholder growing. The unfiltered first load keeps the page size,
+ * where ten rows is what actually arrives.
+ */
+export const KNOWLEDGE_FILTERED_SKELETON_ROWS = 3;
+
+/**
+ * The cap the search box puts on a title fragment, mirroring
+ * `KnowledgeDocumentListQuerySchema.q` (`z.string().min(1).max(120)`).
+ *
+ * Named here rather than typed into the control, so the box cannot offer a
+ * term the parser behind the URL would silently drop — which from the reader’s
+ * side is a search box that stops working with no explanation.
+ */
+export const KNOWLEDGE_QUERY_MAX_LENGTH = 120;
 
 /**
  * How tall the entry editor's text area is, in rows.

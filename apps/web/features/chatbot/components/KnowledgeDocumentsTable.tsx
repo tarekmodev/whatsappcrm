@@ -8,11 +8,13 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { RowActions } from '@/components/ui/RowActions';
+import { TextLink } from '@/components/ui/TextLink';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useActionForm } from '@/lib/hooks/useActionForm';
 import { useContent } from '@/lib/content';
 import { reindexKnowledgeEntryAction } from '../chatbot.actions';
-import { KNOWLEDGE_DOCUMENTS_PAGE_SIZE } from '../constants';
+import { routes } from '@/lib/routes';
+import { KNOWLEDGE_DOCUMENTS_PAGE_SIZE, KNOWLEDGE_FILTERED_SKELETON_ROWS } from '../constants';
 import { KNOWLEDGE_STATUS_TONES } from '../presentation';
 import { useIndexingRefresh } from '../useIndexingRefresh';
 import { knowledgeColumnMeta } from './knowledge-columns';
@@ -44,12 +46,20 @@ export interface KnowledgeDocumentsTableProps {
    */
   indexedEntryCount: number;
   canWrite: boolean;
+  /**
+   * A search term or a status filter is applied, which picks between the two
+   * empty states. Not optional: "this workspace has no entries" and "nothing
+   * matched" need different copy and different next steps, and a caller that
+   * could leave it out is a caller that would get it wrong.
+   */
+  isFiltered: boolean;
 }
 
 export function KnowledgeDocumentsTable({
   documents,
   indexedEntryCount,
   canWrite,
+  isFiltered,
 }: KnowledgeDocumentsTableProps) {
   const content = useContent();
   const [editing, setEditing] = useState<KnowledgeDocumentListItem | null>(null);
@@ -103,7 +113,23 @@ export function KnowledgeDocumentsTable({
   }, [canWrite, content]);
 
   if (documents.length === 0) {
-    return (
+    // Two states, not one. A filter that matched nothing offers the way back;
+    // a knowledge base that has never had an entry gets the explanation of what
+    // the emptiness costs, and its next step is the `Add entry` button in the
+    // card header directly above — a second one inside the state would be the
+    // same control twice in one card.
+    return isFiltered ? (
+      <EmptyState
+        icon="filter"
+        title={content.chatbot.knowledgeFilteredEmptyHeading}
+        description={content.chatbot.knowledgeFilteredEmptyBody}
+        action={
+          <TextLink href={routes.settingsChatbot()}>
+            {content.chatbot.knowledgeClearFilters}
+          </TextLink>
+        }
+      />
+    ) : (
       <EmptyState
         icon="note"
         title={content.chatbot.knowledgeEmptyHeading}
@@ -243,10 +269,24 @@ function isLastIndexedEntry(
 
 /**
  * Mirrors the loaded table exactly — it *is* the same table, with the same
- * columns and placeholder cells — so the swap to real data shifts nothing. Row
- * count matches the page size the server requests.
+ * columns and placeholder cells — so the swap to real data shifts nothing.
+ *
+ * **Row count depends on whether a filter is applied** (TAR-613). Unfiltered,
+ * it is the page size the server requests, which is what actually arrives.
+ * Filtered, it is three: a narrowed search usually returns one or two entries,
+ * and ten skeleton rows collapsing to one is a bigger jolt than a short
+ * placeholder growing.
+ *
+ * `hasActions` stays beside it because this is also the route's `loading.tsx`
+ * placeholder, which has no session to read and no filters to read either.
  */
-export function KnowledgeDocumentsTableSkeleton({ hasActions = true }: { hasActions?: boolean }) {
+export function KnowledgeDocumentsTableSkeleton({
+  hasActions = true,
+  isFiltered = false,
+}: {
+  hasActions?: boolean;
+  isFiltered?: boolean;
+}) {
   const content = useContent();
 
   return (
@@ -254,7 +294,7 @@ export function KnowledgeDocumentsTableSkeleton({ hasActions = true }: { hasActi
       <LoadingAnnouncement label={content.chatbot.knowledgeLoading} />
       <DataTableSkeleton
         caption={content.chatbot.knowledgeHeading}
-        rowCount={KNOWLEDGE_DOCUMENTS_PAGE_SIZE}
+        rowCount={isFiltered ? KNOWLEDGE_FILTERED_SKELETON_ROWS : KNOWLEDGE_DOCUMENTS_PAGE_SIZE}
         columns={knowledgeColumnMeta(content, hasActions).map((meta) => ({
           ...meta,
           render: () => null,

@@ -288,6 +288,15 @@
   --scale-size-pane-xs: 14rem;
   --scale-size-media-sm: 8rem;
   --scale-size-media-md: 18rem;
+  /*
+   * A button's box, pinned so a placeholder can stand in for one whose
+   * existence is still being decided (TAR-613). Measured rather than derived:
+   * a skeleton fills its parent, and a card’s action slot is shrink-to-fit, so
+   * a placeholder with no width of its own has no width at all. 8rem is what
+   * two words at `--font-size-body-sm` plus the control’s inline padding
+   * occupy — re-measure before changing it.
+   */
+  --scale-size-action: 8rem;
   /* A native audio control's own height, pinned so a placeholder can match it. */
   --scale-size-player: 3.375rem;
   /* `dvh`, never `vh`: mobile browser chrome makes the two differ by a toolbar. */

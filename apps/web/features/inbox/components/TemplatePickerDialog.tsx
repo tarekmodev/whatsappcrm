@@ -11,7 +11,7 @@ import { TextInput } from '@/components/ui/TextInput';
 import { Stack } from '@/components/layout/Stack';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useContent } from '@/lib/content';
-import { useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
+import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
 import { useTemplateSearch, type TemplateSearchState } from '@/features/inbox/useTemplateSearch';
 import { TemplateList, TemplateListSkeleton } from './TemplateList';
 import { TemplateSendForm } from './TemplateSendForm';
@@ -159,5 +159,3 @@ function TemplateResults({
     </Stack>
   );
 }
-
-const SEARCH_DEBOUNCE_MS = 300;

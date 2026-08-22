@@ -1,23 +1,29 @@
-import type { Permission } from '@whatsappcrm/contracts';
 import { Stack } from '@/components/layout/Stack';
 import { LazyBoundary } from '@/components/ui/LazyBoundary';
 import { Notice } from '@/components/ui/Notice';
 import { SectionCard } from '@/components/ui/SectionCard';
 import { content } from '@/content/en';
 import type { PermissionChecker } from '@/lib/session/permissions';
-import { loadChatbot } from '../chatbot.data';
+import { loadChatbotConfig } from '../chatbot.data';
+import { CHATBOT_PERMISSIONS } from '../constants';
 import { AiConfigFormSkeleton } from './AiConfigForm.Skeleton';
 import { BotReadinessPanel, BotReadinessPanelSkeleton } from './BotReadinessPanel';
-import { KnowledgeBaseSection, KnowledgeBaseSectionSkeleton } from './KnowledgeBaseSection';
 import { LazyAiConfigForm } from './chatbot-widgets.lazy';
 
 /**
- * Fetches the chatbot's configuration and knowledge base, then composes the
- * page's three sections. Usage: inside a Suspense boundary on the chatbot
- * settings page, with `ChatbotSectionsSkeleton` as the fallback.
+ * Fetches the chatbot's configuration and composes the two cards that are made
+ * of it: whether it is answering, and the settings that decide when. Usage:
+ * inside an **unkeyed** Suspense boundary on the chatbot settings page, with
+ * `ChatbotConfigSectionsSkeleton` as the fallback.
  *
- * A server component, so the permission decision and both reads happen on the
+ * A server component, so the permission decision and the read happen on the
  * server and the client bundle carries neither.
+ *
+ * **Unkeyed is load-bearing** (TAR-613). The knowledge base below is filtered
+ * from the URL and its boundary is keyed on those filters, so it remounts on
+ * every debounced keystroke. This boundary must not: React reconciles it in
+ * place instead, which is what stops a search in the table below throwing away
+ * an admin's half-written system prompt.
  *
  * **Readiness comes first, and it is not part of the form.** The single most
  * important fact on this page is whether customers are getting automated replies
@@ -29,15 +35,8 @@ import { LazyAiConfigForm } from './chatbot-widgets.lazy';
  * /ai/config` is readable without the `ai_chatbot` feature precisely so this page
  * can explain itself to a tenant that has not bought it.
  */
-
-/** The permissions this surface's controls are gated on, named once. */
-export const CHATBOT_PERMISSIONS = {
-  read: 'ai:read',
-  write: 'ai:write',
-} as const satisfies Record<string, Permission>;
-
-export async function ChatbotSections({ checker }: { checker: PermissionChecker }) {
-  const { config, documents, hasMoreDocuments } = await loadChatbot();
+export async function ChatbotConfigSections({ checker }: { checker: PermissionChecker }) {
+  const config = await loadChatbotConfig();
   // Two gates, not one: `ai:write` is what the endpoints require, and the plan
   // feature is what the API checks on top of it. A principal who holds the
   // permission on a plan without the chatbot still gets a read-only surface,
@@ -67,23 +66,13 @@ export async function ChatbotSections({ checker }: { checker: PermissionChecker 
           </LazyBoundary>
         </Stack>
       </SectionCard>
-
-      <KnowledgeBaseSection
-        documents={documents}
-        hasMore={hasMoreDocuments}
-        // From the same read as the readiness panel above, so "the only entry
-        // the chatbot can answer from" and "it answers from N entries" are one
-        // number rather than two that can disagree.
-        indexedEntryCount={config.readiness.indexedDocumentCount}
-        canWrite={canWrite}
-      />
     </Stack>
   );
 }
 
 /**
- * The fallback. The same stack and gap and the same three cards, each holding
- * its own section's skeleton, so the page does not reflow when the data lands.
+ * The fallback. The same stack and gap and the same two cards, each holding its
+ * own section's skeleton, so the page does not reflow when the data lands.
  *
  * The upsell notice is not drawn: whether it appears depends on the plan, which
  * has not arrived, and reserving space for it would leave a gap on the common
@@ -91,14 +80,9 @@ export async function ChatbotSections({ checker }: { checker: PermissionChecker 
  * appears is correct — it is the page telling somebody something they need to
  * read.
  *
- * Row actions are assumed present in the table skeleton for the same reason the
- * workspace skeleton always draws its plan card: this route's `loading.tsx` has
- * no session to read, and every principal who reaches this page under today's
- * role table holds `ai:write`.
- *
  * Changed in the same commit as the sections it stands in for.
  */
-export function ChatbotSectionsSkeleton() {
+export function ChatbotConfigSectionsSkeleton() {
   return (
     <Stack gap="5">
       <SectionCard
@@ -115,7 +99,6 @@ export function ChatbotSectionsSkeleton() {
       >
         <AiConfigFormSkeleton />
       </SectionCard>
-      <KnowledgeBaseSectionSkeleton />
     </Stack>
   );
 }

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { KnowledgeDocumentListItem } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
+import { routes } from '@/lib/routes';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import { KnowledgeDocumentsTable } from './KnowledgeDocumentsTable';
 
@@ -48,8 +49,9 @@ function renderTable(
   documents: readonly KnowledgeDocumentListItem[],
   {
     canWrite = true,
+    isFiltered = false,
     indexedEntryCount = documents.filter((entry) => entry.status === 'indexed').length,
-  }: { canWrite?: boolean; indexedEntryCount?: number } = {},
+  }: { canWrite?: boolean; isFiltered?: boolean; indexedEntryCount?: number } = {},
 ) {
   return render(
     <ToastProvider>
@@ -57,6 +59,7 @@ function renderTable(
         documents={documents}
         indexedEntryCount={indexedEntryCount}
         canWrite={canWrite}
+        isFiltered={isFiltered}
       />
     </ToastProvider>,
   );
@@ -78,6 +81,25 @@ describe('KnowledgeDocumentsTable', () => {
 
     expect(screen.getByText(content.chatbot.knowledgeEmptyHeading)).toBeInTheDocument();
     expect(screen.getByText(content.chatbot.knowledgeEmptyBody)).toBeInTheDocument();
+  });
+
+  it('tells a filter that matched nothing apart from an empty knowledge base', () => {
+    // TAR-613: the same blank table means two different things, and only one of
+    // them is fixed by clearing a filter. Sharing one string between them is
+    // what makes a working search look broken.
+    renderTable([], { isFiltered: true });
+
+    expect(screen.getByText(content.chatbot.knowledgeFilteredEmptyHeading)).toBeInTheDocument();
+    expect(screen.getByText(content.chatbot.knowledgeFilteredEmptyBody)).toBeInTheDocument();
+    expect(screen.queryByText(content.chatbot.knowledgeEmptyHeading)).not.toBeInTheDocument();
+  });
+
+  it('offers the filtered empty state a way back to the whole knowledge base', () => {
+    renderTable([], { isFiltered: true });
+
+    expect(
+      screen.getByRole('link', { name: content.chatbot.knowledgeClearFilters }),
+    ).toHaveAttribute('href', routes.settingsChatbot());
   });
 
   it('says why an entry failed to index, on the row', () => {
