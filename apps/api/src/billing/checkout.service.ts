@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   BILLING_PROVIDER,
   type BillingProvider,
@@ -10,14 +10,12 @@ import { PlanLimitsService } from '../entitlements/plan-limits.service';
 import { UsageCounterService } from '../entitlements/usage-counter.service';
 import { TenantLinkService } from '../identity/mailer/tenant-link.service';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
-import { TenantLifecycleService } from '../tenancy/lifecycle/tenant-lifecycle.service';
 import {
   BillingProviderUnavailableError,
   NoSubscriptionError,
   PlanDowngradeBlockedError,
   PlanNotFoundError,
 } from './billing.errors';
-import { SubscriptionSyncService } from './subscription-sync.service';
 
 /** Where the console lands when the provider sends the browser back. */
 const DEFAULT_SUCCESS_PATH = '/settings/billing?checkout=success';
@@ -25,8 +23,13 @@ const DEFAULT_CANCEL_PATH = '/settings/billing?checkout=cancelled';
 const DEFAULT_RETURN_PATH = '/settings/billing';
 
 /**
- * Opening a checkout, opening the customer portal, and applying what a completed
- * checkout bought.
+ * Opening a checkout, and opening the customer portal.
+ *
+ * Applying a purchase is **not** here: the provider webhook is the one path that
+ * writes a subscription (`BillingWebhookService` → `SubscriptionSyncService`).
+ * TAR-619 chose the webhook plus a refresh over a client-side completion call on
+ * return from the hosted page, and TAR-651 removed the endpoint that offered the
+ * second path, so there is exactly one writer.
  *
  * ## Return URLs are composed here, never taken from the caller
  *
@@ -54,16 +57,12 @@ const DEFAULT_RETURN_PATH = '/settings/billing';
  */
 @Injectable()
 export class CheckoutService {
-  private readonly logger = new Logger(CheckoutService.name);
-
   constructor(
     @Inject(BILLING_PROVIDER) private readonly provider: BillingProvider,
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly planLimits: PlanLimitsService,
     private readonly usage: UsageCounterService,
     private readonly links: TenantLinkService,
-    private readonly subscriptions: SubscriptionSyncService,
-    private readonly lifecycle: TenantLifecycleService,
   ) {}
 
   /**
@@ -142,48 +141,6 @@ export class CheckoutService {
       tenantId,
       returnUrl: await this.absoluteUrl(input.returnPath ?? DEFAULT_RETURN_PATH),
     });
-  }
-
-  /**
-   * Applies a checkout the browser has just returned from, so the console shows
-   * the new plan immediately.
-   *
-   * **The fast path, not the authoritative one.** The webhook is authoritative
-   * and may land seconds later or seconds earlier; both are made safe to apply
-   * in either order by `subscriptions.last_event_at`, which drops whichever
-   * arrives with the older provider timestamp. Applying only one of the two
-   * would mean either a console that lags a purchase by however long delivery
-   * takes, or a purchase that is lost entirely if the endpoint is disabled.
-   *
-   * Returns whether anything was applied, so the caller can decide what to
-   * render rather than guessing from an absent error.
-   */
-  async applyCompletedCheckout(tenantId: string, checkoutId: string): Promise<boolean> {
-    const event = await this.provider.resolveCheckout({ tenantId, checkoutId });
-
-    if (event === null) {
-      // Still open, expired, or not this tenant's. All three answer the same:
-      // there is nothing to apply, and the webhook remains the backstop.
-      return false;
-    }
-
-    const outcome = await this.subscriptions.apply(event);
-
-    if (outcome.result !== 'applied') {
-      this.logger.warn(
-        `Checkout ${checkoutId} for tenant ${tenantId} resolved but was not applied ` +
-          `(${outcome.result}); the webhook is the backstop.`,
-      );
-
-      return false;
-    }
-
-    // After the commit, for the reason `SubscriptionSyncService` states at
-    // length: `applyBillingEvent` opens its own transaction and enqueues a job
-    // keyed on the row it writes.
-    await this.lifecycle.applyBillingEvent(event);
-
-    return true;
   }
 
   /**
