@@ -92,6 +92,7 @@ the one that produced it.
 | [Branding and custom domains API](docs/reference/branding-domains-api.md)                    | The white-label surface: branding, hostnames, DNS verification, the operator queue |
 | [Canned responses API](docs/reference/canned-responses-api.md)                               | The quick-reply library: CRUD, the shortcut grammar, the picker, the relay         |
 | [AI chatbot and knowledge base API](docs/reference/chatbot-api.md)                           | Knowledge-base CRUD, chatbot config, confidence gating, the two handoff routes     |
+| [Billing API](docs/reference/billing-api.md)                                                 | Plans, checkout, portal, the webhook pipeline, seats, volume, dunning              |
 | [Changing a ticket's status and priority](docs/guides/manage-ticket-status-and-priority.md)  | For agents working in the console, not for API consumers                           |
 | [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)           | For supervisors writing routing rules in the console                               |
 | [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md)                      | For supervisors emptying the flagged queue in the console                          |
@@ -105,6 +106,7 @@ the one that produced it.
 | [Answer common questions with saved replies](docs/guides/use-saved-replies.md)               | For agents inserting a saved reply in the composer by typing a shortcut            |
 | [Keep the workspace's saved replies up to date](docs/guides/manage-saved-replies.md)         | For supervisors and admins adding, editing and deleting saved replies              |
 | [Set up your workspace](docs/guides/set-up-your-workspace.md)                                | For a new admin: the setup checklist, seats, and what suspension means             |
+| [Choose a plan and manage billing](docs/guides/manage-your-plan-and-billing.md)              | For admins comparing tiers, buying one, and reaching invoices and payment          |
 | [Automate what happens to a ticket](docs/guides/automate-tickets-with-workflows.md)          | For supervisors building trigger → condition → action workflows in the console     |
 | [Set up the chatbot and its knowledge base](docs/guides/set-up-the-chatbot.md)               | For admins writing the knowledge base and deciding when the chatbot answers        |
 | [Work with the chatbot in the inbox](docs/guides/work-with-the-chatbot-in-the-inbox.md)      | For agents reading a handover summary and taking a thread from the chatbot         |
@@ -112,6 +114,7 @@ the one that produced it.
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                             |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                           |
 | [Environments runbook](docs/runbooks/environments.md)                                        | Provisioning, secrets, health, alerting, rollback                                  |
+| [Billing provider runbook](docs/runbooks/billing-provider.md)                                | The Polar credentials still outstanding, the webhook endpoint, sandbox vs live     |
 | [Migrations runbook](docs/runbooks/migrations.md)                                            | How a migration reaches an environment, and how to undo one                        |
 | [Backups runbook](docs/runbooks/backups.md)                                                  | Backup coverage, restoring on Render, and the restore drill                        |
 

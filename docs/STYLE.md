@@ -68,6 +68,11 @@ Two more (TAR-415) cover the AI chatbot:
 [Set up the chatbot and its knowledge base](guides/set-up-the-chatbot.md) for an admin, and
 [Work with the chatbot in the inbox](guides/work-with-the-chatbot-in-the-inbox.md) for an
 agent.
+[Choose a plan and manage billing](guides/manage-your-plan-and-billing.md) (TAR-622) is for
+an admin, and is the first guide whose subject the reader cannot yet do — no environment has
+a payment provider connected. It says so in its first paragraph rather than describing a
+purchase that cannot happen, which is the same honesty rule the `TODO(author)` above states,
+applied to a whole page instead of a section.
 
 One subject splits into two guides when it splits into two permissions. Branding and custom
 domains sit on one settings area and read as one topic, but `branding:write` and
