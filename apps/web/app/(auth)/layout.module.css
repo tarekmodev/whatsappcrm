@@ -1,4 +1,4 @@
-.main {
+.layout {
   /*
    * `dvh`, not `vh`: on iOS Safari the browser chrome is inside `vh`, so a
    * centred card measured against it sits low and the submit button ends up
@@ -6,40 +6,98 @@
    */
   min-block-size: 100dvh;
   display: grid;
-  align-content: center;
-  justify-items: center;
-  gap: var(--space-5);
-  padding-block: var(--space-6);
-  padding-block-end: calc(var(--space-6) + env(safe-area-inset-bottom));
-  padding-inline: clamp(var(--space-4), 4vw, var(--space-6));
 }
 
-.utilities {
-  /* Out of the centred column so it cannot push the card off-centre, and pinned
-     clear of the notch on a landscape phone. */
-  position: absolute;
-  inset-block-start: calc(var(--space-3) + env(safe-area-inset-top));
-  inset-inline-end: calc(var(--space-3) + env(safe-area-inset-right));
+/* Full height and on the surface, so there is no canvas showing anywhere: this
+   panel *is* the page below the split breakpoint and the leading half above it. */
+.formPanel {
+  display: flex;
+  flex-direction: column;
+  /* Without this a long word in a field or a heading can push a grid column
+     wider than its track and take the layout into horizontal scroll. */
+  min-inline-size: 0;
+  background: var(--color-surface);
+  padding-inline: clamp(var(--space-4), 4vw, var(--space-6));
+  padding-block-end: calc(var(--space-5) + env(safe-area-inset-bottom));
+}
+
+/*
+ * The brand band, and the reason this screen has a top edge at all. Full-bleed
+ * to the panel's gutters — negative margin rather than moving the padding onto
+ * every child, so the band's colour reaches the edge of a 320px screen while the
+ * lockup inside it stays on the same gutter as the form below.
+ */
+.band {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--size-band);
+  margin-inline: calc(clamp(var(--space-4), 4vw, var(--space-6)) * -1);
+  padding-inline: clamp(var(--space-4), 4vw, var(--space-6));
+  padding-block-start: env(safe-area-inset-top);
+  background: var(--color-rail);
+  color: var(--color-on-rail-strong);
+}
+
+/*
+ * Centred, but only so far.
+ *
+ * A form centred in a 945px viewport sits in a void with nothing above it, which
+ * is the "large void" TAR-521 opens on. The two spacers do the centring: both
+ * grow, but the leading one stops at `--size-band`, so the form is centred on a
+ * laptop and sits a band's height from the top on anything taller. `safe center`
+ * cannot express that, and a fixed `padding-block-start` would break the short
+ * screens it is meant to help.
+ */
+.content {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+.content::before {
+  content: '';
+  flex: 1 1 auto;
+  max-block-size: var(--size-band);
+}
+
+.content::after {
+  content: '';
+  flex: 1 1 auto;
 }
 
 .column {
+  flex: 0 0 auto;
   inline-size: 100%;
   max-inline-size: var(--size-container-sm);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
+  /* Centred in the panel below the split breakpoint, where the panel is the whole
+     screen; above it the panel is barely wider than the column. */
+  margin-inline: auto;
+  padding-block: var(--space-5);
 }
 
-.wordmark {
-  text-align: center;
-  font-size: var(--font-size-heading-sm);
-  font-weight: var(--font-weight-strong);
-  color: var(--color-accent);
-}
+@media (min-width: 64rem) {
+  .layout {
+    /*
+     * The form panel is the column plus its own gutters and nothing more, so the
+     * brand panel takes every pixel left over. Derived rather than a new size
+     * token: a panel wider than the form it holds is just a wider void.
+     */
+    grid-template-columns: calc(var(--size-container-sm) + var(--space-6) * 2) 1fr;
+  }
 
-/* The logo takes the wordmark's place and its space, so a tenant with a logo and
-   one without produce the same column height. */
-.mark {
-  display: flex;
-  justify-content: center;
+  .formPanel {
+    padding-inline: var(--space-6);
+  }
+
+  /* On the surface from here up: the rail colour beside it is the brand panel's,
+     and two navy regions with a form between them is a frame, not a screen. */
+  .band {
+    min-block-size: auto;
+    margin-inline: 0;
+    padding-inline: 0;
+    padding-block: var(--space-6);
+    background: none;
+    color: inherit;
+  }
 }

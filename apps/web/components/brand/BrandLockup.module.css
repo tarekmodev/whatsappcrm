@@ -1,21 +1,84 @@
+/*
+ * The mark keeps its own colours (the accent pair, which is a measured one in
+ * both themes and under every tenant brand); the wordmark takes `currentColor`,
+ * so the same lockup is correct on the surface above a sign-in form and on the
+ * navy band above it without a variant for each.
+ */
 .lockup {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  gap: var(--space-2);
   min-inline-size: 0;
-  color: var(--color-on-surface);
   font-size: var(--font-size-body);
   font-weight: var(--font-weight-strong);
-  text-decoration: none;
+  line-height: var(--line-height-tight);
+}
+
+.lockup[data-size='lg'] {
+  font-size: var(--font-size-heading-sm);
+}
+
+.mark {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  background: var(--color-accent);
+  border-radius: var(--radius-md);
+  color: var(--color-on-accent);
+  font-size: var(--font-size-body-sm);
+  /* A product name is the tenant's, and "acme" and "Acme" must not produce two
+     different marks. */
+  text-transform: uppercase;
+}
+
+.lockup[data-size='lg'] .mark {
+  inline-size: var(--size-control-md);
+  block-size: var(--size-control-md);
+  font-size: var(--font-size-body);
 }
 
 /*
- * A tenant may be called anything. The wordmark truncates rather than pushing
- * the controls beside it off a 320px bar — the lockup is chrome, and chrome is
- * what gives way first.
+ * Truncated in the chrome, where the rail and the bar are fixed-width boxes and a
+ * wrapping wordmark would change their height.
  */
 .name {
   min-inline-size: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/*
+ * Wrapped at `lg`, which is the signed-out screens and nothing else. There the
+ * lockup stands in a band with room below it, and truncation would be content
+ * loss rather than tidiness: at 320px with the text at 200% a long product name
+ * has nowhere to go, and "Northwi…" is the workspace's name not being shown
+ * (WCAG 2.2 SC 1.4.4).
+ */
+.lockup[data-size='lg'] .name {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The collapsed rail keeps the mark and drops the word — visually only, so the
+ * link that wraps this keeps its accessible name and the navigation does not
+ * change shape for a screen reader when the width does.
+ *
+ * `data-rail` is set by `AppShell` on the frame and is a documented seam between
+ * that frame and the components inside it (see `AppSidebar.module.css`). The rule
+ * lives here rather than there because a component never styles another
+ * component's internals: the rail says how wide it is, and the lockup decides
+ * what fits.
+ */
+[data-rail='collapsed'] .name {
+  position: absolute;
+  inline-size: var(--border-hairline);
+  block-size: var(--border-hairline);
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

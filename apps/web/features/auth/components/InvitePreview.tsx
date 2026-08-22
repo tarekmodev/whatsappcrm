@@ -58,12 +58,17 @@ export function InvitePreview({ preview }: { preview: InvitePreviewResponse }) {
 export function InvitePreviewSkeleton() {
   return (
     <Stack gap="3">
+      {/*
+        One line, not two. The lead is a single sentence — "X invited you to join
+        Y" — and its length is the one thing on this card the skeleton genuinely
+        cannot know, because both names arrive with the lookup. One line is what
+        it comes to for ordinary names at this column width; two was tuned for the
+        narrower card the screen used to sit in (TAR-521), and it shrank by a line
+        every time the invitation landed.
+      */}
       <span className={cx(styles.lead, styles.leadPlaceholder)}>
         <span className={styles.placeholderLine}>
-          <SkeletonLine />
-        </span>
-        <span className={styles.placeholderLine}>
-          <SkeletonLine width="62%" />
+          <SkeletonLine width="80%" />
         </span>
       </span>
 

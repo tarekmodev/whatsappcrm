@@ -337,6 +337,13 @@
   --size-icon-lg: var(--scale-size-icon-lg);
   /* The disc an empty or error state draws its icon in. */
   --size-state-plate: var(--scale-size-state-plate);
+  /*
+   * The signed-out screens' brand band (TAR-521), and the cap on how far the
+   * form beside it may drift from the optical centre of a tall viewport. One
+   * role because it is one measurement: the band above the form and the void
+   * above the form are the same 120px, and they are meant to stay equal.
+   */
+  --size-band: var(--scale-size-band-md);
   --size-rail: var(--scale-size-rail);
   --size-rail-collapsed: var(--scale-size-rail-collapsed);
   --size-bar: var(--scale-size-bar);

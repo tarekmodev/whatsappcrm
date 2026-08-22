@@ -4,7 +4,7 @@ import type { TenantBranding } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { routes } from '@/lib/routes';
 import { RAIL_NAV_ID } from '@/lib/shell/rail';
-import { BrandLogo } from '@/components/brand/BrandLogo';
+import { BrandLockup } from '@/components/brand/BrandLockup';
 import { RailNav } from './RailNav';
 import { RailToggle } from './RailToggle';
 import type { NavItem } from './navigation';
@@ -48,21 +48,10 @@ export function AppSidebar({
     <div className={styles.rail}>
       <div className={styles.brandRow}>
         <Link href={routes.inbox()} className={styles.brand} aria-label={branding.productName}>
-          {branding.logo === null ? (
-            <>
-              {/*
-                Two spellings of the same wordmark: the full name, and the
-                initial that survives the collapsed width. Both come from the
-                tenant's branding, so white-labelling replaces them here.
-              */}
-              <span className={styles.brandMark} aria-hidden="true">
-                {branding.productName.charAt(0)}
-              </span>
-              <span className={styles.brandName}>{branding.productName}</span>
-            </>
-          ) : (
-            <BrandLogo branding={branding} />
-          )}
+          {/* The same lockup the top bar and the sign-in screen render, including
+              what it does with the tenant's logo and what it drops when the rail
+              collapses. */}
+          <BrandLockup branding={branding} />
         </Link>
         <RailToggle />
       </div>

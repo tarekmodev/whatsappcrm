@@ -60,6 +60,7 @@ export function LoginForm({ redirectTo }: { redirectTo: string }) {
     <AuthCard title={content.auth.signInTitle} description={content.auth.signInDescription}>
       <AuthForm
         submitLabel={content.auth.signInSubmit}
+        pendingLabel={content.auth.signInPending}
         isPending={isPending}
         formError={formError}
         requestId={requestId}

@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react';
 import { AUTH_POLICY } from '@whatsappcrm/contracts';
 import { Button } from '@/components/ui/Button';
+import { ButtonLink } from '@/components/ui/ButtonLink';
 import { Field } from '@/components/ui/Field';
 import { TextInput } from '@/components/ui/TextInput';
 import { TextLink } from '@/components/ui/TextLink';
@@ -47,25 +48,29 @@ export function ForgotPasswordForm() {
   if (sentTo !== null) {
     return (
       <AuthOutcomeCard
+        icon="mail"
         title={content.auth.forgotSentHeading}
         body={content.auth.forgotSentBody(sentTo)}
         detail={content.auth.forgotSentExpiry(RESET_LINK_TTL_MINUTES)}
         notice={content.auth.forgotSentHint}
-        actions={
-          <>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                // Back to the form with the address still in it: the usual reason
-                // to be here is a typo, and retyping the whole thing to fix one
-                // character is the wrong ask.
-                setSentTo(null);
-              }}
-            >
-              {content.auth.forgotSendAgain}
-            </Button>
-            <TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>
-          </>
+        action={
+          <ButtonLink href={routes.login()} variant="primary" isBlock>
+            {content.auth.backToSignIn}
+          </ButtonLink>
+        }
+        secondaryAction={
+          <Button
+            variant="secondary"
+            isBlock
+            onClick={() => {
+              // Back to the form with the address still in it: the usual reason
+              // to be here is a typo, and retyping the whole thing to fix one
+              // character is the wrong ask.
+              setSentTo(null);
+            }}
+          >
+            {content.auth.forgotSendAgain}
+          </Button>
         }
       />
     );
@@ -75,6 +80,7 @@ export function ForgotPasswordForm() {
     <AuthCard title={content.auth.forgotTitle} description={content.auth.forgotDescription}>
       <AuthForm
         submitLabel={content.auth.forgotSubmit}
+        pendingLabel={content.auth.forgotPending}
         isPending={isPending}
         formError={formError}
         requestId={requestId}

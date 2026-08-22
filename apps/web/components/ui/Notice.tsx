@@ -9,7 +9,12 @@ import styles from './Notice.module.css';
  * explains something about the content that is on screen right now.
  */
 
-export const NOTICE_TONES = ['info', 'warning'] as const;
+/**
+ * `danger` is the one a form's failure summary is drawn in (`FormError`), and it
+ * is here rather than in that component so a screen cannot end up with two
+ * different-looking ways of saying the same thing.
+ */
+export const NOTICE_TONES = ['info', 'warning', 'danger'] as const;
 export type NoticeTone = (typeof NOTICE_TONES)[number];
 
 /**

@@ -1,11 +1,11 @@
 /*
- * Skeleton only — the real form is built from `Field` and `AuthForm`, which own
- * their styling.
+ * Skeleton only — the real form is built from `Field`, `PasswordRequirements` and
+ * `AuthForm`, which own their styling.
  *
- * A placeholder bar is 0.75em tall, but the label and hint it stands in for each
- * occupy a whole line box. Boxing every placeholder to `1lh` of the type it
- * replaces is what keeps the skeleton exactly as tall as the loaded form, so the
- * card does not jump when the invitation arrives.
+ * A placeholder bar is 0.75em tall, but the label, legend, hint and checklist
+ * lines it stands in for each occupy a whole line box. Boxing every placeholder
+ * to `1lh` of the type it replaces is what keeps the skeleton exactly as tall as
+ * the loaded form, so the card does not jump when the invitation arrives.
  */
 
 .line {
@@ -18,8 +18,17 @@
   font-size: var(--font-size-body-sm);
 }
 
-.hint {
+.legend,
+.hint,
+.requirement {
   font-size: var(--font-size-caption);
+}
+
+/* The gap `PasswordRequirements` puts between its rules. */
+.requirements {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 /* The footer link below the action, which is a touch target rather than a line. */

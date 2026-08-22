@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { AUTH_POLICY } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { fieldByLabel } from '@/lib/testing/field-queries';
 import type { ActionResult } from '@/lib/actions/result';
@@ -98,6 +99,46 @@ describe('ResetPasswordForm', () => {
         screen.getByRole('heading', { name: content.auth.resetDoneHeading }),
       );
     });
+  });
+
+  it('says it is saving, and disables the passwords it is saving', async () => {
+    confirmPasswordResetAction.mockReturnValue(new Promise(() => {}));
+    openLinkWith(`#token=${TOKEN}`);
+    render(<ResetPasswordForm />);
+
+    await waitFor(() => {
+      expect(fieldByLabel(content.auth.newPasswordLabel)).toBeInTheDocument();
+    });
+    fillAndSubmit(NEW_PASSWORD);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: content.auth.resetPending })).toBeInTheDocument();
+    });
+    expect(fieldByLabel(content.auth.newPasswordLabel)).toBeDisabled();
+    expect(fieldByLabel(content.auth.confirmPasswordLabel)).toBeDisabled();
+  });
+
+  it('shows the policy as a checklist that ticks, rather than as a rule to remember', async () => {
+    openLinkWith(`#token=${TOKEN}`);
+    render(<ResetPasswordForm />);
+
+    await waitFor(() => {
+      expect(fieldByLabel(content.auth.newPasswordLabel)).toBeInTheDocument();
+    });
+
+    const minimum = content.auth.passwordMinRequirement(AUTH_POLICY.passwordMinLength);
+
+    expect(screen.getByText(minimum, { exact: false })).toHaveTextContent(
+      content.form.requirementUnmet,
+    );
+
+    fireEvent.change(fieldByLabel(content.auth.newPasswordLabel), {
+      target: { value: NEW_PASSWORD },
+    });
+
+    expect(screen.getByText(minimum, { exact: false })).toHaveTextContent(
+      content.form.requirementMet,
+    );
   });
 
   it('refuses to submit a confirmation that does not match', async () => {

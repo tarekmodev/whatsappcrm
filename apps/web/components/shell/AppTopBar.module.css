@@ -72,17 +72,41 @@
 }
 
 /*
+ * The link around the lockup; `BrandLockup` owns how the lockup is drawn — the
+ * bar carries the link, the destination and the tap target, and nothing about
+ * how the product spells its name.
+ *
  * Below 30rem the drawer trigger, the search, the bell, the quick-create and the
  * avatar take the whole row, and the wordmark is what gives way — 0001's rule
  * that the lockup is the first thing to stand down. The drawer heads its own
  * navigation with the same lockup, so the workspace is still named at 320px.
+ *
+ * Where it is shown it does not shrink. The wordmark inside truncates with an
+ * ellipsis when it has to, and a flex item that may shrink freely truncates it to
+ * *nothing* on a narrow bar — which is how the product's name silently
+ * disappeared from the one place below 48rem that carries it.
  */
 .brand {
   display: none;
+  flex: 0 0 auto;
+  align-items: center;
   min-inline-size: 0;
   /* A link home is a tap like the four beside it, whatever the wordmark's own
      line height happens to be. */
   min-block-size: var(--size-touch-target);
+  color: var(--color-on-surface);
+  text-decoration: none;
+}
+
+/* The drawer's copy of the same link: always shown, because the drawer is where
+   the workspace is named once the bar's wordmark has stood down. */
+.drawerBrand {
+  display: flex;
+  align-items: center;
+  min-inline-size: 0;
+  min-block-size: var(--size-touch-target);
+  color: var(--color-on-surface);
+  text-decoration: none;
 }
 
 @media (min-width: 30rem) {

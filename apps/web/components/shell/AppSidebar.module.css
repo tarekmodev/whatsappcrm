@@ -53,36 +53,17 @@
     padding-inline-start: var(--space-2);
   }
 
+  /* The link around the lockup, and nothing about how the lockup itself is
+     drawn — `BrandLockup` owns its own type, its mark and what it hides when
+     the rail collapses. The wordmark takes `currentColor` from here. */
   .brand {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
     min-inline-size: 0;
     /* Wins the free space so the toggle sits at the inline end. */
     flex: 1 1 auto;
     color: var(--color-on-rail-strong);
-    font-size: var(--font-size-body);
-    font-weight: var(--font-weight-strong);
     text-decoration: none;
-  }
-
-  .brandMark {
-    display: none;
-    flex: 0 0 auto;
-    place-items: center;
-    inline-size: var(--size-control-sm);
-    block-size: var(--size-control-sm);
-    background: var(--color-accent);
-    border-radius: var(--radius-md);
-    color: var(--color-on-accent);
-    font-size: var(--font-size-body-sm);
-  }
-
-  .brandName {
-    min-inline-size: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
   }
 
   .nav {
@@ -114,18 +95,5 @@
   [data-rail='collapsed'] .brand {
     flex: 0 0 auto;
     justify-content: center;
-  }
-
-  [data-rail='collapsed'] .brandMark {
-    display: grid;
-  }
-
-  [data-rail='collapsed'] .brandName {
-    position: absolute;
-    inline-size: var(--border-hairline);
-    block-size: var(--border-hairline);
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
   }
 }

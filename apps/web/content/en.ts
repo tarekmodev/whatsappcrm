@@ -156,6 +156,14 @@ export const content = {
     label: 'Theme',
     toggleToDark: 'Switch to dark theme',
     toggleToLight: 'Switch to light theme',
+    /**
+     * The visible label where the toggle is a labelled control rather than an
+     * icon in the chrome (TAR-521). It names the theme the press *lands on*, so
+     * the word on screen is a substring of the accessible name above it — which
+     * is what SC 2.5.3 asks of a control whose label and name differ.
+     */
+    dark: 'Dark',
+    light: 'Light',
   },
 
   roleStub: {
@@ -3081,6 +3089,35 @@ export const content = {
     forgotPasswordLink: 'Forgot your password?',
     requestNewLink: 'Request a new link',
     genericFailure: 'We could not complete that. Try again in a moment.',
+    /**
+     * The reveal control inside a password input (TAR-521). Two strings rather
+     * than one plus a pressed state: the control's accessible name has to say
+     * what pressing it will do *now*, and "Show password" announced while the
+     * password is already on screen is the wrong sentence.
+     */
+    showPassword: 'Show password',
+    hidePassword: 'Hide password',
+    /** Names the requirement checklist for a screen reader; nothing shows it. */
+    passwordRequirementsLabel: 'Password requirements',
+    /**
+     * The checklist beside a new password, derived from `AUTH_POLICY` for the
+     * same reason `passwordHint` is: a rule written down here and enforced there
+     * is a rule that will disagree with itself.
+     */
+    passwordMinRequirement: (minLength: number) => `At least ${minLength} characters`,
+    passwordMaxRequirement: (maxLength: number) => `At most ${maxLength} characters`,
+    /**
+     * The one line of positioning on the sign-in screen's brand panel.
+     *
+     * **Placeholder.** TAR-521 puts the slot on the page and says explicitly that
+     * the wording is a Product Owner call; it is deliberately about the job the
+     * console does rather than about any one workspace, because a tenant's own
+     * name is what renders above it.
+     */
+    brandTagline: 'Every customer conversation your team handles, in one place.',
+    /** The auth screens' footer line out to whoever runs this deployment. */
+    supportLink: 'Contact support',
+    supportSubject: 'Help signing in',
 
     // --- Session ------------------------------------------------------------
     signOut: 'Sign out',
@@ -3089,6 +3126,12 @@ export const content = {
     signInTitle: 'Sign in',
     signInDescription: 'Use the email address your workspace invited.',
     signInSubmit: 'Sign in',
+    /**
+     * What the submit button says while the request is in flight (TAR-521). One
+     * per flow rather than a shared "Submitting…": on a screen whose fields have
+     * just been disabled, the button is the only thing saying what is happening.
+     */
+    signInPending: 'Signing in…',
     signInSuccess: (displayName: string) => `Signed in as ${displayName}`,
     passwordLabel: 'Password',
     /**
@@ -3121,6 +3164,7 @@ export const content = {
     inviteDisplayNameTooLongError: 'That name is too long. Use a shorter one.',
     invitePasswordLabel: 'Choose a password',
     inviteSubmit: 'Create account',
+    invitePending: 'Creating your account…',
     inviteSuccess: (workspace: string) => `Welcome to ${workspace}`,
     inviteFailedError: 'We could not create your account. Try again.',
     inviteAccountExistsError:
@@ -3136,6 +3180,7 @@ export const content = {
     forgotDescription:
       'Enter the address you sign in with and we will email you a link to set a new password.',
     forgotSubmit: 'Email me a reset link',
+    forgotPending: 'Sending your link…',
     forgotSentHeading: 'Check your email',
     /**
      * Says "if an account exists" and never confirms it does. The API answers
@@ -3153,6 +3198,7 @@ export const content = {
     resetTitle: 'Set a new password',
     resetDescription: 'Choose a new password for your account.',
     resetSubmit: 'Save new password',
+    resetPending: 'Saving your new password…',
     resetLoading: 'Opening your reset link',
     resetDoneHeading: 'Password updated',
     resetDoneBody: 'Sign in with your new password to pick up where you left off.',
@@ -3171,6 +3217,7 @@ export const content = {
     changeDescription: 'You stay signed in here. Every other device is signed out.',
     signedInAs: 'Signed in as',
     changeSubmit: 'Change password',
+    changePending: 'Changing your password…',
     changeSuccessToast: 'Password changed',
     changeDoneHeading: 'Password changed',
     /** TAR-35: a change revokes every session *except* the caller's own. */
@@ -3371,6 +3418,19 @@ export const content = {
     invalidEmailError: 'Enter a valid email address',
     submitting: 'Saving…',
     genericSubmitError: 'We could not save that. Check the fields and try again.',
+    /**
+     * The key to the `*` every required `Field` renders (TAR-521). The marker
+     * was on screen with nothing explaining it, which is SC 3.3.2 — a symbol
+     * carrying an instruction has to be defined somewhere the reader can see.
+     */
+    requiredLegend: '* Required',
+    /**
+     * What a screen reader hears for one line of a live requirement checklist.
+     * The tick and the muted dot are the sighted carriers; these are the other
+     * half, so the state is never colour or shape alone.
+     */
+    requirementMet: 'Met',
+    requirementUnmet: 'Not met',
   },
 
   mockNotice: {

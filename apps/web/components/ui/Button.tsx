@@ -31,6 +31,9 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
    * export is preparing a file, not saving one. Overriding it keeps the
    * announcement inside the button rather than adding a second live region
    * beside it, which would say the same thing twice.
+   *
+   * On an `isBlock` button it is also shown on screen — see the note in the
+   * component body for why the two presentations differ.
    */
   pendingLabel?: string;
   /** Renders at full width; used by the drawer and sheet layouts. */
@@ -54,6 +57,15 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   ref,
 ) {
   const content = useContent();
+  /*
+   * A pending button normally hides its label and centres a spinner over it, so
+   * the button keeps its width and the row around it does not shift. A **block**
+   * button has no width to keep — it is already 100% — so it can afford to say
+   * what it is doing, and on a screen whose fields have just been disabled it is
+   * the only thing that can (TAR-521). Derived rather than another prop: the two
+   * presentations differ for exactly this reason.
+   */
+  const isPendingLabelVisible = isBlock && pendingLabel !== undefined;
 
   return (
     <button
@@ -79,14 +91,26 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
         onClick?.(event);
       }}
     >
-      {isPending ? (
-        <span className={styles.pending}>
-          <Spinner label={pendingLabel ?? content.form.submitting} />
+      {isPending && isPendingLabelVisible ? (
+        <span className={styles.label}>
+          {/* The spinner already carries the label for assistive technology, so
+              the copy beside it is decoration — otherwise the button says what it
+              is doing twice. */}
+          <Spinner label={pendingLabel} />
+          <span aria-hidden="true">{pendingLabel}</span>
         </span>
-      ) : null}
-      <span className={styles.label} data-pending={isPending ? 'true' : undefined}>
-        {children}
-      </span>
+      ) : (
+        <>
+          {isPending ? (
+            <span className={styles.pending}>
+              <Spinner label={pendingLabel ?? content.form.submitting} />
+            </span>
+          ) : null}
+          <span className={styles.label} data-pending={isPending ? 'true' : undefined}>
+            {children}
+          </span>
+        </>
+      )}
     </button>
   );
 });

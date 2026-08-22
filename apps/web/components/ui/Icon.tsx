@@ -156,6 +156,46 @@ const ICON_PATHS = {
   /** Grows and shrinks the reply box. Two glyphs, because one rotated is a lie. */
   expand: ['M9 4H4v5', 'M15 20h5v-5', 'm4 4 5.5 5.5', 'm20 20-5.5-5.5'],
   collapse: ['M10 9H5', 'M10 9V4', 'M14 15h5', 'M14 15v5', 'm4 4 6 5', 'm20 20-6-5'],
+  /**
+   * The theme toggle's two faces (TAR-521), replacing the ☀️/🌙 emoji it shipped
+   * with. An emoji is the one glyph in a set that cannot be restyled: it carries
+   * its own colour, ignores `currentColor`, and renders as whatever the operating
+   * system happens to draw — which is how a control ended up looking like a
+   * character somebody had typed rather than a button.
+   */
+  sun: [
+    'M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
+    'M12 3v2',
+    'M12 19v2',
+    'M3 12h2',
+    'M19 12h2',
+    'm5.6 5.6 1.4 1.4',
+    'm17 17 1.4 1.4',
+    'm18.4 5.6-1.4 1.4',
+    'm7 17-1.4 1.4',
+  ],
+  moon: ['M20.5 14.8A8.5 8.5 0 0 1 9.2 3.5a8.5 8.5 0 1 0 11.3 11.3'],
+  /**
+   * The reveal control inside a password input (TAR-521). Two glyphs rather than
+   * one rotated or recoloured, because "hidden" and "shown" are opposite states
+   * and a set that spells them with the same shape spells them with nothing.
+   */
+  eye: ['M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6', 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0'],
+  eyeOff: [
+    'm3 3 18 18',
+    'M10.7 6.2A11 11 0 0 1 12 6c6.4 0 10 6 10 6a18.5 18.5 0 0 1-3.4 3.9',
+    'M6.5 7.6A18.4 18.4 0 0 0 2 12s3.6 6 10 6a11 11 0 0 0 4-.7',
+    'M9.9 9.9a3 3 0 0 0 4.2 4.2',
+  ],
+  /**
+   * An email on its way — the outcome card for a reset link (TAR-521). An
+   * envelope rather than `note`, which is this set's shape for something
+   * somebody wrote inside the workspace.
+   */
+  mail: [
+    'M3 7a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
+    'm3.5 7.5 8.5 6 8.5-6',
+  ],
   /** Opens a menu below its trigger; never mirrored, unlike the chevrons below. */
   chevronDown: ['m6 9 6 6 6-6'],
   /** Points along the reading direction; mirrored under `dir="rtl"`. */

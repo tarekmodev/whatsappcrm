@@ -232,6 +232,14 @@
   --scale-size-icon-lg: 2.5rem;
   /* The disc that icon sits in, sized around it rather than measured from it. */
   --scale-size-state-plate: 4.5rem;
+  /*
+   * A band across the top of a screen, and the largest gap worth leaving above
+   * content that is otherwise centred in it (TAR-521). 120px is the height at
+   * which the signed-out brand band reads as part of the frame rather than as a
+   * strip of colour, and — used the other way round — the point past which a
+   * centred sign-in form stops looking placed and starts looking lost.
+   */
+  --scale-size-band-md: 7.5rem;
   /* The console frame: a fixed rail beside a fixed bar. */
   --scale-size-rail: 15rem;
   --scale-size-rail-collapsed: 4.25rem;

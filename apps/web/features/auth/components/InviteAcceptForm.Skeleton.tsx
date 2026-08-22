@@ -14,10 +14,10 @@ import styles from './InviteAcceptForm.Skeleton.module.css';
  * changed in the same commit when either changes.
  *
  * It mirrors the real card exactly: the same title and description, the same
- * summary block, three fields with the hints the real ones carry, the same
- * full-width action and the same footer link. Measured rather than eyeballed —
- * the loading and loaded cards come out the same height, so the swap moves
- * nothing.
+ * summary block, the required legend, three fields with the hints and the policy
+ * checklist the real ones carry, the same full-width action and the same footer
+ * link. Measured rather than eyeballed — the loading and loaded cards come out
+ * the same height, so the swap moves nothing.
  *
  * Shown immediately rather than after an anti-flash delay: this is the screen's
  * first paint, so delaying it would show an empty card instead of a faster one.
@@ -29,7 +29,10 @@ export function InviteAcceptSkeleton() {
       <LoadingAnnouncement label={content.auth.inviteLoading} />
       <InvitePreviewSkeleton />
       <Stack gap="4">
-        {PLACEHOLDER_FIELDS.map(({ label, hint }) => (
+        <span className={styles.legend}>
+          <SkeletonForText>{content.form.requiredLegend}</SkeletonForText>
+        </span>
+        {PLACEHOLDER_FIELDS.map(({ label, hint, hasRequirements }) => (
           <Stack key={label} gap="2">
             <span className={cx(styles.line, styles.label)}>
               <SkeletonLine width={label} />
@@ -43,6 +46,17 @@ export function InviteAcceptSkeleton() {
               </span>
             )}
             <SkeletonBlock height="var(--size-touch-target)" />
+            {/* And the checklist below it, one line per rule, from the same copy
+                for the same reason. */}
+            {hasRequirements ? (
+              <span className={styles.requirements}>
+                {PASSWORD_REQUIREMENTS.map((requirement) => (
+                  <span key={requirement} className={cx(styles.line, styles.requirement)}>
+                    <SkeletonForText>{requirement}</SkeletonForText>
+                  </span>
+                ))}
+              </span>
+            ) : null}
           </Stack>
         ))}
         <SkeletonBlock height="var(--size-touch-target)" />
@@ -60,7 +74,13 @@ export function InviteAcceptSkeleton() {
  * the placeholder occupies exactly the lines the real hint will.
  */
 const PLACEHOLDER_FIELDS = [
-  { label: '5rem', hint: content.auth.inviteDisplayNameHint },
-  { label: '9rem', hint: content.auth.passwordHint(AUTH_POLICY.passwordMinLength) },
-  { label: '11rem', hint: undefined },
+  { label: '5rem', hint: content.auth.inviteDisplayNameHint, hasRequirements: false },
+  { label: '9rem', hint: undefined, hasRequirements: true },
+  { label: '11rem', hint: undefined, hasRequirements: false },
+] as const;
+
+/** The same two rules `PasswordRequirements` derives from the same policy. */
+const PASSWORD_REQUIREMENTS = [
+  content.auth.passwordMinRequirement(AUTH_POLICY.passwordMinLength),
+  content.auth.passwordMaxRequirement(AUTH_POLICY.passwordMaxLength),
 ] as const;
