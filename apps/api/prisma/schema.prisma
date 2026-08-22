@@ -2677,9 +2677,13 @@ model Notification {
   /// declared on this line and the next `migrate dev` would propose creating a
   /// second, non-partial one beside it.
   @@unique([tenantId, slaTimerId, recipientUserId])
-  /// The workflow types' idempotency layer — one `notify` per recipient per
-  /// occurrence. Null for `sla_breach`, which does not collide, for the same
-  /// reason and with the same non-partial shape.
+  /// The workflow types' idempotency layer — one row per recipient per
+  /// occurrence, where the occurrence is a `notify` action for `workflow_notify`
+  /// and the run that disarmed the workflow for `workflow_broken`. Both key on
+  /// the run rather than on the workflow, because `acknowledged_at` makes a
+  /// longer-lived reservation indistinguishable from suppression (TAR-605).
+  /// Null for `sla_breach`, which does not collide, for the same reason and with
+  /// the same non-partial shape.
   @@unique([tenantId, recipientUserId, dedupeKey])
   /// The escalation path's idempotency layer — one notification per recipient
   /// per `escalated` event (TAR-468). Non-partial for the same reason as the two

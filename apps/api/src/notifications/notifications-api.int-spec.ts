@@ -331,7 +331,7 @@ describe('the notification inbox across two tenants and two recipients', () => {
           ticketId: TICKET_A,
           recipientUserId: SUPERVISOR_A,
           data: { workflowId: WORKFLOW_ID, workflowRunId: RUN_ID },
-          dedupeKey: `workflow-broken:${WORKFLOW_ID}`,
+          dedupeKey: `workflow-broken:${RUN_ID}`,
           createdAt: new Date('2026-08-22T09:02:00.000Z'),
         },
         {

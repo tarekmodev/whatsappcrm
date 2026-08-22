@@ -522,6 +522,47 @@ describe('UsersService — role write invariants', () => {
       ).toEqual({ from: 'active', to: 'suspended', workflowsDisarmed: 2 });
     });
 
+    it('tells the caller how many it disarmed, in the response', async () => {
+      // TAR-605. The audit row above is the record; this is the acting admin
+      // finding out at the moment they caused it. Deliberately *not* a
+      // `workflow_broken` notification: `notifications.ticket_id` is `NOT NULL`
+      // and `NotificationResponse` publishes `ticketId`/`ticketNumber` as
+      // required, because every notification the table holds is raised about a
+      // ticket — and a suspension is raised about a person.
+      // `UserUpdateResponseSchema` carries the whole argument.
+      const { users, tenantContext } = buildService({
+        target: activeAgent,
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+        workflowsNamingTarget: [WORKFLOW_A, WORKFLOW_B],
+      });
+
+      const response = await asPrincipal(tenantContext, 'admin', () =>
+        users.update(TARGET, { status: 'suspended' }),
+      );
+
+      expect(response).toMatchObject({ status: 'suspended', workflowsDisarmed: 2 });
+    });
+
+    it('reports zero disarmed on an update that suspended nobody', async () => {
+      // Always present, so a client reads one field rather than inferring from
+      // `status` whether the number is meaningful.
+      const { users, tenantContext } = buildService({
+        target: activeAgent,
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+        workflowsNamingTarget: [WORKFLOW_A],
+      });
+
+      const response = await asPrincipal(tenantContext, 'admin', () =>
+        users.update(TARGET, { displayName: 'Renamed' }),
+      );
+
+      expect(response.workflowsDisarmed).toBe(0);
+    });
+
     it('touches no workflow when the suspended user is named by none', async () => {
       // An untargeted `updateMany` here would disarm every workflow in the tenant.
       const { users, tenantContext, recorded } = buildService({

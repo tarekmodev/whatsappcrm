@@ -493,6 +493,12 @@ export class WorkflowTriggerService {
    * `exists: false` and the console shows precisely which field needs a new
    * value.
    *
+   * **`count === 0` is what makes this once per break**, not the dedupe key.
+   * The `updateMany` takes the workflow's row lock and only the transaction that
+   * actually flipped `is_active` continues, so a second ticket tripping over the
+   * same workflow — or a concurrent run doing it at the same moment — writes
+   * nothing. See `workflowBrokenDedupeKey` for what the key is left to cover.
+   *
    * The audit row carries a null actor: nobody did this, the engine did.
    */
   private async deactivate(
@@ -529,11 +535,7 @@ export class WorkflowTriggerService {
             ticketId,
             recipientUserId: admin.id,
             data: { workflowId, workflowRunId: runId },
-            // One "this workflow is broken" per admin, ever — not one per
-            // ticket that trips over it. `UNIQUE (tenant_id,
-            // recipient_user_id, dedupe_key)` is what enforces that, and it is
-            // why the key names the workflow rather than the run.
-            dedupeKey: `workflow-broken:${workflowId}`,
+            dedupeKey: workflowBrokenDedupeKey(runId),
           })),
           skipDuplicates: true,
         });
@@ -619,6 +621,32 @@ function asFailureReason(reason: string | null): WorkflowFailureReason {
     default:
       return 'internal_error';
   }
+}
+
+/**
+ * One notification reservation per **deactivation**, not per workflow.
+ *
+ * The key used to name the workflow — `workflow-broken:${workflowId}` — on the
+ * reasoning that an admin needs telling once and not once per ticket. That was
+ * true while nothing could write `acknowledged_at` on a `workflow_broken` row.
+ * TAR-596's acknowledge endpoint is the first writer that can, and it turned the
+ * reservation into suppression: acknowledge the first break, repair the workflow,
+ * re-arm it, and the *next* break collides on
+ * `UNIQUE (tenant_id, recipient_user_id, dedupe_key)`, inserts nothing, and
+ * leaves the admin's inbox showing the week-old row they already dismissed —
+ * empty under the default `unacknowledgedOnly=true`.
+ *
+ * So the key names the run that disarmed it. A second break is a second run and
+ * therefore a new, unacknowledged row, while a retry inside one deactivation
+ * re-derives the same key and still inserts nothing — the same trade
+ * `notifyDedupeKey` makes, and for the same reason.
+ *
+ * "Once per break rather than once per ticket" did not depend on this key and
+ * still does not: `deactivate`'s `count === 0` guard is what enforces it, and a
+ * disarmed workflow is not a candidate for the next ticket anyway.
+ */
+function workflowBrokenDedupeKey(runId: string): string {
+  return `workflow-broken:${runId}`;
 }
 
 /** The human-readable half behind `failure_reason`, naming the action that stopped the list. */

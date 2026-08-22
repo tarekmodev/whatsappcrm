@@ -147,6 +147,39 @@ export const UserUpdateInputSchema = z.object({
   status: UserWritableStatusSchema.optional(),
 });
 
+/**
+ * What `PATCH /users/{id}` answers: the user, plus the one side effect the
+ * caller did not ask for.
+ *
+ * Suspending somebody disarms every workflow whose definition names them
+ * (TAR-596) — an admin muting one agent can switch off the tenant's automation
+ * without being told. TAR-605 asked whether that should instead write the
+ * `workflow_broken` notifications the engine's own disarm path writes, and the
+ * answer is no: `notifications.ticket_id` is `NOT NULL` and
+ * `NotificationResponse` publishes `ticketId` and `ticketNumber` as required,
+ * because every notification the table has ever held was raised *about a
+ * ticket*. A suspension is raised about a person, so a row for it would need
+ * that column relaxed, the two CHECKs rewritten and a published field made
+ * nullable — a breaking contract change to deliver something the acting admin
+ * is better told synchronously anyway. The audit trail already carries the
+ * count; this puts it in front of the person who caused it.
+ *
+ * A separate schema rather than a field on `UserResponse`, so `GET /users` and
+ * `GET /users/{id}` are not made to carry a number that means nothing there.
+ *
+ * `DELETE /users/{id}` answers 204 and has nowhere to put this. Its count stays
+ * in the `user.removed` audit row, which is where a removal's other side
+ * effects — assignments cleared, invites revoked — already are.
+ */
+export const UserUpdateResponseSchema = UserResponseSchema.extend({
+  /**
+   * How many workflows this request disarmed. `0` on every request that did not
+   * suspend an active user, so a client may read it without branching on
+   * `status`.
+   */
+  workflowsDisarmed: z.int().min(0),
+});
+
 export const AvailabilityUpdateInputSchema = z.object({
   availability: AgentAvailabilitySchema,
 });
@@ -205,6 +238,7 @@ export type UserWritableStatus = z.infer<typeof UserWritableStatusSchema>;
 export type AgentAvailability = z.infer<typeof AgentAvailabilitySchema>;
 export type UserSecurityState = z.infer<typeof UserSecurityStateSchema>;
 export type UserResponse = z.infer<typeof UserResponseSchema>;
+export type UserUpdateResponse = z.infer<typeof UserUpdateResponseSchema>;
 export type UserListQuery = z.infer<typeof UserListQuerySchema>;
 export type UserParams = z.infer<typeof UserParamsSchema>;
 export type UserUpdateInput = z.infer<typeof UserUpdateInputSchema>;

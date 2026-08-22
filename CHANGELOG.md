@@ -1834,6 +1834,37 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
 
 ### Fixed
 
+- **Acknowledging a broken-workflow notification no longer silences every later break of
+  that workflow** (TAR-605) — `WorkflowTriggerService.deactivate` keyed its
+  `workflow_broken` rows on `workflow-broken:${workflowId}` against
+  `UNIQUE (tenant_id, recipient_user_id, dedupe_key)`, on the reasoning that an admin needs
+  telling once and not once per ticket that trips over the same rule. That was harmless
+  while nothing could write `acknowledged_at` on such a row. TAR-596's acknowledge endpoint
+  is the first writer that can, and it turned the reservation into suppression: acknowledge
+  the first break, repair the reference, re-arm the workflow, and its next break a week
+  later collided on the index, inserted nothing, and left the admin's inbox showing only the
+  row they had already dismissed — invisible under the default `unacknowledgedOnly=true`,
+  and mis-dated with it off.
+  The key now names the **run that disarmed the workflow**, `workflow-broken:${runId}`, the
+  same shape `notifyDedupeKey` already used for `workflow_notify`: a second break is a
+  second run and therefore a new, unacknowledged row, while a redelivery of one deactivation
+  re-derives the same key and still inserts nothing. No migration — the column and the index
+  are unchanged, and only the string written into them moved. "Once per break rather than
+  once per ticket" never depended on the key and still does not: `deactivate` continues only
+  when its `UPDATE … WHERE is_active` matched a row, and a disarmed workflow is not a
+  candidate for the next ticket anyway.
+  Two questions the same review left open are answered with it. `PATCH /api/v1/users/{id}`
+  now returns **`workflowsDisarmed`**, so the admin who suspends somebody is told at once
+  that they switched off automation naming that person — deliberately a response field
+  rather than a notification, because `notifications.ticket_id` is `NOT NULL` and
+  `NotificationResponse` publishes `ticketId` and `ticketNumber` as required: every row in
+  that table is raised about a ticket, and a suspension is raised about a person, so a row
+  for it would take a schema migration and a breaking contract change to deliver
+  asynchronously what the acting admin is better told in the response. `DELETE
+/api/v1/users/{id}` answers 204 and keeps its count on the `user.removed` audit row.
+  `workflows-api.md` also stopped claiming this surface has no integration coverage — TAR-596
+  added 17 + 6 cases — and `data-model.md` no longer counts four acknowledge endpoints where
+  there are three.
 - **A new tenant's first admin now gets the welcome email, and the tenant's trail starts
   where the tenant does** (TAR-598) — `tenant_welcome` is one of ADR 0009 decision 7's ten
   templates and was mapped in `TenantLifecycleNotifier`, but nothing could ever reach it.

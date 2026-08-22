@@ -608,6 +608,70 @@ describe('workflow schema', () => {
     });
   });
 
+  describe('a second break of the same workflow reaches the admin (TAR-605)', () => {
+    const WORKFLOW = '39422222-2222-7222-8222-2222222222e7';
+    const FIRST_RUN = '39422222-2222-7222-8222-2222222222e8';
+    const SECOND_RUN = '39422222-2222-7222-8222-2222222222e9';
+
+    /**
+     * The `createMany({ skipDuplicates: true })` that `deactivate` issues, at the
+     * one layer that can prove the outcome: `UNIQUE (tenant_id,
+     * recipient_user_id, dedupe_key)` is a database object, and a mock agrees
+     * with whichever key it is handed.
+     */
+    function insertBroken(dedupeKey: string): Promise<{ id: string }[]> {
+      return systemPrisma.$queryRaw<{ id: string }[]>`
+        INSERT INTO notifications (id, tenant_id, type, ticket_id, recipient_user_id,
+                                   data, dedupe_key, created_at)
+        VALUES (gen_random_uuid(), ${TENANT}::uuid, 'workflow_broken'::notification_type,
+                ${ticketId}::uuid, ${AGENT}::uuid,
+                ${JSON.stringify({ workflowId: WORKFLOW })}::jsonb, ${dedupeKey}, now())
+        ON CONFLICT (tenant_id, recipient_user_id, dedupe_key) DO NOTHING
+        RETURNING id
+      `;
+    }
+
+    /** What `GET /api/v1/notifications` serves under its default `unacknowledgedOnly=true`. */
+    function unacknowledgedBreaks(): Promise<{ id: string }[]> {
+      return systemPrisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM notifications
+         WHERE tenant_id = ${TENANT}::uuid
+           AND recipient_user_id = ${AGENT}::uuid
+           AND type = 'workflow_broken'
+           AND acknowledged_at IS NULL
+      `;
+    }
+
+    async function acknowledgeAll(): Promise<void> {
+      await systemPrisma.$executeRaw`
+        UPDATE notifications SET acknowledged_at = now()
+         WHERE tenant_id = ${TENANT}::uuid AND acknowledged_at IS NULL
+      `;
+    }
+
+    it('inserts a fresh row, because the key names the run and not the workflow', async () => {
+      // The regression. Keyed on the workflow, the second insert conflicts with a
+      // row the admin acknowledged a week earlier, `skipDuplicates` swallows it,
+      // and a live break appears in no inbox.
+      await expect(insertBroken(`workflow-broken:${FIRST_RUN}`)).resolves.toHaveLength(1);
+      await acknowledgeAll();
+
+      await expect(insertBroken(`workflow-broken:${SECOND_RUN}`)).resolves.toHaveLength(1);
+      await expect(unacknowledgedBreaks()).resolves.toHaveLength(1);
+    });
+
+    it('still swallows a redelivery of one deactivation', async () => {
+      // The key's remaining job, and the reason it is a key at all: the run claim
+      // is the load-bearing guarantee, and this covers the window between it and
+      // these inserts.
+      const key = `workflow-broken:${FIRST_RUN}`;
+
+      await expect(insertBroken(key)).resolves.toHaveLength(1);
+      await expect(insertBroken(key)).resolves.toHaveLength(0);
+      await expect(unacknowledgedBreaks()).resolves.toHaveLength(1);
+    });
+  });
+
   describe('through the app role, under RLS', () => {
     const WORKFLOW = '39422222-2222-7222-8222-2222222222e6';
 
