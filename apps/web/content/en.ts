@@ -3406,13 +3406,13 @@ export const content = {
 
   /**
    * The supervisor's performance dashboard (TAR-30,
-   * `docs/architecture/0009-reporting-dashboard-and-export.md`).
+   * `docs/architecture/0010-reporting-dashboard-and-export.md`).
    *
    * Two things this copy has to carry, because the numbers are otherwise
    * ambiguous and end up in a client-facing report: **what each metric is
-   * anchored on** (0009 decision 2 — "resolved this week" is over tickets
+   * anchored on** (0010 decision 2 — "resolved this week" is over tickets
    * resolved this week, whenever they arrived), and **that the durations are
-   * wall-clock** rather than business hours (0009 risk 2).
+   * wall-clock** rather than business hours (0010 risk 2).
    */
   reports: {
     title: 'Performance',
