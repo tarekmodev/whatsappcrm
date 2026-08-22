@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import type { ConversationResponse, ConversationSort } from '@whatsappcrm/contracts';
 import { Avatar } from '@/components/ui/Avatar';
+import { Icon } from '@/components/ui/Icon';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { SkeletonCircle, SkeletonLine } from '@/components/ui/Skeleton';
 import { Cluster } from '@/components/layout/Cluster';
@@ -45,6 +46,12 @@ import styles from './ThreadHeader.module.css';
  * the browser's own button. It is a real link to the list URL — with the filters
  * intact — rather than a history step, so it works on a deep link too, and it is
  * hidden once both panes fit on screen.
+ *
+ * It leads the identity row rather than standing above it (TAR-522). A row of
+ * its own cost 56px at the top of a 390px-wide thread, where the header, the
+ * stream and the composer are already competing for a fixed height — and a
+ * chevron pointing back the way you came says "leave this" more directly than a
+ * sentence floating over the name you opened.
  */
 
 export interface ThreadQuery {
@@ -85,10 +92,9 @@ export function ThreadHeader({
 
   return (
     <Stack gap="3">
-      <BackToList query={query} />
-
       <Cluster justify="between" align="start" gap="3">
-        <Cluster gap="3" align="center" className={styles.identity}>
+        <Cluster gap="2" align="center" className={styles.identity}>
+          <BackToList query={query} />
           {/* Decorative by construction: the name is beside it. */}
           <Avatar name={conversation.contact.displayName} size="sm" tone="neutral" />
           <div className={styles.names}>
@@ -149,8 +155,17 @@ function BackToList({ query }: { query: ThreadQuery }) {
   const content = useContent();
 
   return (
-    <Link className={styles.back} href={routes.inbox(query)} scroll={false}>
-      {content.inbox.backToList}
+    <Link
+      className={styles.back}
+      href={routes.inbox(query)}
+      scroll={false}
+      aria-label={content.inbox.backToList}
+    >
+      {/* The chevron is the affordance and the label names the destination, so
+          the label is clipped rather than dropped where the row is tight — the
+          link keeps its full name either way. */}
+      <Icon name="chevronBack" />
+      <span className={styles.backLabel}>{content.inbox.conversationsHeading}</span>
     </Link>
   );
 }
@@ -163,9 +178,12 @@ function BackToList({ query }: { query: ThreadQuery }) {
 export function ThreadHeaderSkeleton({ query }: { query: ThreadQuery }) {
   return (
     <Stack gap="3">
-      <BackToList query={query} />
-      <Cluster justify="between" align="start" gap="3" aria-hidden="true">
-        <Cluster gap="3" align="center" className={styles.identity}>
+      <Cluster justify="between" align="start" gap="3">
+        <Cluster gap="2" align="center" className={styles.identity}>
+          {/* The one thing in the skeleton that is not a placeholder: a reader
+              who opened the wrong conversation must be able to leave it before
+              it has finished loading. */}
+          <BackToList query={query} />
           <SkeletonCircle size="var(--size-control-sm)" />
           <div className={styles.names}>
             <SkeletonLine width="12rem" height="var(--font-size-heading-sm)" />

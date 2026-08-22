@@ -1,11 +1,31 @@
 .trigger {
+  flex: 0 0 auto;
+  justify-content: center;
   gap: var(--space-2);
+  /* Below the layout breakpoint the label is the avatar alone, so the trigger is
+     the same square tap the bell and the quick-create beside it are. */
+  min-inline-size: var(--size-touch-target);
 }
 
 .chevron {
+  /* The bar has room for the avatar and nothing else below the breakpoint. The
+     trigger still says it opens a menu — `aria-expanded` does that, and it does
+     not cost 16px of a 320px row. */
+  display: none;
   flex: 0 0 auto;
   color: var(--color-on-surface-muted);
   transition: rotate var(--duration-fast) var(--easing-standard);
+}
+
+@media (min-width: 48rem) {
+  .trigger {
+    flex: 1 1 auto;
+    justify-content: flex-start;
+  }
+
+  .chevron {
+    display: block;
+  }
 }
 
 .trigger[aria-expanded='true'] .chevron {

@@ -287,12 +287,12 @@ all of them:
 └───────────┴─────────────────────────────────────────┘
 ```
 
-| Region  | Component                                  | Notes                                                                       |
-| ------- | ------------------------------------------ | --------------------------------------------------------------------------- |
-| Rail    | `apps/web/components/shell/AppSidebar.tsx` | Fixed, collapsible, icon + label, More/Less past five entries, footer slot  |
-| Top bar | `apps/web/components/shell/AppTopBar.tsx`  | Search, quick create, account menu; the drawer trigger below the breakpoint |
-| Canvas  | `apps/web/components/shell/PageShell.tsx`  | Gutter and vertical rhythm for the sections, or a full-height workspace     |
-| Drawer  | `apps/web/components/shell/MobileMenu.tsx` | The rail, below 48rem                                                       |
+| Region  | Component                                  | Notes                                                                                                            |
+| ------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Rail    | `apps/web/components/shell/AppSidebar.tsx` | Fixed, collapsible, icon + label, More/Less past five entries, footer slot                                       |
+| Top bar | `apps/web/components/shell/AppTopBar.tsx`  | Search, quick create, account menu; the drawer trigger below the breakpoint. One `--size-bar` row at every width |
+| Canvas  | `apps/web/components/shell/PageShell.tsx`  | Gutter and vertical rhythm for the sections, or a full-height workspace                                          |
+| Drawer  | `apps/web/components/shell/MobileMenu.tsx` | The rail, below 48rem: the wordmark, the same nav, and the account block at its foot                             |
 
 Rules that hold for all of them:
 
@@ -308,7 +308,10 @@ Rules that hold for all of them:
   hides the labels from the eye only; the links keep their accessible names.
 - **Below 48rem there is no rail.** It is removed rather than hidden, so its links leave
   the tab order, and `MobileMenu` — focus-trapped, Escape-closable, scroll-locking — is
-  the navigation.
+  the navigation. Being the rail, it carries what the rail carries: the wordmark at its
+  head, the navigation scrolling between, and the account block pinned to its foot. The
+  panel slides at `--duration-medium`/`--easing-enter` with the scrim fading at
+  `--duration-fast`; the token layer flattens both under `prefers-reduced-motion`.
 - **The top bar's search searches conversations, and says so.** 0002 exposes `?q=` on
   `GET /conversations` and on nothing else, so `TopBarSearch` submits to `/inbox?q=…` and
   is labelled for what it does. It widens to contacts and tickets when their reads land —
@@ -327,6 +330,42 @@ Rules that hold for all of them:
   and no tenant name (`packages/contracts/src/auth.ts`); naming and branding the workspace
   is TAR-29.
 
+#### The bar is one row, at every width (TAR-522)
+
+```text
+below 30rem   [ ≡ ]                     [ ⌕ ] [ 🔔3 ] [ + ] [ ◍ ]
+30–48rem      [ ≡ ] Northwind Support   [ ⌕ ] [ 🔔3 ] [ + ] [ ◍ ]
+48rem and up        [ ⌕ search conversations ]  [ 🔔3 ] [ + ] [ ◍ Omar Farouk / Admin ⌄ ]
+```
+
+`AppTopBar` does not wrap. It used to, and below 48rem it wrapped into three rows —
+trigger and wordmark, then bell and quick-create, then the search field on a line of its
+own — which measured 161.4px of an 844px phone before the page had said anything, put a
+visible "Open menu" caption across the wordmark beside it, and dropped the account menu
+entirely. The rules that keep it one `--size-bar` row:
+
+- **Icon-only controls are named by `aria-label`, never by a caption.** That is the fix
+  for the drawer trigger's label; a visible caption under a hamburger is not an
+  accessibility feature, it is a second row.
+- **The search is a trigger below 48rem, and the field expands _over_ the bar.** Out of
+  flow, so the row behind it keeps its height. Activating it moves focus into the field;
+  Escape and the close button collapse it and hand focus back to the trigger. Nothing is
+  trapped. A collapsed trigger with a term applied carries a mark and says the term in its
+  accessible name — the field is allowed to hide, an applied filter is not.
+- **The account menu is in the bar at every width, and is the last thing to give way.**
+  It is the only route to sign out and to the theme. Below 48rem the trigger is the avatar
+  alone (`PrincipalIdentity isCompact`); the name, the role and the chevron return above
+  it. The drawer carries the same block pinned to its foot as well, because a control you
+  have to scroll a nav list to reach is one you cannot rely on.
+- **The wordmark is the first thing to give way.** It stands down below 30rem, which is
+  the measured width at which the full lockup stops fitting beside the five controls
+  (150px available against 142px needed at 480px, and 67px at 390px). The drawer heads its
+  navigation with the same `BrandLockup`, so the workspace is still named at 320px.
+- **Order of sacrifice, if a sixth control is ever added.** Wordmark first, then the bell
+  and the quick-create move _into_ the account menu. The row is never allowed to wrap and
+  nothing is ever silently dropped. The bar's min-content is about 252px today, against
+  294px of content box at 320px; that is the number to re-measure.
+
 #### The canvas has two variants: `flow` and `fill`
 
 `PageShell` takes a `variant`, and it is **opt-in per route**. Ordinary screens — Reports,
@@ -344,9 +383,10 @@ Three things about `fill` are load-bearing, and each of them is a mistake somebo
 otherwise make again:
 
 - **Fill the space with flex, never with arithmetic.** `calc(100dvh - var(--size-bar))` is
-  wrong: `AppTopBar` is `flex-wrap: wrap` with a safe-area inset, so below 48rem the search
-  field takes a line of its own and the bar is taller than that token — at exactly the
-  width where a pinned composer matters most. `AppShell` instead sets `block-size: 100dvh`
+  wrong even now that the bar is one row of exactly that token: it also carries the
+  device's safe-area inset, it grows with the text at 200% zoom, and the next thing added
+  to it would break an arithmetic that nothing checks — at exactly the width where a
+  pinned composer matters most. `AppShell` instead sets `block-size: 100dvh`
   and `overflow: hidden` on the frame, and `min-block-size: 0` on the column and on
   `<main>`, so `<main>` measures whatever the bar actually left. There is no height token
   to keep in sync, and there must not be one.
@@ -609,7 +649,9 @@ decoration:
 
 - The four regions fill the height exactly and each scrolls itself. The composer is
   pinned to the foot of the thread column and is reachable without scrolling at every
-  width, including below 48rem where the top bar takes two lines.
+  width. Below 48rem the height it is competing for is the whole screen minus one
+  `--size-bar` row (TAR-522); the return to the list is a leading chevron and a label
+  inside the thread's own header, not a line of its own above it.
 - They are separated by hairline dividers, not by gaps and radii — no canvas shows
   between, beneath or either side of them. The filter column's divider is a
   `border-block-end` while it is a band and a `border-inline-end` from 84rem, because it

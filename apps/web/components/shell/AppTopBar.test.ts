@@ -3,18 +3,20 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * TAR-652, asserted against the module file rather than against a render.
+ * The bar's geometry, asserted against the module file rather than against a
+ * render, because the defect it stands guard over is layout and jsdom has none.
+ * Same idiom as `tokens.test.ts` — assert the CSS source, not a copy of its
+ * values.
  *
- * The defect is geometry: below 48rem the bar wraps onto more than one row, and
- * on a fill-mode route it is a flex item of a column pinned to `100dvh` — so
- * flex shrank it back below the rows it went on painting. The overflowing
- * search pill landed on the inbox's filter disclosure, and because the bar is
- * `position: sticky` above `--z-nav` it took the taps too: 40.4px of overlap at
- * 320x568, with the disclosure's own centre hit-testing to the search field.
+ * Two rules, from two stories:
  *
- * jsdom has no layout, so it cannot measure that; what it can hold is the one
- * declaration the measurement turned on. Same idiom as `tokens.test.ts` —
- * assert the CSS source, not a copy of its values.
+ *   * **TAR-652.** The bar is a flex item of a column pinned to `100dvh` on a
+ *     fill-mode route, so flex will shrink it back below the rows it paints.
+ *     `main` is the item that gives way; the bar refuses.
+ *   * **TAR-522.** It is one `--size-bar` row at every width. It used to wrap
+ *     into three below 48rem — 161.4px of an 844px screen — and the overflowing
+ *     search line landed on the inbox's filter disclosure and took its taps.
+ *     Nothing about that is fixable while the bar is allowed to wrap.
  */
 
 const css = readModuleFile('AppTopBar.module.css');
@@ -44,7 +46,21 @@ describe('the top bar', () => {
     expect(barRule()).toMatch(/flex-shrink:\s*0;/);
   });
 
-  it('still wraps, which is what makes the shrink visible', () => {
-    expect(barRule()).toMatch(/flex-wrap:\s*wrap;/);
+  it('never wraps, at any width', () => {
+    expect(barRule()).not.toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  it('is one row of exactly the bar token, plus the device inset', () => {
+    expect(barRule()).toMatch(
+      /min-block-size:\s*calc\(var\(--size-bar\) \+ env\(safe-area-inset-top\)\);/,
+    );
+    // Block padding would add to the 44px controls and overshoot the token.
+    expect(barRule()).toMatch(/padding-block:\s*0;/);
+  });
+
+  it('keeps the account menu in the bar at every width', () => {
+    const start = css.indexOf('.account {');
+    expect(start, 'AppTopBar.module.css has an .account rule').toBeGreaterThan(-1);
+    expect(css.slice(start, css.indexOf('}', start))).not.toMatch(/display:\s*none/);
   });
 });

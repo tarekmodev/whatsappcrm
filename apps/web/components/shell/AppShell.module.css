@@ -27,11 +27,11 @@
  * scrolling document — `PageShell variant="fill"`, which the inbox uses.
  *
  * The frame stops growing with its content and `<main>` measures whatever the
- * bar left it. Deliberately *not* `calc(100dvh - var(--size-bar))`: the bar is
- * `flex-wrap: wrap` with a safe-area inset, so below 48rem the search field
- * takes a line of its own and the bar is taller than that token — exactly the
- * width where a pinned composer matters most. Flex already knows the real
- * number, and it stays right when the bar changes.
+ * bar left it. Deliberately *not* `calc(100dvh - var(--size-bar))`, even now
+ * that the bar is one row of exactly that token (TAR-522): it also carries the
+ * device's safe-area inset, it grows with the text at 200% zoom, and the next
+ * thing added to it would silently break an arithmetic that nothing checks.
+ * Flex already knows the real number, and it stays right when the bar changes.
  *
  * Knowing it is not the same as keeping it: flex will shrink the bar back below
  * its content to make the column fit, which is what `flex-shrink: 0` in

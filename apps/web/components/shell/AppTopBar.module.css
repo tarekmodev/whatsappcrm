@@ -4,33 +4,43 @@
   z-index: var(--z-nav);
   display: flex;
   /*
-   * The bar is a flex item of the shell's column, and on a fill-mode route that
-   * column is exactly `100dvh` — so when the page below wants more height than
-   * there is, flex takes it from every item that will give, this one included.
+   * One row, from 320px up (TAR-522). The bar used to wrap, and below 48rem it
+   * wrapped into three: trigger and wordmark, then bell and quick-create, then
+   * the search field on a line of its own — 161.4px of an 844px screen spent
+   * before the page had said anything, with the "Open menu" caption under the
+   * hamburger colliding with the wordmark beside it.
    *
-   * `min-block-size` is no floor here: it describes *one* row, and below 48rem
-   * the search takes a line of its own. At 320x568 the inbox measured this bar
-   * at 96.9px while it went on painting 161.4px, and the overflow is the search
-   * line — which, the bar being `position: sticky` above `--z-nav`, landed on
-   * top of the filter disclosure and took the taps meant for it: 40.4px of
-   * overlap, `elementFromPoint` at the disclosure's own centre returning the
-   * search field (TAR-652). 29.1px at 375, 32.4px on a landscape phone.
+   * Nothing here wraps now. The search is a trigger that expands over the bar,
+   * the wordmark stands down below 30rem, and what is left is five controls that
+   * fit a 320px row with the gaps between them.
    *
-   * It needed a conversation list long enough to overflow the column, which is
-   * why an empty inbox looks fine and a real one does not.
+   * That does give the bar a min-content floor — about 252px with a supervisor's
+   * bell on it, against 294px of content box at 320. It is comfortably inside the
+   * 320px the app supports, and below it the pages themselves stop reflowing
+   * first (a card's own min-content is 231px). If a sixth control is ever added
+   * here, this is the number to check: 0001's rule is that the bell and the
+   * quick-create move into the account menu before this row is allowed to wrap.
    *
-   * The bar is chrome at its content height; `main` is the item that gives way,
-   * and it already has `min-block-size: 0` to do it with.
+   * `flex-shrink: 0` is the other half, and it predates this (TAR-652): the bar
+   * is a flex item of a column pinned to `100dvh` on a fill-mode route, so when
+   * the page below wants more height than there is, flex takes it from every
+   * item that will give. The bar is chrome at its content height; `main` is the
+   * item that gives way, and it has `min-block-size: 0` to do it with.
    */
   flex-shrink: 0;
-  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
-  min-block-size: var(--size-bar);
+  /*
+   * Exactly `--size-bar`, plus whatever the device's own chrome asks for: the
+   * controls inside are `--size-touch-target`, so there is no block padding to
+   * add to them. The safe-area inset is added to the floor as well as applied as
+   * padding, so a notched phone gets the same 56px row *below* its notch rather
+   * than 56px including it.
+   */
+  min-block-size: calc(var(--size-bar) + env(safe-area-inset-top));
   padding-inline: clamp(var(--space-3), 4vw, var(--space-6));
-  padding-block: var(--space-2);
-  padding-block-start: calc(var(--space-2) + env(safe-area-inset-top));
+  padding-block: 0;
+  padding-block-start: env(safe-area-inset-top);
   background: var(--color-bar);
   border-block-end: var(--border-hairline) solid var(--color-bar-border);
 }
@@ -43,40 +53,47 @@
   min-inline-size: 0;
 }
 
+/* Takes the slack below the layout breakpoint, so the trailing group sits at the
+   trailing edge; above it, it is empty and the search field takes the slack. */
 .start {
-  order: 0;
   flex: 1 1 auto;
 }
 
 .end {
-  order: 1;
   flex: 0 0 auto;
 }
 
-/*
- * Below the layout breakpoint the search takes a line of its own under the two
- * groups — a field sharing 320px with the drawer trigger, the wordmark and the
- * quick-create is about 30px wide, which is too narrow to read back what you
- * typed. One extra line of chrome is the cheaper answer.
- */
+/* A trigger the width of an icon below the layout breakpoint. The expanded field
+   is out of flow — see `TopBarSearch.module.css` — so this box is the icon's
+   either way, and the bar does not move when the field opens. */
 .search {
-  order: 2;
-  flex: 1 1 100%;
+  flex: 0 0 auto;
   min-inline-size: 0;
 }
 
+/*
+ * Below 30rem the drawer trigger, the search, the bell, the quick-create and the
+ * avatar take the whole row, and the wordmark is what gives way — 0001's rule
+ * that the lockup is the first thing to stand down. The drawer heads its own
+ * navigation with the same lockup, so the workspace is still named at 320px.
+ */
 .brand {
-  color: var(--color-on-surface);
-  font-size: var(--font-size-body);
-  font-weight: var(--font-weight-strong);
-  text-decoration: none;
-  white-space: nowrap;
+  display: none;
+  min-inline-size: 0;
+  /* A link home is a tap like the four beside it, whatever the wordmark's own
+     line height happens to be. */
+  min-block-size: var(--size-touch-target);
+}
+
+@media (min-width: 30rem) {
+  .brand {
+    display: flex;
+  }
 }
 
 .account {
-  /* The drawer carries the identity and the same controls below the breakpoint,
-     where the bar has no room for a name, a role and a chevron. */
-  display: none;
+  display: flex;
+  min-inline-size: 0;
 }
 
 @media (min-width: 48rem) {
@@ -89,18 +106,8 @@
     display: none;
   }
 
-  /* Back on the one line, between the wordmark's place and the utilities. */
+  /* The field itself from here up, taking the slack between the two groups. */
   .search {
-    order: 1;
     flex: 1 1 auto;
-  }
-
-  .end {
-    order: 2;
-  }
-
-  .account {
-    display: flex;
-    min-inline-size: 0;
   }
 }
