@@ -3406,13 +3406,13 @@ export const content = {
 
   /**
    * The supervisor's performance dashboard (TAR-30,
-   * `docs/architecture/0009-reporting-dashboard-and-export.md`).
+   * `docs/architecture/0010-reporting-dashboard-and-export.md`).
    *
    * Two things this copy has to carry, because the numbers are otherwise
    * ambiguous and end up in a client-facing report: **what each metric is
-   * anchored on** (0009 decision 2 — "resolved this week" is over tickets
+   * anchored on** (0010 decision 2 — "resolved this week" is over tickets
    * resolved this week, whenever they arrived), and **that the durations are
-   * wall-clock** rather than business hours (0009 risk 2).
+   * wall-clock** rather than business hours (0010 risk 2).
    */
   reports: {
     title: 'Performance',
@@ -3436,7 +3436,7 @@ export const content = {
     scopeAll: 'All tickets',
     scopeAssigned: 'Assigned to me',
     /**
-     * 0009 decision 6: without `report:read_all` the totals still cover
+     * 0010 decision 6: without `report:read_all` the totals still cover
      * everything the caller can see, and the breakdown is narrowed to their own
      * row rather than the request being refused. Saying so is what stops an
      * agent reading a supervisor's shared link as a broken table.
@@ -3465,7 +3465,7 @@ export const content = {
     resolutionLabel: 'Resolution time',
     resolutionHint:
       'Median, from the ticket opening to its resolution, for tickets resolved in this range.',
-    /** Wall-clock, not business hours — 0009 risk 2, stated rather than assumed. */
+    /** Wall-clock, not business hours — 0010 risk 2, stated rather than assumed. */
     durationBasisNote: 'Durations are wall-clock, including nights and weekends.',
 
     statAverage: 'Average',

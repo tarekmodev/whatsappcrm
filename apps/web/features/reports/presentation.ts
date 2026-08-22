@@ -6,10 +6,10 @@ import type { Content } from '@/lib/content';
  * How the dashboard's numbers read.
  *
  * Formatting lives here and nowhere else, and that is a contract decision rather
- * than a tidiness one: ADR 0009 decision 7 keeps the API on integer seconds
- * precisely so the console owns the only duration formatter in the system. A
- * second one — in the CSV, in a widget, in an email — is how "2h 14m" on screen
- * and "2h 15m" in a report start disagreeing.
+ * than a tidiness one: ADR 0010 (reporting dashboard and export) decision 7 keeps
+ * the API on integer seconds precisely so the console owns the only duration
+ * formatter in the system. A second one — in the CSV, in a widget, in an email —
+ * is how "2h 14m" on screen and "2h 15m" in a report start disagreeing.
  *
  * Everything here is a pure function of its arguments. Nothing reads the clock,
  * so server and client render the same string and there is nothing to hydrate
