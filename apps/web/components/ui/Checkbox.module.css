@@ -1,0 +1,94 @@
+/*
+ * The box is `TextInput`'s, at checkbox size: the same hairline, the same radius
+ * and the same disabled and invalid roles, read from `Control.module.css`'s
+ * vocabulary rather than copied out of it.
+ *
+ * The box itself is not the touch target — a checkbox always has a `<label>`
+ * around or beside it, and that label is what clears 44px. `CheckboxGroup` makes
+ * the whole row the target for exactly this reason.
+ */
+
+.checkbox {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.input {
+  appearance: none;
+  inline-size: var(--size-checkbox);
+  block-size: var(--size-checkbox);
+  margin: 0;
+  background-color: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    border-color var(--duration-fast) var(--easing-standard);
+}
+
+.input:checked {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--color-danger);
+}
+
+.input:disabled {
+  background-color: var(--color-surface-sunken);
+  border-color: var(--color-border);
+  cursor: not-allowed;
+}
+
+.input:disabled:checked {
+  background-color: var(--color-on-surface-subtle);
+  border-color: var(--color-on-surface-subtle);
+}
+
+@media (hover: hover) {
+  .input:not(:disabled):hover {
+    border-color: var(--color-accent);
+  }
+}
+
+/* Decoration: the state is the input's own, and screen readers read it there. */
+.tick {
+  /* `inset: 0` plus `margin: auto` centres a fixed-size box on both axes without
+     a physical translate, so it lands in the same place when the page reads
+     right to left. */
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  color: var(--color-on-accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--easing-standard);
+}
+
+.input:checked ~ .tick {
+  opacity: 1;
+}
+
+/*
+ * `appearance: none` takes the platform's tick with it, so forced-colors mode
+ * would show a checked box and an empty one as the same empty box. System colour
+ * keywords are honoured inside this query.
+ */
+@media (forced-colors: active) {
+  .input {
+    background-color: ButtonFace;
+    border-color: ButtonBorder;
+  }
+
+  .input:checked {
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+
+  .tick {
+    color: HighlightText;
+  }
+}

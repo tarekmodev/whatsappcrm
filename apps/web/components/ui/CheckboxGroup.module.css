@@ -52,17 +52,14 @@
   }
 }
 
-.option:has(.checkbox:checked) {
+.option:has(input:checked) {
   background: var(--color-accent-subtle);
   border-color: var(--color-accent);
 }
 
+/* Size, border and tick are `Checkbox`'s; the row only says where it sits. */
 .checkbox {
-  inline-size: var(--space-4);
-  block-size: var(--space-4);
   margin-block-start: var(--space-1);
-  accent-color: var(--color-accent);
-  flex-shrink: 0;
 }
 
 .optionText {

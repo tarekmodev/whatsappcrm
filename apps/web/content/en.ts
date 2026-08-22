@@ -2918,6 +2918,15 @@ export const content = {
     // --- Readiness ---------------------------------------------------------
     readinessHeading: 'Automated replies',
     readinessDescription: 'Whether the chatbot is answering customers right now.',
+    /**
+     * The readiness badge, and deliberately not `enabledOn` / `enabledOff`
+     * (TAR-710). Those two words belong to the switch in the settings card and
+     * to nothing else: a badge reading "On" beside a control reading "On" made
+     * one boolean look like two, and readiness is not that boolean anyway — it
+     * is the conjunction of four clauses, of which the switch is one.
+     */
+    readinessOn: 'Answering',
+    readinessOff: 'Not answering',
     readyHeading: 'The chatbot is answering',
     readyBody: (indexedCount: number) =>
       indexedCount === 1

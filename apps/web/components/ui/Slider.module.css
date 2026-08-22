@@ -1,0 +1,173 @@
+/*
+ * The slider's face. The element underneath is still `<input type="range">`, so
+ * every rule here is painting: the rail and the filled portion are siblings
+ * drawn behind a transparent input, and the knob is the one part that has to go
+ * through the vendor pseudo-elements because no browser exposes it any other way.
+ */
+
+.slider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.control {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-inline-size: 0;
+  /* The whole row is the drag target, not the 6px rail inside it. */
+  min-block-size: var(--size-touch-target);
+}
+
+.track {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 50%;
+  block-size: var(--size-slider-track);
+  border-radius: var(--radius-pill);
+  /*
+   * The same ground `UsageMeter`'s track uses, and the one the knob's accent
+   * ring is measured against — `--color-border-strong` reads as a rule rather
+   * than a channel, and in the dark theme it leaves the ring at 2.15:1, under
+   * the 3:1 SC 1.4.11 asks of a control's parts.
+   */
+  background-color: var(--color-surface-sunken);
+  /*
+   * A hairline rather than a second background: the sunken role is one step
+   * from the surface in both themes, which is right for a fill and leaves the
+   * *unfilled* part of the rail hard to find on a dark card. Inset, so it
+   * follows the pill and does not change the rail's height.
+   */
+  box-shadow: inset 0 0 0 var(--border-hairline) var(--color-border);
+  translate: 0 -50%;
+}
+
+.fill {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  /*
+   * Ends under the centre of the knob rather than at a flat percentage of the
+   * rail: the knob travels between half its own width and the rail's width less
+   * that half, so a naive `ratio * 100%` runs ahead of it at the top of the
+   * range and behind it at the bottom.
+   */
+  inline-size: calc(
+    var(--size-slider-knob) / 2 + var(--slider-ratio) * (100% - var(--size-slider-knob))
+  );
+  border-radius: var(--radius-pill);
+  background-color: var(--color-accent);
+}
+
+.range {
+  appearance: none;
+  position: relative;
+  inline-size: 100%;
+  min-inline-size: 0;
+  block-size: var(--size-touch-target);
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/*
+ * WebKit and Gecko each expose the track and the thumb under their own
+ * pseudo-element, and neither accepts the other's — so these rules are written
+ * twice on purpose. They cannot be merged into one selector list: an unknown
+ * pseudo-element invalidates the whole rule.
+ */
+.range::-webkit-slider-runnable-track {
+  block-size: var(--size-slider-knob);
+  background: transparent;
+}
+
+.range::-moz-range-track {
+  block-size: var(--size-slider-knob);
+  background: transparent;
+}
+
+.range::-webkit-slider-thumb {
+  appearance: none;
+  inline-size: var(--size-slider-knob);
+  block-size: var(--size-slider-knob);
+  border: var(--border-hairline) solid var(--color-accent);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface);
+  box-shadow: var(--shadow-raised);
+}
+
+.range::-moz-range-thumb {
+  inline-size: var(--size-slider-knob);
+  block-size: var(--size-slider-knob);
+  border: var(--border-hairline) solid var(--color-accent);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface);
+  box-shadow: var(--shadow-raised);
+}
+
+.range:disabled {
+  cursor: not-allowed;
+}
+
+/* `:has`, not a sibling combinator: the rail is drawn *before* the input so it
+   sits behind it, so there is no preceding-sibling selector to reach it with. */
+.control:has(.range:disabled) .track {
+  background-color: var(--color-surface-sunken);
+}
+
+.control:has(.range:disabled) .fill {
+  background-color: var(--color-border-strong);
+}
+
+.control:has(.range:disabled) .range::-webkit-slider-thumb {
+  border-color: var(--color-border-strong);
+  background-color: var(--color-surface-sunken);
+  box-shadow: none;
+}
+
+.control:has(.range:disabled) .range::-moz-range-thumb {
+  border-color: var(--color-border-strong);
+  background-color: var(--color-surface-sunken);
+  box-shadow: none;
+}
+
+.value {
+  /*
+   * Reserved width, so dragging from 5% to 100% does not shuffle the control
+   * beside it. `ch` on tabular figures keeps that true whatever form the
+   * locale's percentage takes.
+   */
+  min-inline-size: 8ch;
+  font-size: var(--font-size-body-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-on-surface-muted);
+  text-align: end;
+}
+
+/*
+ * A background colour is dropped in forced-colors mode, which would leave the
+ * rail, the fill and the page the same colour. System keywords are honoured
+ * inside this query; the value beside the control carries the meaning either way.
+ */
+@media (forced-colors: active) {
+  .track {
+    border: var(--border-hairline) solid CanvasText;
+    background-color: Canvas;
+  }
+
+  .fill {
+    background-color: Highlight;
+  }
+
+  .range::-webkit-slider-thumb {
+    border-color: CanvasText;
+    background-color: ButtonFace;
+  }
+
+  .range::-moz-range-thumb {
+    border-color: CanvasText;
+    background-color: ButtonFace;
+  }
+}

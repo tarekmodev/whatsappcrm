@@ -29,7 +29,7 @@ export function BotReadinessPanel({ readiness }: { readiness: AiReadiness }) {
     return (
       <Stack gap="2">
         <Cluster gap="3" align="center">
-          <Badge tone="success">{content.chatbot.enabledOn}</Badge>
+          <Badge tone="success">{content.chatbot.readinessOn}</Badge>
           <p className={styles.heading}>{content.chatbot.readyHeading}</p>
         </Cluster>
         <p className={styles.body}>{content.chatbot.readyBody(readiness.indexedDocumentCount)}</p>
@@ -43,7 +43,7 @@ export function BotReadinessPanel({ readiness }: { readiness: AiReadiness }) {
         {/* `warning`, not `danger`: a chatbot that is not answering is the
             product's normal state and its safe one — a human answers, exactly as
             they did before the feature existed. */}
-        <Badge tone="warning">{content.chatbot.enabledOff}</Badge>
+        <Badge tone="warning">{content.chatbot.readinessOff}</Badge>
         <p className={styles.heading}>{content.chatbot.notReadyHeading}</p>
       </Cluster>
       <p className={styles.body}>{content.chatbot.notReadyBody}</p>

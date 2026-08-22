@@ -14,6 +14,7 @@ import { useContent } from '@/lib/content';
 import { reindexKnowledgeEntryAction } from '../chatbot.actions';
 import { KNOWLEDGE_DOCUMENTS_PAGE_SIZE } from '../constants';
 import { KNOWLEDGE_STATUS_TONES } from '../presentation';
+import { useIndexingRefresh } from '../useIndexingRefresh';
 import { knowledgeColumnMeta } from './knowledge-columns';
 import { LazyDeleteKnowledgeEntryDialog, LazyKnowledgeEntryDialog } from './knowledge-dialogs.lazy';
 import styles from './KnowledgeDocumentsTable.module.css';
@@ -53,6 +54,10 @@ export function KnowledgeDocumentsTable({
   const content = useContent();
   const [editing, setEditing] = useState<KnowledgeDocumentListItem | null>(null);
   const [deleting, setDeleting] = useState<KnowledgeDocumentListItem | null>(null);
+
+  // `Indexing` settles into `Ready` or `Failed` within seconds, so the row that
+  // says it refetches itself rather than waiting for somebody to press reload.
+  useIndexingRefresh(documents.some((document) => document.status === 'pending'));
 
   const columns = useMemo<DataTableColumn<KnowledgeDocumentListItem>[]>(() => {
     const renderers: Record<string, (document: KnowledgeDocumentListItem) => ReactNode> = {

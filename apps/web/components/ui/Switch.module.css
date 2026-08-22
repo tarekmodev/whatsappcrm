@@ -1,0 +1,141 @@
+/*
+ * The switch's face. The element underneath is still `<input type="checkbox">`
+ * — see the component for why — so everything here is painting, and nothing
+ * here is behaviour.
+ */
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.control {
+  /*
+   * The knob is positioned against this box rather than against the input,
+   * because the input's own box is 44px of hit target with a smaller track
+   * painted inside it (see `.input`). Every offset below is derived from that
+   * one arrangement rather than measured by hand.
+   */
+  --switch-track-block: calc(var(--size-switch-knob) + var(--space-1) * 2);
+  /* The gutter between the input's hit box and the track painted inside it. */
+  --switch-inset: calc((var(--size-touch-target) - var(--size-switch-track)) / 2);
+  /* How far the knob travels: the track, less the knob and its two end gaps. */
+  --switch-travel: calc(var(--size-switch-track) - var(--size-switch-knob) - var(--space-1) * 2);
+  /*
+   * `translate` is physical where `inset-inline-start` is not, so the sign of
+   * the travel is the one thing this component has to know the writing
+   * direction for. Declared once here rather than at the rule that moves.
+   */
+  --switch-direction: 1;
+
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+[dir='rtl'] .control {
+  --switch-direction: -1;
+}
+
+/*
+ * The input is the track. It keeps a full 44px hit box and paints only the pill
+ * inside it: `background-clip: content-box` with the difference as padding, so
+ * the target is the size WCAG asks for while the control is the size the design
+ * asks for. Painting the input itself — rather than hiding it behind a div — is
+ * what keeps the app's one global `:focus-visible` ring landing on the right box.
+ */
+.input {
+  appearance: none;
+  inline-size: var(--size-touch-target);
+  block-size: var(--size-touch-target);
+  padding-inline: var(--switch-inset);
+  padding-block: calc((var(--size-touch-target) - var(--switch-track-block)) / 2);
+  margin: 0;
+  background-color: var(--color-on-surface-muted);
+  background-clip: content-box;
+  border: 0;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+.input:checked {
+  background-color: var(--color-accent);
+}
+
+.input:disabled {
+  background-color: var(--color-border-strong);
+  cursor: not-allowed;
+}
+
+@media (hover: hover) {
+  .input:checked:not(:disabled):hover {
+    background-color: var(--color-accent-hover);
+  }
+}
+
+/*
+ * Decoration: the state it stands for is announced by `role="switch"` and
+ * written out in `.state` beside it.
+ */
+.knob {
+  position: absolute;
+  inset-inline-start: calc(var(--switch-inset) + var(--space-1));
+  inset-block-start: 50%;
+  inline-size: var(--size-switch-knob);
+  block-size: var(--size-switch-knob);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface);
+  box-shadow: var(--shadow-raised);
+  pointer-events: none;
+  translate: 0 -50%;
+  transition: translate var(--duration-fast) var(--easing-standard);
+}
+
+.input:checked ~ .knob {
+  background-color: var(--color-on-accent);
+  translate: calc(var(--switch-travel) * var(--switch-direction)) -50%;
+}
+
+.input:disabled ~ .knob {
+  background-color: var(--color-surface);
+  box-shadow: none;
+}
+
+.state {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-on-surface);
+}
+
+/*
+ * `appearance: none` means the platform paints nothing here, so forced-colors
+ * mode would otherwise leave a switch with no visible track at all. System
+ * colour keywords are honoured inside this query, which is what lets the
+ * control keep both of its carriers — the track's fill and the knob's position.
+ */
+@media (forced-colors: active) {
+  .input {
+    background-color: ButtonFace;
+    /* The 44px hit box, drawn so the pill inside it has an edge to sit on. */
+    border: var(--border-hairline) solid ButtonBorder;
+  }
+
+  .input:checked {
+    background-color: Highlight;
+  }
+
+  .input:disabled {
+    background-color: GrayText;
+  }
+
+  .knob {
+    background-color: ButtonText;
+  }
+
+  .input:checked ~ .knob {
+    background-color: HighlightText;
+  }
+}

@@ -265,6 +265,21 @@
   /* The swatch a colour picker shows beside its hex field. */
   --scale-size-swatch: 2.75rem;
 
+  /*
+   * The three drawn form controls (TAR-710), measured from one knob: a switch's
+   * knob and a slider's are the same object moving in two directions, and a set
+   * whose grabbable parts differ by a pixel or two reads as three kits rather
+   * than one. None of these is the hit target — each is centred inside a
+   * `--scale-size-touch-target` box, so a small painted control still clears 44px.
+   */
+  --scale-size-switch-track: 2.5rem;
+  --scale-size-switch-knob: 1.125rem;
+  --scale-size-slider-knob: 1.125rem;
+  /* The rail that knob runs along: a rule, not a bar. */
+  --scale-size-slider-track: 0.375rem;
+  /* A checkbox's box, one step above `--scale-size-icon-sm` — which is its tick. */
+  --scale-size-checkbox: 1.25rem;
+
   /* Panes and media, added for the shared inbox's two-column layout. */
   --scale-size-pane-sm: 20rem;
   --scale-size-pane-md: 22rem;

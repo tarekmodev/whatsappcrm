@@ -31,6 +31,17 @@ export const ENTRY_CONTENT_ROWS = 10;
  * whether somebody chose it or a drag produced it. Five points is the coarsest
  * granularity that still lets the threshold be tuned.
  */
+/**
+ * How often the chatbot page refetches while an entry is still indexing.
+ *
+ * Indexing is seconds of work, so four is short enough that a `Indexing` badge
+ * turns into `Ready` while somebody is still looking at it, and long enough that
+ * a knowledge base with a stuck entry is not refetching the whole page many
+ * times a minute. See `useIndexingRefresh`, which only runs while something is
+ * pending and skips a tick in a hidden tab.
+ */
+export const INDEXING_REFRESH_INTERVAL_MS = 4_000;
+
 export const MIN_CONFIDENCE_RANGE = {
   min: 0,
   max: 1,

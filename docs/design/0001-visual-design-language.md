@@ -720,6 +720,97 @@ a live checklist rather than as a sentence to remember. The required `*` has a l
 While a form submits, its fields are disabled and the block submit button says which flow
 is in flight.
 
+### Settings forms (TAR-710)
+
+A settings form is not a dialog form and must not be laid out like one. Its fields are
+long-lived facts about the workspace, each carrying a sentence of explanation, and the
+card it sits in is the full width of the page. Stacked in a 26rem column, seven of them
+left roughly 700px of empty card down the right of `/settings/chatbot` — the widest
+unused area in the product.
+
+`SettingsForm` is the pattern, and no settings screen writes its own:
+
+- **Two columns from 64rem.** The field's name and its help text in the **leading**
+  column, capped at `--measure-body`; the control in the **trailing** column, capped at
+  `--size-container-sm`. A threshold slider that stretches to 1600px is harder to aim at,
+  not easier — the cap is what fills the card without inflating the controls.
+- **One row per field**, the label's first line on the control's first line. The offset is
+  derived from `--size-touch-target` and the label's own line box, so it stays true if
+  either token moves.
+- **Below 64rem it stacks**, with both caps still in force — which is exactly what these
+  forms did at every width before the split existed.
+- **`--space-6` between field groups**, and a hairline between logical sections. The rule
+  belongs to the second section and every one after it (`.section + .section`), so a form
+  of one group draws no rule and a form of three never ends on one.
+- **The layout reaches the fields through context, not props.** A `Field` two components
+  deep — `ModelChoiceField`, `ConfidenceField` — still belongs to the form's layout, and a
+  prop threaded through each of them is a prop one of them will be missing.
+- **A save failure is inline, above the action** (`FormError`), never a toast: a message
+  that slides away takes the reason with it while the reader is still looking at the fields
+  that caused it. The success is the toast, because there is nothing left to read.
+- **The fields stay editable while the save is in flight.** The submit carries the pending
+  state and the double-submit guard; a save that is running is not a reason to stop
+  somebody correcting a typo they have just spotted. (The signed-out screens disable
+  theirs, and that is the exception: an auth flow's fields are the credential being
+  checked.)
+
+Chatbot settings is the first screen on it. Workspace, Assignment and Security are clean
+today and adopt it when they next change — the pattern exists so they do not each invent
+one.
+
+#### No browser-default control chrome, part two
+
+TAR-516 settled selects and dates in the filter row; a settings screen is where the
+remaining native controls were hiding. The rule is the same and it now covers the set:
+
+| The control      | Use                                                              |
+| ---------------- | ---------------------------------------------------------------- |
+| On/off, live     | `Switch` — takes effect on flip. Never a checkbox                |
+| One of several   | `Checkbox` / `CheckboxGroup` — chosen now, committed by a submit |
+| A value in range | `Slider`                                                         |
+| One choice       | `Select` — the native element under a designed face              |
+| Multi-line text  | `Textarea` — `resize: vertical` at most, never `both`            |
+
+All three new controls are the **native element with `appearance: none`**, never a div
+wearing ARIA: the keyboard model, the label association, the form reset and the platform's
+touch behaviour are all things a custom widget has to re-earn and usually gets wrong. What
+is replaced is the platform's painting, which is the one thing on the page no theme
+reaches. Each of them therefore restores in `forced-colors` what `appearance: none` took
+away, using system colour keywords.
+
+**A switch and a checkbox are not interchangeable.** A checkbox proposes a change that a
+submit commits; a switch reads as the mode the product is in right now. Picking the wrong
+one is how `/settings/chatbot` came to show an `On` badge and a checkbox labelled `On` for
+one boolean — **two representations, and only one of them may be a control.** A read-only
+summary of a setting states it in different words than the control does (`Answering`, not
+`On`), or it is a second control by accident.
+
+**Neither the switch's knob position nor the slider's fill is the only carrier.** The
+switch writes its state out beside it, and the slider's value is an `<output>` whose text
+is also the control's `aria-valuetext` — so a screen reader hears "60% sure" on every
+arrow press rather than "0.6", and a reader in forced colours is not reading a position.
+
+Where a control's help text explains the **selected option** rather than the field — the
+model's price per million tokens — it is part of the control's `aria-describedby`, not a
+loose paragraph underneath it. Otherwise the one number that decides the choice is the one
+thing a screen reader never reads.
+
+`appearance: none` also means the platform stops guaranteeing that these controls are
+visible at all, so the parts that identify each one and its state are measured against
+WCAG 2.2 SC 1.4.11's 3:1 and asserted in `apps/web/styles/tokens/tokens.test.ts`:
+
+| Pair                                                          | Light  | Dark   | Floor |
+| ------------------------------------------------------------- | ------ | ------ | ----- |
+| Switch knob (`surface`) on its off track (`on-surface-muted`) | 4.76:1 | 6.96:1 | 3     |
+| Switch knob (`on-accent`) on its on track (`accent`)          | 5.37:1 | 5.73:1 | 3     |
+| The off track itself, against the `surface` behind it         | 4.76:1 | 6.96:1 | 3     |
+| Slider knob's accent ring on the rail (`surface-sunken`)      | 4.90:1 | 5.73:1 | 3     |
+| Slider knob's `surface` disc on the filled portion (`accent`) | 5.37:1 | 5.07:1 | 3     |
+
+The slider's rail is `--color-surface-sunken` rather than `--color-border-strong` for the
+fourth row: a border-weight rail left the knob's ring at 2.15:1 in the dark theme, which is
+the whole reason this table exists.
+
 ### Detail views
 
 A contact, a ticket, a conversation:
@@ -993,6 +1084,10 @@ space:
 | Filter pills            | `FilterPills`                                      |
 | A search filter         | `SearchField`                                      |
 | A single choice         | `Select` (`variant="filter"` above a list)         |
+| A settings form         | `SettingsForm` — see "Settings forms"              |
+| An on/off setting       | `Switch` — never a checkbox for a live setting     |
+| A multi-select tick     | `Checkbox`, or `CheckboxGroup` for a whole set     |
+| A value in a range      | `Slider`                                           |
 | A date range            | `DateRangeField`                                   |
 | Collapsed filters       | `FilterMenu` + `ActiveFilterChips`                 |
 | A status chip or count  | `Badge` — see "Status vocabulary" for how many     |
