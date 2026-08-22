@@ -3,16 +3,19 @@ import 'server-only';
 import {
   BillingSummaryResponseSchema,
   HostedSessionSchema,
+  PlanListItemSchema,
   PlanListResponseSchema,
   UsageSummaryResponseSchema,
   type BillingSummaryResponse,
   type CheckoutRequest,
   type HostedSession,
+  type PlanListItem,
   type PlanListResponse,
   type PortalRequest,
   type UsageSummaryResponse,
 } from '@whatsappcrm/contracts';
 import { authenticatedRequest } from '@/lib/api/authenticated';
+import { MalformedResponseError } from '@/lib/api/parse';
 
 /**
  * The five billing routes, exactly as the TAR-37 contract publishes them. No
@@ -47,11 +50,63 @@ import { authenticatedRequest } from '@/lib/api/authenticated';
 
 const BILLING_PATH = '/v1/billing';
 
-/** `GET /v1/billing/plans` — every tier, plus this tenant's position in them. */
+/**
+ * `GET /v1/billing/plans` — every tier, plus this tenant's position in them.
+ *
+ * **The plans are validated one at a time, and a plan that fails is dropped**
+ * rather than failing the response. The catalogue is platform-wide and the route
+ * returns all of it, so parsing the array as a unit made one non-conforming row
+ * — a plan key with a hyphen in it, left behind by a test fixture — the billing
+ * page's error boundary for every tenant on the platform, with no way back from
+ * the UI (TAR-657). A pricing page missing a tier is a bad page; a pricing page
+ * that will not render is no page.
+ *
+ * It is a second line of defence, not the fix: `plans_key_format` and
+ * `plans_entitlements_shape` stop the row being written in the first place. This
+ * is what keeps the next unforeseen bad row from costing the whole surface.
+ *
+ * The envelope itself is **not** tolerated. `usage` drives the seat and volume
+ * readings the page renders next to those plans, and a page that quietly invents
+ * them is worse than one that fails.
+ */
 export async function getBillingPlans(): Promise<PlanListResponse> {
-  return PlanListResponseSchema.parse(
-    await authenticatedRequest({ method: 'GET', path: `${BILLING_PATH}/plans` }),
-  );
+  const response = await authenticatedRequest({ method: 'GET', path: `${BILLING_PATH}/plans` });
+
+  if (typeof response !== 'object' || response === null) {
+    throw new MalformedResponseError('Expected a plan list envelope object.');
+  }
+
+  const { plans, usage } = response as { plans?: unknown; usage?: unknown };
+
+  if (!Array.isArray(plans)) {
+    throw new MalformedResponseError('Expected `plans` to be an array.');
+  }
+
+  // Re-parsed as a whole afterwards, so `usage` is still validated and the
+  // returned value is the contract's type rather than a cast.
+  return PlanListResponseSchema.parse({ plans: plans.filter(isRenderablePlan), usage });
+}
+
+/**
+ * Whether one plan of the list matches the contract, logging it if it does not.
+ *
+ * Never swallowed: the server log keeps the plan the tenant must not be shown,
+ * with enough of the row to identify it in the catalogue.
+ */
+function isRenderablePlan(plan: unknown): plan is PlanListItem {
+  const result = PlanListItemSchema.safeParse(plan);
+
+  if (!result.success) {
+    const key = typeof plan === 'object' && plan !== null ? (plan as { key?: unknown }).key : plan;
+
+    console.error(
+      'Dropping a billing plan that does not match the contract',
+      { key },
+      result.error,
+    );
+  }
+
+  return result.success;
 }
 
 /** `GET /v1/billing/subscription` — the current plan, its dates and its usage. */
