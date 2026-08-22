@@ -2,7 +2,7 @@ import type { DashboardExportQuery } from '@whatsappcrm/contracts';
 
 /**
  * What the downloaded report is called, and the `Content-Disposition` that
- * carries it (ADR 0009 decision 7).
+ * carries it — ADR 0010 (reporting dashboard and export) decision 7.
  *
  * `report-<section>-<from>-<to>.csv`, so a supervisor who exports four ranges
  * in a morning ends up with four distinguishable files in their downloads

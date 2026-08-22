@@ -30,7 +30,8 @@ import styles from './MetricCard.module.css';
  * time, 2 hours 14 minutes" instead of two unrelated fragments.
  *
  * The card never formats anything. It is handed rendered values, so the one
- * duration formatter in the app stays in `presentation.ts` (ADR 0009 decision 7).
+ * duration formatter in the app stays in `presentation.ts` — ADR 0010 (reporting
+ * dashboard and export) decision 7.
  */
 
 export interface MetricCardDetail {

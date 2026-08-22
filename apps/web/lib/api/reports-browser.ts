@@ -6,10 +6,10 @@ import { exportDashboardCsvAction } from '@/features/reports/reports.actions';
 
 /**
  * `GET /api/v1/reports/dashboard/export` — the CSV behind the dashboard's export
- * control (ADR 0009, TAR-431).
+ * control. ADR 0010 (reporting dashboard and export), TAR-431.
  *
- * Made **by the browser**, and fetched rather than linked. ADR 0009's frontend
- * notes give the reason: a bare `<a download>` cannot fail visibly. A refused or
+ * Made **by the browser**, and fetched rather than linked. The frontend notes in
+ * that ADR give the reason: a bare `<a download>` cannot fail visibly. A refused or
  * timed-out export would navigate the tab to a JSON error body, which is neither
  * an error state nor a download, and the supervisor would be left reading an
  * envelope. Fetching keeps the failure in the page, where the control can say
@@ -94,12 +94,13 @@ async function mockExport(query: DashboardExportQuery): Promise<DashboardExportF
 /**
  * The API's `Content-Disposition` name, or the contract's own naming rule.
  *
- * The header is authoritative — deriving the name as a matter of course would be
- * a second implementation of a rule ADR 0009 decision 7 already fixes — but it is
- * also a value that ends up as a filename on somebody's disk, so it is accepted
- * only in the shape the contract describes. Anything else falls back rather than
- * being sanitised into a different name: a path separator or a control character
- * in there is a bug on the API side, not something to correct quietly.
+ * The header is authoritative — deriving the name as a matter of course would be a
+ * second implementation of a rule ADR 0010 (reporting dashboard and export)
+ * decision 7 already fixes — but it is also a value that ends up as a filename on
+ * somebody's disk, so it is accepted only in the shape the contract describes.
+ * Anything else falls back rather than being sanitised into a different name: a
+ * path separator or a control character in there is a bug on the API side, not
+ * something to correct quietly.
  */
 function fileNameFor(header: string | null, query: DashboardExportQuery): string {
   const quoted = /filename="([^"]*)"/.exec(header ?? '');
@@ -110,7 +111,10 @@ function fileNameFor(header: string | null, query: DashboardExportQuery): string
 
 const SAFE_FILE_NAME = /^[A-Za-z0-9._-]+\.csv$/;
 
-/** `report-<section>-<from>-<to>.csv`, per ADR 0009 decision 7. */
+/**
+ * `report-<section>-<from>-<to>.csv`, per ADR 0010 (reporting dashboard and
+ * export) decision 7.
+ */
 export function derivedFileName(query: DashboardExportQuery): string {
   return `report-${query.section}-${query.from}-${query.to}.csv`;
 }
