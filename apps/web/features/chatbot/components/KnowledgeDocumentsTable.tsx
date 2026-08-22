@@ -114,8 +114,9 @@ export function KnowledgeDocumentsTable({
   if (documents.length === 0) {
     return (
       <EmptyState
-        heading={content.chatbot.knowledgeEmptyHeading}
-        body={content.chatbot.knowledgeEmptyBody}
+        icon="note"
+        title={content.chatbot.knowledgeEmptyHeading}
+        description={content.chatbot.knowledgeEmptyBody}
       />
     );
   }

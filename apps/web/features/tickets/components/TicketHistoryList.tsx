@@ -27,8 +27,9 @@ export function TicketHistoryList({
   if (entries.length === 0) {
     return (
       <EmptyState
-        heading={content.tickets.historyEmptyHeading}
-        body={content.tickets.historyEmptyBody}
+        icon="ticket"
+        title={content.tickets.historyEmptyHeading}
+        description={content.tickets.historyEmptyBody}
       />
     );
   }

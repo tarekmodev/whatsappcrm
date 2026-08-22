@@ -10,6 +10,10 @@ import { EmptyState } from './EmptyState';
  */
 export function ForbiddenState() {
   return (
-    <EmptyState heading={content.errors.forbiddenHeading} body={content.errors.forbiddenBody} />
+    <EmptyState
+      icon="security"
+      title={content.errors.forbiddenHeading}
+      description={content.errors.forbiddenBody}
+    />
   );
 }

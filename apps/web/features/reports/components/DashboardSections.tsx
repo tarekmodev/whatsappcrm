@@ -2,6 +2,7 @@ import { Stack } from '@/components/layout/Stack';
 import { LazyBoundary } from '@/components/ui/LazyBoundary';
 import { Notice } from '@/components/ui/Notice';
 import { SectionCard } from '@/components/ui/SectionCard';
+import { SectionErrorBoundary } from '@/components/ui/SectionErrorBoundary';
 import { SkeletonLine } from '@/components/ui/Skeleton';
 import { content } from '@/content/en';
 import { loadDashboardMetrics } from '@/features/reports/reports.data';
@@ -57,7 +58,9 @@ export async function DashboardSections({ params, isScopeNarrowed }: DashboardSe
               formatReportDate(metrics.range.to, content),
             )}
           </p>
-          <MetricSummaryGrid metrics={metrics.summary} />
+          <SectionErrorBoundary>
+            <MetricSummaryGrid metrics={metrics.summary} />
+          </SectionErrorBoundary>
         </Stack>
       </SectionCard>
 
@@ -67,7 +70,16 @@ export async function DashboardSections({ params, isScopeNarrowed }: DashboardSe
         description={content.reports.agentsDescription}
       >
         <Stack gap="3">
-          <AgentBreakdownTable rows={metrics.agents} />
+          {/*
+            The three sections come out of one fetch, so a *read* that fails
+            fails all three — that is ADR 0009 decision 1 and the page-level
+            boundary is where it belongs. This is the other failure: the
+            breakdown throwing while rendering, which must not take the summary
+            above it and the chart below it with it (TAR-515).
+          */}
+          <SectionErrorBoundary>
+            <AgentBreakdownTable rows={metrics.agents} />
+          </SectionErrorBoundary>
           <p className={styles.note}>{content.reports.mediansDoNotSumNote}</p>
         </Stack>
       </SectionCard>

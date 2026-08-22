@@ -9,7 +9,9 @@ import { DataTable, type DataTableColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { Stack } from '@/components/layout/Stack';
+import { TextLink } from '@/components/ui/TextLink';
 import { useContent } from '@/lib/content';
+import { routes } from '@/lib/routes';
 import type { FlaggedTicketRow } from '../flagged-rows';
 import { ticketLabel } from '../ticket-label';
 import { DEFERRED_REASON_TONES } from '../presentation';
@@ -113,18 +115,24 @@ export function FlaggedTicketsTable({
   }, [canAssign, content]);
 
   if (rows.length === 0) {
-    return (
+    // The filtered state offers to widen; the unfiltered one is good news and
+    // has nothing to offer beyond saying so.
+    return isFiltered ? (
       <EmptyState
-        heading={
-          isFiltered
-            ? content.assignment.flaggedFilteredEmptyHeading
-            : content.assignment.flaggedEmptyHeading
+        icon="filter"
+        title={content.assignment.flaggedFilteredEmptyHeading}
+        description={content.assignment.flaggedFilteredEmptyBody}
+        action={
+          <TextLink href={routes.settingsAssignment()}>
+            {content.assignment.flaggedFilteredEmptyAction}
+          </TextLink>
         }
-        body={
-          isFiltered
-            ? content.assignment.flaggedFilteredEmptyBody
-            : content.assignment.flaggedEmptyBody
-        }
+      />
+    ) : (
+      <EmptyState
+        icon="alert"
+        title={content.assignment.flaggedEmptyHeading}
+        description={content.assignment.flaggedEmptyBody}
       />
     );
   }

@@ -4,6 +4,7 @@ import { content } from '@/content/en';
 import { verifySession } from '@/lib/session/session';
 import { loadInbox, type InboxQuery } from '@/features/inbox/inbox.data';
 import { ConversationList, ConversationListSkeleton } from './ConversationList';
+import styles from './InboxSection.module.css';
 
 /**
  * Fetches and renders the conversation list. Usage: inside a Suspense boundary
@@ -37,7 +38,7 @@ export async function InboxSection({ query, selectedId, isScopeNarrowed }: Inbox
     canClaim || canAssign ? { currentUserId: session.principal.userId, canClaim, canAssign } : null;
 
   return (
-    <Stack gap="3">
+    <Stack gap="3" className={styles.sections}>
       {isScopeNarrowed ? (
         // The API narrows `all` rather than refusing it; saying so is what
         // stops an agent wondering why a shared supervisor link shows so
@@ -51,6 +52,7 @@ export async function InboxSection({ query, selectedId, isScopeNarrowed }: Inbox
         query={{ scope: query.scope, status: query.status, q: query.q }}
         selectedId={selectedId}
         claim={claim}
+        canManageChannels={session.checker.can('channel:manage')}
       />
     </Stack>
   );
@@ -64,7 +66,7 @@ export async function InboxSection({ query, selectedId, isScopeNarrowed }: Inbox
  */
 export function InboxSectionSkeleton({ hasClaim = false }: { hasClaim?: boolean }) {
   return (
-    <Stack gap="3">
+    <Stack gap="3" className={styles.sections}>
       <ConversationListSkeleton hasClaim={hasClaim} />
     </Stack>
   );
