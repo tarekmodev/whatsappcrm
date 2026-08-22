@@ -118,11 +118,11 @@ TAR-390 added **Settings → Response deadlines** (`/settings/sla`), so the wind
 needs an API call made on somebody's behalf. It reads `GET /sla-policies` and writes
 `PATCH /sla-policies/{id}`; there is nothing it can do that this page does not describe.
 
-| Console control                     | Field on the request                     |
-| ----------------------------------- | ---------------------------------------- |
-| Give new tickets a deadline         | `isActive`                               |
-| First response, in minutes          | `firstResponseMinutes` — empty is `null` |
-| Resolution, in minutes              | `resolutionMinutes` — empty is `null`    |
+| Console control             | Field on the request                     |
+| --------------------------- | ---------------------------------------- |
+| Give new tickets a deadline | `isActive`                               |
+| First response, in minutes  | `firstResponseMinutes` — empty is `null` |
+| Resolution, in minutes      | `resolutionMinutes` — empty is `null`    |
 
 It edits **the catch-all only**. Per-priority policies are listed read-only under _Priority
 overrides_, because `SlaPolicyUpdateInputSchema` accepts no `priority` and the resource has no

@@ -1065,8 +1065,7 @@ export const content = {
      * pretends they are not there.
      */
     overridesHeading: 'Priority overrides',
-    overridesDescription:
-      'Windows that apply to one priority instead of the workspace default.',
+    overridesDescription: 'Windows that apply to one priority instead of the workspace default.',
     overridesNotice:
       'These are set through the API. This screen changes the workspace default only.',
     /** A row's value: the two windows one override sets. */

@@ -1325,9 +1325,7 @@ describe('SLA policies', () => {
 
     const page = await listSlaPolicies();
 
-    expect(page.items.map((policy) => policy.id)).not.toContain(
-      MOCK_IDS.slaPolicies.otherTenant,
-    );
+    expect(page.items.map((policy) => policy.id)).not.toContain(MOCK_IDS.slaPolicies.otherTenant);
   });
 
   it('refuses an agent, who holds neither SLA permission', async () => {

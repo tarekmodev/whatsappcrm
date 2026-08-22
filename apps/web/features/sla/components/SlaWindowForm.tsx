@@ -59,9 +59,7 @@ export function SlaWindowForm({ policy }: { policy: SlaPolicyResponse }) {
   const copy = content.slaSettings;
   const { showToast } = useToast();
   const [isActive, setIsActive] = useState(policy.isActive);
-  const [firstResponse, setFirstResponse] = useState(
-    toWindowInput(policy.firstResponseMinutes),
-  );
+  const [firstResponse, setFirstResponse] = useState(toWindowInput(policy.firstResponseMinutes));
   const [resolution, setResolution] = useState(toWindowInput(policy.resolutionMinutes));
   const [fieldErrors, setFieldErrors] = useState<WindowErrors>({});
   const firstResponseRef = useRef<HTMLInputElement>(null);

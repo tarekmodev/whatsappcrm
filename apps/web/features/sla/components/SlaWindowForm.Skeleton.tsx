@@ -44,10 +44,7 @@ export function SlaWindowFormSkeleton() {
       <SettingsFormSection>
         <Field label={copy.activeLabel} hint={copy.activeHint}>
           {() => (
-            <SkeletonBlock
-              className={styles.togglePlaceholder}
-              height="var(--size-touch-target)"
-            />
+            <SkeletonBlock className={styles.togglePlaceholder} height="var(--size-touch-target)" />
           )}
         </Field>
         <Field

@@ -4351,7 +4351,10 @@ function listSlaPolicies({ principal, query }: RouteContext): CursorPage<SlaPoli
   }
 
   const items = tenantSlaPolicies(principal)
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+    .sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    )
     .slice(0, parsed.data.limit)
     .map(stripTenant);
 
