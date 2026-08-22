@@ -372,6 +372,21 @@ export interface WebhookSubject {
   tenantId: string | null;
   providerSubscriptionId: string | null;
   providerCustomerId: string | null;
+  /**
+   * The provider's own name for what happened — `subscription.active` and its
+   * siblings. **Read here rather than parsed**, because it is the one thing an
+   * operator needs about a delivery the parse never got to: a payload that names
+   * no tenant is parked before `parseWebhookEvent` is ever called, and an alert
+   * that cannot say which event type is stuck is one that still needs the
+   * database opened (TAR-668).
+   *
+   * Nullable like the rest, and for the same reason: a delivery whose envelope
+   * carries no type at all is exactly the kind this field exists to describe, so
+   * it reports the absence rather than refusing to be read. Nothing routes on
+   * it — it is diagnostic only, which is why the vocabulary rule that keeps
+   * provider strings out of the receiver does not apply.
+   */
+  eventType: string | null;
 }
 
 /**

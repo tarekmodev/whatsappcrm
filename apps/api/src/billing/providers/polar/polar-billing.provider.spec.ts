@@ -4,6 +4,7 @@ import type { ConfigService } from '@nestjs/config';
 import { BillingEventProcessor } from '../../billing-event.processor';
 import type { SeatSyncService } from '../../seat-sync.service';
 import type { SubscriptionSyncService } from '../../subscription-sync.service';
+import type { ErrorTrackingService } from '../../../observability/error-tracking.service';
 import type { SystemPrisma } from '../../../prisma/prisma.tokens';
 import type { TenantLifecycleService } from '../../../tenancy/lifecycle/tenant-lifecycle.service';
 import type { WebhookEventsRepository } from '../../../webhooks/webhook-events.repository';
@@ -126,6 +127,7 @@ function processorFor(payload: unknown) {
   const markFailed = jest.fn().mockResolvedValue(undefined);
   const apply = jest.fn().mockResolvedValue({ result: 'applied', planKey: 'growth', seats: 7 });
   const applyBillingEvent = jest.fn().mockResolvedValue(undefined);
+  const captureMessage = jest.fn();
 
   const processor = new BillingEventProcessor(
     { getOrThrow: () => 5 } as unknown as ConfigService,
@@ -147,9 +149,10 @@ function processorFor(payload: unknown) {
     { apply } as unknown as SubscriptionSyncService,
     { enqueue: jest.fn().mockResolvedValue(undefined) } as unknown as SeatSyncService,
     { applyBillingEvent } as unknown as TenantLifecycleService,
+    { captureMessage } as unknown as ErrorTrackingService,
   );
 
-  return { processor, apply, applyBillingEvent, markProcessed, markFailed };
+  return { processor, apply, applyBillingEvent, markProcessed, markFailed, captureMessage };
 }
 
 /**
@@ -222,7 +225,17 @@ describe('the Polar driver receiving a real webhook', () => {
         tenantId: TENANT,
         providerSubscriptionId: 'sub_01k3n0f4q2b7wq0f2rp3m4d5c6',
         providerCustomerId: 'cus_01k3n0dyf9x2s3t4u5v6w7x8y9',
+        eventType: 'subscription.active',
       });
+    });
+
+    /**
+     * The one field a park alert can still name when nothing else about the
+     * delivery read (TAR-668) — so an envelope with no type reports the absence
+     * rather than an empty string an operator would read as a blank field.
+     */
+    it('reports a missing event type as absent rather than empty', () => {
+      expect(provider().readWebhookSubject({ data: {} })).toMatchObject({ eventType: null });
     });
 
     it('translates it into an activation, product id included', () => {

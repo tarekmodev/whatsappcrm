@@ -328,6 +328,10 @@ export class PolarBillingProvider implements BillingProvider {
       tenantId: readTenantIdFromMetadata(envelope.data),
       providerSubscriptionId: readProviderSubscriptionId(type, envelope.data),
       providerCustomerId: readProviderCustomerId(envelope.data),
+      // The empty string the fallback above produces is not a type; an operator
+      // reading a park alert needs "no type on the envelope" to be visibly
+      // different from a type we simply do not handle.
+      eventType: type === '' ? null : type,
     };
   }
 
