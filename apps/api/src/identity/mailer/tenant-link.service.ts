@@ -54,6 +54,37 @@ export class TenantLinkService {
   }
 
   /**
+   * `https://{primary host}{path}` — an absolute console URL with no token in
+   * it, or `null` when the tenant has no deliverable domain.
+   *
+   * TAR-37's checkout is the caller. A payment provider redirects the browser
+   * to whatever `success_url` it is handed, so that URL is an **open redirect
+   * with a payment page in front of it** if it comes from the request: the one
+   * screen where a user is most primed to trust where they land. The published
+   * `CheckoutRequest` therefore carries a *path*, and this composes it against
+   * the host the control plane holds — the same rule, and the same resolver,
+   * that keeps a reset token from being aimed at an attacker's server.
+   *
+   * The path is encoded through `URL`, which is what stops a caller smuggling a
+   * second origin through a `//evil.example` path that a string concatenation
+   * would happily produce.
+   */
+  async absoluteUrl(path: string): Promise<string | null> {
+    const hostname = await this.primaryHostname();
+
+    if (hostname === null) {
+      return null;
+    }
+
+    const base = new URL(`${this.scheme}://${hostname}`);
+    const resolved = new URL(path, base);
+
+    // A path that resolved to another origin was not a path. `new URL('//x', …)`
+    // yields `https://x`, which is exactly the smuggling this refuses.
+    return resolved.origin === base.origin ? resolved.toString() : null;
+  }
+
+  /**
    * The same link on the **platform** host, for a message that belongs to no
    * tenant — today only self-signup's verification mail (TAR-405).
    *

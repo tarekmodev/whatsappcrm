@@ -237,6 +237,46 @@ export const BillingEventSchema = z.object({
   currentPeriodStart: TimestampSchema.nullable(),
   currentPeriodEnd: TimestampSchema.nullable(),
   occurredAt: TimestampSchema,
+
+  /**
+   * Whether the subscription is set to end at the close of the current period.
+   *
+   * Optional rather than nullable-required, so an event that says nothing about
+   * cancellation leaves the column alone — `undefined` is "no opinion" and
+   * `false` is "the cancellation was withdrawn", and collapsing the two would
+   * make every routine `subscription.updated` clear a pending cancellation.
+   *
+   * A requested cancellation is **not** a cancellation: the tenant has paid
+   * through `cancelsAt` and stays fully serviceable until it, which is why this
+   * pair writes no lifecycle transition.
+   */
+  cancelAtPeriodEnd: z.boolean().optional(),
+  /** When a requested cancellation takes effect. `null` withdraws it. */
+  cancelsAt: TimestampSchema.nullable().optional(),
+
+  /**
+   * The provider's own identifiers for this subscription and its customer.
+   *
+   * **Opaque strings the adapter alone interprets** — the same rule the
+   * `subscriptions.provider_*` columns carry. They are here because the
+   * consumer has to persist them: without the subscription id there is nothing
+   * to call `updateSeats` or `getSubscription` against, and without the customer
+   * id a portal session cannot be opened for a tenant whose checkout completed
+   * before its first webhook landed.
+   */
+  providerSubscriptionId: z.string().min(1).optional(),
+  providerCustomerId: z.string().min(1).optional(),
+
+  /**
+   * The provider's product identifier, when the event carries one.
+   *
+   * Present instead of a resolved `planKey` because the adapter cannot read the
+   * catalogue: the product → plan mapping lives in `plans.provider_product_id`,
+   * which is a database row, and a provider adapter that queried it would be an
+   * adapter with an opinion about our pricing. The consumer resolves it, and
+   * falls back to `planKey` for a provider that speaks in plan keys directly.
+   */
+  providerProductId: z.string().min(1).optional(),
 });
 
 export type Plan = z.infer<typeof PlanSchema>;
@@ -265,14 +305,44 @@ export interface HostedSession {
  * tests, which is what lets the whole billing flow be exercised without network
  * access or a sandbox account.
  */
+/**
+ * Who a verified webhook payload is about, as far as the **provider** can say.
+ *
+ * Returned by `readWebhookSubject` so the receiver can resolve a tenant before
+ * it parses. Every field is nullable because every one of them can be missing
+ * from a legitimate delivery — an event for a subscription created before we
+ * started stamping metadata carries no `tenantId`, and an event about a customer
+ * carries no subscription id.
+ *
+ * The two provider ids are **opaque**: the receiver only ever compares them to
+ * `subscriptions.provider_subscription_id` and `provider_customer_id`, which is
+ * exactly what those columns exist for.
+ */
+export interface WebhookSubject {
+  /** The tenant the provider is carrying for us, from metadata we set at checkout. */
+  tenantId: string | null;
+  providerSubscriptionId: string | null;
+  providerCustomerId: string | null;
+}
+
 export interface BillingProvider {
-  /** Starts a subscription. Returns the hosted checkout page to redirect to. */
+  /**
+   * Starts a subscription. Returns the hosted checkout page to redirect to.
+   *
+   * `providerProductId` is read from `plans.provider_product_id` by the caller
+   * and passed through untouched. The adapter cannot look it up itself — the
+   * catalogue is ours, and a provider adapter that read `plans` would be one
+   * with an opinion about our pricing. `null` means the plan has not been
+   * mapped to a provider product yet, which every adapter that needs one must
+   * refuse rather than call the provider with nothing.
+   */
   createCheckout(input: {
     tenantId: string;
     planKey: string;
     seats: number;
     successUrl: string;
     cancelUrl: string;
+    providerProductId: string | null;
   }): Promise<HostedSession>;
 
   /** Self-service management (payment method, invoices, cancellation). */
@@ -298,6 +368,19 @@ export interface BillingProvider {
   verifyWebhookSignature(rawBody: Uint8Array, headers: Record<string, string | undefined>): boolean;
 
   /**
+   * Who a verified payload is about, before it is translated.
+   *
+   * Its own call rather than a field on the parsed event, because tenant
+   * resolution has **three** branches and only the first is one an adapter can
+   * answer: the metadata we stamped at checkout, then a lookup by provider
+   * subscription id, then by provider customer id. The last two are reads of
+   * `subscriptions`, which is the receiver's table and not the adapter's — so
+   * the adapter reports what the payload names and the receiver decides who it
+   * belongs to.
+   */
+  readWebhookSubject(payload: unknown): WebhookSubject;
+
+  /**
    * Translates a verified provider payload into our vocabulary, or `null` to
    * ignore it.
    *
@@ -306,10 +389,16 @@ export interface BillingProvider {
    * body field, and `BillingEvent.providerEventId` is what makes webhook
    * handling idempotent. A parser given only the body cannot populate the one
    * field the replay defence turns on.
+   *
+   * Takes the resolved `tenantId` for the mirror-image reason: `BillingEvent`
+   * carries one and two of the three ways to establish it are database lookups
+   * the adapter may not make. The receiver resolves it through
+   * `readWebhookSubject` first and passes it in.
    */
   parseWebhookEvent(
     payload: unknown,
     headers: Record<string, string | undefined>,
+    tenantId: string,
   ): BillingEvent | null;
 
   /**
@@ -329,7 +418,12 @@ export interface BillingProvider {
    * Distinct from `createCheckout`, which only opens one — an upgrade from a
    * paid tier is a subscription amendment, not a second purchase.
    */
-  changePlan(input: { tenantId: string; planKey: string; seats: number }): Promise<void>;
+  changePlan(input: {
+    tenantId: string;
+    planKey: string;
+    seats: number;
+    providerProductId: string | null;
+  }): Promise<void>;
 }
 
 /** DI token for the port. Nest binds the concrete adapter to this in `BillingModule`. */

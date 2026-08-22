@@ -13,7 +13,9 @@ import { WebhookIngestService } from './webhook-ingest.service';
 import { WebhookSweeperService } from './webhook-sweeper.service';
 import { WhatsAppAccountResolver } from './whatsapp-account.resolver';
 import { WhatsAppEventProcessor } from './whatsapp-event.processor';
+import { PlanLimitsService } from '../entitlements/plan-limits.service';
 import { UsageCounterService } from '../entitlements/usage-counter.service';
+import { volumePolicyConfig } from '../entitlements/volume-policy.test-config';
 import { UsagePeriodResolver } from '../entitlements/usage-period.resolver';
 import { WhatsAppInboundWriter } from './whatsapp-inbound.writer';
 
@@ -245,6 +247,10 @@ describe('WhatsApp webhook ingestion, end to end', () => {
         emitter,
         queue,
         new UsageCounterService(new UsagePeriodResolver()),
+        new PlanLimitsService(
+          volumePolicyConfig(),
+          new UsageCounterService(new UsagePeriodResolver()),
+        ),
       ),
       tenantContext,
     );

@@ -28,6 +28,7 @@ import {
 } from './conversations.errors';
 import { InternalNotesService } from './internal-notes.service';
 import { PlanLimitsService } from '../entitlements/plan-limits.service';
+import { volumePolicyConfig } from '../entitlements/volume-policy.test-config';
 import { UsageCounterService } from '../entitlements/usage-counter.service';
 import { UsagePeriodResolver } from '../entitlements/usage-period.resolver';
 import { MessageSendService } from './message-send.service';
@@ -214,7 +215,10 @@ describe('the shared inbox, end to end', () => {
       queue,
       new EventEmitter2(),
       new ResponseOriginService({ getOrThrow: () => 'https' } as never, tenantContext),
-      new PlanLimitsService(new UsageCounterService(new UsagePeriodResolver())),
+      new PlanLimitsService(
+        volumePolicyConfig(),
+        new UsageCounterService(new UsagePeriodResolver()),
+      ),
     );
 
     await removeFixture();

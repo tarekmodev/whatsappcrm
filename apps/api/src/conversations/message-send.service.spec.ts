@@ -22,6 +22,7 @@ import {
   TemplateNotSendableError,
 } from './conversations.errors';
 import { PlanLimitsService } from '../entitlements/plan-limits.service';
+import { volumePolicyConfig } from '../entitlements/volume-policy.test-config';
 import { UsageCounterService } from '../entitlements/usage-counter.service';
 import { UsagePeriodResolver } from '../entitlements/usage-period.resolver';
 import { MessageSendService } from './message-send.service';
@@ -197,7 +198,10 @@ describe('MessageSendService', () => {
       // reads as unlimited — so every case here exercises the send path rather
       // than the cap, and the cap's own behaviour is proved in
       // `conversation-cap.int-spec.ts` against a real counter.
-      new PlanLimitsService(new UsageCounterService(new UsagePeriodResolver())),
+      new PlanLimitsService(
+        volumePolicyConfig(),
+        new UsageCounterService(new UsagePeriodResolver()),
+      ),
     );
   });
 

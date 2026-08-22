@@ -87,7 +87,13 @@ export class WebhookEventsRepository {
         status: { in: [WebhookEventStatus.received, WebhookEventStatus.processing] },
       },
       data: { status: WebhookEventStatus.processing, attempts: { increment: 1 } },
-      select: { id: true, payload: true, attempts: true },
+      // `providerEventId` travels with the payload because for a Standard
+      // Webhooks provider it **is** a header (`webhook-id`), and the headers are
+      // gone by the time a worker runs off the stored row. Storing it in the
+      // column and handing it back here is what lets the worker reconstruct the
+      // one field the replay defence turns on, without widening the job payload
+      // or re-reading the row.
+      select: { id: true, providerEventId: true, payload: true, attempts: true },
     });
 
     return claimed[0] ?? null;
@@ -123,18 +129,26 @@ export class WebhookEventsRepository {
   }
 
   /**
-   * Ids of events still `received`, or stuck in `processing`, since before
-   * `staleBefore` — what the sweeper re-enqueues.
+   * Ids of **one provider's** events still `received`, or stuck in `processing`,
+   * since before `staleBefore` — what that provider's sweeper re-enqueues.
+   *
+   * The `provider` filter is not a convenience. Each provider has its own queue
+   * and its own worker (`WEBHOOKS_QUEUE` for Meta, `BILLING_QUEUE` for TAR-37),
+   * and a worker fails loudly on a job name its handler map does not carry — so
+   * an unfiltered sweep would hand Polar's rows to the WhatsApp processor, which
+   * would park every one of them `failed` with an unrecognised payload. It costs
+   * nothing: `provider` is the leading column of the `(provider,
+   * provider_event_id)` unique index, and the predicate narrows the same
+   * `(status, received_at)` scan this query has always used.
    *
    * Ordered oldest first and bounded by `limit`, so a backlog drains in arrival
    * order across several sweeps instead of one sweep trying to load all of it.
-   * Served by the `(status, received_at)` index the schema declares for exactly
-   * this query; only the id is selected, because that is all the job payload
-   * carries.
+   * Only the id is selected, because that is all the job payload carries.
    */
-  async findStale(staleBefore: Date, limit: number): Promise<string[]> {
+  async findStale(provider: WebhookProvider, staleBefore: Date, limit: number): Promise<string[]> {
     const stale = await this.prisma.webhookEvent.findMany({
       where: {
+        provider,
         status: { in: [WebhookEventStatus.received, WebhookEventStatus.processing] },
         receivedAt: { lt: staleBefore },
       },
@@ -149,6 +163,8 @@ export class WebhookEventsRepository {
 
 export interface ClaimedWebhookEvent {
   readonly id: string;
+  /** The provider's own event id — for Standard Webhooks, the `webhook-id` header. */
+  readonly providerEventId: string;
   readonly payload: Prisma.JsonValue;
   /** How many times processing has been attempted, including this one. */
   readonly attempts: number;

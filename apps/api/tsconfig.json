@@ -3,7 +3,20 @@
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      // `@polar-sh/sdk` publishes its webhook verifier on a subpath and declares
+      // it only through the `exports` map. Node honours that at runtime — which
+      // is why the import works — but this project compiles with
+      // `moduleResolution: "Node"` (node10), which predates `exports` and looks
+      // for a real `webhooks.js` at the package root instead.
+      //
+      // Mapped here rather than by moving the whole API to `node16` resolution:
+      // that switch makes every relative import in the project require a `.js`
+      // extension, which is a repo-wide change for one dependency. The target is
+      // the CommonJS build, matching what `require` actually loads.
+      "@polar-sh/sdk/webhooks.js": ["./node_modules/@polar-sh/sdk/dist/commonjs/webhooks.d.ts"]
+    }
   },
   "include": ["src/**/*.ts"]
 }

@@ -68,6 +68,49 @@ export const NOTIFY_TENANT_LIFECYCLE_JOB = 'tenancy.notify-lifecycle';
 export const PURGE_TENANT_JOB = 'tenancy.purge-tenant';
 
 /**
+ * Billing background work (TAR-37): the webhook worker, its sweep, and the
+ * nightly reconciliation against the provider.
+ *
+ * **A queue of its own rather than a second handler map on `WEBHOOKS_QUEUE`**,
+ * even though both drain the same `webhook_events` table. A BullMQ worker takes
+ * whatever job the queue hands it and `QueueService` fails loudly on a name its
+ * map does not carry, so two workers sharing one queue would each fail half the
+ * jobs. The alternative — registering the billing handler inside
+ * `WebhookQueueRunner` — would make `WebhooksModule` import `BillingModule`,
+ * which is the wrong direction and a cycle waiting to happen.
+ *
+ * The consequence is that `WebhookEventsRepository.findStale` is
+ * provider-filtered: each sweeper reclaims only its own rows.
+ */
+export const BILLING_QUEUE = 'billing';
+
+/** Process one stored `webhook_events` row with `provider = 'billing'`, named by id. */
+export const PROCESS_BILLING_EVENT_JOB = 'billing.process-event';
+
+/** The repeatable sweep that re-enqueues billing events nothing picked up. */
+export const SWEEP_BILLING_EVENTS_JOB = 'billing.sweep-stuck-events';
+
+/**
+ * The nightly reconciliation against the provider's own record.
+ *
+ * It exists because a missed webhook is silent: Polar disables an endpoint after
+ * ten consecutive failures, and a subscription that stopped being updated looks
+ * exactly like one that has not changed. A queue job rather than a `@Cron` for
+ * the reason `SWEEP_WEBHOOK_EVENTS_JOB` gives — BullMQ's scheduler is what stops
+ * it running once per replica.
+ */
+export const RECONCILE_BILLING_JOB = 'billing.reconcile-subscriptions';
+
+/**
+ * Push a tenant's seat count to the provider, named by tenant id.
+ *
+ * Off the request path deliberately: a membership change must not fail because
+ * Polar is slow, and the seat count in the database is the truth the retry
+ * re-reads. Under-billing for a few minutes is the acceptable direction.
+ */
+export const SYNC_BILLING_SEATS_JOB = 'billing.sync-seats';
+
+/**
  * Namespace for every BullMQ key. Explicit so a Redis instance shared with
  * anything else — a session store, a rate limiter — cannot collide with a queue
  * key, and so `KEYS whatsappcrm:*` is a complete answer during an incident.

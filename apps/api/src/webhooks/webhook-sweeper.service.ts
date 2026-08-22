@@ -50,7 +50,11 @@ export class WebhookSweeperService {
   /** Returns how many events were re-enqueued, for the log line and the tests. */
   async sweep(now: Date = new Date()): Promise<number> {
     const staleBefore = new Date(now.getTime() - this.stuckAfterMs);
-    const stale = await this.events.findStale(staleBefore, SWEEP_BATCH_SIZE);
+    // Meta's rows only. TAR-37's billing events share this table and its
+    // durability rule, but they are drained by their own worker on
+    // `BILLING_QUEUE` — a sweep that re-enqueued them here would hand a Polar
+    // payload to `WhatsAppEventProcessor`, which parks it `failed`.
+    const stale = await this.events.findStale('whatsapp', staleBefore, SWEEP_BATCH_SIZE);
 
     if (stale.length === 0) {
       return 0;

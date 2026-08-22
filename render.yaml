@@ -252,6 +252,18 @@ projects:
                 sync: false
               - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
                 sync: false
+              # TAR-37. Left `sync: false` so an operator sets them per environment
+              # and nothing is ever copied between estates: Polar's sandbox and
+              # production tokens are separate and not interchangeable.
+              #
+              # `BILLING_PROVIDER_DRIVER` is the switch that makes the two below
+              # mandatory — the API refuses to boot on `polar` without them. It
+              # stays unset (defaulting to `fake`) until the credentials for that
+              # environment exist, which is the direction that cannot take money.
+              - key: BILLING_PROVIDER_DRIVER
+                sync: false
+              - key: POLAR_ENVIRONMENT
+                sync: false
               - key: POLAR_ACCESS_TOKEN
                 sync: false
               - key: POLAR_WEBHOOK_SECRET
@@ -388,6 +400,18 @@ projects:
               - key: WHATSAPP_PHONE_NUMBER_ID
                 sync: false
               - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+                sync: false
+              # TAR-37. Left `sync: false` so an operator sets them per environment
+              # and nothing is ever copied between estates: Polar's sandbox and
+              # production tokens are separate and not interchangeable.
+              #
+              # `BILLING_PROVIDER_DRIVER` is the switch that makes the two below
+              # mandatory — the API refuses to boot on `polar` without them. It
+              # stays unset (defaulting to `fake`) until the credentials for that
+              # environment exist, which is the direction that cannot take money.
+              - key: BILLING_PROVIDER_DRIVER
+                sync: false
+              - key: POLAR_ENVIRONMENT
                 sync: false
               - key: POLAR_ACCESS_TOKEN
                 sync: false
@@ -531,6 +555,18 @@ projects:
               - key: WHATSAPP_PHONE_NUMBER_ID
                 sync: false
               - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+                sync: false
+              # TAR-37. Left `sync: false` so an operator sets them per environment
+              # and nothing is ever copied between estates: Polar's sandbox and
+              # production tokens are separate and not interchangeable.
+              #
+              # `BILLING_PROVIDER_DRIVER` is the switch that makes the two below
+              # mandatory — the API refuses to boot on `polar` without them. It
+              # stays unset (defaulting to `fake`) until the credentials for that
+              # environment exist, which is the direction that cannot take money.
+              - key: BILLING_PROVIDER_DRIVER
+                sync: false
+              - key: POLAR_ENVIRONMENT
                 sync: false
               - key: POLAR_ACCESS_TOKEN
                 sync: false

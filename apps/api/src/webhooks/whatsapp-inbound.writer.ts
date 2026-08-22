@@ -10,8 +10,10 @@ import {
   type InboundMessageTicketTrigger,
 } from '@whatsappcrm/contracts';
 import {
+  CONVERSATION_VOLUME_CHANGED_EVENT,
   MESSAGE_CREATED_EVENT,
   MESSAGE_STATUS_CHANGED_EVENT,
+  type ConversationVolumeChangedEvent,
   type MessageCreatedEvent,
   type MessageStatusChangedEvent,
 } from '../events/domain-events';
@@ -24,6 +26,7 @@ import {
 } from '../generated/prisma/enums';
 import { DOWNLOAD_INBOUND_MEDIA_JOB, MEDIA_QUEUE } from '../media/media.constants';
 import { downloadInboundMediaJobId, type DownloadInboundMediaJob } from '../media/media-jobs';
+import { PlanLimitsService } from '../entitlements/plan-limits.service';
 import { UsageCounterService } from '../entitlements/usage-counter.service';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { uuidV7 } from '../prisma/uuid-v7';
@@ -78,6 +81,21 @@ interface AppliedInboundMessage {
     readonly attachmentId: string | null;
     readonly event: MessageCreatedEvent;
   } | null;
+  /**
+   * The metered conversation total, when this delivery opened a thread for a
+   * tenant that has a ceiling (TAR-37). Null on every other delivery, which is
+   * almost all of them.
+   */
+  readonly volume: ConversationVolumeChangedEvent | null;
+}
+
+/**
+ * What `upsertConversation` found or created: the thread, and the metered total
+ * if opening it moved one.
+ */
+interface OpenedConversation {
+  readonly id: string;
+  readonly volume: ConversationVolumeChangedEvent | null;
 }
 
 /**
@@ -148,6 +166,7 @@ export class WhatsAppInboundWriter {
     private readonly events: EventEmitter2,
     private readonly queue: QueueService,
     private readonly usage: UsageCounterService,
+    private readonly planLimits: PlanLimitsService,
   ) {
     this.downloadAttempts = config.getOrThrow<number>('MEDIA_DOWNLOAD_MAX_ATTEMPTS');
     this.ticketLinkAttempts = config.getOrThrow<number>('TICKET_LINK_MAX_ATTEMPTS');
@@ -181,10 +200,11 @@ export class WhatsAppInboundWriter {
         seenAt: message.timestamp,
       });
 
-      const conversationId = await this.upsertConversation(tx, account, contactId, {
+      const conversation = await this.upsertConversation(tx, account, contactId, {
         lastMessageAt: message.timestamp,
         serviceWindowExpiresAt: serviceWindowEnd(message.timestamp),
       });
+      const conversationId = conversation.id;
 
       // `skipDuplicates` is `ON CONFLICT (tenant_id, provider_message_id) DO
       // NOTHING`: an empty result means this exact message is already recorded,
@@ -236,6 +256,7 @@ export class WhatsAppInboundWriter {
             sentAt: message.timestamp,
           } satisfies MessageCreatedEvent,
         },
+        volume: conversation.volume,
       } satisfies AppliedInboundMessage;
     });
 
@@ -249,6 +270,13 @@ export class WhatsAppInboundWriter {
       if (applied.created.attachmentId !== null) {
         await this.queueMediaDownload(account, applied.created.attachmentId);
       }
+    }
+
+    if (applied.volume !== null) {
+      // After the commit, and only when a ceiling exists. Billing decides whether
+      // this count crossed a line worth telling the tenant admin about — the warn
+      // fraction and the policy are its configuration, not ingest's.
+      this.events.emit(CONVERSATION_VOLUME_CHANGED_EVENT, applied.volume);
     }
 
     await this.queueTicketLink(account.tenantId, applied, message.timestamp);
@@ -292,7 +320,7 @@ export class WhatsAppInboundWriter {
 
     return existing === null
       ? null
-      : { contactId, conversationId, messageId: existing.id, created: null };
+      : { contactId, conversationId, messageId: existing.id, created: null, volume: null };
   }
 
   /**
@@ -627,7 +655,7 @@ export class WhatsAppInboundWriter {
     { tenantId, whatsappAccountId }: RoutedWhatsAppAccount,
     contactId: string,
     opening: ConversationOpening,
-  ): Promise<string> {
+  ): Promise<OpenedConversation> {
     const [inserted] = await tx.$queryRaw<{ id: string }[]>`
       INSERT INTO conversations (
         id, tenant_id, whatsapp_account_id, contact_id,
@@ -652,13 +680,13 @@ export class WhatsAppInboundWriter {
       // this transaction back has to take the increment with it. Metering is
       // unconditional — whether the tenant has a cap is the send path's question,
       // not this one's.
-      await this.usage.increment(tx, {
+      const opened = await this.usage.increment(tx, {
         tenantId,
         metric: 'conversations_opened',
         at: opening.lastMessageAt,
       });
 
-      return inserted.id;
+      return { id: inserted.id, volume: await this.observeVolume(tx, tenantId, opened, opening) };
     }
 
     const existing = await tx.conversation.findUniqueOrThrow({
@@ -668,7 +696,43 @@ export class WhatsAppInboundWriter {
       select: { id: true },
     });
 
-    return existing.id;
+    return { id: existing.id, volume: null };
+  }
+
+  /**
+   * The metered total, for the tenant that has a ceiling to measure it against
+   * (TAR-37's volume policy).
+   *
+   * **Nothing here refuses anything.** Ingest stores a customer's message
+   * whatever the counter says, under either policy — that asymmetry is already
+   * documented on `PlanLimitsService` and does not change. What this produces is
+   * a fact for the subscriber that decides whether the tenant admin should be
+   * told, and it is produced only when a finite cap exists: an uncapped tenant
+   * has no threshold to cross, and announcing every conversation it opens would
+   * be a message per thread for nobody.
+   *
+   * One extra indexed read per **newly opened conversation** — not per message —
+   * inside a transaction that is already open.
+   */
+  private async observeVolume(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    opened: number,
+    opening: ConversationOpening,
+  ): Promise<ConversationVolumeChangedEvent | null> {
+    const cap = await this.planLimits.conversationCap(tx);
+
+    if (cap === null) {
+      return null;
+    }
+
+    const { period } = await this.usage.current(tx, {
+      tenantId,
+      metric: 'conversations_opened',
+      at: opening.lastMessageAt,
+    });
+
+    return { tenantId, opened, cap, periodStart: period.start };
   }
 
   /**
@@ -733,7 +797,13 @@ export class WhatsAppInboundWriter {
       displayName: null,
       seenAt: update.timestamp,
     });
-    const conversationId = await this.upsertConversation(tx, account, contactId, {
+    // The metered total this may have moved is deliberately dropped. A status
+    // receipt is not a customer opening a conversation, and a warning email
+    // triggered by hearing that one of our own messages was delivered would be
+    // one nobody could act on. The counter itself is still correct — the
+    // increment is inside the same transaction — and the next real inbound
+    // message is what carries the crossing to the tenant admin.
+    const { id: conversationId } = await this.upsertConversation(tx, account, contactId, {
       lastMessageAt: update.timestamp,
       // A delivery receipt is not the customer writing to us, so it opens no
       // service window. Only an inbound message does.

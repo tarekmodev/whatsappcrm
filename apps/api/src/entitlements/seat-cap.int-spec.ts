@@ -4,6 +4,7 @@ import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import { PlanLimitExceededError } from './entitlements.errors';
 import { PlanLimitsService } from './plan-limits.service';
+import { volumePolicyConfig } from './volume-policy.test-config';
 import { UsageCounterService } from './usage-counter.service';
 import { UsagePeriodResolver } from './usage-period.resolver';
 
@@ -63,7 +64,10 @@ function entitlementsWithSeats(seats: number | null): Prisma.InputJsonObject {
 
 describe('the plan seat cap', () => {
   const tenantContext = new TenantContextService();
-  const planLimits = new PlanLimitsService(new UsageCounterService(new UsagePeriodResolver()));
+  const planLimits = new PlanLimitsService(
+    volumePolicyConfig(),
+    new UsageCounterService(new UsagePeriodResolver()),
+  );
 
   let systemPrisma: PrismaClient;
   let tenantBase: PrismaClient;

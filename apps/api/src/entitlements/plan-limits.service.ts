@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   PLAN_FEATURES,
   PlanEntitlementsSchema,
   type PlanEntitlements,
   type PlanLimits,
+  type VolumePolicy,
 } from '@whatsappcrm/contracts';
 import type { Prisma } from '../generated/prisma/client';
 import { PlanLimitExceededError } from './entitlements.errors';
@@ -111,7 +113,19 @@ const UNCAPPED_ENTITLEMENTS: EffectiveEntitlements = {
  */
 @Injectable()
 export class PlanLimitsService {
-  constructor(private readonly usage: UsageCounterService) {}
+  /**
+   * `warn` or `block`, from `BILLING_VOLUME_POLICY`. Read once at construction:
+   * it is deployment configuration, not a per-tenant setting, and re-reading it
+   * per send would put a config lookup on the busiest path in the product.
+   */
+  private readonly volumePolicy: VolumePolicy;
+
+  constructor(
+    config: ConfigService,
+    private readonly usage: UsageCounterService,
+  ) {
+    this.volumePolicy = config.getOrThrow<VolumePolicy>('BILLING_VOLUME_POLICY');
+  }
   /**
    * Refuses the caller if the tenant has no seat left for one more member.
    *
@@ -192,13 +206,29 @@ export class PlanLimitsService {
 
   /**
    * Refuses the caller when the tenant has opened its plan's allowance of
-   * conversations in the current period.
+   * conversations in the current period **and the configured policy is
+   * `block`**.
    *
    * Called from the **outbound send**, never from ingest. That asymmetry is the
    * design and not an oversight: a conversation is opened by a customer writing
    * in, so metering counts inbound-opened threads, but refusing the inbound
    * write to enforce a quota would lose a real person's message to fix a billing
-   * problem. What the cap withholds is the reply.
+   * problem. What the cap withholds is the reply — and under `warn`, not even
+   * that.
+   *
+   * ## The policy is configuration, not a code path
+   *
+   * `BILLING_VOLUME_POLICY` (TAR-37) selects it, and it defaults to `warn`
+   * because blocking a helpdesk's replies is the most damaging thing this
+   * system can do to a tenant's *customers*. Under `warn` the cap is still
+   * metered and still crossed and still notified — the tenant and the reseller
+   * both find out — and the send goes through. Inbound is never refused under
+   * either policy.
+   *
+   * The check is skipped entirely under `warn`, rather than performed and its
+   * result discarded: it is a counter read on the send path, and paying for it
+   * to reach a branch that cannot refuse is waste on the product's busiest
+   * route.
    *
    * No lock — see the note on the class. Takes the caller's transaction so the
    * count it reads is the one its own increment would land against.
@@ -207,8 +237,11 @@ export class PlanLimitsService {
     tx: Prisma.TransactionClient,
     tenantId: string,
   ): Promise<void> {
-    const row = await tx.tenantEntitlements.findFirst({ select: { entitlements: true } });
-    const cap = limitOf(row?.entitlements, 'conversationsPerPeriod');
+    if (this.volumePolicy !== 'block') {
+      return;
+    }
+
+    const cap = await this.conversationCap(tx);
 
     if (cap === null) {
       return;
@@ -222,6 +255,22 @@ export class PlanLimitsService {
     if (value >= cap) {
       throw PlanLimitExceededError.conversationsPerPeriod(cap, value);
     }
+  }
+
+  /**
+   * The tenant's conversation ceiling for the current period, or `null` when it
+   * has none.
+   *
+   * Public because the **ingest** path needs it too, and for a different reason:
+   * it refuses nothing, but it has to know whether an increment just crossed a
+   * threshold worth telling the tenant admin about. One reader rather than two,
+   * so the number the warning is measured against is the number the send path
+   * would have refused on.
+   */
+  async conversationCap(tx: Prisma.TransactionClient): Promise<number | null> {
+    const row = await tx.tenantEntitlements.findFirst({ select: { entitlements: true } });
+
+    return limitOf(row?.entitlements, 'conversationsPerPeriod');
   }
 }
 

@@ -43,5 +43,13 @@ import { WhatsAppWebhookController } from './whatsapp-webhook.controller';
     WhatsAppInboundWriter,
     ApiExceptionFilter,
   ],
+  // The one export, and it is the point of the class it names: `webhook_events`
+  // is the platform's single store-then-enqueue table, and TAR-37's billing
+  // ingest lands in it under `provider = 'billing'` rather than growing a second
+  // table with a second sweeper and a second place for a stuck row to hide.
+  // Exporting the repository is what keeps the `SystemPrisma` exception confined
+  // to one class — `BillingModule` reaches the table through this and never
+  // injects `SYSTEM_PRISMA` for it.
+  exports: [WebhookEventsRepository],
 })
 export class WebhooksModule {}

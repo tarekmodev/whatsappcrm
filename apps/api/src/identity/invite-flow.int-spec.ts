@@ -9,6 +9,7 @@ import {
 import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { PlanLimitsService } from '../entitlements/plan-limits.service';
+import { volumePolicyConfig } from '../entitlements/volume-policy.test-config';
 import { UsageCounterService } from '../entitlements/usage-counter.service';
 import { UsagePeriodResolver } from '../entitlements/usage-period.resolver';
 import type { PrismaClient } from '../generated/prisma/client';
@@ -189,7 +190,11 @@ describe('the invite flow', () => {
         new AuditService(tenantContext),
         throttleConfig,
       ),
-      new PlanLimitsService(new UsageCounterService(new UsagePeriodResolver())),
+      new PlanLimitsService(
+        volumePolicyConfig(),
+        new UsageCounterService(new UsagePeriodResolver()),
+      ),
+      new EventEmitter2(),
     );
   });
 
