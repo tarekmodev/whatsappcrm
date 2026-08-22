@@ -3,6 +3,26 @@
   inset-block-start: 0;
   z-index: var(--z-nav);
   display: flex;
+  /*
+   * The bar is a flex item of the shell's column, and on a fill-mode route that
+   * column is exactly `100dvh` — so when the page below wants more height than
+   * there is, flex takes it from every item that will give, this one included.
+   *
+   * `min-block-size` is no floor here: it describes *one* row, and below 48rem
+   * the search takes a line of its own. At 320x568 the inbox measured this bar
+   * at 96.9px while it went on painting 161.4px, and the overflow is the search
+   * line — which, the bar being `position: sticky` above `--z-nav`, landed on
+   * top of the filter disclosure and took the taps meant for it: 40.4px of
+   * overlap, `elementFromPoint` at the disclosure's own centre returning the
+   * search field (TAR-652). 29.1px at 375, 32.4px on a landscape phone.
+   *
+   * It needed a conversation list long enough to overflow the column, which is
+   * why an empty inbox looks fine and a real one does not.
+   *
+   * The bar is chrome at its content height; `main` is the item that gives way,
+   * and it already has `min-block-size: 0` to do it with.
+   */
+  flex-shrink: 0;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
