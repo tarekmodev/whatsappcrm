@@ -15,7 +15,13 @@
       // that switch makes every relative import in the project require a `.js`
       // extension, which is a repo-wide change for one dependency. The target is
       // the CommonJS build, matching what `require` actually loads.
-      "@polar-sh/sdk/webhooks.js": ["./node_modules/@polar-sh/sdk/dist/commonjs/webhooks.d.ts"]
+      "@polar-sh/sdk/webhooks.js": ["./node_modules/@polar-sh/sdk/dist/commonjs/webhooks.d.ts"],
+      // Same reason. `validateEvent` throws this one once the signature has
+      // already passed, and telling it apart from a verification failure is what
+      // stops an authentic delivery becoming a 500 (TAR-663).
+      "@polar-sh/sdk/models/errors/sdkvalidationerror.js": [
+        "./node_modules/@polar-sh/sdk/dist/commonjs/models/errors/sdkvalidationerror.d.ts"
+      ]
     }
   },
   "include": ["src/**/*.ts"]

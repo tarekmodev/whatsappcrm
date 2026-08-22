@@ -58,14 +58,25 @@ export const PlanEntitlementsSchema = z.object({
   limits: PlanLimitsSchema,
 });
 
+/**
+ * The grammar a plan key has to obey, named once because three layers assert it:
+ * `PlanSchema` below, the `plans_key_format` CHECK constraint on the catalogue
+ * table, and the console's plan-by-plan parser.
+ *
+ * Deliberately narrow — lowercase, no hyphen, no leading digit — because a plan
+ * key is a stable identifier that travels into checkout requests, console URLs
+ * and `tenant_entitlements.plan_key`. Widening it later is a data change;
+ * narrowing it is not.
+ */
+export const PLAN_KEY_PATTERN = /^[a-z][a-z0-9_]*$/;
+
+/** Bound on a plan key, mirrored by the same CHECK constraint. */
+export const PLAN_KEY_MAX_LENGTH = 40;
+
 export const PlanSchema = z.object({
   id: IdSchema,
   /** Stable business key. All plan logic branches on this, never on a provider id. */
-  key: z
-    .string()
-    .min(1)
-    .max(40)
-    .regex(/^[a-z][a-z0-9_]*$/),
+  key: z.string().min(1).max(PLAN_KEY_MAX_LENGTH).regex(PLAN_KEY_PATTERN),
   name: z.string().min(1).max(80),
   /** Price per seat per interval. */
   pricePerSeat: MoneySchema,
@@ -140,6 +151,27 @@ export const BillingSummaryResponseSchema = z.object({
 });
 
 /**
+ * One row of the plans view.
+ *
+ * Named rather than inlined so a client can validate the plans **one at a time**
+ * and drop only the row that fails. A single malformed catalogue row taking the
+ * whole billing page down, for every tenant, is the failure TAR-657 records.
+ */
+export const PlanListItemSchema = PlanSchema.extend({
+  /** True for the plan the tenant is on now. */
+  isCurrent: z.boolean(),
+  /**
+   * False when the plan's ceilings are below the tenant's current usage —
+   * the console disables the button and says which limit blocks it. A
+   * downgrade that would leave a tenant over its own new cap is refused
+   * before checkout rather than after payment.
+   */
+  isSelectable: z.boolean(),
+  /** Which ceilings block selection. Empty when `isSelectable`. */
+  blockedBy: z.array(z.enum(['seats', 'conversationsPerPeriod'])),
+});
+
+/**
  * `GET /api/v1/billing/plans` — the plans view, with the tenant's position in it.
  *
  * The two derived booleans are computed server-side rather than left to the
@@ -147,21 +179,7 @@ export const BillingSummaryResponseSchema = z.object({
  * otherwise have to guess at.
  */
 export const PlanListResponseSchema = z.object({
-  plans: z.array(
-    PlanSchema.extend({
-      /** True for the plan the tenant is on now. */
-      isCurrent: z.boolean(),
-      /**
-       * False when the plan's ceilings are below the tenant's current usage —
-       * the console disables the button and says which limit blocks it. A
-       * downgrade that would leave a tenant over its own new cap is refused
-       * before checkout rather than after payment.
-       */
-      isSelectable: z.boolean(),
-      /** Which ceilings block selection. Empty when `isSelectable`. */
-      blockedBy: z.array(z.enum(['seats', 'conversationsPerPeriod'])),
-    }),
-  ),
+  plans: z.array(PlanListItemSchema),
   usage: z.object({
     seatsUsed: z.int().nonnegative(),
     seatsPending: z.int().nonnegative(),
@@ -284,6 +302,7 @@ export type PlanLimits = z.infer<typeof PlanLimitsSchema>;
 export type PlanEntitlements = z.infer<typeof PlanEntitlementsSchema>;
 export type Subscription = z.infer<typeof SubscriptionSchema>;
 export type BillingSummaryResponse = z.infer<typeof BillingSummaryResponseSchema>;
+export type PlanListItem = z.infer<typeof PlanListItemSchema>;
 export type PlanListResponse = z.infer<typeof PlanListResponseSchema>;
 export type CheckoutRequest = z.infer<typeof CheckoutRequestSchema>;
 export type PortalRequest = z.infer<typeof PortalRequestSchema>;
@@ -355,6 +374,34 @@ export interface WebhookSubject {
   providerCustomerId: string | null;
 }
 
+/**
+ * What an adapter made of a verified payload — **three outcomes, not two**.
+ *
+ * The distinction is the whole point of the type. `ignored` and `unreadable`
+ * both mean "no event came out of this", and collapsing them into one `null`
+ * cost TAR-663 every real Polar subscription webhook: the receiver recorded each
+ * unreadable payload as `processed`, so a tenant that paid was never activated
+ * and nothing anywhere said so.
+ *
+ *   * `event` — translated; apply it.
+ *   * `ignored` — verified, understood, and deliberately not acted on. An event
+ *     type this integration does not subscribe to, or a one-off purchase that is
+ *     not a subscription. Recorded as processed, because parking these would
+ *     bury the rows that matter under noise.
+ *   * `unreadable` — the adapter could not make sense of a payload it *should*
+ *     have understood. Parked with the raw payload intact so it can be diagnosed
+ *     and replayed, never marked processed and never retried: no number of
+ *     attempts changes a shape.
+ *
+ * `detail` is operator-facing and lands in `webhook_events.last_error`, so it
+ * names the event type and the field that was missing rather than saying "parse
+ * failed".
+ */
+export type ParsedWebhookEvent =
+  | { outcome: 'event'; event: BillingEvent }
+  | { outcome: 'ignored' }
+  | { outcome: 'unreadable'; detail: string };
+
 export interface BillingProvider {
   /**
    * Starts a subscription. Returns the hosted checkout page to redirect to.
@@ -411,8 +458,9 @@ export interface BillingProvider {
   readWebhookSubject(payload: unknown): WebhookSubject;
 
   /**
-   * Translates a verified provider payload into our vocabulary, or `null` to
-   * ignore it.
+   * Translates a verified provider payload into our vocabulary, or says why it
+   * did not: see `ParsedWebhookEvent` for what the receiver does with each
+   * outcome.
    *
    * Takes the headers as well as the body because under Standard Webhooks — the
    * spec Polar signs with — **the event id is a header** (`webhook-id`), not a
@@ -429,7 +477,7 @@ export interface BillingProvider {
     payload: unknown,
     headers: Record<string, string | undefined>,
     tenantId: string,
-  ): BillingEvent | null;
+  ): ParsedWebhookEvent;
 
   /**
    * Resolves a completed checkout into the plan and seats the tenant actually

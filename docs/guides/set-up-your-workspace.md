@@ -8,6 +8,9 @@ A workspace is your organisation on the platform — your WhatsApp numbers, your
 customers and their conversations. This guide covers the three things to set up when it is new,
 what your plan limits, and what happens if the workspace is suspended.
 
+Comparing tiers, buying one, and reaching your invoices are a separate page and a separate
+guide: [Choose a plan and manage billing](manage-your-plan-and-billing.md).
+
 ## Before you start
 
 - You are signed in as an admin. Only admins can change workspace settings; agents and
@@ -94,7 +97,8 @@ unaccepted invitations, the message says so, because withdrawing one is the quic
 a seat.
 
 To free a seat, go to **Settings → People** and either remove an agent or withdraw a pending
-invitation.
+invitation. To buy more, go to **Settings → Plans and billing** —
+[Choose a plan and manage billing](manage-your-plan-and-billing.md) walks through it.
 
 > **TODO(author):** the **People** page says "Invited agents do not use a seat until they
 > accept", which is the opposite of what the workspace is enforcing and of what the **Workspace**
@@ -110,8 +114,13 @@ current period, against your plan's allowance.
 still arrive and are still stored — what stops is your team's ability to reply, until the period
 rolls over or the limit is raised. You will see a message saying so when a reply is refused.
 
-There is no self-service upgrade yet. **Contact support to raise a limit** — the console says the
-same rather than showing a checkout page that does not exist.
+Whether reaching the allowance actually stops replies, or only warns you, is a platform-wide
+setting rather than yours. Both cases, and the emails that warn you first, are covered in
+[Choose a plan and manage billing](manage-your-plan-and-billing.md).
+
+**To raise a limit, move to a larger plan** under **Settings → Plans and billing**. That page
+also shows your seats and conversations against their allowances, so it is the one to open when
+either runs short.
 
 ## What each workspace status means
 
@@ -136,6 +145,8 @@ and agents lose access.
 When a workspace is suspended:
 
 - **Your agents cannot sign in.** Anyone signed in loses access on their next action.
+- **An admin can still open Settings → Plans and billing**, and only an admin. A workspace that
+  could not reach checkout could not pay its way out of a suspension.
 - **Your customers' messages still arrive and are still stored.** Nothing is dropped and nobody
   is bounced. They are held outside your inbox, so you will not see them on screen while the
   workspace is suspended, and you cannot reply until access is restored.
@@ -173,11 +184,12 @@ still set up.
 supervisor. Workspace settings are changed by admins. Ask an admin in your workspace.
 
 **An invitation was refused and mentions seats.** Every seat on your plan is taken. Withdraw an
-unaccepted invitation or remove an agent under **Settings → People**, then invite again.
+unaccepted invitation or remove an agent under **Settings → People**, then invite again — or move
+to a plan with more seats under **Settings → Plans and billing**.
 
 **A reply was refused and mentions conversations.** Your plan's conversation allowance for this
-period is spent. Incoming messages are still being received and stored. Contact support to raise
-the limit.
+period is spent. Incoming messages are still being received and stored. Move to a plan with a
+larger allowance under **Settings → Plans and billing**, or wait for the period to roll over.
 
 **Agents suddenly cannot sign in.** Check **Settings → Workspace**. If the status is
 **Suspended**, see [What suspension means](#what-suspension-means). If it is anything else,

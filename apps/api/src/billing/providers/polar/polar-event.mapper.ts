@@ -1,4 +1,4 @@
-import type { BillingEvent, SubscriptionStatus } from '@whatsappcrm/contracts';
+import type { BillingEvent, ParsedWebhookEvent, SubscriptionStatus } from '@whatsappcrm/contracts';
 
 /**
  * Polar's vocabulary → ours. **The only file that knows what a Polar event is
@@ -36,13 +36,38 @@ import type { BillingEvent, SubscriptionStatus } from '@whatsappcrm/contracts';
  * `benefit*.*`, `product.*`, `refund.*`, `discount.*`, `organization.updated` —
  * none of them move a tenant or change what it may do.
  *
- * Anything not listed returns `null`, which the receiver records as processed:
- * an event we did not ask for is not an error, and answering non-2xx would make
- * Polar retry it ten times and then disable the endpoint.
+ * Anything not listed is `ignored`, which the receiver records as processed: an
+ * event we did not ask for is not an error, and answering non-2xx would make
+ * Polar retry it ten times and then disable the endpoint. An event we *did* ask
+ * for whose shape will not read is `unreadable` and is parked instead — see
+ * `ParsedWebhookEvent`.
+ *
+ * ## Two spellings of every payload, and why (TAR-663)
+ *
+ * Polar's JSON is **snake_case** — `customer_id`, `current_period_start`,
+ * `cancel_at_period_end`. The SDK's `Subscription` type is the camelCase object
+ * its deserializer produces from that JSON, and the two reach this file by
+ * different routes:
+ *
+ *   * a **webhook** arrives as raw bytes, is verified against the signature,
+ *     stored in `webhook_events.payload` exactly as signed, and read back by the
+ *     worker — so the mapper sees Polar's wire spelling, with timestamps still
+ *     ISO strings;
+ *   * a **read** (`getSubscription`, `resolveCheckout`) comes back through the
+ *     SDK, already camelCased with `Date` values.
+ *
+ * Reading only the SDK spelling is what TAR-663 was: every real subscription
+ * webhook failed `asSubscription`, mapped to nothing, and was recorded as
+ * processed, so a tenant that completed checkout was never activated. The
+ * readers below therefore accept **both** spellings and normalise to one shape,
+ * which is also what keeps `getSubscription` comparable with what a webhook
+ * would have written — the reconciliation job depends on that.
  */
 
 /**
- * The subset of Polar's `Subscription` this integration reads.
+ * The subset of Polar's `Subscription` this integration reads, **normalised**:
+ * camelCase names and `Date | string` instants, whichever spelling it arrived
+ * in. Produced only by `asSubscription`.
  *
  * Declared structurally rather than imported from the SDK so the mapper can be
  * unit-tested against a literal — the SDK's own type carries a `customer`, a
@@ -53,27 +78,24 @@ export interface PolarSubscriptionShape {
   readonly id: string;
   readonly status: string;
   readonly customerId: string;
-  readonly seats?: number | null;
-  readonly currentPeriodStart?: Date | null;
-  readonly currentPeriodEnd?: Date | null;
-  readonly cancelAtPeriodEnd?: boolean;
-  readonly endsAt?: Date | null;
-  readonly metadata?: Readonly<Record<string, unknown>>;
-  readonly productId?: string | null;
+  readonly seats: number | null;
+  readonly currentPeriodStart: Date | string | null;
+  readonly currentPeriodEnd: Date | string | null;
+  readonly cancelAtPeriodEnd: boolean;
+  readonly endsAt: Date | string | null;
+  readonly startedAt: Date | string | null;
+  readonly productId: string | null;
 }
 
-/** The subset of Polar's `Order` this integration reads. */
+/** The subset of Polar's `Order` this integration reads, normalised the same way. */
 export interface PolarOrderShape {
-  readonly subscriptionId?: string | null;
+  readonly subscriptionId: string | null;
   readonly customerId: string;
-  readonly metadata?: Readonly<Record<string, unknown>>;
-  readonly subscription?: {
-    readonly id?: string;
-    readonly currentPeriodStart?: Date | null;
-    readonly currentPeriodEnd?: Date | null;
-    readonly status?: string;
-    readonly seats?: number | null;
-    readonly productId?: string | null;
+  readonly subscription: {
+    readonly currentPeriodStart: Date | string | null;
+    readonly currentPeriodEnd: Date | string | null;
+    readonly seats: number | null;
+    readonly productId: string | null;
   } | null;
 }
 
@@ -136,63 +158,52 @@ export const SUBSCRIBED_POLAR_EVENTS = [
 ] as const;
 
 /**
- * Translates a verified Polar payload into our vocabulary, or `null` to ignore
- * it.
+ * Translates a verified Polar payload into our vocabulary, or says why it did
+ * not.
  *
  * `providerEventId` is the **`webhook-id` header**, passed in by the caller
  * rather than read from the body: Standard Webhooks names that header as the
  * idempotency key, and it exists whether or not Polar puts an id in the
  * envelope. `tenantId` is likewise resolved by the caller, which is the only
  * layer that can fall back to a `subscriptions` lookup.
+ *
+ * A subscribed event whose data will not read comes back `unreadable` rather
+ * than as a quiet `ignored`, because those are the two ends of TAR-663: one is
+ * an event nobody asked for, the other is a paying tenant not being activated.
  */
 export function toBillingEvent(input: {
   envelope: PolarWebhookEnvelope;
   tenantId: string;
   providerEventId: string;
   receivedAt: Date;
-}): BillingEvent | null {
+}): ParsedWebhookEvent {
   const { envelope, tenantId, providerEventId, receivedAt } = input;
   const occurredAt = readTimestamp(envelope.timestamp) ?? receivedAt.toISOString();
+  const context = { tenantId, providerEventId, occurredAt };
 
   switch (envelope.type) {
     case 'subscription.active':
-      return fromSubscription('subscription.activated', envelope.data, {
-        tenantId,
-        providerEventId,
-        occurredAt,
-      });
+      return subscriptionEvent('subscription.activated', envelope, context);
 
     case 'subscription.past_due':
-      return fromSubscription('subscription.past_due', envelope.data, {
-        tenantId,
-        providerEventId,
-        occurredAt,
-      });
+      return subscriptionEvent('subscription.past_due', envelope, context);
 
     case 'subscription.revoked':
       // Access permanently terminated. This — and only this — is our cancellation.
-      return fromSubscription('subscription.canceled', envelope.data, {
-        tenantId,
-        providerEventId,
-        occurredAt,
-      });
+      return subscriptionEvent('subscription.canceled', envelope, context);
 
     case 'subscription.canceled':
     case 'subscription.uncanceled':
       // A cancellation requested or withdrawn. Both write the banner columns and
       // neither moves the tenant: `cancelAtPeriodEnd` is read off the payload, so
       // one branch serves both.
-      return fromSubscription('subscription.updated', envelope.data, {
-        tenantId,
-        providerEventId,
-        occurredAt,
-      });
+      return subscriptionEvent('subscription.updated', envelope, context);
 
     case 'subscription.updated': {
       const subscription = asSubscription(envelope.data);
 
       if (subscription === null) {
-        return null;
+        return unreadable(envelope);
       }
 
       // A status change *into* `past_due` on an update is a failed renewal that
@@ -204,40 +215,90 @@ export function toBillingEvent(input: {
           ? 'payment.failed'
           : 'subscription.updated';
 
-      return fromSubscription(type, subscription, { tenantId, providerEventId, occurredAt });
+      return subscriptionEvent(type, { ...envelope, data: subscription }, context);
     }
 
     case 'order.paid': {
       const order = asOrder(envelope.data);
 
-      if (order === null || !order.subscriptionId) {
+      if (order === null) {
+        return unreadable(envelope);
+      }
+
+      if (order.subscriptionId === null) {
         // A one-off purchase. Nothing in this product sells one, and a payment
         // that is not for a subscription must not activate a tenant.
-        return null;
+        return { outcome: 'ignored' };
       }
 
       return {
-        type: 'payment.succeeded',
-        tenantId,
-        providerEventId,
-        // The order does not restate the plan; the subscription it belongs to
-        // does, and the next `subscription.updated` carries it. Leaving these
-        // null is what stops a renewal receipt overwriting a plan with nothing.
-        planKey: null,
-        seats: order.subscription?.seats ?? null,
-        status: 'active',
-        currentPeriodStart: toIsoOrNull(order.subscription?.currentPeriodStart),
-        currentPeriodEnd: toIsoOrNull(order.subscription?.currentPeriodEnd),
-        occurredAt,
-        providerSubscriptionId: order.subscriptionId,
-        providerCustomerId: order.customerId,
+        outcome: 'event',
+        event: {
+          type: 'payment.succeeded',
+          tenantId,
+          providerEventId,
+          // The order does not restate the plan; the subscription it belongs to
+          // does, and the next `subscription.updated` carries it. Leaving these
+          // null is what stops a renewal receipt overwriting a plan with nothing.
+          planKey: null,
+          seats: order.subscription?.seats ?? null,
+          status: 'active',
+          currentPeriodStart: toIsoOrNull(order.subscription?.currentPeriodStart),
+          currentPeriodEnd: toIsoOrNull(order.subscription?.currentPeriodEnd),
+          occurredAt,
+          providerSubscriptionId: order.subscriptionId,
+          providerCustomerId: order.customerId,
+        },
       };
     }
 
     default:
-      return null;
+      return { outcome: 'ignored' };
   }
 }
+
+/** One subscribed subscription event: translated, or reported as unreadable. */
+function subscriptionEvent(
+  type: BillingEvent['type'],
+  envelope: PolarWebhookEnvelope,
+  context: { tenantId: string; providerEventId: string; occurredAt: string },
+): ParsedWebhookEvent {
+  const event = fromSubscription(type, envelope.data, context);
+
+  return event === null ? unreadable(envelope) : { outcome: 'event', event };
+}
+
+/**
+ * Why a subscribed payload would not read, in the words an operator needs.
+ *
+ * It names the event type and the identifying fields, because the failure this
+ * exists for was a whole vocabulary being read under the wrong spelling — and
+ * "could not parse payload" in `last_error` would have said nothing about that.
+ */
+function unreadable(envelope: PolarWebhookEnvelope): ParsedWebhookEvent {
+  return {
+    outcome: 'unreadable',
+    detail:
+      `${envelope.type} carries no readable id, status and customer id ` +
+      `(keys: ${describeKeys(envelope.data)})`,
+  };
+}
+
+/** The payload's own top-level keys, capped, so `last_error` stays one line. */
+function describeKeys(data: unknown): string {
+  if (typeof data !== 'object' || data === null) {
+    return typeof data;
+  }
+
+  const keys = Object.keys(data);
+
+  return keys.length <= MAX_REPORTED_KEYS
+    ? keys.join(', ')
+    : `${keys.slice(0, MAX_REPORTED_KEYS).join(', ')}, …`;
+}
+
+/** Enough keys to recognise the object, few enough to keep the line greppable. */
+const MAX_REPORTED_KEYS = 12;
 
 /**
  * The tenant id Polar carries for us, or `null` when the object predates the
@@ -270,9 +331,7 @@ export function readProviderSubscriptionId(type: string, data: unknown): string 
 
 /** The provider customer id an event names, for the caller's second fallback. */
 export function readProviderCustomerId(data: unknown): string | null {
-  const customerId = (data as { customerId?: unknown } | null)?.customerId;
-
-  return typeof customerId === 'string' && customerId.length > 0 ? customerId : null;
+  return readString(data, 'customerId', 'customer_id');
 }
 
 /**
@@ -297,7 +356,7 @@ export function fromSubscription(
     return null;
   }
 
-  const cancelAtPeriodEnd = subscription.cancelAtPeriodEnd ?? false;
+  const { cancelAtPeriodEnd } = subscription;
 
   return {
     type,
@@ -323,33 +382,114 @@ export function fromSubscription(
 
 /** The Polar product id an event names, so the caller can resolve it to a plan. */
 export function readProviderProductId(data: unknown): string | null {
-  const productId = (data as { productId?: unknown } | null)?.productId;
-
-  return typeof productId === 'string' && productId.length > 0 ? productId : null;
+  return readString(data, 'productId', 'product_id');
 }
 
-function asSubscription(data: unknown): PolarSubscriptionShape | null {
-  if (typeof data !== 'object' || data === null) {
+/**
+ * A Polar subscription in either spelling, normalised — or `null` when the three
+ * fields that identify one are not all there.
+ *
+ * Those three are the floor deliberately: everything else is optional on Polar's
+ * side or optional to us, and refusing a payload for a missing `seats` would
+ * park an event we could have applied.
+ */
+export function asSubscription(data: unknown): PolarSubscriptionShape | null {
+  const id = readString(data, 'id');
+  const status = readString(data, 'status');
+  const customerId = readString(data, 'customerId', 'customer_id');
+
+  if (id === null || status === null || customerId === null) {
     return null;
   }
 
-  const candidate = data as Partial<PolarSubscriptionShape>;
-
-  return typeof candidate.id === 'string' &&
-    typeof candidate.status === 'string' &&
-    typeof candidate.customerId === 'string'
-    ? (candidate as PolarSubscriptionShape)
-    : null;
+  return {
+    id,
+    status,
+    customerId,
+    seats: readNumber(data, 'seats'),
+    currentPeriodStart: readInstant(data, 'currentPeriodStart', 'current_period_start'),
+    currentPeriodEnd: readInstant(data, 'currentPeriodEnd', 'current_period_end'),
+    cancelAtPeriodEnd: readBoolean(data, 'cancelAtPeriodEnd', 'cancel_at_period_end'),
+    endsAt: readInstant(data, 'endsAt', 'ends_at'),
+    startedAt: readInstant(data, 'startedAt', 'started_at'),
+    productId: readString(data, 'productId', 'product_id'),
+  };
 }
 
 function asOrder(data: unknown): PolarOrderShape | null {
-  if (typeof data !== 'object' || data === null) {
+  const customerId = readString(data, 'customerId', 'customer_id');
+
+  if (customerId === null) {
     return null;
   }
 
-  const candidate = data as Partial<PolarOrderShape>;
+  const subscription = readField(data, 'subscription');
 
-  return typeof candidate.customerId === 'string' ? (candidate as PolarOrderShape) : null;
+  return {
+    subscriptionId: readString(data, 'subscriptionId', 'subscription_id'),
+    customerId,
+    subscription:
+      typeof subscription === 'object' && subscription !== null
+        ? {
+            currentPeriodStart: readInstant(
+              subscription,
+              'currentPeriodStart',
+              'current_period_start',
+            ),
+            currentPeriodEnd: readInstant(subscription, 'currentPeriodEnd', 'current_period_end'),
+            seats: readNumber(subscription, 'seats'),
+            productId: readString(subscription, 'productId', 'product_id'),
+          }
+        : null,
+  };
+}
+
+/**
+ * One field, under whichever name it arrived: the SDK's camelCase or Polar's
+ * snake_case wire spelling. Names are tried in order, and `??` rather than `||`
+ * so a legitimate `false` or `0` is not skipped for the next spelling.
+ */
+function readField(data: unknown, ...names: readonly string[]): unknown {
+  if (typeof data !== 'object' || data === null) {
+    return undefined;
+  }
+
+  const record = data as Record<string, unknown>;
+
+  for (const name of names) {
+    const value = record[name];
+
+    if (value !== undefined && value !== null) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+/** A non-empty string, or `null`. An id that is not one is not an id. */
+function readString(data: unknown, ...names: readonly string[]): string | null {
+  const value = readField(data, ...names);
+
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function readNumber(data: unknown, ...names: readonly string[]): number | null {
+  const value = readField(data, ...names);
+
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** Absent, null or anything but a boolean reads as `false` — the safe direction. */
+function readBoolean(data: unknown, ...names: readonly string[]): boolean {
+  return readField(data, ...names) === true;
+}
+
+/** An instant as it arrived: a `Date` from the SDK, an ISO string off the wire. */
+function readInstant(data: unknown, ...names: readonly string[]): Date | string | null {
+  const value = readField(data, ...names);
+
+  return value instanceof Date || typeof value === 'string' ? value : null;
 }
 
 /**

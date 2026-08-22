@@ -101,25 +101,44 @@ export class BillingEventProcessor {
     // headers are gone. `provider_event_id` **is** the `webhook-id` header —
     // that is why the ingest path keys idempotency on it — so handing it back to
     // the parser reconstructs the only header the parse actually needs.
-    const event = this.provider.parseWebhookEvent(
+    const parsed = this.provider.parseWebhookEvent(
       claimed.payload,
       { 'webhook-id': claimed.providerEventId },
       tenantId,
     );
 
-    if (event === null) {
-      // Verified, but not an event this integration subscribes to — or one whose
-      // shape we cannot read. Either way it is recorded as processed rather than
-      // parked: an event we did not ask for is not a failure, and parking every
-      // `benefit_grant.*` would fill the operator's `status = 'failed'` list with
-      // noise that hides the rows that matter.
+    if (parsed.outcome === 'unreadable') {
+      // Verified as genuinely the provider's, subscribed to, and still not
+      // readable. No retry changes a shape, so it is parked with the payload
+      // intact — the same treatment `WhatsAppEventProcessor` gives a notification
+      // it cannot parse, and the difference TAR-663 turned on: recording this as
+      // processed is how a paying tenant went unactivated in silence.
+      await this.events.markFailed(
+        webhookEventId,
+        `${PARK_REASON.unrecognisedPayload}: ${parsed.detail}`,
+        tenantId,
+      );
+      this.logger.error(
+        `Billing event ${claimed.providerEventId} for tenant ${tenantId} could not be read ` +
+          `(${parsed.detail}); parked as ${PARK_REASON.unrecognisedPayload}. ` +
+          'Fix the mapping and replay the row.',
+      );
+
+      return;
+    }
+
+    if (parsed.outcome === 'ignored') {
+      // Not an event this integration subscribes to. Recorded as processed
+      // rather than parked: an event we did not ask for is not a failure, and
+      // parking every `benefit_grant.*` would fill the operator's
+      // `status = 'failed'` list with noise that hides the rows that matter.
       await this.events.markProcessed(webhookEventId, tenantId);
 
       return;
     }
 
     try {
-      await this.apply(webhookEventId, event);
+      await this.apply(webhookEventId, parsed.event);
     } catch (error: unknown) {
       await this.handleFailure(webhookEventId, claimed.attempts, error);
     }

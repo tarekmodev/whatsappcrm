@@ -63,7 +63,10 @@ describe('FakeCheckoutController', () => {
       expect(provider.verifyWebhookSignature(rawBody, headers)).toBe(true);
       expect(
         provider.parseWebhookEvent(JSON.parse(rawBody.toString('utf8')), headers, TENANT),
-      ).toMatchObject({ type: 'subscription.activated', planKey: 'scale', seats: 7 });
+      ).toMatchObject({
+        outcome: 'event',
+        event: { type: 'subscription.activated', planKey: 'scale', seats: 7 },
+      });
     });
 
     /** The header the receiver keys idempotency on; without it every delivery is refused. */

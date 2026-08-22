@@ -3310,6 +3310,11 @@ model CannedResponse {
 /// Not RLS-protected — it is public product data.
 model Plan {
   id              String          @id @default(uuid(7)) @db.Uuid
+  /// `PlanSchema.key` — `PLAN_KEY_PATTERN`, at most `PLAN_KEY_MAX_LENGTH`
+  /// characters. `plans_key_format` (TAR-657) asserts exactly that at the write,
+  /// because the console parses this response against the same contract and a
+  /// single non-conforming row used to fail the whole `GET /billing/plans` parse
+  /// — the billing page down for every tenant, from one bad catalogue row.
   key             String          @unique
   name            String
   /// Integer minor units, never a float (TAR-39, conventions).

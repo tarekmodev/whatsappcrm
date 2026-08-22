@@ -32,6 +32,17 @@ const TENANT_B = '40544444-4444-7444-8444-444444444402';
 
 const REQUEST_ID = 'tar405-cap-int-spec';
 
+/**
+ * The catalogue row the two subscription tests hang a `plan_id` off.
+ *
+ * `plans` is platform-wide rather than tenant-scoped, so it does **not** cascade
+ * from the fixture tenants and `removeFixture` has to delete it by name — a row
+ * left here is visible to every tenant on the database for as long as it exists.
+ * Underscored, not hyphenated, because `plans_key_format` refuses anything the
+ * published `PlanSchema` refuses, fixture rows included (TAR-657).
+ */
+const PLAN_KEY = 'tar405_cap_plan';
+
 /** Small enough that the fixture can sit exactly on it. */
 const CAP = 3;
 
@@ -53,7 +64,25 @@ describe('the conversation-volume cap', () => {
   }
 
   async function removeFixture(): Promise<void> {
+    // Tenants first: `subscriptions` cascades from the tenant and holds the
+    // `plan_id` that would otherwise refuse the plan delete below.
     await systemPrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B] } } });
+    await systemPrisma.plan.deleteMany({ where: { key: PLAN_KEY } });
+  }
+
+  /** The fixture plan, created on demand and removed with the rest of the fixture. */
+  async function fixturePlan(): Promise<{ id: string }> {
+    return await systemPrisma.plan.upsert({
+      where: { key: PLAN_KEY },
+      create: {
+        key: PLAN_KEY,
+        name: 'TAR-405 cap fixture',
+        priceMinorUnits: 0,
+        entitlements: entitlementsWithCap(null),
+      },
+      update: {},
+      select: { id: true },
+    });
   }
 
   /** Moves a tenant's anchor, so a period boundary can be put where a test wants it. */
@@ -166,17 +195,7 @@ describe('the conversation-volume cap', () => {
 
     /** Branch 1: a subscription with both bounds set wins over the anchor. */
     it('prefers the subscription period once there is one', async () => {
-      const plan = await systemPrisma.plan.upsert({
-        where: { key: 'tar405-cap-plan' },
-        create: {
-          key: 'tar405-cap-plan',
-          name: 'TAR-405 cap fixture',
-          priceMinorUnits: 0,
-          entitlements: entitlementsWithCap(null),
-        },
-        update: {},
-        select: { id: true },
-      });
+      const plan = await fixturePlan();
 
       await systemPrisma.subscription.create({
         data: {
@@ -205,17 +224,7 @@ describe('the conversation-volume cap', () => {
      * source agrees with.
      */
     it('ignores a subscription that has only one of its two bounds', async () => {
-      const plan = await systemPrisma.plan.upsert({
-        where: { key: 'tar405-cap-plan' },
-        create: {
-          key: 'tar405-cap-plan',
-          name: 'TAR-405 cap fixture',
-          priceMinorUnits: 0,
-          entitlements: entitlementsWithCap(null),
-        },
-        update: {},
-        select: { id: true },
-      });
+      const plan = await fixturePlan();
 
       await systemPrisma.subscription.create({
         data: {
