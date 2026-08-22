@@ -360,7 +360,7 @@ detail nobody has confirmed.
 ## Storage
 
 `tenant_signups`, one of the four tables with no tenant scoping — see
-[the tenant isolation contract](tenancy.md#the-five-tables-with-no-rls-policy). A policy needs a
+[the tenant isolation contract](tenancy.md#the-six-tables-with-no-rls-policy). A policy needs a
 tenant to compare against and there is none: at insert the tenant has not been provisioned and
 the caller is anonymous. `whatsappcrm_app` is granted nothing on the table at all, so the
 **grant** rather than a policy is the enforcement, and every statement runs through
