@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONVERSATION_BOT_STATES, MESSAGE_ORIGINS } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
-import {
-  BOT_STATE_TONES,
-  canRequestHandoff,
-  hasBotEngaged,
-  hasBotStateBadge,
-  isBotMessage,
-} from './bot-state';
+import { BOT_STATE_TONES, canRequestHandoff, hasBotEngaged, isBotMessage } from './bot-state';
 
 /**
  * The distinction TAR-28's second acceptance criterion rests on: the inbox has
@@ -26,19 +20,18 @@ describe('bot state badges', () => {
   });
 
   it('labels a bot-answering conversation', () => {
-    expect(hasBotStateBadge('bot_active')).toBe(true);
+    expect(BOT_STATE_TONES.bot_active).not.toBeNull();
     expect(content.inbox.botStates.bot_active).not.toBe('');
   });
 
   it('labels a handed-over conversation differently from a bot-answering one', () => {
     // The case the boolean `botHandling` cannot express: it reads `false` for
     // both `handed_off` and `off`, and only one of them needs somebody now.
-    expect(hasBotStateBadge('handed_off')).toBe(true);
+    expect(BOT_STATE_TONES.handed_off).not.toBeNull();
     expect(content.inbox.botStates.handed_off).not.toBe(content.inbox.botStates.bot_active);
   });
 
   it('leaves a conversation the chatbot never touched unlabelled', () => {
-    expect(hasBotStateBadge('off')).toBe(false);
     expect(BOT_STATE_TONES.off).toBeNull();
   });
 });

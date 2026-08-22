@@ -34,11 +34,19 @@ import styles from './InboxFilterNav.module.css';
  *
  * ## No unread counts
  *
- * The reference puts a count beside every entry. `ConversationResponse` carries
- * `unreadCount` per conversation and 0002 exposes no counts-by-filter read, so
- * the only honest count would be "unread in the page of the filter you are
- * already on" — which is not what a badge beside *another* filter means. The
- * entries leave the slot empty until an endpoint can fill it.
+ * The reference puts a count beside every entry, and since TAR-514 the chip that
+ * would render one exists — `Badge variant="count"`. What does not exist is the
+ * read behind it: `ConversationResponse` carries `unreadCount` per conversation
+ * and 0002 exposes no counts-by-filter endpoint, so the only number this column
+ * could compute is "unread in the page of the filter you are already on", which
+ * is not what a count beside *another* filter means. Seven `count(*)` queries per
+ * inbox render is also the cost `conversation-query.service.ts` is explicitly
+ * built to avoid, so the endpoint is a decision for 0002 rather than something to
+ * add here.
+ *
+ * The entries therefore leave the slot empty. When the read lands, this renders
+ * `<Badge variant="count">` right-aligned per entry, and a zero renders nothing —
+ * a column of zeroes reads as a broken screen.
  */
 
 export interface InboxFilterNavProps {

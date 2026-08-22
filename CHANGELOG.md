@@ -1733,6 +1733,41 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
 
 ### Changed
 
+- **A status chip is quieter than the button beside it, in both themes and under any
+  tenant brand** (TAR-514) — the dark theme mapped every `--color-*-subtle` role onto a
+  mid-scale saturated primitive (`green-700`, `blue-500`, `amber-600`, `red-600`), so a
+  chip was a solid pill rather than a tint. On a dark conversation row a solid green
+  `Open`, a solid blue `2 unread`, a solid amber `Unclaimed` and a solid blue
+  `Bot is answering` all sat beside a `Claim` button that read as _less_ prominent than
+  any of them: 0001's "one accent carries action" inverted. TAR-29's branding made it
+  worse rather than exposing it late — the seeded tenant resolves the accent to a blue, so
+  the `info` chip and the primary button became near-identical colours at the same weight,
+  and hue alone had been doing the separating by accident. The dark `*-subtle` roles are
+  now a `*-900` tint family tuned to one stand-off from the surface (1.45:1, against the
+  light theme's 1.10–1.23:1 below white), so the separation is **lightness and chroma, not
+  hue** and a blue-branded tenant cannot re-break it. `--color-accent-subtle` moved with
+  them, because `brandCssVariables` already derives a tenant's by mixing 86% toward the
+  surface and the unbranded console was the only one whose selected rows and avatars were
+  blocks of colour. `neutral` gained its own `--color-neutral-subtle` /
+  `--color-on-neutral-subtle` pair instead of borrowing `surface-sunken` +
+  `on-surface-muted`, which is how it came to be the one chip nobody had measured, at
+  4.34:1 in light. Every pair is re-measured into 0001's contrast table and asserted by
+  `apps/web/styles/tokens/tokens.test.ts`, which reads the token files themselves and
+  sweeps eight brand hues through the real derivation.
+- **`Badge` has variants and sizes, and 0001 has a rule for how many may appear**
+  (TAR-514) — `subtle`, `outline`, `count` and `dot`, in `sm` and `md`. The colour was only
+  half the problem: every screen rendered every fact it held as its own equal pill. 0001's
+  new "Status vocabulary" says a list row shows at most one status chip and a detail header
+  at most two, a status the active filter already implies is not shown, assignment is an
+  avatar with an accessible name rather than a text pill, and a count is the `count`
+  variant rather than a sentence in one. The inbox is the first consumer:
+  `features/inbox/conversation-chips.ts` ranks the candidates most-actionable first — the
+  chatbot handed over, then unclaimed, then the chatbot answering, then a non-`open` status
+  — and takes the top one. `open` never earns a chip, on the same argument that already
+  leaves bot state `off` unlabelled. Tickets and Settings keep their present badges and
+  follow in their own passes; the filter column still shows no counts, because 0002 exposes
+  no counts-by-filter read.
+
 - **`assignment_rules` can hold a routing rule.** TAR-47 shipped the table with
   `conditions JSONB`, `position`, `is_active` and both target foreign keys under a comment
   saying TAR-24 owned the grammar; 0007 worked out what that grammar needed, and this is the

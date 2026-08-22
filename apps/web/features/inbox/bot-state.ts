@@ -11,6 +11,10 @@ import type { BadgeTone } from '@/components/ui/Badge';
 /**
  * A badge tone per state — or `null` for the state that gets no badge at all.
  *
+ * *Whether* the chip is rendered is `conversation-chips.ts`'s question since
+ * TAR-514, because a row has one slot and several candidates for it. This is
+ * still the only place a bot state's tone is written down.
+ *
  * `off` is deliberately unlabelled. A conversation the chatbot never touched is
  * the ordinary case, and a badge on every row would put a word in front of every
  * reader for no information. The other three each say something the reader
@@ -28,17 +32,6 @@ export const BOT_STATE_TONES = {
   handed_off: 'warning',
   human_active: 'neutral',
 } as const satisfies Record<ConversationBotState, BadgeTone | null>;
-
-/**
- * Whether this conversation's bot state is worth a badge.
- *
- * A function rather than a `!== 'off'` at each call site, because "does this get
- * a badge" and "has the bot been involved" are different questions that happen
- * to have the same answer today — and the second one is `hasBotEngaged` below.
- */
-export function hasBotStateBadge(state: ConversationBotState): boolean {
-  return BOT_STATE_TONES[state] !== null;
-}
 
 /**
  * Whether a conversation in this state can still be taken from the chatbot.

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import type { ConversationResponse } from '@whatsappcrm/contracts';
 import { RelativeTime } from '@/components/ui/RelativeTime';
-import { SkeletonLine, SkeletonText } from '@/components/ui/Skeleton';
+import { SkeletonCircle, SkeletonLine, SkeletonText } from '@/components/ui/Skeleton';
 import { Cluster } from '@/components/layout/Cluster';
 import { useContent } from '@/lib/content';
 import { routes, type ConversationStatusFilter, type InboxScope } from '@/lib/routes';
@@ -110,6 +110,7 @@ export function ConversationRow({
             conversation={conversation}
             assigneeName={assigneeName}
             teamName={teamName}
+            filter={query}
           />
           {/* Shown only for the direction this reader may actually take:
               claiming is everyone's, releasing and taking over are a
@@ -134,6 +135,11 @@ export function ConversationRow({
  * Mirrors `ConversationRow`: the same card frame and the same three rows —
  * headline, preview, badge row — so nothing shifts when the data lands.
  *
+ * The badge row reserves what a row now carries at most: one status chip and the
+ * holder's avatar. It is a circle rather than a third line because that is what
+ * lands there — a skeleton drawn as pills for a row that renders an avatar is
+ * exactly the drift 0001 forbids.
+ *
  * `hasClaim` keeps the badge row the same height for a principal who will get a
  * claim button, since a `sm` button is taller than a badge.
  */
@@ -150,8 +156,8 @@ export function ConversationRowSkeleton({ hasClaim = false }: { hasClaim?: boole
         </div>
         <Cluster justify="between" align="end" gap="2" className={styles.footer}>
           <Cluster gap="2">
-            <SkeletonLine width="4rem" height="1.25rem" />
-            <SkeletonLine width="6rem" height="1.25rem" />
+            <SkeletonLine width="5rem" height="1.25rem" />
+            <SkeletonCircle size="var(--size-control-sm)" />
           </Cluster>
           {hasClaim ? <SkeletonLine width="4.5rem" height="var(--size-control-sm)" /> : null}
         </Cluster>

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import type { ConversationResponse } from '@whatsappcrm/contracts';
 import { Notice } from '@/components/ui/Notice';
 import { RelativeTime } from '@/components/ui/RelativeTime';
-import { SkeletonLine } from '@/components/ui/Skeleton';
+import { SkeletonCircle, SkeletonLine } from '@/components/ui/Skeleton';
 import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
 import { useContent } from '@/lib/content';
@@ -111,7 +111,8 @@ export function ThreadHeader({
         conversation={conversation}
         assigneeName={assigneeName}
         teamName={teamName}
-        showUnreadCount={false}
+        filter={query}
+        view="detail"
       />
 
       {/* Why nobody on the team has replied. Without it, a thread the chatbot
@@ -158,9 +159,12 @@ export function ThreadHeaderSkeleton({ query }: { query: ThreadQuery }) {
             neither appearing moves the badge row below. */}
         <SkeletonLine width="10rem" height="var(--size-touch-target)" />
       </Cluster>
+      {/* Two chips and the holder's avatar: the most a detail header now
+          carries, at the `md` chip's height rather than a row's `sm`. */}
       <Cluster gap="2" aria-hidden="true">
-        <SkeletonLine width="4rem" height="1.25rem" />
-        <SkeletonLine width="6rem" height="1.25rem" />
+        <SkeletonLine width="6rem" height="1.75rem" />
+        <SkeletonLine width="5rem" height="1.75rem" />
+        <SkeletonCircle size="var(--size-control-sm)" />
       </Cluster>
     </Stack>
   );

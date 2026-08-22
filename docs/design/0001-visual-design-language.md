@@ -83,7 +83,7 @@ status, and it means exactly one thing: **this is the action, or this is where y
 | -------------------------- | ----------- | ----------- | ----------------------------------- |
 | `--color-accent`           | `green-600` | `green-500` | Primary buttons, current tab, links |
 | `--color-accent-hover`     | `green-700` | `green-300` | Their hover state                   |
-| `--color-accent-subtle`    | `green-100` | `green-700` | Selected rows, avatar backgrounds   |
+| `--color-accent-subtle`    | `green-100` | `green-900` | Selected rows, avatar backgrounds   |
 | `--color-on-accent`        | `white`     | `slate-950` | Text on the accent                  |
 | `--color-on-accent-subtle` | `green-700` | `green-100` | Text on the subtle accent           |
 
@@ -97,6 +97,7 @@ were picked for rather than the other way round:
 | `slate-950` on `green-500` (primary button, dark) | 5.73:1 | 4.5   |
 | `green-500` on `slate-900` (link on dark)         | 5.07:1 | 4.5   |
 | `green-700` on `green-100` (subtle accent, light) | 6.35:1 | 4.5   |
+| `green-100` on `green-900` (subtle accent, dark)  | 10.3:1 | 4.5   |
 | `slate-300` on `navy-900` (rail label)            | 10.1:1 | 4.5   |
 | `slate-400` on `navy-900` (rail muted text)       | 5.86:1 | 4.5   |
 
@@ -115,6 +116,57 @@ backgrounds it can land on:
 
 Re-measure before changing any of them. `--color-on-surface-subtle` is around 2.6:1 and
 is decoration only — never put text on it.
+
+### Status colour
+
+Status never gets a saturated fill. Each `--color-*-subtle` is a **tint** — a surface the
+eye skims past, with its `--color-on-*-subtle` carrying the meaning in text — because the
+accent is the only thing on a screen allowed to be loud, and a chip beside a button that
+shouts louder than it inverts the whole hierarchy. `neutral` is a status like the rest and
+has its own pair: before TAR-514 it borrowed `surface-sunken` + `on-surface-muted`, which
+is how it came to be the one chip nobody had measured, at 4.34:1.
+
+| Role                     | Light       | Dark        | Text role                   | Light       | Dark        |
+| ------------------------ | ----------- | ----------- | --------------------------- | ----------- | ----------- |
+| `--color-neutral-subtle` | `slate-100` | `slate-750` | `--color-on-neutral-subtle` | `slate-600` | `slate-100` |
+| `--color-success-subtle` | `green-100` | `green-900` | `--color-on-success-subtle` | `green-700` | `green-100` |
+| `--color-warning-subtle` | `amber-100` | `amber-900` | `--color-on-warning-subtle` | `amber-600` | `amber-100` |
+| `--color-danger-subtle`  | `red-100`   | `red-900`   | `--color-on-danger-subtle`  | `red-600`   | `red-100`   |
+| `--color-info-subtle`    | `blue-100`  | `blue-900`  | `--color-on-info-subtle`    | `blue-500`  | `blue-100`  |
+
+Two ratios matter for a chip, not one. The **text pair** is the AA floor; the **stand-off**
+is how far the tint sits from the surface behind it, and it is the number that decides
+whether a chip out-shouts the button beside it. `apps/web/styles/tokens/tokens.test.ts`
+asserts both against the token files, so neither can drift the way the dark theme did.
+
+| Chip      | Text, light | Text, dark | Stand-off, light | Stand-off, dark |
+| --------- | ----------- | ---------- | ---------------- | --------------- |
+| `neutral` | 6.92:1      | 11.4:1     | 1.10:1           | 1.43:1          |
+| `accent`  | 6.35:1      | 10.3:1     | 1.19:1           | 1.46:1          |
+| `success` | 6.35:1      | 10.3:1     | 1.19:1           | 1.46:1          |
+| `warning` | 6.07:1      | 10.9:1     | 1.13:1           | 1.46:1          |
+| `danger`  | 7.33:1      | 10.1:1     | 1.22:1           | 1.45:1          |
+| `info`    | 5.46:1      | 10.1:1     | 1.23:1           | 1.45:1          |
+
+Text floor 4.5:1. The accent's own stand-off is **5.37:1 light and 5.07:1 dark**, so the
+ordering on any screen is: solid accent button > chip > body text > muted text.
+
+#### Why the stand-off, and not the hue
+
+TAR-29 lets a tenant replace the accent, and the seeded workspace resolves it to a blue —
+the same hue as the `info` chip. A dark theme that separated chips from the accent _by
+hue_ was therefore one tenant away from re-breaking, which is exactly what happened: a
+`2 unread` chip and a `Claim` button rendered as near-identical blues at the same weight.
+
+So the separation is **lightness and chroma**. Every chip tint sits at the same small
+stand-off from the surface whatever its hue; a solid accent button sits two to five times
+further out whatever hue a tenant supplies. `tokens.test.ts` sweeps the hue wheel through
+`brandCssVariables` rather than checking the default green.
+
+The one boundary: a tenant whose primary colour is itself within ~1.5:1 of the console
+surface — a near-black brand in the dark theme — makes its own button quiet. The branding
+screen already reports a colour's measured contrast; nothing in the token layer can save a
+brand from being invisible against the surface it was chosen to sit on.
 
 ### Surfaces
 
@@ -271,6 +323,43 @@ otherwise make again:
 shell is an ancestor of the page and a page cannot hand its ancestor a prop. That attribute
 is a documented seam, the same kind as `[data-rail]` in the other direction.
 
+## Status vocabulary
+
+Colour was only half of the badge soup. The other half is that every screen rendered every
+fact it had as its own pill, so an inbox row carried five of them and none of them meant
+more than any other. Four rules, and they are as binding as the token rules:
+
+- A list row shows **at most one** status chip. A detail header shows at most **two**.
+- **A status the active filter already implies is not shown.** "Open" under the "All open"
+  filter, "Unclaimed" under "Unassigned": the column on the left has just said it. `open`
+  is never a chip at all — it is the ordinary state of a conversation in an inbox, and a
+  word on every row is a word nobody gains anything from. Its absence says it, the same
+  way an unlabelled bot state says "the chatbot never touched this".
+- **Assignment is an avatar with an accessible name**, never a text pill. A held thread is
+  a _who_, and a who is a face.
+- **A count is the `count` variant**, never a sentence in a pill. A zero renders nothing —
+  a column of zeroes reads as a broken screen.
+
+Which chip wins the one slot is a decision, not an accident: order the candidates
+most-actionable first and take the top one. `apps/web/features/inbox/conversation-chips.ts`
+is the worked example, and it is a pure module with its own test rather than a rule living
+inside a component.
+
+### The chip itself
+
+`components/ui/Badge.tsx`, in two sizes — `sm` for a row or a cell, `md` for a detail
+header. There is no third.
+
+| Variant   | Use                                         | Treatment                                            |
+| --------- | ------------------------------------------- | ---------------------------------------------------- |
+| `subtle`  | Status in a row, a cell, a header (default) | The tone's `*-subtle` tint, `on-*-subtle` text, pill |
+| `outline` | Low-emphasis metadata — a channel, a team   | Transparent, hairline border, muted text; no tone    |
+| `count`   | Unread counts, filter counts                | Pill, tabular numerals, one width for `1` and `99`   |
+| `dot`     | Presence of unread, with no number to give  | A circle in the tone's colour, no text               |
+
+`dot` is decorative by construction and carries no accessible name — the parent supplies
+one. A dot on its own conveys state by colour alone, which this document forbids.
+
 ## Structural patterns
 
 ### List views
@@ -358,6 +447,7 @@ space:
 | A table                 | `DataTable` + `DataTableSkeleton`               |
 | Tabs                    | `Tabs`                                          |
 | Filter pills            | `FilterPills`                                   |
+| A status chip or count  | `Badge` — see "Status vocabulary" for how many  |
 | An icon                 | `Icon`                                          |
 | A person's initial      | `Avatar`                                        |
 | A popup of actions      | `MenuButton`                                    |
