@@ -34,9 +34,10 @@ export type ReportParams = DashboardMetricsQuery;
  * and the client's differ, and a pure function is testable without freezing time.
  *
  * It is the *server's* today. The range itself is resolved in the tenant's own
- * timezone by the API (ADR 0009 decision 5), so only the default's endpoints —
- * never the numbers — can sit a day out for a tenant far from UTC, and any
- * interaction with the picker replaces them with dates the supervisor chose.
+ * timezone by the API — ADR 0010 (reporting dashboard and export) decision 5 — so
+ * only the default's endpoints, never the numbers, can sit a day out for a tenant
+ * far from UTC, and any interaction with the picker replaces them with dates the
+ * supervisor chose.
  */
 export function parseReportParams(
   raw: {
@@ -71,7 +72,7 @@ function parseRange(
 
 /**
  * The applied query as a search string — the **one** serialisation both reads
- * use (ADR 0009 decision 1, part one).
+ * use. ADR 0010 (reporting dashboard and export) decision 1, part one.
  *
  * It lives here rather than beside the metrics client because the export is
  * fetched by the browser and `lib/api/reports.ts` is `server-only`: a second

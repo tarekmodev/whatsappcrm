@@ -11,7 +11,7 @@ import { authenticatedRequest } from '@/lib/api/authenticated';
 import { reportSearchParams } from '@/features/reports/report-params';
 
 /**
- * The reporting read surface, per ADR 0009.
+ * The reporting read surface, per ADR 0010 (reporting dashboard and export).
  *
  * `GET /reports/dashboard/export` answers bytes rather than JSON, so the console
  * fetches it from the **browser** (`lib/api/reports-browser.ts`) — a link cannot

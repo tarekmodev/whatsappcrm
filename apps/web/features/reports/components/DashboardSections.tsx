@@ -21,9 +21,9 @@ import styles from './DashboardSections.module.css';
  *
  * **One fetch, three sections.** The summary, the breakdown and the daily series
  * come out of a single aggregation, which is what makes the totals incapable of
- * disagreeing with the rows beneath them (ADR 0009 decision 1). Splitting them
- * into three requests to win three streaming boundaries would trade that away for
- * a few hundred milliseconds.
+ * disagreeing with the rows beneath them — ADR 0010 (reporting dashboard and
+ * export) decision 1. Splitting them into three requests to win three streaming
+ * boundaries would trade that away for a few hundred milliseconds.
  *
  * `isScopeNarrowed` is resolved from the session rather than from the response, so
  * the notice occupies the same space in the skeleton as in the loaded view and
@@ -32,7 +32,10 @@ import styles from './DashboardSections.module.css';
 
 export interface DashboardSectionsProps {
   params: ReportParams;
-  /** True when the caller lacks `report:read_all` (ADR 0009 decision 6). */
+  /**
+   * True when the caller lacks `report:read_all` — ADR 0010 (reporting dashboard
+   * and export) decision 6.
+   */
   isScopeNarrowed: boolean;
   /**
    * The breakdown's order, from the URL. `undefined` is the API's own order,
@@ -81,10 +84,11 @@ export async function DashboardSections({ params, isScopeNarrowed, sort }: Dashb
         <Stack gap="3">
           {/*
             The three sections come out of one fetch, so a *read* that fails
-            fails all three — that is ADR 0009 decision 1 and the page-level
-            boundary is where it belongs. This is the other failure: the
-            breakdown throwing while rendering, which must not take the summary
-            above it and the chart below it with it (TAR-515).
+            fails all three — that is ADR 0010 (reporting dashboard and export)
+            decision 1 and the page-level boundary is where it belongs. This is
+            the other failure: the breakdown throwing while rendering, which must
+            not take the summary above it and the chart below it with it
+            (TAR-515).
           */}
           <SectionErrorBoundary>
             <AgentBreakdownTable rows={metrics.agents} params={params} sort={sort} />

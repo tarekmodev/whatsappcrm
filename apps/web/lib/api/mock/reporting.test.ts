@@ -6,8 +6,8 @@ import {
 } from '@whatsappcrm/contracts';
 
 /**
- * The dashboard aggregate the console is built against (TAR-30, ADR 0009),
- * standing in for TAR-428's query service.
+ * The dashboard aggregate the console is built against — TAR-30, ADR 0010
+ * (reporting dashboard and export) — standing in for TAR-428's query service.
  *
  * These are the rules whose failure is **silent** — a wrong number looks exactly
  * like a right one — so each is asserted rather than assumed:
@@ -162,8 +162,9 @@ describe('an agent’s dashboard', () => {
   it('breaks nothing out by colleague — one row, their own', async () => {
     const metrics = await dashboard();
 
-    // ADR 0009 decision 6. The aggregate still covers what they can see; what is
-    // withheld is the comparison against the people they work with.
+    // ADR 0010 (reporting dashboard and export) decision 6. The aggregate still
+    // covers what they can see; what is withheld is the comparison against the
+    // people they work with.
     expect(metrics.agents.map((row) => row.userId)).not.toContain(MOCK_IDS.users.priya);
     expect(
       metrics.agents.every((row) => row.userId === MOCK_IDS.users.amina || row.userId === null),
