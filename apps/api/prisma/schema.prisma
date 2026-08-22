@@ -234,6 +234,32 @@ enum WhatsappQualityRating {
   @@map("whatsapp_quality_rating")
 }
 
+/// Whether a number has been registered for Cloud API use, which is what makes
+/// it able to **send** (TAR-170, contract TAR-766). A second axis to
+/// `WhatsappAccountStatus`, not a widening of it: a number can be `connected`
+/// (attached, receiving) and `unregistered` (cannot send) at the same time, and
+/// one enum cannot say that.
+///
+/// `unregistered` and `failed` are separate values on purpose. `unregistered` is
+/// "never attempted" — every row that existed before this shipped, and every row
+/// the operator paste-token path creates. `failed` claims Meta answered and
+/// refused, so defaulting to it would print a rejection that never happened on
+/// every existing connection, and the console's copy for the two differs ("set
+/// up sending" against "sending failed: …").
+///
+/// `pending` is an attempt in flight. Kept distinct because a process killed
+/// between the Meta call and the outcome write has to be tellable from one that
+/// never called: the first may be registered at Meta under a PIN this row holds,
+/// and re-registering with that same PIN is how it recovers.
+enum WhatsappRegistrationStatus {
+  unregistered
+  pending
+  registered
+  failed
+
+  @@map("whatsapp_registration_status")
+}
+
 enum MessageTemplateStatus {
   pending
   approved
@@ -1640,18 +1666,49 @@ model WhatsappBusinessAccount {
 /// (TAR-39, webhook ingestion) — that does not change with several WABAs behind
 /// it, because the routing key names the number rather than the business.
 model WhatsappAccount {
-  id                        String                 @id @default(uuid(7)) @db.Uuid
-  tenantId                  String                 @map("tenant_id") @db.Uuid
-  whatsappBusinessAccountId String                 @map("whatsapp_business_account_id") @db.Uuid
-  phoneNumberId             String                 @unique @map("phone_number_id")
-  displayPhoneNumber        String                 @map("display_phone_number")
-  verifiedName              String?                @map("verified_name")
+  id                        String                     @id @default(uuid(7)) @db.Uuid
+  tenantId                  String                     @map("tenant_id") @db.Uuid
+  whatsappBusinessAccountId String                     @map("whatsapp_business_account_id") @db.Uuid
+  phoneNumberId             String                     @unique @map("phone_number_id")
+  displayPhoneNumber        String                     @map("display_phone_number")
+  verifiedName              String?                    @map("verified_name")
   /// Meta's rating for this number. NULL until we have read it; `unknown` when
   /// Meta says so. Not on the WABA — Meta rates and throttles per number.
-  qualityRating             WhatsappQualityRating? @map("quality_rating")
-  status                    WhatsappAccountStatus  @default(disconnected)
-  createdAt                 DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt                 DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  qualityRating             WhatsappQualityRating?     @map("quality_rating")
+  status                    WhatsappAccountStatus      @default(disconnected)
+  /// Whether this number may **send** (TAR-170). Deliberately independent of
+  /// `status`, which keeps its `connected | disconnected | error` meaning —
+  /// see `WhatsappRegistrationStatus` for why the two cannot be one column.
+  registrationStatus        WhatsappRegistrationStatus @default(unregistered) @map("registration_status")
+  /// The six-digit Cloud API registration PIN, encrypted at rest by the same
+  /// cipher, key and payload format as the WABA's access token, bound to this
+  /// row's `phone_number_id` as AAD — the number, not the business, because a
+  /// PIN moved between two numbers of one WABA must fail to decrypt.
+  ///
+  /// On the number rather than beside the token on the WABA because Meta
+  /// registers a *number*: two numbers under one WABA register independently and
+  /// can hold different PINs. Stored rather than derived so a retry re-sends the
+  /// PIN Meta already accepted, and so the key stays rotatable.
+  ///
+  /// Never selected into an API response projection. There is no endpoint that
+  /// returns it, and it is never logged or written to an audit row.
+  registrationPinEncrypted  String?                    @map("registration_pin_encrypted")
+  /// Why the last attempt failed, from `WHATSAPP_REGISTRATION_FAILURE_REASONS`
+  /// in `@whatsappcrm/contracts`. Text rather than an enum type: the vocabulary
+  /// grows as Meta's failure codes are mapped, it is only ever written from a
+  /// closed TS constant, and a value this build does not recognise reads as
+  /// `rejected` rather than failing a deserialise — the same arrangement
+  /// `sessions.revoked_reason` already uses.
+  registrationFailureReason String?                    @map("registration_failure_reason")
+  /// When Meta last accepted this number. Set on every success, never cleared —
+  /// a later failure moves `registration_status`, not this.
+  registeredAt              DateTime?                  @map("registered_at") @db.Timestamptz(3)
+  /// When an attempt last started, and the lease that makes a `pending` row
+  /// recoverable: older than `META_GRAPH_API_TIMEOUT_MS` means the previous
+  /// attempt died and the row can be taken over.
+  registrationAttemptedAt   DateTime?                  @map("registration_attempted_at") @db.Timestamptz(3)
+  createdAt                 DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant                  Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   whatsappBusinessAccount WhatsappBusinessAccount @relation(fields: [tenantId, whatsappBusinessAccountId], references: [tenantId, id], onDelete: Cascade)
