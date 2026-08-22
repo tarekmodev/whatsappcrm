@@ -57,6 +57,19 @@ describe('navigation visibility by role', () => {
    * the contract's table gives to admin alone. A supervisor never sees a link to
    * a page whose only action the API would refuse.
    */
+  /**
+   * TAR-575: the saved-reply library is gated on `canned_response:write`, which
+   * 0004 grants supervisor-and-above — not on `canned_response:read`, which
+   * every agent holds so the composer can expand a shortcut. An agent reads the
+   * library from the reply box; an entry to a screen whose every button the API
+   * would refuse is worse than no entry.
+   */
+  it('gives the saved-reply library to the roles that may write one', () => {
+    expect(navIdsFor('admin')).toContain('settings-saved-replies');
+    expect(navIdsFor('supervisor')).toContain('settings-saved-replies');
+    expect(navIdsFor('agent')).not.toContain('settings-saved-replies');
+  });
+
   it('keeps the WhatsApp connection surface to the role that may connect one', () => {
     expect(navIdsFor('admin')).toContain('settings-whatsapp');
     expect(navIdsFor('supervisor')).not.toContain('settings-whatsapp');
@@ -80,6 +93,17 @@ describe('navigation visibility by role', () => {
     }
   });
 
+  /**
+   * TAR-28: `ai:read` and `ai:write` are admin-only in the contract's table, and
+   * ADR 0010 adds no permission. A supervisor never sees a link to a knowledge
+   * base whose every endpoint the API would refuse.
+   */
+  it('keeps the chatbot surface to the role that may configure one', () => {
+    expect(navIdsFor('admin')).toContain('settings-chatbot');
+    expect(navIdsFor('supervisor')).not.toContain('settings-chatbot');
+    expect(navIdsFor('agent')).not.toContain('settings-chatbot');
+  });
+
   it('gives an admin every entry', () => {
     const ids = navIdsFor('admin');
 
@@ -88,6 +112,7 @@ describe('navigation visibility by role', () => {
         'inbox',
         'settings-people',
         'settings-assignment',
+        'settings-chatbot',
         'settings-whatsapp',
       ]),
     );

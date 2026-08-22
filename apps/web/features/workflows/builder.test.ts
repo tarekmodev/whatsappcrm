@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { workflowCatalog, type Tag, type TeamResponse } from '@whatsappcrm/contracts';
+import { content } from '@/content/en';
 import {
   availableActionTypes,
   availableConditionTypes,
   blankAction,
   blankTrigger,
+  tagOptions,
   withAssignmentState,
   withNotifyAudience,
 } from './builder';
@@ -90,6 +92,36 @@ describe('blankAction', () => {
       type: 'reassign',
       target: { kind: 'team', teamId: '' },
     });
+  });
+});
+
+describe('tagOptions', () => {
+  const DANGLING_TAG_ID = '0192f00b-0000-7000-8000-000000000b99';
+  const UNKNOWN = content.workflows.unknownReference;
+
+  it('offers the workspace tags and invents nothing when every id resolves', () => {
+    expect(tagOptions(FULL, [TAG.id], UNKNOWN)).toStrictEqual([{ value: TAG.id, label: TAG.name }]);
+  });
+
+  it('keeps an id that no longer resolves listed, so it can be replaced', () => {
+    // Dropping it would blank the control while the workflow still carries the
+    // id and sends it back on the next save.
+    expect(tagOptions(FULL, [DANGLING_TAG_ID], UNKNOWN)).toStrictEqual([
+      { value: TAG.id, label: TAG.name },
+      { value: DANGLING_TAG_ID, label: UNKNOWN },
+    ]);
+  });
+
+  it('treats an unchosen id as unchosen rather than as a dangling one', () => {
+    // `add_ticket_tag` starts blank in a workspace with no tags, and the empty
+    // option is `withPlaceholder`'s — a second one would collide with it.
+    expect(tagOptions(BARE, [''], UNKNOWN)).toStrictEqual([]);
+  });
+
+  it('lists one row per dangling id, however often it is named', () => {
+    expect(tagOptions(BARE, [DANGLING_TAG_ID, DANGLING_TAG_ID], UNKNOWN)).toStrictEqual([
+      { value: DANGLING_TAG_ID, label: UNKNOWN },
+    ]);
   });
 });
 

@@ -84,6 +84,16 @@ export const routes = {
    */
   settingsCustomFields: () => '/settings/custom-fields',
   /**
+   * The tenant's shared canned-response library (TAR-31, TAR-575).
+   *
+   * `saved-replies`, not `canned-responses`. `docs/STYLE.md` fixes *canned
+   * response* as the word in code and *saved reply* as the console's word on
+   * screen, and this path is read by a customer — the same reasoning that makes
+   * `settingsWorkspace` `/settings/workspace` rather than `/settings/tenant`.
+   * The API route it writes to keeps the contract's spelling.
+   */
+  settingsSavedReplies: () => '/settings/saved-replies',
+  /**
    * The automation builder (TAR-27). Its own settings section rather than a
    * fourth panel on Assignment: a routing rule decides where a *conversation*
    * goes, while a workflow writes to a *ticket* — and the Assignment page is
@@ -105,6 +115,17 @@ export const routes = {
    * invite and reset link, `branding:write` controls a colour.
    */
   settingsDomains: () => '/settings/domains',
+  /**
+   * The AI chatbot: its knowledge base and the settings that decide when it
+   * answers (TAR-28).
+   *
+   * `chatbot`, not `ai`. The path is read by a customer, and `docs/STYLE.md`
+   * reserves *agent* for a person — so the on-screen word for the machine is
+   * "chatbot", and the URL takes the on-screen word. Nothing here is a query
+   * parameter: the surface is two cards on one page, and neither is a filter
+   * anybody would share.
+   */
+  settingsChatbot: () => '/settings/chatbot',
   settingsSecurity: () => '/settings/security',
   /**
    * Sign in. `redirectTo` is where the user was heading when the guard turned

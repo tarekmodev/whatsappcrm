@@ -1,0 +1,34 @@
+.shortcut {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+  /* An identifier, not prose: it reads left-to-right even in an RTL console. */
+  direction: ltr;
+  unicode-bidi: isolate;
+  overflow-wrap: anywhere;
+}
+
+.title {
+  font-weight: var(--font-weight-medium);
+}
+
+.body {
+  color: var(--color-on-surface-muted);
+  /* Two lines at any width, so a long reply cannot make one row taller than the
+     rest of the table. `preview()` has already cut the string; this is what
+     stops the cut string wrapping past two lines in a narrow column. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  /* The body is the one column that carries prose, so it keeps its newlines
+     collapsed rather than rendering a saved reply's line breaks in a cell. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  /* Keeps the pair on one line until the table stacks, where the cell is full
+     width and they wrap naturally. */
+  flex-wrap: wrap;
+}

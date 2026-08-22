@@ -74,7 +74,13 @@ export function WorkflowCard({
   const copy = content.workflows;
   const names = createReferenceLookup(workflow.references, vocabulary);
   const broken = describeBrokenReferences(workflow.references, content);
-  const isBroken = broken.length > 0 || workflow.brokenReason !== null;
+  // `brokenReason` is **derived state, not a latch** (ADR 0009 decision 6, as
+  // amended on TAR-399): the API arms on reference resolution alone and says so —
+  // the field is "safe to render and safe to ignore as a gate". Reading it as
+  // sticky here disagreed with that gate. A removed agent is re-invited onto the
+  // same row, so the id resolves again while the stored column still stands until
+  // the next write, and the workflow could never be turned back on.
+  const isBroken = broken.length > 0;
 
   return (
     <li className={styles.card} data-inactive={workflow.isActive ? undefined : 'true'}>

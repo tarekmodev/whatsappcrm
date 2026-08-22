@@ -276,7 +276,13 @@ describe('conversation scoping', () => {
       path: '/v1/conversations?scope=unassigned&limit=100',
     })) as CursorPage<{ id: string }>;
 
+    // Both unclaimed threads, newest first. The second is the one the chatbot
+    // handed over (TAR-28): `HandoffService` re-requests routing only when
+    // nobody placed the ticket, so "the bot gave up and it is nobody's yet" is
+    // exactly a shared-pool thread — and an agent who could not see it would
+    // have to wait for a supervisor to assign work the bot already refused.
     expect(page.items.map((conversation) => conversation.id)).toEqual([
+      MOCK_IDS.conversations.handedOff,
       MOCK_IDS.conversations.unassigned,
     ]);
   });

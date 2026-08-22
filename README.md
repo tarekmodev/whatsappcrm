@@ -1417,6 +1417,63 @@ value pairs as a real `<dl>`, two columns above a container-query threshold) and
 `components/ui/UsageMeter` (an allowance gauge whose bar is `aria-hidden` decoration over a
 sentence that states the numbers).
 
+### The chatbot: silence is a state the console has to explain
+
+`/settings/chatbot` (TAR-28) is where a tenant admin writes the knowledge base the AI
+chatbot answers from and decides when it answers at all. Everything on it follows from one
+rule in
+[ADR 0010](docs/architecture/0010-ai-chatbot-knowledge-base-and-handoff.md): **the
+empty-knowledge-base guarantee is structural, not behavioural.** With nothing indexed, no
+prompt is assembled and no request is made, so a hallucinated answer is impossible — and the
+product's visible behaviour is that the chatbot says nothing at all.
+
+Silence and a broken feature look identical, which is why `GET /api/v1/ai/config` publishes
+a `readiness` breakdown rather than a bare toggle, and why `BotReadinessPanel` is the first
+thing on the page. It lists **every** failing clause, not the first: an admin who clears one
+of four and still gets silence has learned nothing. `aiReadiness` in the mock transport
+derives the answer from the plan and the stored documents on every read for the same reason —
+a cached `ready: true` would be the console claiming replies that cannot happen.
+
+The knowledge base is written, not uploaded. A blank line is a chunk boundary — the indexer
+packs paragraphs — so the entry dialog says so where somebody is typing, and nothing else in
+the product ever would. A write is asynchronous in exactly one respect: `POST`, and a `PATCH`
+that changes the text, come back `pending` and the chatbot cannot use the entry until
+indexing commits. The table renders that state rather than hiding it, and a `failed` entry
+carries its `indexError` on the row, because the chatbot ignores a failed entry silently.
+
+In the inbox, `conversation.botState` replaces `botHandling` as what the badge reads.
+The boolean is still published and still means `botState === 'bot_active'`; what it cannot
+say is the difference between a conversation the chatbot never touched and one it **gave up
+on**, and only the second needs somebody now. `messages.origin` does the same job one level
+down: a workflow reply (TAR-27) is also "sent automatically", so `origin === 'bot'` is what
+lets the thread name the chatbot rather than automation in general.
+
+`GET /api/v1/conversations/{id}/handoff` is deliberately **not** a transcript. A bot reply is
+an ordinary `messages` row — it was genuinely sent to the customer — so the thread already
+holds the exchange, and `HandoffPanel` renders only what the transcript cannot carry: why the
+chatbot stopped, the composite confidence with both halves it is the `min` of, and the
+knowledge base entries it cited. That last field is the one that earns its place: it is how
+an agent spots that the chatbot answered from the refunds policy when the customer asked
+about shipping.
+
+| Surface                    | Endpoint                                  | Permission           |
+| -------------------------- | ----------------------------------------- | -------------------- |
+| Readiness, settings (read) | `GET /api/v1/ai/config`                   | `ai:read`            |
+| Settings (write)           | `PATCH /api/v1/ai/config`                 | `ai:write` + plan    |
+| Knowledge base             | `/api/v1/knowledge-documents`             | `ai:read`/`ai:write` |
+| Handoff summary            | `GET /api/v1/conversations/{id}/handoff`  | `conversation:read`  |
+| Take a thread from the bot | `POST /api/v1/conversations/{id}/handoff` | `conversation:claim` |
+
+`GET /ai/config` is readable **without** the `ai_chatbot` plan feature, so the page can render
+an upsell instead of a 403; the `PATCH` is refused. The handoff pair is `conversation:*`
+rather than `ai:*` on purpose — `ai:read` is admin-only, and the agent reading the summary is
+exactly who it is for.
+
+⚠️ The backend (TAR-406) and the schema (TAR-402) are separate stories. Until they land the
+console runs against the mock transport, and the API publishes `botState: 'off'` and derives
+`origin` from the direction and the sender — never `bot`, because nothing before TAR-406 is
+one.
+
 ### Interim state: mock API and stubbed role
 
 Two flags in `.env.example` exist because TAR-82 was built ahead of its dependencies. Real

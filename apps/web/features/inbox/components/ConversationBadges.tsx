@@ -4,6 +4,7 @@ import type { ConversationResponse } from '@whatsappcrm/contracts';
 import { Badge } from '@/components/ui/Badge';
 import { Cluster } from '@/components/layout/Cluster';
 import { useContent } from '@/lib/content';
+import { BOT_STATE_TONES, hasBotStateBadge } from '@/features/inbox/bot-state';
 
 /**
  * Status, unread count and who holds a conversation, as one badge row. Usage:
@@ -60,7 +61,16 @@ export function ConversationBadges({
       {teamName === null ? null : <Badge>{content.inbox.assignedToTeam(teamName)}</Badge>}
       {isUnclaimed ? <Badge tone="warning">{content.inbox.unclaimed}</Badge> : null}
 
-      {conversation.botHandling ? <Badge tone="info">{content.inbox.botHandling}</Badge> : null}
+      {/* `botState`, not `botHandling`: the boolean cannot tell a conversation
+          the chatbot never touched from one it gave up on, and those two need
+          different things from the reader — nothing, and somebody now (TAR-28,
+          ADR 0010 decision 5). `botHandling` keeps its published meaning and is
+          simply not what this row asks. */}
+      {hasBotStateBadge(conversation.botState) ? (
+        <Badge tone={BOT_STATE_TONES[conversation.botState] ?? 'neutral'}>
+          {content.inbox.botStates[conversation.botState]}
+        </Badge>
+      ) : null}
     </Cluster>
   );
 }

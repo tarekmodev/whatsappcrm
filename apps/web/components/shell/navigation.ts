@@ -71,6 +71,20 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     requiresAny: ['tenant:settings'],
   },
   {
+    id: 'settings-saved-replies',
+    label: content.nav.savedReplies,
+    href: routes.settingsSavedReplies(),
+    icon: 'note',
+    /**
+     * `canned_response:write` — the permission the three mutating endpoints
+     * require (0011), which 0004 grants supervisor-and-above. Deliberately not
+     * `canned_response:read`, which every agent holds so the composer can expand
+     * a shortcut: an agent reads the library from the reply box, and an entry to
+     * a screen whose every button the API refuses is worse than no entry.
+     */
+    requiresAny: ['canned_response:write'],
+  },
+  {
     id: 'settings-people',
     label: content.nav.people,
     href: routes.settingsPeople(),
@@ -94,6 +108,22 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     // The permission the endpoints behind it require (ADR 0009). `workflow:read`
     // alone is enough to see the list; writing is gated separately on the page.
     requiresAny: ['workflow:read'],
+  },
+  {
+    id: 'settings-chatbot',
+    label: content.nav.chatbot,
+    href: routes.settingsChatbot(),
+    // `note`, for the knowledge base an admin writes here. The conversation icon
+    // belongs to the WhatsApp entry below, and `automation` to the workflow
+    // builder above it — two entries sharing one glyph is exactly what makes a
+    // collapsed rail unreadable.
+    icon: 'note',
+    // The same permissions the endpoints behind it require. `ai:read` alone is
+    // enough to reach the page: `GET /ai/config` and the document list are
+    // readable, and every control the reader may not use is rendered read-only
+    // rather than hidden, so nobody is sent to a 403 for a surface they can
+    // half use.
+    requiresAny: ['ai:read', 'ai:write'],
   },
   {
     id: 'settings-whatsapp',

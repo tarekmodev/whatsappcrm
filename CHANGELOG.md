@@ -169,6 +169,36 @@ change.
 
 ### Added
 
+- **The notification inbox has a read surface, and suspending an agent disarms their
+  workflows** (TAR-596) — two gaps a post-merge review of the workflow builder found and
+  re-verified against `main`.
+  ADR 0002's REST table and ADR 0009 decision 7 both publish `GET /api/v1/notifications` and
+  `POST /api/v1/notifications/{id}/acknowledge` as the generalised inbox, and no controller
+  existed: a `notify` action and an auto-deactivation each wrote a durable row that nothing
+  listed and nobody could acknowledge, so a workflow could switch itself off with no way for
+  a supervisor to find out. Both routes now exist, on `ticket:read` and narrowed to
+  `recipient_user_id = principal.userId` on top of RLS — somebody else's notification answers
+  **404, not 403** — keyset paginated on `(created_at DESC, id DESC)` against the index that
+  was already there, filterable by `type` and, by default, to what is still unacknowledged.
+  The acknowledge is idempotent and writes the same column as the `/sla-alerts` one, which is
+  point of one table and one unread count. `GET /api/v1/sla-alerts` and
+  `GET /api/v1/escalation-alerts` are untouched and stay as published, as single-type views
+  over the same rows; `escalation` is deliberately not in the generalised list, because its
+  response carries two fields `NotificationResponse` has no home for.
+  The second gap was quieter. A workflow may only name an **active** user —
+  `REFERENCEABLE_USER` is the predicate arming resolves against — and `users.service.ts`
+  disarmed workflows on the removal path only. Suspending somebody therefore left every
+  workflow naming them armed against an actor the executor refuses to use: the first ticket
+  to reach one failed `reference_missing` and auto-deactivated it anyway, so the automation
+  broke on a customer's ticket rather than in front of the admin who caused it. The
+  suspension now disarms in the same transaction as the status change, with its own
+  `reference_suspended` reason — the console's copy points at reinstating the person rather
+  than at replacing them — and the count lands on the `user.status_changed` audit row.
+  Unlike removal it leaves `workflow_references` standing, because the account is still there
+  and the admin still needs to see which field names whom. Reactivating them re-arms nothing:
+  `broken_reason` clears on the next write once every reference resolves, and a human with
+  `workflow:write` sends `isActive: true`.
+
 - **The workflow builder is documented, for both readers** (TAR-401) — TAR-27 shipped a
   trigger → condition → action engine (TAR-395) and the console that writes it (TAR-396), and
   neither had a page. Two documents, split by reader rather than averaged into one.
@@ -1739,6 +1769,31 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
   incremental sort inside one millisecond. Recorded as ADR 0008 amendment 3.
 
 ### Fixed
+
+- **A workflow whose broken reference has come back can be turned on again from the console**
+  (TAR-597) — `WorkflowCard` read `brokenReason` as a latch: once the API had set it, Enable
+  stayed disabled whatever the workflow's references actually said. TAR-399's ruling on ADR
+  0009 decision 6 had already settled the opposite — the field is derived state, the arming
+  gate is reference resolution alone, and the column is "safe to render and safe to ignore as
+  a gate" — and the API was changed to match. The console was not, so it disagreed with the
+  endpoint it was guarding and refused a request the API would have accepted.
+  It needs nobody to edit the workflow. `present()` returns the stored column rather than
+  deriving it, and only a _write_ rewrites it, so an agent removed and then re-invited — which
+  reactivates the same row and the same id (ADR 0005) — leaves `brokenReason` standing over
+  references that all resolve, and the card never offered a way back. It now asks the same
+  question the API asks, and the warning notice follows: a reason with nothing unresolved
+  behind it no longer renders "it points at that no longer exists" with an empty list in the
+  middle of it. The cost is that the reason text disappears one step earlier than before —
+  a supervisor who has replaced the missing target loses the sentence saying why the workflow
+  was switched off, which is the trade the ruling already made on the API side.
+  ⚠️ Deriving `brokenReason` in `present()` is the API-side half and is not in this change;
+  until it lands the field can still read stale in the response, which now costs a stale field
+  in the payload rather than a workflow nobody can turn on.
+
+- `add_ticket_tag`'s tag picker keeps a tag id that no longer resolves listed, labelled the way
+  the card labels it, instead of rendering blank over an id the form still carries and sends
+  back on save — the rule the tag conditions' checkboxes already followed, now one shared
+  `tagOptions` serving both. Defensive: nothing deletes a tag today. (TAR-597)
 
 - **A realtime socket can be opened under the local auth stub** (TAR-576) —
   `StubPrincipalSource` stamped every principal with a literal `sessionId`, and the Socket.IO

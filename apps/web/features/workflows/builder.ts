@@ -179,12 +179,34 @@ export function userOptions(
     .map((user) => ({ value: user.id, label: user.displayName }));
 }
 
-export function tagOptions(vocabulary: WorkflowVocabulary): readonly CheckboxOption[] {
-  return vocabulary.tags.map((tag) => ({ value: tag.id, label: tag.name }));
-}
+/**
+ * The workspace's tags, plus a row for any id the workflow already names that no
+ * longer resolves — labelled the way the card labels it rather than dropped, so
+ * the supervisor sees the same thing in both places and can replace it. A
+ * dangling id left out of the list is not removed from the workflow: it is
+ * invisible, and it rides along on every save (ADR 0009 decision 6).
+ *
+ * One list for the tag conditions' checkboxes and for `add_ticket_tag`'s select,
+ * so the two cannot drift — a `SelectOption` is a `CheckboxOption` without the
+ * optional hint.
+ *
+ * An empty id is "nothing chosen yet", not a dangling reference; that one is
+ * `withPlaceholder`'s to render.
+ */
+export function tagOptions(
+  vocabulary: WorkflowVocabulary,
+  referencedTagIds: readonly string[],
+  unknownLabel: string,
+): readonly SelectOption[] {
+  const known = new Set(vocabulary.tags.map((tag) => tag.id));
+  const dangling = [...new Set(referencedTagIds)].filter(
+    (tagId) => tagId !== '' && !known.has(tagId),
+  );
 
-export function tagSelectOptions(vocabulary: WorkflowVocabulary): readonly SelectOption[] {
-  return vocabulary.tags.map((tag) => ({ value: tag.id, label: tag.name }));
+  return [
+    ...vocabulary.tags.map((tag) => ({ value: tag.id, label: tag.name })),
+    ...dangling.map((tagId) => ({ value: tagId, label: unknownLabel })),
+  ];
 }
 
 /**

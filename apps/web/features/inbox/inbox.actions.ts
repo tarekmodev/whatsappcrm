@@ -1,6 +1,7 @@
 'use server';
 
 import { InternalNoteCreateInputSchema, type ConversationStatus } from '@whatsappcrm/contracts';
+import { requestHandoff } from '@/lib/api/ai';
 import {
   assignConversation,
   claimConversation,
@@ -148,6 +149,40 @@ export async function setConversationStatusAction(
     label: 'Inbox',
     perform: async () => {
       const conversation = await setConversationStatus(conversationId, { status });
+
+      return { contactName: conversation.contact.displayName };
+    },
+  });
+}
+
+/**
+ * Takes a conversation off the **chatbot** (TAR-28).
+ *
+ * A third destination for "who is handling this", and a different write again:
+ * the claim and the take-over both move `assignedUserId`, while this one moves
+ * `bot_state` and leaves the assignment alone. A thread the chatbot is on may
+ * already be routed to a team, and stopping the bot is not a decision about who
+ * on that team answers.
+ *
+ * `conversation:claim`, matching the endpoint: taking work the chatbot is doing
+ * is the same act as taking work nobody is doing, and every role holds it.
+ *
+ * **Idempotent by design.** A conversation already handed off — or already held
+ * by a human — answers `200` with the current record and writes nothing, so a
+ * double-click is a no-op rather than a `409`. That is the API's guarantee, not
+ * this action's: the console still disables the control while one is in flight.
+ */
+export async function takeOverFromBotAction(
+  conversationId: string,
+): Promise<ActionResult<{ contactName: string }>> {
+  return runAction({
+    permission: 'conversation:claim',
+    parser: null,
+    input: undefined,
+    revalidate: INBOX_PATH,
+    label: 'Inbox',
+    perform: async () => {
+      const conversation = await requestHandoff(conversationId);
 
       return { contactName: conversation.contact.displayName };
     },

@@ -9,12 +9,7 @@ import type {
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { useContent } from '@/lib/content';
-import {
-  actionParameterValues,
-  labelledOptions,
-  tagSelectOptions,
-  withPlaceholder,
-} from '../builder';
+import { actionParameterValues, labelledOptions, tagOptions, withPlaceholder } from '../builder';
 import type { WorkflowVocabulary } from '../presentation';
 import { AssigneeField } from './AssigneeField';
 import { NotifyActionFields } from './NotifyActionFields';
@@ -56,7 +51,14 @@ export function ActionFields({
               aria-describedby={describedBy}
               aria-invalid={isInvalid}
               value={action.tagId}
-              options={withPlaceholder(tagSelectOptions(vocabulary), copy.tagRequiredError)}
+              // A tag the action names that no longer resolves still gets an
+              // option, so the select shows what the workflow points at instead
+              // of rendering blank over an id it is about to send back. Same rule
+              // and same label as the tag conditions' checkboxes.
+              options={withPlaceholder(
+                tagOptions(vocabulary, [action.tagId], copy.unknownReference),
+                copy.tagRequiredError,
+              )}
               onChange={(event) => {
                 onChange({ ...action, tagId: event.target.value });
               }}
