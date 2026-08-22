@@ -48,6 +48,11 @@ describe('TenantLifecycleNotifier', () => {
 
   describe('which template a transition sends', () => {
     it.each([
+      // `from` is null on the genesis row provisioning writes, which is the
+      // production producer of `tenant_welcome` (TAR-598). Every entry is keyed
+      // on the arrival, so `created` reaches the same answer — that is the shape
+      // a tenant left in `created` by a half-applied provision would take.
+      [null, 'trialing', 'tenant_welcome'],
       ['created', 'trialing', 'tenant_welcome'],
       ['trialing', 'past_due', 'trial_expired'],
       ['active', 'past_due', 'payment_failed'],
@@ -78,14 +83,17 @@ describe('TenantLifecycleNotifier', () => {
       expect(sentTemplates()).toContain('payment_failed');
     });
 
-    it('sends nothing for `created → active`, which is an operator provisioning a tenant', async () => {
-      // There is no admin yet, and the operator is the one who knows.
-      findUniqueEvent.mockResolvedValue(eventFor('created', 'active'));
+    it.each([null, 'created'] as const)(
+      'sends nothing for a %s → active genesis row, which is an operator provisioning a tenant',
+      async (from) => {
+        // There is no admin yet, and the operator is the one who knows.
+        findUniqueEvent.mockResolvedValue(eventFor(from, 'active'));
 
-      await notifier.notify(EVENT_ID);
+        await notifier.notify(EVENT_ID);
 
-      expect(send).not.toHaveBeenCalled();
-    });
+        expect(send).not.toHaveBeenCalled();
+      },
+    );
 
     it('sends nothing for a trial converting, which is billing’s receipt to send', async () => {
       findUniqueEvent.mockResolvedValue(eventFor('trialing', 'active'));

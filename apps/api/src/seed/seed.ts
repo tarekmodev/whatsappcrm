@@ -7,6 +7,8 @@ import type { Prisma, PrismaClient } from '../generated/prisma/client';
 import { mediaObjectKey } from '../media/media-object-key';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
+import { QueueService } from '../queue/queue.service';
+import { TenantLifecycleService } from '../tenancy/lifecycle/tenant-lifecycle.service';
 import { TenantProvisioningService } from '../tenancy/tenant-provisioning.service';
 import { WhatsAppAccessTokenCipher } from '../whatsapp/access-token.cipher';
 import {
@@ -143,7 +145,19 @@ async function main(): Promise<void> {
   // outside Nest — the cipher says so in its own comments — so the seed reuses
   // them rather than restating the hostname rule or the AES construction.
   const config = new ConfigService();
-  const provisioning = new TenantProvisioningService(systemPrisma, config);
+
+  // Provisioning queues the notification for the genesis `lifecycle_events` row
+  // it writes, and this seed deliberately gives it a queue with no Redis: a demo
+  // tenant takes the operator path, whose arrival at `active` maps to no
+  // template at all, so there is nothing to send — and a live BullMQ connection
+  // would keep this script's process alive after it had finished seeding. The
+  // enqueue answers `unavailable`, the row keeps `notified_at IS NULL`, and the
+  // lifecycle sweep claims it. That is a supported state rather than a stub.
+  const lifecycle = new TenantLifecycleService(
+    systemPrisma,
+    new QueueService({ get: () => undefined } as unknown as ConfigService, tenantContext),
+  );
+  const provisioning = new TenantProvisioningService(systemPrisma, lifecycle, config);
   const cipher = new WhatsAppAccessTokenCipher(config);
 
   const dataset = demoDataset(new Date());
@@ -417,6 +431,17 @@ async function writeSubscription(
  * By slug and only these slugs. Every tenant-scoped table cascades from
  * `tenants`, so this one statement takes the whole dataset with it and stays
  * correct as the schema grows — the same reasoning the integration fixtures use.
+ *
+ * **`lifecycle_events` is the one thing it cannot take**, and that is the table
+ * behaving as designed rather than a gap here. ADR 0009 Amendment 1 ruling 2
+ * dropped its foreign key so the trail survives the purge that empties
+ * everything else, and `whatsappcrm_system` holds `SELECT, INSERT` and no
+ * `DELETE` so an append-only table stays append-only. Each re-seed therefore
+ * leaves the previous run's genesis rows behind, pointing at tenant ids that no
+ * longer resolve — a pair of dangling audit rows per seed on a developer's
+ * database, which is what the trail outliving its tenant means in a place where
+ * tenants are thrown away. Nothing reads them: the lifecycle sweep claims each
+ * one once, and an operator-path row maps to no email.
  *
  * `SystemPrisma`, necessarily: `tenants` carries no RLS policy and `TenantPrisma`
  * refuses to write it at all.

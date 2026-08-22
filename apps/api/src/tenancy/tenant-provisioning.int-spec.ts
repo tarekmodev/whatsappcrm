@@ -4,6 +4,8 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import type { PrismaClient } from '../generated/prisma/client';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
+import { QueueService } from '../queue/queue.service';
+import { TenantLifecycleService } from './lifecycle/tenant-lifecycle.service';
 import { PlatformHostnameTakenError } from './tenant-provisioning.errors';
 import { TenantProvisioningService } from './tenant-provisioning.service';
 
@@ -69,7 +71,16 @@ describe('tenant provisioning, end to end', () => {
     tenantBase = createPrismaClient('tenant', requireEnv('APP_DATABASE_URL'));
     tenantPrisma = withTenantScope(tenantBase, tenantContext);
 
-    provisioning = new TenantProvisioningService(systemPrisma, {
+    // No `REDIS_URL`: the genesis notification answers `unavailable`, the row
+    // still commits with `notified_at IS NULL`, and the lifecycle sweep is what
+    // would pick it up. Same arrangement as `lifecycle-purge.int-spec.ts`, and
+    // it keeps this file about the database rather than about the queue.
+    const lifecycle = new TenantLifecycleService(
+      systemPrisma,
+      new QueueService({ get: () => undefined } as unknown as ConfigService, tenantContext),
+    );
+
+    provisioning = new TenantProvisioningService(systemPrisma, lifecycle, {
       getOrThrow: () => PLATFORM_DOMAIN,
     } as unknown as ConfigService);
 

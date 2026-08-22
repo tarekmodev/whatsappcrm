@@ -45,6 +45,10 @@ const TENANT_ID = '50444444-4444-7444-8444-4444444444c1';
 
 const PROVISIONED: ProvisionTenantResult = {
   created: true,
+  // Provisioning owned its own transaction on this route, so it has already
+  // queued the notification for this row; the controller only passes the tenant
+  // on.
+  lifecycleEventId: '5e444444-4444-7444-8444-4444444444e1',
   tenant: {
     id: TENANT_ID,
     slug: 'acme',
