@@ -29,6 +29,19 @@ describe('ForgotPasswordForm', () => {
     });
   });
 
+  it('says it is sending, and freezes the address it is sending', async () => {
+    requestPasswordResetAction.mockReturnValue(new Promise(() => {}));
+
+    render(<ForgotPasswordForm />);
+
+    submitWith('agent@acme.test');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: content.auth.forgotPending })).toBeInTheDocument();
+    });
+    expect(fieldByLabel(content.auth.emailLabel)).toBeDisabled();
+  });
+
   it('validates the address before spending a round trip on it', () => {
     render(<ForgotPasswordForm />);
 

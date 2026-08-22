@@ -19,3 +19,29 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+/*
+ * The signed-out screens, where the lockup is not chrome beside five controls
+ * but the only thing at the top of the screen (TAR-521). Two differences, and
+ * both follow from that.
+ *
+ * It takes `currentColor`, because at that size it sits on the surface above the
+ * form at one width and on the rail-coloured band at another, and a lockup that
+ * carried its own colour would be wrong on one of them.
+ */
+.lockup[data-size='lg'] {
+  color: inherit;
+  font-size: var(--font-size-heading-sm);
+}
+
+/*
+ * And it wraps rather than truncating. Truncation is right in a fixed-width bar
+ * and wrong in a band with room below it: at 320px with the text at 200% a long
+ * product name has nowhere to go, and "Northwi…" is the workspace's name not
+ * being shown (WCAG 2.2 SC 1.4.4).
+ */
+.lockup[data-size='lg'] .name {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

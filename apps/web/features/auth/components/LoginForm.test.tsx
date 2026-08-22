@@ -75,6 +75,22 @@ describe('LoginForm', () => {
     expect(screen.getByText(content.auth.passwordRequiredError)).toBeInTheDocument();
   });
 
+  it('says it is signing in, and disables what it has already sent', async () => {
+    transport.login.mockReturnValue(new Promise(() => {}));
+    renderForm();
+
+    fill(content.auth.emailLabel, 'amina@northwind.example');
+    fill(content.auth.passwordLabel, 'correct horse battery');
+    submit();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: content.auth.signInPending })).toBeInTheDocument();
+    });
+    // Disabled rather than hidden — the user can still read what they typed.
+    expect(fieldByLabel(content.auth.emailLabel)).toBeDisabled();
+    expect(fieldByLabel(content.auth.passwordLabel)).toBeDisabled();
+  });
+
   it('rejects a malformed address before the round trip', () => {
     renderForm();
 

@@ -82,6 +82,19 @@ describe('ChangePasswordForm', () => {
     });
   });
 
+  it('says it is changing the password, and disables the fields while it does', async () => {
+    changePasswordAction.mockReturnValue(new Promise(() => {}));
+    renderForm();
+
+    fillAndSubmit(CURRENT, NEXT);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: content.auth.changePending })).toBeInTheDocument();
+    });
+    expect(fieldByLabel(content.auth.currentPasswordLabel)).toBeDisabled();
+    expect(fieldByLabel(content.auth.newPasswordLabel)).toBeDisabled();
+  });
+
   it('will not submit without the current password', () => {
     renderForm();
 

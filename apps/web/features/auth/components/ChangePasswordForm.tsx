@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { AUTH_POLICY } from '@whatsappcrm/contracts';
 import { Button } from '@/components/ui/Button';
 import { Notice } from '@/components/ui/Notice';
 import { useToast } from '@/components/ui/ToastProvider';
@@ -70,6 +69,7 @@ export function ChangePasswordForm({ email }: { email: string }) {
   return (
     <AuthForm
       submitLabel={content.auth.changeSubmit}
+      pendingLabel={content.auth.changePending}
       isPending={isPending}
       formError={formError}
       requestId={requestId}
@@ -123,7 +123,7 @@ export function ChangePasswordForm({ email }: { email: string }) {
       />
       <PasswordField
         label={content.auth.newPasswordLabel}
-        hint={content.auth.passwordHint(AUTH_POLICY.passwordMinLength)}
+        hasRequirements
         autoComplete="new-password"
         value={password}
         error={fieldErrors.password}

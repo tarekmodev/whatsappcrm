@@ -3,20 +3,16 @@
   font-size: var(--font-size-body-sm);
 }
 
+/*
+ * Stacked and full width, so the primary way out is the widest thing on the card
+ * and every action clears the 44px target on a phone. The secondary one sits
+ * under it rather than beside it: two equal-width blocks side by side read as a
+ * choice between two things, and these are never that — one is the next step and
+ * the other is the way back.
+ */
 .actions {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: var(--space-3);
-}
-
-/* Side by side once there is room; stacked and full width below it, so every
-   action clears the 44px target on a phone. */
-@container (min-width: 22rem) {
-  .actions {
-    flex-direction: row;
-    justify-content: center;
-    align-items: center;
-    flex-wrap: wrap;
-  }
 }

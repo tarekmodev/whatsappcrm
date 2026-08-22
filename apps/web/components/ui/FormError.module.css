@@ -1,18 +1,59 @@
+/*
+ * The message itself is a `Notice` in the danger role. Composed rather than
+ * copied, so the tint, the border and the measured text colour are declared once
+ * — a form failure and an inline warning that looked like two different systems
+ * is what this replaces.
+ */
 .formError {
+  composes: notice from './Notice.module.css';
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding-inline: var(--space-4);
-  padding-block: var(--space-3);
-  background: var(--color-danger-subtle);
-  border: var(--border-hairline) solid var(--color-danger);
-  border-radius: var(--radius-md);
-  color: var(--color-on-danger-subtle);
-  font-size: var(--font-size-body-sm);
+  /*
+   * Inset, because `.revealClip` below has to hide overflow to animate the
+   * height and an outline is drawn *outside* the border box — where it would be
+   * clipped away. The ring keeps its width and its colour; only its offset moves.
+   */
+  outline-offset: calc(var(--focus-ring-offset) * -1);
 }
 
 .requestId {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-caption);
   opacity: 0.8;
+}
+
+/*
+ * The failure arrives from a request that has already been sent, so it lands in
+ * the middle of a form somebody is looking at. Growing it from nothing is what
+ * stops the fields below jumping down the page by the height of a banner
+ * (TAR-521): the row goes 0fr → 1fr, which is a height animation the box can do
+ * without anybody having to guess how many lines the message will wrap to.
+ *
+ * `@starting-style` is what gives a *newly inserted* element a from-state; a
+ * plain transition has nothing to interpolate from and the box would simply
+ * appear. Reduced motion is handled by the token layer, which collapses
+ * `--duration-fast` to 1ms.
+ */
+.reveal {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows var(--duration-fast) var(--easing-enter),
+    opacity var(--duration-fast) var(--easing-enter);
+}
+
+@starting-style {
+  .reveal {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+.revealClip {
+  /* Both needed: a grid row can only shrink past its content's height if the
+     item allows it, and the content has to be clipped while it does. */
+  min-block-size: 0;
+  overflow: hidden;
 }

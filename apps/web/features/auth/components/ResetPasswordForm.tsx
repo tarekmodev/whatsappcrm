@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { AUTH_POLICY } from '@whatsappcrm/contracts';
+import { ButtonLink } from '@/components/ui/ButtonLink';
 import { TextLink } from '@/components/ui/TextLink';
 import { useActionForm } from '@/lib/hooks/useActionForm';
 import { useContent } from '@/lib/content';
@@ -42,14 +42,16 @@ export function ResetPasswordForm() {
   if (token.status === 'missing') {
     return (
       <AuthOutcomeCard
+        icon="warning"
+        tone="danger"
         title={content.auth.linkUnusableHeading}
         body={content.auth.linkIncompleteBody}
-        actions={
-          <>
-            <TextLink href={routes.forgotPassword()}>{content.auth.requestNewLink}</TextLink>
-            <TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>
-          </>
+        action={
+          <ButtonLink href={routes.forgotPassword()} variant="primary" isBlock>
+            {content.auth.requestNewLink}
+          </ButtonLink>
         }
+        secondaryAction={<TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>}
       />
     );
   }
@@ -83,12 +85,18 @@ function ResetPasswordFields({ token }: { token: string }) {
   if (outcome?.kind === 'reset') {
     return (
       <AuthOutcomeCard
+        icon="security"
+        tone="success"
         title={content.auth.resetDoneHeading}
         body={content.auth.resetDoneBody}
         // TAR-35: a completed reset revokes every session the account had, and
         // the person holding those sessions may not be the person reading this.
         notice={content.auth.resetSessionsRevokedNotice}
-        actions={<TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>}
+        action={
+          <ButtonLink href={routes.login()} variant="primary" isBlock>
+            {content.auth.backToSignIn}
+          </ButtonLink>
+        }
       />
     );
   }
@@ -96,17 +104,19 @@ function ResetPasswordFields({ token }: { token: string }) {
   if (outcome?.kind === 'link_unusable') {
     return (
       <AuthOutcomeCard
+        icon="warning"
+        tone="danger"
         title={content.auth.linkUnusableHeading}
         // The API says which of unknown / expired / used / revoked it was, and
         // that is worth showing: it is the difference between "try the newer
         // email" and "ask an administrator".
         body={outcome.message}
-        actions={
-          <>
-            <TextLink href={routes.forgotPassword()}>{content.auth.requestNewLink}</TextLink>
-            <TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>
-          </>
+        action={
+          <ButtonLink href={routes.forgotPassword()} variant="primary" isBlock>
+            {content.auth.requestNewLink}
+          </ButtonLink>
         }
+        secondaryAction={<TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>}
       />
     );
   }
@@ -115,6 +125,7 @@ function ResetPasswordFields({ token }: { token: string }) {
     <AuthCard title={content.auth.resetTitle} description={content.auth.resetDescription}>
       <AuthForm
         submitLabel={content.auth.resetSubmit}
+        pendingLabel={content.auth.resetPending}
         isPending={isPending}
         formError={formError}
         requestId={requestId}
@@ -131,7 +142,7 @@ function ResetPasswordFields({ token }: { token: string }) {
       >
         <PasswordField
           label={content.auth.newPasswordLabel}
-          hint={content.auth.passwordHint(AUTH_POLICY.passwordMinLength)}
+          hasRequirements
           autoComplete="new-password"
           value={password}
           error={fieldErrors.password}

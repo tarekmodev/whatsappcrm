@@ -2,12 +2,15 @@
 
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/Button';
+import { Icon } from '@/components/ui/Icon';
 import { useContent } from '@/lib/content';
 import { oppositeTheme, parseTheme, type Theme } from '@/lib/theme/theme';
 import { setThemeAction } from './theme.actions';
 
 /**
- * Switches the theme. Usage: `<ThemeToggle initialTheme={theme} />`.
+ * Switches the theme. Usage: `<ThemeToggle initialTheme={theme} />`, or
+ * `<ThemeToggle initialTheme={theme} isLabelVisible />` where it stands on its
+ * own rather than in a row of chrome.
  *
  * The choice is persisted in a cookie by a server action, and the server renders
  * `data-theme` on `<html>` from that cookie — so a reload paints the right theme
@@ -18,7 +21,20 @@ import { setThemeAction } from './theme.actions';
  * time, because the top bar renders one instance for the drawer and one for
  * itself, and the two must not disagree after a resize.
  */
-export function ThemeToggle({ initialTheme }: { initialTheme: Theme }) {
+export function ThemeToggle({
+  initialTheme,
+  isLabelVisible = false,
+}: {
+  initialTheme: Theme;
+  /**
+   * Shows the target theme's name beside the icon. For the signed-out screens,
+   * where this is not one control among several in a bar and an icon alone reads
+   * as a stray glyph rather than as a button (TAR-521). The visible word is a
+   * substring of the accessible name, which is what SC 2.5.3 asks when the two
+   * differ.
+   */
+  isLabelVisible?: boolean;
+}) {
   const content = useContent();
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [isPending, startTransition] = useTransition();
@@ -42,7 +58,8 @@ export function ThemeToggle({ initialTheme }: { initialTheme: Theme }) {
         });
       }}
     >
-      <span aria-hidden="true">{next === 'dark' ? '🌙' : '☀️'}</span>
+      <Icon name={next === 'dark' ? 'moon' : 'sun'} size="sm" />
+      {isLabelVisible ? (next === 'dark' ? content.theme.dark : content.theme.light) : null}
     </Button>
   );
 }

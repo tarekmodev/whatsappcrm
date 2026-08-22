@@ -1,21 +1,71 @@
+/*
+ * No border, no shadow and no background of its own (TAR-521). The form panel it
+ * now sits in *is* `--color-surface` and runs the full height of the viewport, so
+ * a white card on a white panel was a box drawn around nothing — the outline of
+ * the frame this screen used to be missing, kept after the frame arrived.
+ *
+ * The class is still the screen's frame in every other sense: it owns the `<h1>`,
+ * the description, the rhythm between them and the content below.
+ */
 .card {
-  /* The card, not the viewport, is what the outcome actions size themselves
-     against — it is the same card at 320px and inside a 26rem column. */
-  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
-  padding: var(--space-5);
-  background: var(--color-surface);
-  border: var(--border-hairline) solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-raised);
+  /*
+   * Arrives rather than appears: the card fades up over the space of one step of
+   * the spacing scale. `both`, so the from-state applies before the first frame
+   * and there is no flash of the finished card.
+   *
+   * Reduced motion is the token layer's job — `--duration-medium` collapses to
+   * 1ms under `prefers-reduced-motion`, so this becomes a cut rather than an
+   * element left part-way through a rise.
+   */
+  animation: card-enter var(--duration-medium) var(--easing-enter) both;
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    translate: 0 var(--space-2);
+  }
+
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
 }
 
 .headingGroup {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+/* The disc `StateLayout` draws an empty or error state's icon in, at card scale:
+   this sits above a heading rather than in the middle of an empty region. */
+.plate {
+  display: grid;
+  place-items: center;
+  inline-size: var(--size-control-md);
+  block-size: var(--size-control-md);
+  border-radius: var(--radius-pill);
+  /* One step of rhythm below the heading it introduces. */
+  margin-block-end: var(--space-1);
+}
+
+.plate[data-tone='neutral'] {
+  background: var(--color-neutral-subtle);
+  color: var(--color-on-neutral-subtle);
+}
+
+.plate[data-tone='success'] {
+  background: var(--color-success-subtle);
+  color: var(--color-on-success-subtle);
+}
+
+.plate[data-tone='danger'] {
+  background: var(--color-danger-subtle);
+  color: var(--color-on-danger-subtle);
 }
 
 .title {

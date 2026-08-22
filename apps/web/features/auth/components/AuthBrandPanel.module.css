@@ -1,0 +1,96 @@
+/*
+ * Hidden by default and shown from the split breakpoint up. Written this way
+ * round because the small-screen answer is the simpler one: below 64rem the brand
+ * is the band above the form, and this panel has nothing to add that is worth a
+ * screen of scrolling.
+ */
+.panel {
+  display: none;
+}
+
+@media (min-width: 64rem) {
+  .panel {
+    /* The rail's navy in both themes — the colour that already frames this
+       product when somebody is signed in, so the sign-in screen is recognisably
+       the same application rather than a page in front of it. */
+    display: grid;
+    grid-template-rows: 1fr auto;
+    /* Crops the decoration against the panel's own edge, which is what makes it
+       read as a treatment rather than as three shapes in a row. */
+    overflow: hidden;
+    padding: var(--space-7);
+    background: var(--color-rail);
+    color: var(--color-on-rail);
+  }
+
+  .statement {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--space-4);
+    /* Running text, not a banner: the tagline stays a readable measure however
+       wide the panel gets on an ultrawide screen. */
+    max-inline-size: var(--measure-body);
+  }
+
+  .name {
+    color: var(--color-on-rail-strong);
+    font-size: var(--font-size-heading-lg);
+    font-weight: var(--font-weight-strong);
+    line-height: var(--line-height-heading);
+    /* A product name is one word or several and never breaks at a space it does
+       not have. */
+    overflow-wrap: anywhere;
+  }
+
+  .tagline {
+    font-size: var(--font-size-body-lg);
+    line-height: var(--line-height-body);
+  }
+
+  /*
+   * A row of three shapes at the foot of the panel, aligned with the copy above
+   * them and overlapping into one motif. In flow rather than absolutely placed,
+   * so it can never end up on top of the tagline at a width nobody measured — and
+   * `margin-inline-start` on each shape rather than a `gap`, so the overlap
+   * mirrors under `dir="rtl"` instead of unstacking.
+   */
+  .decor {
+    display: flex;
+    align-items: flex-end;
+    margin-block-start: var(--space-7);
+  }
+
+  .disc,
+  .ring {
+    flex: 0 0 auto;
+    inline-size: var(--size-band);
+    block-size: var(--size-band);
+    border-radius: var(--radius-pill);
+  }
+
+  .disc {
+    background: var(--color-rail-hover);
+  }
+
+  /*
+   * The only thing drawn in `--color-brand-decor` — the one role a tenant owns
+   * for decoration, and never behind text (`branding-theme.ts`). An outline
+   * rather than a fill on purpose: the colour is whatever the workspace chose,
+   * and a filled disc of it beside a sign-in form would be the loudest thing on a
+   * screen whose loudest thing should be the submit button.
+   */
+  .ring {
+    border: var(--space-2) solid var(--color-brand-decor);
+    margin-inline-start: calc(var(--space-7) * -1);
+  }
+
+  .square {
+    flex: 0 0 auto;
+    inline-size: var(--size-control-md);
+    block-size: var(--size-control-md);
+    border-radius: var(--radius-lg);
+    background: var(--color-rail-selected);
+    margin-inline-start: var(--space-4);
+  }
+}

@@ -1,0 +1,13 @@
+/*
+ * Everything visual comes from `Button`. This file exists for the two things an
+ * anchor brings with it that a button does not.
+ */
+.buttonLink {
+  composes: button from './Button.module.css';
+  /* The underline a link carries in running text; the shape already says this is
+     an action. */
+  text-decoration: none;
+  /* A button's label is centred by its own flex rules; an anchor that wraps to
+     two lines would otherwise leave the second line ragged. */
+  text-align: center;
+}
