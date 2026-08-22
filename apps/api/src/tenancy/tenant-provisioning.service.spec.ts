@@ -2,6 +2,7 @@ import type { ConfigService } from '@nestjs/config';
 import { PLAN_FEATURES } from '@whatsappcrm/contracts';
 import { Prisma } from '../generated/prisma/client';
 import type { SystemPrisma } from '../prisma/prisma.tokens';
+import type { TenantLifecycleService } from './lifecycle/tenant-lifecycle.service';
 import { PlatformHostnameTakenError, TenantSlugTakenError } from './tenant-provisioning.errors';
 import { TenantProvisioningService } from './tenant-provisioning.service';
 
@@ -51,10 +52,28 @@ interface TransactionSpies {
   tenantDomain: { create: jest.Mock };
   slaPolicy: { create: jest.Mock };
   tenantEntitlements: { create: jest.Mock };
+  lifecycleEvent: { create: jest.Mock };
+}
+
+/** Just the parts of the genesis `lifecycle_events` row these assertions read. */
+interface LifecycleEventCreateArgs {
+  data: {
+    id: string;
+    tenantId: string;
+    occurredAt: Date;
+    fromState: null;
+    toState: string;
+    trigger: string;
+    actorType: string;
+    actorUserId: null;
+    actorLabel: null;
+    metadata: { onboardingPath: string };
+  };
 }
 
 describe('TenantProvisioningService', () => {
   let tx: TransactionSpies;
+  let notifyOfEvent: jest.Mock;
   let service: TenantProvisioningService;
 
   beforeEach(() => {
@@ -65,6 +84,7 @@ describe('TenantProvisioningService', () => {
       tenantDomain: { create: jest.fn() },
       slaPolicy: { create: jest.fn() },
       tenantEntitlements: { create: jest.fn() },
+      lifecycleEvent: { create: jest.fn() },
     };
 
     const systemPrisma = {
@@ -73,10 +93,27 @@ describe('TenantProvisioningService', () => {
       ),
     } as unknown as SystemPrisma;
 
+    notifyOfEvent = jest.fn().mockResolvedValue(undefined);
+
     const config = { getOrThrow: () => PLATFORM_DOMAIN } as unknown as ConfigService;
 
-    service = new TenantProvisioningService(systemPrisma, config);
+    service = new TenantProvisioningService(
+      systemPrisma,
+      { notifyOfEvent } as unknown as TenantLifecycleService,
+      config,
+    );
   });
+
+  /** The argument the service passed to `lifecycleEvent.create`, typed. */
+  function genesisEventArgs(): LifecycleEventCreateArgs {
+    const [firstCall] = tx.lifecycleEvent.create.mock.calls as [LifecycleEventCreateArgs][];
+
+    if (firstCall === undefined) {
+      throw new Error('lifecycleEvent.create was never called');
+    }
+
+    return firstCall[0];
+  }
 
   /** The argument the service passed to `tenant.create`, typed. */
   function tenantCreateArgs(): TenantCreateArgs {
@@ -172,6 +209,72 @@ describe('TenantProvisioningService', () => {
       expect(tx.tenantEntitlements.create).not.toHaveBeenCalled();
     });
 
+    it('writes the genesis lifecycle row in the same transaction as the tenant', async () => {
+      // TAR-598: without this row a tenant's trail starts empty and
+      // `tenant_welcome` — which the notifier only sends off a committed
+      // `lifecycle_events` row — never fires for anybody.
+      const result = await service.provision({ slug: 'acme', name: 'Acme Ltd' });
+
+      expect(tx.lifecycleEvent.create).toHaveBeenCalledTimes(1);
+
+      const { data } = genesisEventArgs();
+
+      expect(data).toMatchObject({
+        tenantId: TENANT_ID,
+        // The one row `lifecycle_events.from_state` is nullable for: creation
+        // has nothing to have come from, and
+        // `lifecycle_events_transition_changes_state` admits it for that reason.
+        fromState: null,
+        toState: 'active',
+        trigger: 'system',
+        actorType: 'system',
+        actorUserId: null,
+        actorLabel: null,
+        metadata: { onboardingPath: 'operator' },
+      });
+      // The tenant's own `created_at`, not a second clock, so the row and the
+      // tenant cannot disagree about when the tenant came into existence.
+      expect(data.occurredAt).toBe(CREATED_AT);
+      expect(result.lifecycleEventId).toBe(data.id);
+    });
+
+    it('records a self-signup tenant as arriving at `trialing`, which is what sends the welcome', async () => {
+      tx.tenant.create.mockResolvedValue({
+        id: TENANT_ID,
+        slug: 'acme',
+        name: 'Acme Ltd',
+        status: 'trialing',
+        createdAt: CREATED_AT,
+      });
+
+      await service.provision({ slug: 'acme', name: 'Acme Ltd', path: 'self_signup' });
+
+      expect(genesisEventArgs().data).toMatchObject({
+        toState: 'trialing',
+        metadata: { onboardingPath: 'self_signup' },
+      });
+    });
+
+    it('queues the notification itself when it owned the transaction', async () => {
+      const result = await service.provision({ slug: 'acme', name: 'Acme Ltd' });
+
+      // After the commit, which is the only moment the row is visible to a
+      // worker — and possible here precisely because this call owned it.
+      expect(notifyOfEvent).toHaveBeenCalledWith(TENANT_ID, result.lifecycleEventId);
+    });
+
+    it('leaves the notification to a caller that brought its own transaction', async () => {
+      // Self-signup's case: the row is not visible to a worker until the
+      // signup's transaction commits, and only the signup knows when that is.
+      const result = await service.provision(
+        { slug: 'acme', name: 'Acme Ltd', path: 'self_signup' },
+        tx as unknown as Prisma.TransactionClient,
+      );
+
+      expect(notifyOfEvent).not.toHaveBeenCalled();
+      expect(result.lifecycleEventId).toBe(genesisEventArgs().data.id);
+    });
+
     it('derives the hostname from the slug, never from the caller', async () => {
       const result = await service.provision({ slug: 'acme', name: 'Acme Ltd' });
 
@@ -245,6 +348,12 @@ describe('TenantProvisioningService', () => {
       expect(tx.tenantSettings.create).not.toHaveBeenCalled();
       expect(tx.tenantDomain.create).not.toHaveBeenCalled();
       expect(tx.slaPolicy.create).not.toHaveBeenCalled();
+      // No second genesis row, and nothing queued: a replayed provisioning call
+      // against a tenant that has been trading for months must not send its
+      // admins a welcome email.
+      expect(tx.lifecycleEvent.create).not.toHaveBeenCalled();
+      expect(notifyOfEvent).not.toHaveBeenCalled();
+      expect(result.lifecycleEventId).toBeNull();
     });
 
     it('does not rename it, and does not reset its settings, to match the request', async () => {
@@ -315,6 +424,10 @@ describe('TenantProvisioningService', () => {
         locale: 'en',
         primaryHostname: 'acme.app.example.com',
       });
+      // The one thing the repair path deliberately does not converge on. A
+      // genesis row written now would be dated now, and the sweep would deliver
+      // a welcome email to a tenant that has been using the product since.
+      expect(tx.lifecycleEvent.create).not.toHaveBeenCalled();
     });
 
     it('leaves a tenant that already configured its own SLA policy alone', async () => {

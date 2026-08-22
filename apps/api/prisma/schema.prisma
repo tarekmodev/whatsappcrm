@@ -502,6 +502,13 @@ enum WorkflowBrokenReason {
   /// A reference went missing at evaluation time — the belt-and-braces case no
   /// foreign key covers.
   reference_missing
+  /// A referenced user was suspended. Set in the same transaction as the status
+  /// change, beside the session revocation that already lives there (TAR-596).
+  ///
+  /// Its own label rather than `reference_removed` because the repair differs:
+  /// a suspension is reversible, so the console tells an admin to reinstate the
+  /// person or pick a replacement, not only the latter.
+  reference_suspended
 
   @@map("workflow_broken_reason")
 }

@@ -18,7 +18,10 @@ import { TenantSignupService } from './tenant-signup.service';
  * `TenancyModule` is imported for `TenantProvisioningService`: signup drives
  * TAR-19's provisioning rather than reimplementing it, which is what keeps a
  * self-serve tenant indistinguishable from an operator-provisioned one save for
- * the status and caps it starts on.
+ * the status and caps it starts on. `TenantLifecycleService` comes from the same
+ * import, for one call: provisioning runs inside signup's transaction, so signup
+ * is the only place that knows when the genesis row has committed and the
+ * `tenant_welcome` job may be queued.
  *
  * Everything else it needs is already global — `SystemPrisma` from
  * `PrismaModule`, and `PasswordService`, `SessionService` and `MAILER` from

@@ -169,6 +169,36 @@ change.
 
 ### Added
 
+- **The notification inbox has a read surface, and suspending an agent disarms their
+  workflows** (TAR-596) — two gaps a post-merge review of the workflow builder found and
+  re-verified against `main`.
+  ADR 0002's REST table and ADR 0009 decision 7 both publish `GET /api/v1/notifications` and
+  `POST /api/v1/notifications/{id}/acknowledge` as the generalised inbox, and no controller
+  existed: a `notify` action and an auto-deactivation each wrote a durable row that nothing
+  listed and nobody could acknowledge, so a workflow could switch itself off with no way for
+  a supervisor to find out. Both routes now exist, on `ticket:read` and narrowed to
+  `recipient_user_id = principal.userId` on top of RLS — somebody else's notification answers
+  **404, not 403** — keyset paginated on `(created_at DESC, id DESC)` against the index that
+  was already there, filterable by `type` and, by default, to what is still unacknowledged.
+  The acknowledge is idempotent and writes the same column as the `/sla-alerts` one, which is
+  point of one table and one unread count. `GET /api/v1/sla-alerts` and
+  `GET /api/v1/escalation-alerts` are untouched and stay as published, as single-type views
+  over the same rows; `escalation` is deliberately not in the generalised list, because its
+  response carries two fields `NotificationResponse` has no home for.
+  The second gap was quieter. A workflow may only name an **active** user —
+  `REFERENCEABLE_USER` is the predicate arming resolves against — and `users.service.ts`
+  disarmed workflows on the removal path only. Suspending somebody therefore left every
+  workflow naming them armed against an actor the executor refuses to use: the first ticket
+  to reach one failed `reference_missing` and auto-deactivated it anyway, so the automation
+  broke on a customer's ticket rather than in front of the admin who caused it. The
+  suspension now disarms in the same transaction as the status change, with its own
+  `reference_suspended` reason — the console's copy points at reinstating the person rather
+  than at replacing them — and the count lands on the `user.status_changed` audit row.
+  Unlike removal it leaves `workflow_references` standing, because the account is still there
+  and the admin still needs to see which field names whom. Reactivating them re-arms nothing:
+  `broken_reason` clears on the next write once every reference resolves, and a human with
+  `workflow:write` sends `isActive: true`.
+
 - **The workflow builder is documented, for both readers** (TAR-401) — TAR-27 shipped a
   trigger → condition → action engine (TAR-395) and the console that writes it (TAR-396), and
   neither had a page. Two documents, split by reader rather than averaged into one.
@@ -1739,6 +1769,36 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
   incremental sort inside one millisecond. Recorded as ADR 0008 amendment 3.
 
 ### Fixed
+
+- **A new tenant's first admin now gets the welcome email, and the tenant's trail starts
+  where the tenant does** (TAR-598) — `tenant_welcome` is one of ADR 0009 decision 7's ten
+  templates and was mapped in `TenantLifecycleNotifier`, but nothing could ever reach it.
+  The notifier sends off a committed `lifecycle_events` row, and creation was the one
+  arrival that wrote none: `TenantProvisioningService` decides a tenant's first status
+  inside the `INSERT` that creates it — 0009's documented exception to `transition()` being
+  the only writer of `tenants.status` — and stopped there. So the mapping's `trialing`
+  branch was dead in production, a signed-up admin got the verification mail and nothing
+  else, and `GET /tenant/lifecycle/events` opened empty until the tenant's first _later_
+  transition. The unit test covering the mapping passed throughout, because it called the
+  pure function directly.
+  Provisioning now writes the tenant's **genesis row** in the same transaction as the
+  tenant, with `from_state` NULL — the case that column is nullable for, and the shape
+  TAR-403's backfill already gave every tenant that predates the table — carrying
+  `trigger = 'system'`, `actor_type = 'system'` and which of the two onboarding paths ran.
+  `occurred_at` is read back from the tenant's own `created_at` rather than taken from a
+  second clock, so the row and the tenant cannot disagree about when the tenant began.
+  Who queues the notification follows who owns the commit: a call that opened its own
+  transaction queues it itself, and self-signup — which passes its transaction in, because
+  consuming the token, provisioning, creating the first admin and issuing the session are
+  one unit — is handed the row id and queues it after its own commit, when the row and the
+  admin are both visible to a worker. Nothing about the queue's durability changes: a
+  notification lost to a Redis outage is still re-enqueued by the lifecycle sweep's
+  backstop, and `notified_at` still makes a redelivery a no-op.
+  Only the creating call writes a genesis row. Provisioning's repair path deliberately does
+  not: a row written now for a tenant that has been trading for months would be dated now,
+  and the sweep would deliver it a welcome email. An operator-provisioned tenant gets the
+  row and no email — its arrival at `active` maps to no template, because its admin does not
+  exist yet and the operator is the one who knows.
 
 - **A workflow whose broken reference has come back can be turned on again from the console**
   (TAR-597) — `WorkflowCard` read `brokenReason` as a latch: once the API had set it, Enable

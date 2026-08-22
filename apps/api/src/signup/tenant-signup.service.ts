@@ -17,6 +17,7 @@ import type { SessionOrigin } from '../identity/invite.service';
 import { SessionService } from '../identity/session.service';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 import { uuidV7 } from '../prisma/uuid-v7';
+import { TenantLifecycleService } from '../tenancy/lifecycle/tenant-lifecycle.service';
 import {
   TenantProvisioningService,
   type ProvisionedTenant,
@@ -103,6 +104,7 @@ export class TenantSignupService {
     @Inject(SYSTEM_PRISMA) private readonly prisma: SystemPrisma,
     @Inject(MAILER) private readonly mailer: MailerPort,
     private readonly provisioning: TenantProvisioningService,
+    private readonly lifecycle: TenantLifecycleService,
     private readonly passwords: PasswordService,
     private readonly sessions: SessionService,
     private readonly throttle: SignupThrottleService,
@@ -223,7 +225,7 @@ export class TenantSignupService {
           throw new SignupTokenInvalidError(await rejectionFor(tx, tokenHash));
         }
 
-        const { tenant } = await this.provisioning.provision(
+        const { tenant, lifecycleEventId } = await this.provisioning.provision(
           {
             slug: signup.desired_slug,
             name: signup.tenant_name,
@@ -287,7 +289,7 @@ export class TenantSignupService {
           expiresAt: issued.expiresAt.toISOString(),
         };
 
-        return { tenant, principal, issued };
+        return { tenant, principal, issued, lifecycleEventId };
       },
       { timeout: VERIFY_TRANSACTION_TIMEOUT_MS },
     );
@@ -296,6 +298,18 @@ export class TenantSignupService {
     // principal for a transaction that rolled back would be a live credential for
     // a session that does not exist.
     await this.sessions.publish(completed.issued, completed.principal);
+
+    // The welcome notice, and after the commit for the same reason. The
+    // notification job reads the genesis `lifecycle_events` row **and** the
+    // tenant's admins, and neither is visible to a worker until this transaction
+    // commits — provisioning wrote its row inside it and cannot know when that
+    // happened, which is why it hands the id back rather than enqueueing itself.
+    // `notifyOfEvent` never throws, and a queue that is down costs a minute
+    // rather than the notice: the row still carries `notified_at IS NULL` for
+    // the lifecycle sweep's backstop to find.
+    if (completed.lifecycleEventId !== null) {
+      await this.lifecycle.notifyOfEvent(completed.tenant.id, completed.lifecycleEventId);
+    }
 
     this.logger.log(
       `Signup verified: provisioned tenant ${completed.tenant.id} at ` +

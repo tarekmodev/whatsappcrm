@@ -8,6 +8,7 @@ import {
   type UserResponse,
   type UserStatus,
   type UserUpdateInput,
+  type WorkflowBrokenReason,
 } from '@whatsappcrm/contracts';
 import { AUDIT_ACTIONS } from '../audit/audit.actions';
 import { AuditService } from '../audit/audit.service';
@@ -166,7 +167,20 @@ export class UsersService {
           ? null
           : await replaceTeamMemberships(tx, tenantId, userId, input.teamIds);
 
-      await this.recordUserChanges(tx, tenantId, before, input, teamsChanged);
+      // The same cascade the removal path runs, on the other transition that
+      // makes a user unusable to the automation engine (TAR-596).
+      //
+      // `USER_WRITABLE_STATUSES` is `['active', 'suspended']`, so the only
+      // status this route can write that a workflow may not name is
+      // `suspended` — and an armed workflow can only name an *active* user,
+      // because `REFERENCEABLE_USER` is what arming resolves against. So this
+      // fires on exactly the transition that creates a dangling actor.
+      const workflowsDisarmed =
+        input.status === 'suspended' && before.status !== 'suspended'
+          ? await disarmWorkflowsNaming(tx, userId, 'reference_suspended')
+          : 0;
+
+      await this.recordUserChanges(tx, tenantId, before, input, teamsChanged, workflowsDisarmed);
 
       return toUserResponse(
         // `teamMemberships` was read before the membership write, so it would
@@ -259,35 +273,23 @@ export class UsersService {
         // target, not find it silently gone.
         data: { targetUserId: null, isActive: false },
       });
-      // The same rule for workflows (TAR-27, 0009 decision 6, delta 5), and it
-      // has to happen here rather than through a foreign key: `workflow_references`
+      // The same rule for workflows (TAR-27, 0009 decision 6, delta 5) — see
+      // `disarmWorkflowsNaming` for why it disarms rather than deletes. It has
+      // to happen here rather than through a foreign key: `workflow_references`
       // permits a user delete on purpose, because removal is a security action
       // that must **always** succeed — where a tag or team delete is refused by
       // the constraint precisely so a supervisor is told before anything breaks.
-      //
-      // Deactivated with a reason rather than deleted, matching the assignment
-      // rule above: a supervisor should find the workflow needing a new target,
-      // not find it silently gone. `broken_reason` is what blocks re-enabling it
-      // until the reference is replaced, and `workflows_broken_is_inactive`
-      // makes the pairing structural — which is why both columns move in one
-      // statement.
-      //
-      // The dangling id stays in `definition` deliberately: the workflow's
-      // `references` array then reports `exists: false` and the console shows
-      // exactly which field needs a new value.
-      const brokenWorkflowIds = await tx.workflowReference.findMany({
-        where: { userId },
-        select: { workflowId: true },
-      });
+      const workflowsDisarmed = await disarmWorkflowsNaming(tx, userId, 'reference_removed');
 
-      if (brokenWorkflowIds.length > 0) {
-        await tx.workflow.updateMany({
-          where: { id: { in: brokenWorkflowIds.map((reference) => reference.workflowId) } },
-          data: { isActive: false, brokenReason: 'reference_removed' },
-        });
+      if (workflowsDisarmed > 0) {
         // The reverse index drops the rows naming this user, so the next
         // "which workflows use this?" lookup is accurate. The composite foreign
         // key is `NoAction`, so this is what makes the removal legal at all.
+        //
+        // **Removal only.** A suspension leaves these rows standing: the account
+        // is still there, still reinstatable, and the workflow still names it —
+        // dropping them would make the console's `references` array claim the
+        // definition points at nothing and lose the id the admin has to repair.
         await tx.workflowReference.deleteMany({ where: { userId } });
       }
 
@@ -329,6 +331,7 @@ export class UsersService {
           roleAtRemoval: user.role,
           assignmentsCleared: conversations.count + tickets.count,
           invitesRevoked: invitesRevoked.count,
+          workflowsDisarmed,
         },
       });
 
@@ -467,6 +470,7 @@ export class UsersService {
     before: { id: string; role: TenantRole; status: UserStatus; name: string },
     input: UserUpdateInput,
     teamsChanged: TeamMembershipDelta | null,
+    workflowsDisarmed: number,
   ): Promise<void> {
     const roleChanged = input.role !== undefined && input.role !== before.role;
     const statusChanged = input.status !== undefined && input.status !== before.status;
@@ -486,7 +490,11 @@ export class UsersService {
         action: AUDIT_ACTIONS.userStatusChanged,
         targetType: 'user',
         targetId: before.id,
-        metadata: { from: before.status, to: input.status },
+        // `workflowsDisarmed` is the side effect the admin did not ask for and
+        // has to know about: suspending one person can switch off automation the
+        // whole tenant relies on. Recorded on the row that caused it rather than
+        // left to be reconstructed from `workflow.deactivated` timestamps.
+        metadata: { from: before.status, to: input.status, workflowsDisarmed },
       });
     }
 
@@ -565,6 +573,59 @@ async function replaceTeamMemberships(
   }
 
   return { added, removed, changed: added.length > 0 || removed.length > 0 };
+}
+
+/**
+ * Disarms every workflow naming this user, and reports how many (TAR-27, 0009
+ * decision 6, delta 5; extended to suspension by TAR-596).
+ *
+ * **Two callers, one implementation, because the rule is one rule**: a workflow
+ * may only name an *active* user — `REFERENCEABLE_USER` is the predicate both
+ * arming and the executor resolve against — so any transition out of `active`
+ * leaves an armed workflow pointing at an actor the executor will refuse to use.
+ * Left alone, the first ticket that reaches such a workflow fails
+ * `reference_missing` and auto-deactivates it anyway; doing it here means the
+ * admin who caused it is told by the audit trail rather than by a customer.
+ *
+ * Deactivated with a reason rather than deleted, matching the assignment rule
+ * beside it: a supervisor should find the workflow needing a new target, not
+ * find it silently gone. `broken_reason` is what blocks re-arming until the
+ * reference resolves again, and `workflows_broken_is_inactive` makes the pairing
+ * structural — which is why both columns move in one statement.
+ *
+ * The dangling id stays in `definition` deliberately: the workflow's
+ * `references` array then reports `exists: false` and the console shows exactly
+ * which field needs a new value.
+ *
+ * `reference_removed` overwrites `reference_suspended` when a suspended user is
+ * later removed, and that is the right way round — the more permanent fact wins,
+ * and the update is unconditional rather than filtered on `broken_reason` so a
+ * workflow already broken for a different reason is not silently left claiming
+ * the old one.
+ *
+ * Two indexed statements: the reverse index by `user_id`, and one `updateMany`
+ * over the ids it returned. Bounded by `workflowsPerTenant`, never by history.
+ */
+async function disarmWorkflowsNaming(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  reason: WorkflowBrokenReason,
+): Promise<number> {
+  const naming = await tx.workflowReference.findMany({
+    where: { userId },
+    select: { workflowId: true },
+  });
+
+  if (naming.length === 0) {
+    return 0;
+  }
+
+  const { count } = await tx.workflow.updateMany({
+    where: { id: { in: naming.map((reference) => reference.workflowId) } },
+    data: { isActive: false, brokenReason: reason },
+  });
+
+  return count;
 }
 
 /** True when the requested change takes the target out of the active-admin set. */

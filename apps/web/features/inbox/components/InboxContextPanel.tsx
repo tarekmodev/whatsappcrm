@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { ContactResponse, ConversationResponse } from '@whatsappcrm/contracts';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
@@ -36,13 +37,34 @@ import styles from './InboxContextPanel.module.css';
  * priority are changed. `conversation.ticketId` names the **active** ticket, so
  * resolving one empties this section as well as removing the row from the queue
  * — the panel reporting nothing to link is the correct answer, not a gap.
+ *
+ * ## The chatbot section
+ *
+ * Rendered only for a conversation the chatbot has actually been on
+ * (`botState !== 'off'`), and passed in as a slot rather than fetched here: it
+ * needs a second endpoint, so it gets its own Suspense boundary in
+ * `InboxContextSection` and a card that fails on its own. A contact card must
+ * never be held up — or taken down — by a summary of what a bot did.
  */
-export function InboxContextPanel({ conversation }: { conversation: ConversationResponse }) {
+export function InboxContextPanel({
+  conversation,
+  chatbot,
+}: {
+  conversation: ConversationResponse;
+  /** The chatbot card's contents; omitted for a conversation it never touched. */
+  chatbot?: ReactNode;
+}) {
   return (
     <Stack gap="4">
       <SectionCard id="contact" title={content.inbox.contextHeading} headingLevel={3}>
         <ContactIdentity contact={conversation.contact} />
       </SectionCard>
+
+      {chatbot === undefined ? null : (
+        <SectionCard id="chatbot" title={content.inbox.handoffHeading} headingLevel={3}>
+          {chatbot}
+        </SectionCard>
+      )}
 
       <SectionCard id="ticket" title={content.inbox.ticketHeading} headingLevel={3}>
         <TicketLink ticketId={conversation.ticketId} />

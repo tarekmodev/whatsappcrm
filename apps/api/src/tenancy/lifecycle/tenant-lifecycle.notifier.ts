@@ -15,6 +15,12 @@ import { LifecycleEventNotFoundError } from './tenant-lifecycle.errors';
 function templateFor(from: TenantStatus | null, to: TenantStatus): OutboundEmailTemplate | null {
   switch (to) {
     case 'trialing':
+      // The one arrival whose producer is not `transition()`. Nothing in the
+      // state machine moves *to* `trialing`; a tenant is inserted there by
+      // `TenantProvisioningService` on the self-signup path, which writes the
+      // genesis row (`from_state IS NULL`) in the same transaction and queues
+      // this job once it has committed. Keyed on the arrival like every other
+      // entry, so it does not care that `from` is null rather than `created`.
       return 'tenant_welcome';
     case 'past_due':
       return from === 'trialing' ? 'trial_expired' : 'payment_failed';
@@ -33,16 +39,17 @@ function templateFor(from: TenantStatus | null, to: TenantStatus): OutboundEmail
       // with nothing to do.
       return null;
     case 'active':
-      // Only a *return* is worth an email. `created → active` is an operator
-      // provisioning a tenant, whose admin does not exist yet and is told by the
-      // operator; `trialing → active` is a trial converting, which is billing's
-      // receipt to send rather than a lifecycle notice.
+      // Only a *return* is worth an email. A genesis row arriving at `active`
+      // is an operator provisioning a tenant, whose admin does not exist yet and
+      // is told by the operator; `trialing → active` is a trial converting,
+      // which is billing's receipt to send rather than a lifecycle notice.
       return from === 'suspended' || from === 'past_due' || from === 'cancelled'
         ? 'tenant_reactivated'
         : null;
     default:
-      // `created` is written by provisioning inside the insert, never by a
-      // transition, and has nobody to write to.
+      // `created` is a column default no tenant is ever observable in —
+      // provisioning decides the real status inside the insert — so nothing
+      // arrives here, and there would be nobody to write to if it did.
       return null;
   }
 }
