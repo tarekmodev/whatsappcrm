@@ -15,6 +15,39 @@ const SESSION_LIFETIME_MS = 30 * 60 * 1_000;
 const PERIOD_LENGTH_MS = 30 * 24 * 60 * 60 * 1_000;
 
 /**
+ * Where `FakeCheckoutController` serves the stand-in hosted page, relative to the
+ * global `api` prefix `bootstrap.ts` sets.
+ *
+ * Declared here rather than in the controller because this adapter is what puts
+ * the URL in front of a browser: one string builds the link and mounts the route,
+ * so the two cannot drift into a 404 that reads as a broken checkout.
+ */
+export const FAKE_CHECKOUT_ROUTE_PATH = 'billing/fake-checkout';
+
+/** The global prefix, so the link this adapter hands out is the path Nest mounts. */
+const API_PREFIX = 'api';
+
+/** What the shopper did on the stand-in hosted page. */
+export type FakeCheckoutOutcome = 'paid' | 'cancelled';
+
+/** What the stand-in hosted page needs in order to behave like a real one. */
+export interface FakeCheckoutSettlement {
+  /**
+   * Where to send the browser. Taken from the session this adapter stored when
+   * the checkout was opened, never from the request — a redirect target a caller
+   * can choose is an open redirect.
+   */
+  readonly redirectTo: string;
+
+  /**
+   * The activation to deliver as a webhook, or `null` when the shopper backed
+   * out. The delivery is the page's job, not this adapter's: a provider does not
+   * call itself back.
+   */
+  readonly event: BillingEvent | null;
+}
+
+/**
  * The local and test adapter — what lets the whole billing flow be exercised
  * with no Polar account, no network and no credentials.
  *
@@ -28,6 +61,21 @@ const PERIOD_LENGTH_MS = 30 * 24 * 60 * 60 * 1_000;
  * It is bound outside production by `BILLING_PROVIDER_DRIVER`, which defaults to
  * `fake` — an environment that was never given Polar credentials runs the whole
  * flow rather than failing at the first request.
+ *
+ * ## It has a hosted page, because a provider that cannot call back has nothing
+ *
+ * The one thing a fake payment provider cannot do is deliver its own webhook:
+ * there is no external system to send it. Polar's part of the flow is a page the
+ * shopper lands on, pays on, and is redirected away from — and the delivery is
+ * made *because* of what happened on that page. So the fake has one too:
+ * `createCheckout` points the browser at `FakeCheckoutController`, and settling
+ * there produces the activation event that the controller delivers through the
+ * ordinary webhook path (TAR-658).
+ *
+ * That keeps the real invariant intact rather than working around it. The webhook
+ * is still the only writer of a subscription — TAR-651's point — and the fake
+ * driver still rehearses signature verification, replay absorption, the queue and
+ * `SubscriptionSyncService` rather than shortcutting past all four.
  *
  * ## What it does not pretend to be
  *
@@ -55,9 +103,8 @@ export class FakeBillingProvider implements BillingProvider {
   private readonly consoleOrigin: string;
 
   constructor(config: ConfigService) {
-    // Where the fake "hosted page" sends the browser. It is the console's own
-    // origin, so a developer clicking Upgrade lands back in the app with a
-    // checkout id to resolve rather than on a dead link.
+    // The base a relative return URL is resolved against, so a caller that passes
+    // a path rather than an absolute URL still gets a link that opens.
     this.consoleOrigin = config.getOrThrow<string>('WEB_ORIGIN');
 
     this.logger.warn(
@@ -75,24 +122,61 @@ export class FakeBillingProvider implements BillingProvider {
     providerProductId: string | null;
   }): Promise<HostedSession> {
     const checkoutId = randomUUID();
+    const successUrl = new URL(input.successUrl, this.consoleOrigin);
+    const cancelUrl = new URL(input.cancelUrl, this.consoleOrigin);
 
     this.checkouts.set(checkoutId, {
       tenantId: input.tenantId,
       planKey: input.planKey,
       seats: input.seats,
+      // Held here, so settling reads them from the session rather than from
+      // whoever opens the page.
+      successUrl: successUrl.toString(),
+      cancelUrl: cancelUrl.toString(),
     });
 
-    // The `successUrl` with the checkout id appended, which is what a real
-    // hosted page redirects to. The console's return handler is therefore
-    // exercised locally exactly as it will be against Polar.
-    const url = new URL(input.successUrl, this.consoleOrigin);
-
-    url.searchParams.set('checkout_id', checkoutId);
+    // The stand-in hosted page, on the same host the shopper is already on: the
+    // console proxies `/api/*` to this API (`next.config.mjs`), so the whole flow
+    // — open, settle, return — stays on the tenant's own origin exactly as it
+    // does against Polar.
+    const page = new URL(`/${API_PREFIX}/${FAKE_CHECKOUT_ROUTE_PATH}/${checkoutId}`, successUrl);
 
     return Promise.resolve({
-      url: url.toString(),
+      url: page.toString(),
       expiresAt: new Date(Date.now() + SESSION_LIFETIME_MS).toISOString(),
     });
+  }
+
+  /**
+   * What the stand-in hosted page did: the browser's next stop, and the delivery
+   * that has to follow a payment.
+   *
+   * **Not keyed on a tenant, deliberately.** A real hosted checkout page carries
+   * no session from our application — the shopper may not even be signed in by
+   * the time they pay — and it is the unguessable session id in the URL that
+   * stands in for a credential. This mirrors that rather than inventing an
+   * authenticated variant the real flow does not have. `resolveCheckout` below is
+   * the tenant-scoped read, and it keeps its tenant check.
+   *
+   * `null` for a session that was never opened, which the page answers as a 404.
+   */
+  settleHostedCheckout(
+    checkoutId: string,
+    outcome: FakeCheckoutOutcome,
+  ): FakeCheckoutSettlement | null {
+    const checkout = this.checkouts.get(checkoutId);
+
+    if (checkout === undefined) {
+      return null;
+    }
+
+    if (outcome === 'cancelled') {
+      // Nothing was bought, so there is nothing to deliver — the console reads
+      // the outcome off the return URL it composed when it opened the session.
+      return { redirectTo: checkout.cancelUrl, event: null };
+    }
+
+    return { redirectTo: checkout.successUrl, event: this.activate(checkoutId, checkout) };
   }
 
   createPortalSession(input: { tenantId: string; returnUrl: string }): Promise<HostedSession> {
@@ -238,9 +322,23 @@ export class FakeBillingProvider implements BillingProvider {
       return Promise.resolve(null);
     }
 
+    return Promise.resolve(this.activate(input.checkoutId, checkout));
+  }
+
+  /**
+   * Turns an opened checkout into the subscription it bought, and reports it as
+   * an activation event.
+   *
+   * Shared by the hosted page and by `resolveCheckout` so the two cannot describe
+   * the same purchase differently. The event id is derived from the checkout id
+   * rather than random, which is what makes a settled page safe to reload: the
+   * second delivery carries an id the receiver already holds and is absorbed by
+   * the same `ON CONFLICT` that absorbs a provider's redelivery.
+   */
+  private activate(checkoutId: string, checkout: FakeCheckout): BillingEvent {
     const now = Date.now();
     const subscription: FakeSubscription = {
-      id: `fake-sub-${input.checkoutId}`,
+      id: `fake-sub-${checkoutId}`,
       tenantId: checkout.tenantId,
       planKey: checkout.planKey,
       seats: checkout.seats,
@@ -252,9 +350,7 @@ export class FakeBillingProvider implements BillingProvider {
 
     this.subscriptions.set(checkout.tenantId, subscription);
 
-    return Promise.resolve(
-      this.toEvent(subscription, 'subscription.activated', `fake-checkout-${input.checkoutId}`),
-    );
+    return this.toEvent(subscription, 'subscription.activated', `fake-checkout-${checkoutId}`);
   }
 
   private toEvent(
@@ -286,6 +382,8 @@ interface FakeCheckout {
   readonly tenantId: string;
   readonly planKey: string;
   readonly seats: number;
+  readonly successUrl: string;
+  readonly cancelUrl: string;
 }
 
 interface FakeSubscription {

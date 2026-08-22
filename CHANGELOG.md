@@ -1903,6 +1903,34 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
 
 ### Fixed
 
+- **A checkout on the fake billing driver can complete again** (TAR-658) — every environment
+  runs `BILLING_PROVIDER_DRIVER=fake` until Polar credentials are provisioned, and on that
+  driver a checkout had nothing left that could finish it. TAR-619 chose webhook-plus-refresh
+  for the return from the hosted page, and TAR-651 removed `POST /billing/checkout/complete`
+  as uncalled — correctly, from the browser's point of view. But a fake provider cannot
+  deliver its own webhook: there is no external system to send one. So an admin who chose a
+  paid plan was redirected to a success URL and then sat on "confirming your payment"
+  permanently, which made TAR-37's "checkout completes → limits take effect" criterion
+  unverifiable everywhere.
+  What was missing was not a second writer of a subscription — the webhook is still the only
+  one — it was the **page**. With Polar the delivery happens because a shopper settled a
+  hosted session, so the fake driver now has a stand-in for that session:
+  `GET /api/billing/fake-checkout/{id}`, which `FakeBillingProvider.createCheckout` points
+  the browser at instead of straight back at the success URL. Settling it produces the
+  activation and posts it through `BillingWebhookService.ingest`, signed with the adapter's
+  own key — the same bytes, signature check, replay absorption, queue and
+  `SubscriptionSyncService` a Polar delivery goes through, rather than a shortcut past all
+  five. `?outcome=cancelled` walks the cancel path, which the fake had never been able to
+  reach at all.
+  It is unauthenticated and outside tenancy, exactly as a real hosted page is: the
+  unguessable session id in the URL stands in for a credential, and what possession of it
+  grants is bounded — the tenant, plan, seats and both return URLs were fixed when the
+  session was opened and nothing in the request can change any of them. The route answers
+  `not_found` unless the bound adapter _is_ the fake, checked by `instanceof` rather than by
+  a second read of the driver setting so no configuration can make the gate and the binding
+  disagree. Reloading a settled page is absorbed by the receiver, because the event id is
+  derived from the checkout id.
+
 - **Acknowledging a broken-workflow notification no longer silences every later break of
   that workflow** (TAR-605) — `WorkflowTriggerService.deactivate` keyed its
   `workflow_broken` rows on `workflow-broken:${workflowId}` against
