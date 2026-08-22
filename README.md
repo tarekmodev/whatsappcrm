@@ -91,6 +91,7 @@ the one that produced it.
 | [Reporting dashboard and export](docs/reference/reporting-api.md)                            | The four metrics, the date range, scope and attribution, and export parity         |
 | [Branding and custom domains API](docs/reference/branding-domains-api.md)                    | The white-label surface: branding, hostnames, DNS verification, the operator queue |
 | [Canned responses API](docs/reference/canned-responses-api.md)                               | The quick-reply library: CRUD, the shortcut grammar, the picker, the relay         |
+| [AI chatbot and knowledge base API](docs/reference/chatbot-api.md)                           | Knowledge-base CRUD, chatbot config, confidence gating, the two handoff routes     |
 | [Changing a ticket's status and priority](docs/guides/manage-ticket-status-and-priority.md)  | For agents working in the console, not for API consumers                           |
 | [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)           | For supervisors writing routing rules in the console                               |
 | [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md)                      | For supervisors emptying the flagged queue in the console                          |
@@ -104,6 +105,8 @@ the one that produced it.
 | [Answer common questions with saved replies](docs/guides/use-saved-replies.md)               | For agents inserting a saved reply in the composer by typing a shortcut            |
 | [Set up your workspace](docs/guides/set-up-your-workspace.md)                                | For a new admin: the setup checklist, seats, and what suspension means             |
 | [Automate what happens to a ticket](docs/guides/automate-tickets-with-workflows.md)          | For supervisors building trigger → condition → action workflows in the console     |
+| [Set up the chatbot and its knowledge base](docs/guides/set-up-the-chatbot.md)               | For admins writing the knowledge base and deciding when the chatbot answers        |
+| [Work with the chatbot in the inbox](docs/guides/work-with-the-chatbot-in-the-inbox.md)      | For agents reading a handover summary and taking a thread from the chatbot         |
 | [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                             |
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                             |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                           |
@@ -1469,10 +1472,17 @@ an upsell instead of a 403; the `PATCH` is refused. The handoff pair is `convers
 rather than `ai:*` on purpose — `ai:read` is admin-only, and the agent reading the summary is
 exactly who it is for.
 
-⚠️ The backend (TAR-406) and the schema (TAR-402) are separate stories. Until they land the
-console runs against the mock transport, and the API publishes `botState: 'off'` and derives
-`origin` from the direction and the sender — never `bot`, because nothing before TAR-406 is
-one.
+The backend (TAR-406) and the schema (TAR-402) landed as separate stories and are both on
+`main`, so the API now publishes a real `botState` and a real `origin`. The console still
+reaches them through the mock transport wherever `NEXT_PUBLIC_USE_MOCK_API` is on — see
+[Interim state](#interim-state-mock-api-and-stubbed-role), which is not specific to this
+surface.
+
+The full endpoint surface, the confidence rules and the handoff reasons are in
+[the AI chatbot and knowledge base API reference](docs/reference/chatbot-api.md); the console
+side is documented for its two readers in
+[Set up the chatbot and its knowledge base](docs/guides/set-up-the-chatbot.md) and
+[Work with the chatbot in the inbox](docs/guides/work-with-the-chatbot-in-the-inbox.md).
 
 ### Interim state: mock API and stubbed role
 
