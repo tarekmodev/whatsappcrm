@@ -12,7 +12,9 @@ import type {
   MessageType,
   OnboardingStepId,
   OnboardingStepStatus,
+  PlanFeature,
   SlaTargetKind,
+  SubscriptionStatus,
   TenantDomainKind,
   TenantDomainStatus,
   TenantRole,
@@ -77,6 +79,7 @@ export const content = {
     reports: 'Reports',
     settings: 'Settings',
     workspace: 'Workspace',
+    billing: 'Plans and billing',
     customFields: 'Custom fields',
     /** `docs/STYLE.md`: *canned response* in code, *saved reply* on screen. */
     savedReplies: 'Saved replies',
@@ -1281,6 +1284,20 @@ export const content = {
     inviteSubmit: 'Send invitation',
     inviteSuccess: (email: string) => `Invitation sent to ${email}`,
 
+    /**
+     * The upgrade path shown when the API refuses an invitation because every
+     * seat is taken (`plan_limit_exceeded`, TAR-37).
+     *
+     * It appears **only after that refusal**, never as a pre-check. The console
+     * does not hold the authoritative seat count — an invitation accepted in
+     * another tab changes it — so a dialog that disabled its own submit button
+     * from a stale number would refuse invitations the API would have allowed.
+     * The API's own message states the numbers; this adds the way out of it.
+     */
+    seatLimitUpgradeBody:
+      'Adding a seat is the quickest fix. You can also withdraw an outstanding invitation or remove an agent.',
+    seatLimitUpgradeLink: 'Compare plans',
+
     editAgent: 'Edit',
     editAgentAria: (name: string) => `Edit ${name}`,
     editAgentTitle: (name: string) => `Edit ${name}`,
@@ -2216,13 +2233,12 @@ export const content = {
       `${used} conversations — this plan sets no limit`,
 
     /**
-     * ADR 0009 risk 4: the trial's caps are enforced before anything can be
-     * bought, so a workspace that reaches one has no route to a larger plan
-     * until billing ships. The honest answer is a support contact, not a
-     * checkout link that does not exist.
+     * A cap has been reached. TAR-37 replaced ADR 0009 risk 4's "contact
+     * support" with a real checkout, so this now names the page that raises the
+     * limit rather than an email address that cannot.
      */
-    upgradeUnavailableNotice:
-      'There is no self-service upgrade yet. Contact support to raise a limit.',
+    upgradeUnavailableNotice: 'A limit has been reached. Compare plans to raise it.',
+    upgradeLink: 'Plans and billing',
 
     /**
      * One line per lifecycle state, so a badge never carries meaning alone.
@@ -2275,6 +2291,190 @@ export const content = {
         heading: 'This workspace is closing',
         body: 'Your team can still work as normal until it closes. Contact support if you want to keep it.',
       },
+    },
+  },
+
+  /**
+   * Plans, usage and billing (TAR-37, TAR-619).
+   *
+   * Two rules shape most of the copy here, and both are about not overclaiming:
+   *
+   *   1. **Never announce a payment the API has not confirmed.** The redirect
+   *      back from the hosted checkout page beats the provider's webhook more
+   *      often than not, so "you paid" and "your plan changed" are two different
+   *      sentences and only the second is read off the subscription.
+   *   2. **Never state a limit the console worked out for itself.** Whether a
+   *      plan can be selected, and which ceiling blocks it, are answered by the
+   *      API — `isSelectable` and `blockedBy` — because they depend on live
+   *      usage. The copy phrases that answer; it does not derive one.
+   */
+  billing: {
+    title: 'Plans and billing',
+    subtitle: 'What this workspace is on, what it is using, and where to change it.',
+    loading: 'Loading plans and billing',
+
+    // --- Current plan ------------------------------------------------------
+    currentHeading: 'Current plan',
+    currentDescription: 'Your plan, its allowances, and how much of each is in use.',
+    planLabel: 'Plan',
+    statusLabel: 'Status',
+    seatsLabel: 'Seats billed',
+    renewsLabel: 'Renews',
+    endsLabel: 'Ends',
+    trialEndsLabel: 'Trial ends',
+    priceLabel: 'Price',
+    /**
+     * What a price is *per*, as one phrase rather than two joined with a space.
+     *
+     * `Intl` formats the amount and the content layer phrases the rest, and the
+     * rest is a single unit: a translation may well not put "per seat" and "per
+     * month" in that order, or use two prepositions at all, and two keys
+     * concatenated at the call site cannot follow it.
+     */
+    seatCadence: {
+      month: 'per seat, per month',
+      year: 'per seat, per year',
+    } satisfies Record<'month' | 'year', string>,
+
+    /**
+     * One line per provider-neutral subscription state. `canceled` is the
+     * contract's spelling of the *state*, and the copy for it is deliberately
+     * reassuring: a cancellation that has been requested is still paid for, and
+     * telling somebody they have lost access on the day they clicked cancel
+     * would be false as well as alarming.
+     */
+    statuses: {
+      trialing: 'Trial',
+      active: 'Active',
+      past_due: 'Payment overdue',
+      canceled: 'Closing at the end of this period',
+      incomplete: 'Waiting for payment',
+    } satisfies Record<SubscriptionStatus, string>,
+
+    /**
+     * No subscription is the normal state for a workspace on trial, not a
+     * failure, so it explains the trial rather than reading as an error.
+     */
+    noSubscriptionHeading: 'No paid plan yet',
+    noSubscriptionBody:
+      'This workspace is running on its trial allowances. Choose a plan below when you are ready — nothing is charged until you do.',
+
+    seatsHeading: 'Agent seats',
+    seatsUsage: (used: string, cap: string) => `${used} of ${cap} seats in use`,
+    seatsUsageUnlimited: (used: string) => `${used} seats in use — this plan sets no limit`,
+    seatsPendingNote: (pending: number) =>
+      pending === 1
+        ? '1 invitation is outstanding and counts against the cap.'
+        : `${pending} invitations are outstanding and count against the cap.`,
+    conversationsHeading: 'Conversations this period',
+    conversationsUsage: (used: string, cap: string) => `${used} of ${cap} conversations`,
+    conversationsUsageUnlimited: (used: string) =>
+      `${used} conversations — this plan sets no limit`,
+
+    // --- Plans -------------------------------------------------------------
+    plansHeading: 'Plans',
+    plansDescription: 'Every tier, what it allows, and what it unlocks.',
+    plansEmptyHeading: 'No plans are available',
+    plansEmptyBody:
+      'No plan is on sale for this workspace right now. Contact support and they can put one in place for you.',
+    currentPlanBadge: 'Current plan',
+    currentPlanAction: 'Your current plan',
+    choosePlan: (planName: string) => `Choose ${planName}`,
+    allowancesHeading: 'Allowances',
+    allowanceSeats: (cap: string) => `${cap} agent seats`,
+    allowanceSeatsUnlimited: 'Unlimited agent seats',
+    allowanceConversations: (cap: string) => `${cap} conversations per period`,
+    allowanceConversationsUnlimited: 'Unlimited conversations',
+    featuresHeading: 'Includes',
+    /** One line per `PlanFeature`, in the words a buyer uses rather than the key. */
+    features: {
+      assignment_rules: 'Automatic routing rules',
+      sla_policies: 'SLA policies and breach alerts',
+      workflows: 'Workflow automation',
+      ai_chatbot: 'AI chatbot and knowledge base',
+      custom_branding: 'Your own logo and colours',
+      custom_domain: 'Your own domain',
+      advanced_reporting: 'Advanced reporting',
+      api_access: 'API access',
+    } satisfies Record<PlanFeature, string>,
+    noFeatures: 'The essentials: shared inbox, contacts and tickets.',
+
+    /**
+     * Why a plan cannot be chosen, phrased from the API's `blockedBy` rather
+     * than worked out here. A downgrade below current usage is refused *before*
+     * checkout, so the sentence has to say what to change — otherwise the button
+     * is simply dead.
+     */
+    blockedHeading: 'Not available yet',
+    blockedBy: {
+      seats:
+        'This plan has fewer seats than you are using. Remove an agent or withdraw an invitation first.',
+      conversationsPerPeriod:
+        'You have already had more conversations this period than this plan allows.',
+    } satisfies Record<'seats' | 'conversationsPerPeriod', string>,
+
+    checkoutPending: 'Opening checkout',
+    checkoutFailed: 'We could not open the checkout page. Try again in a moment.',
+
+    // --- Returning from checkout -------------------------------------------
+    /**
+     * Three outcomes, not two. `confirming` is the honest one: the provider sent
+     * the browser back but its webhook has not landed, so the plan on screen is
+     * still the old one and saying anything else would be a guess about money.
+     */
+    outcome: {
+      confirmingHeading: 'Confirming your payment',
+      confirmingBody:
+        'Your payment went through and we are waiting for the provider to confirm it. This usually takes a few seconds — refresh the page to check.',
+      confirmingAction: 'Refresh',
+      succeededHeading: 'Your plan is active',
+      succeededBody: (planName: string) =>
+        `This workspace is on ${planName}. The new allowances apply from now.`,
+      cancelledHeading: 'Checkout cancelled',
+      cancelledBody: 'Nothing was charged and your plan has not changed.',
+    },
+
+    // --- Portal ------------------------------------------------------------
+    portalHeading: 'Invoices and payment',
+    portalDescription:
+      'Invoices, payment method, changing your plan and cancelling are all handled by our payment provider.',
+    portalBody:
+      'You are taken to the provider’s own secure portal, signed in as this workspace. Card details are never handled by us.',
+    portalAction: 'Open the billing portal',
+    portalPending: 'Opening the portal',
+    portalFailed: 'We could not open the billing portal. Try again in a moment.',
+    /** A portal session needs a subscription to be a portal *for*. */
+    portalUnavailableNotice:
+      'The billing portal opens once this workspace is on a paid plan. Choose one below to get started.',
+
+    readOnlyNotice: 'Your role can see the plan and its usage, but not change it. Ask an admin.',
+
+    // --- Banners -----------------------------------------------------------
+    /**
+     * The volume warning. Two states, because "you are close" and "you are over"
+     * are different messages and only the second one is urgent — and neither
+     * ever claims a message was blocked, because the platform's default policy
+     * is to warn rather than block (`VOLUME_POLICIES`).
+     */
+    volumeBanner: {
+      approachingHeading: 'You are close to your conversation allowance',
+      approachingBody: (used: string, cap: string) =>
+        `${used} of ${cap} conversations for this period. Nothing has changed yet — move to a larger plan if you expect to keep going at this rate.`,
+      reachedHeading: 'You have used your conversation allowance',
+      reachedBody: (used: string, cap: string) =>
+        `${used} of ${cap} conversations for this period. Your customers’ messages are still received, and your allowance resets when the period does.`,
+      action: 'Compare plans',
+    },
+
+    /**
+     * A requested cancellation. Its whole job is to say that nothing has been
+     * lost yet — the provider reports a cancellation the moment it is asked for,
+     * and the workspace stays fully usable until the date below.
+     */
+    cancellationBanner: {
+      heading: 'This plan is set to close',
+      body: 'Everything keeps working as normal until then. Reopen the billing portal if you want to keep the plan.',
+      dateLabel: 'Closes',
     },
   },
 

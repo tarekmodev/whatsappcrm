@@ -76,6 +76,17 @@ const ICON_PATHS = {
     'M7 6h10',
     'M5 8v8a2 2 0 0 0 2 2h10',
   ],
+  /**
+   * Billing (TAR-37): a payment card. Deliberately not a coin or a currency
+   * glyph — this product is sold in several currencies and a `$` would be one
+   * of them, and not the `ticket` shape, which is the same rounded rectangle
+   * doing a different job.
+   */
+  billing: [
+    'M3 8a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
+    'M3 11h18',
+    'M7 14h3',
+  ],
   plus: ['M12 5v14', 'M5 12h14'],
   /** Opens a menu below its trigger; never mirrored, unlike the chevrons below. */
   chevronDown: ['m6 9 6 6 6-6'],

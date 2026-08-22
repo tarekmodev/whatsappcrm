@@ -14,7 +14,9 @@ import {
   type MessageResponse,
   type MessageTemplateResponse,
   type OnboardingStep,
+  type Plan,
   type SlaAlertResponse,
+  type Subscription,
   type Tag,
   type TeamResponse,
   type TenantDomain,
@@ -623,15 +625,23 @@ export const MOCK_TENANTS: readonly TenantResponse[] = [
 
 /**
  * ADR 0009 seeds the `trial` plan at **three** seats, and this fixture says
- * five. The deviation is deliberate and is the honest one: three is what a
+ * six. The deviation is deliberate and is the honest one: three is what a
  * *fresh* signup gets, while Northwind already has four active agents and an
  * outstanding invitation, so a three-seat cap here would render "5 of 3" — a
  * state write-time enforcement makes unreachable, and therefore a state the
  * console should never be designed against.
  *
- * Five puts the fixture exactly *at* its cap, which is the state worth having
- * on screen by default: it is the one the meter warns about and the one that
- * explains why the next invitation is refused.
+ * **Six, so the fixture is exactly one invitation short of its cap.** It was
+ * five until TAR-37 made the transport enforce the cap on the invite endpoint,
+ * at which point five meant a reviewer could not send a single invitation — and
+ * "invite an agent" is the primary flow on the People page. Six keeps the meter
+ * in its warning tone on arrival (five of six held) *and* leaves both of the
+ * states that matter one click apart: one invitation fills the last seat, and
+ * the next one is refused with the upgrade path the console renders from that
+ * refusal.
+ *
+ * `MOCK_PLANS`' `trial` tier carries the same six. Two fixtures disagreeing
+ * about one tenant's cap would be worse than either number.
  */
 export const MOCK_TENANT_LIFECYCLES: readonly MockTenantLifecycle[] = [
   {
@@ -650,7 +660,7 @@ export const MOCK_TENANT_LIFECYCLES: readonly MockTenantLifecycle[] = [
         // something the handlers can be tested against rather than assumed.
         features: ['assignment_rules', 'sla_policies', 'ai_chatbot'],
         limits: {
-          seats: 5,
+          seats: 6,
           conversationsPerPeriod: 1000,
           whatsappNumbers: 1,
           teams: 2,
@@ -2423,8 +2433,210 @@ export const MOCK_HANDOFFS: readonly MockHandoffRecord[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// Billing (TAR-37) — the plan catalogue, and one subscription
+// ---------------------------------------------------------------------------
+
+const PLAN_IDS = {
+  trial: '0192f010-0000-7000-8000-000000001001',
+  solo: '0192f010-0000-7000-8000-000000001002',
+  starter: '0192f010-0000-7000-8000-000000001003',
+  growth: '0192f010-0000-7000-8000-000000001004',
+  scale: '0192f010-0000-7000-8000-000000001005',
+} as const;
+
+const SUBSCRIPTION_IDS = {
+  otherTenant: '0192f011-0000-7000-8000-000000001101',
+} as const;
+
+/**
+ * The plan catalogue: platform-wide, and deliberately **not** tenant-scoped.
+ * `plans` is catalogue data with no RLS behind it; what a tenant is entitled to
+ * lives in its own entitlements row, which is why `PlanStatusPanel` reads the
+ * lifecycle and this list is only ever a shop window.
+ *
+ * Five tiers rather than three, because two of them earn their place by making a
+ * *state* reachable that a happy-path catalogue would hide:
+ *
+ *   - **`trial`** is `isPublic: false`. It is what Northwind is on, so the plans
+ *     view has to show it as current while never offering it for sale — the
+ *     "hidden from the pricing page but still honoured" case `PlanSchema.isPublic`
+ *     exists for. Its allowances match `MOCK_TENANT_LIFECYCLES` exactly, and the
+ *     reasoning behind the six seats is written down there; two fixtures
+ *     disagreeing about the same tenant's cap would be worse than either number.
+ *   - **`solo`** is smaller than Northwind's current usage in *both* dimensions,
+ *     so `isSelectable: false` and a two-entry `blockedBy` are on screen by
+ *     default. A downgrade that would strand a tenant over its own new cap is
+ *     the refusal most likely to be got wrong, and it is unreviewable if no
+ *     fixture can produce it.
+ *
+ * `scale` sets `null` for both ceilings — unlimited, per `PlanLimitsSchema`, and
+ * the case that makes the meters draw no bar rather than a full one.
+ *
+ * Prices are whole-dollar amounts in minor units, per `MoneySchema`. Nothing
+ * here is a real price: TAR-37's open question 6 leaves the tiering to a pricing
+ * decision, and this fixture fixes only the *shape*.
+ */
+export const MOCK_PLANS: readonly Plan[] = [
+  {
+    id: PLAN_IDS.trial,
+    key: 'trial',
+    name: 'Trial',
+    pricePerSeat: { amountMinor: 0, currency: 'USD' },
+    interval: 'month',
+    isPublic: false,
+    entitlements: {
+      features: ['assignment_rules', 'sla_policies', 'ai_chatbot'],
+      limits: {
+        seats: 6,
+        conversationsPerPeriod: 1000,
+        whatsappNumbers: 1,
+        teams: 2,
+        knowledgeDocuments: 10,
+      },
+    },
+  },
+  {
+    id: PLAN_IDS.solo,
+    key: 'solo',
+    name: 'Solo',
+    pricePerSeat: { amountMinor: 900, currency: 'USD' },
+    interval: 'month',
+    isPublic: true,
+    entitlements: {
+      features: [],
+      limits: {
+        seats: 3,
+        conversationsPerPeriod: 500,
+        whatsappNumbers: 1,
+        teams: 1,
+        knowledgeDocuments: 5,
+      },
+    },
+  },
+  {
+    id: PLAN_IDS.starter,
+    key: 'starter',
+    name: 'Starter',
+    pricePerSeat: { amountMinor: 1900, currency: 'USD' },
+    interval: 'month',
+    isPublic: true,
+    entitlements: {
+      features: ['assignment_rules', 'sla_policies'],
+      limits: {
+        seats: 10,
+        conversationsPerPeriod: 2500,
+        whatsappNumbers: 1,
+        teams: 3,
+        knowledgeDocuments: 25,
+      },
+    },
+  },
+  {
+    id: PLAN_IDS.growth,
+    key: 'growth',
+    name: 'Growth',
+    pricePerSeat: { amountMinor: 3900, currency: 'USD' },
+    interval: 'month',
+    isPublic: true,
+    entitlements: {
+      features: [
+        'assignment_rules',
+        'sla_policies',
+        'workflows',
+        'ai_chatbot',
+        'custom_branding',
+        'advanced_reporting',
+      ],
+      limits: {
+        seats: 25,
+        conversationsPerPeriod: 10_000,
+        whatsappNumbers: 3,
+        teams: 10,
+        knowledgeDocuments: 100,
+      },
+    },
+  },
+  {
+    id: PLAN_IDS.scale,
+    key: 'scale',
+    name: 'Scale',
+    pricePerSeat: { amountMinor: 6900, currency: 'USD' },
+    interval: 'month',
+    isPublic: true,
+    entitlements: {
+      features: [
+        'assignment_rules',
+        'sla_policies',
+        'workflows',
+        'ai_chatbot',
+        'custom_branding',
+        'custom_domain',
+        'advanced_reporting',
+        'api_access',
+      ],
+      limits: {
+        seats: null,
+        conversationsPerPeriod: null,
+        whatsappNumbers: null,
+        teams: null,
+        knowledgeDocuments: null,
+      },
+    },
+  },
+];
+
+/**
+ * Subscriptions, keyed by their own id and scoped by `tenantId`.
+ *
+ * **Northwind deliberately has none.** A workspace on trial has not bought
+ * anything, and that is both the state most tenants are in and the one the
+ * console is most likely to get wrong — `BillingSummaryResponse.subscription`
+ * and `.plan` are nullable precisely for it. Seeding a paid subscription here
+ * would make the empty state unreachable by clicking, and the empty state is
+ * where every new tenant lands.
+ *
+ * The one row belongs to the other tenant, so subscription scoping is something
+ * the transport can be *tested* against rather than assumed. It is never
+ * rendered.
+ */
+export const MOCK_SUBSCRIPTIONS: readonly Subscription[] = [
+  {
+    id: SUBSCRIPTION_IDS.otherTenant,
+    tenantId: OTHER_TENANT_ID,
+    planKey: 'starter',
+    status: 'active',
+    seats: 3,
+    currentPeriodStart: '2026-08-01T00:00:00.000Z',
+    currentPeriodEnd: '2026-09-01T00:00:00.000Z',
+    cancelAtPeriodEnd: false,
+    trialEndsAt: null,
+    createdAt: '2026-06-01T09:05:00.000Z',
+    updatedAt: '2026-08-01T00:00:12.000Z',
+  },
+];
+
+/**
+ * Conversations already counted against this period before the seeded threads.
+ *
+ * Without it every tenant sits at five conversations against a four-figure
+ * allowance, and the volume-threshold banner — a TAR-37 acceptance criterion —
+ * is a branch no reviewer can reach by clicking. 842 plus the five seeded
+ * threads puts Northwind just past the 80 % warning line and short of the cap,
+ * which is the state the banner exists to show.
+ *
+ * Keyed by tenant so the other tenant stays quiet, which is what makes "this
+ * banner is not simply always on" observable.
+ */
+export const MOCK_CONVERSATION_BASELINE: Readonly<Record<string, number>> = {
+  [MOCK_TENANT_ID]: 842,
+  [OTHER_TENANT_ID]: 0,
+};
+
 export const MOCK_IDS = {
   teams: TEAM_IDS,
+  plans: PLAN_IDS,
+  subscriptions: SUBSCRIPTION_IDS,
   users: USER_IDS,
   contacts: CONTACT_IDS,
   conversations: CONVERSATION_IDS,
