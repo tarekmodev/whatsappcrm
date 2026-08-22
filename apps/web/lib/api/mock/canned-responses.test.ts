@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type {
-  CannedResponseListResponse,
-  CannedResponseResponse,
-  TenantRole,
+import {
+  CANNED_RESPONSE_LIMITS,
+  type CannedResponseListResponse,
+  type CannedResponseResponse,
+  type TenantRole,
 } from '@whatsappcrm/contracts';
 
 /**
@@ -27,7 +28,7 @@ vi.mock('next/headers', () => ({
 }));
 
 const { handleMockRequest } = await import('./handlers');
-const { resetMockState } = await import('./store');
+const { mockState, resetMockState } = await import('./store');
 const { MOCK_IDS } = await import('./fixtures');
 
 function asRole(role: TenantRole): void {
@@ -210,18 +211,45 @@ describe('the canned-response writes', () => {
     expect(ids).not.toContain(MOCK_IDS.cannedResponses.holiday);
   });
 
-  it.each(['PATCH', 'DELETE'] as const)(
-    'answers %s on another tenant’s reply with 404, so nothing can be enumerated',
-    async (method) => {
-      const attempt = handleMockRequest({
-        method,
-        path: `/v1/canned-responses/${MOCK_IDS.cannedResponses.otherTenant}`,
-        body: { title: 'Borrowed' },
-      });
+  it('deletes the same reply twice without turning the second call into a failure', async () => {
+    const path = `/v1/canned-responses/${MOCK_IDS.cannedResponses.holiday}`;
 
-      await expect(attempt).rejects.toMatchObject({ status: 404, code: 'not_found' });
-    },
-  );
+    await handleMockRequest({ method: 'DELETE', path });
+
+    // The case an admin actually meets: two tabs, or a row a colleague removed
+    // while this page was still holding its server render. `not_found` is not
+    // actionable, so a mock that raised it here would put "we could not save
+    // that" over a dialog the real API closes with a success.
+    await expect(handleMockRequest({ method: 'DELETE', path })).resolves.toBeNull();
+  });
+
+  it('answers PATCH on another tenant’s reply with 404, so nothing can be enumerated', async () => {
+    const attempt = handleMockRequest({
+      method: 'PATCH',
+      path: `/v1/canned-responses/${MOCK_IDS.cannedResponses.otherTenant}`,
+      body: { title: 'Borrowed' },
+    });
+
+    await expect(attempt).rejects.toMatchObject({ status: 404, code: 'not_found' });
+  });
+
+  it('answers DELETE on another tenant’s reply with 204, and leaves the row standing', async () => {
+    // Deliberately not the 404 its `PATCH` twin gets. `canned-responses.int-spec.ts`
+    // pins this: delete is idempotent, so it answers the same either way, and
+    // what protects the other tenant is that the row survives — not a status
+    // code. 204 for every id is no more of an oracle than 404 for every id.
+    await expect(
+      handleMockRequest({
+        method: 'DELETE',
+        path: `/v1/canned-responses/${MOCK_IDS.cannedResponses.otherTenant}`,
+      }),
+    ).resolves.toBeNull();
+
+    // Asserted against the store rather than through the list, because this
+    // tenant's list could never have shown the row in the first place — which
+    // would make a passing assertion prove nothing.
+    expect(mockState().cannedResponses.has(MOCK_IDS.cannedResponses.otherTenant)).toBe(true);
+  });
 
   it('refuses an agent, who holds `canned_response:read` and not `:write`', async () => {
     asRole('agent');
@@ -236,5 +264,26 @@ describe('the canned-response writes', () => {
     asRole('supervisor');
 
     await expect(createCannedResponse(NEW_REPLY)).resolves.toBeDefined();
+  });
+
+  it('refuses the create that would take the workspace past its cap', async () => {
+    const held = (await listCannedResponses()).items.length;
+
+    for (let index = held; index < CANNED_RESPONSE_LIMITS.perTenant; index += 1) {
+      await createCannedResponse({
+        shortcut: `/filler${String(index)}`,
+        title: `Filler ${String(index)}`,
+        body: 'Padding the library to its cap.',
+      });
+    }
+
+    // `conflict`, not `plan_limit_exceeded`: the cap is a property of the design
+    // — the console downloads the whole set to resolve a shortcut without a
+    // request per keystroke — not of the tenant's plan, so a 402 would send an
+    // admin to the billing page to fix something money cannot.
+    await expect(createCannedResponse(NEW_REPLY)).rejects.toMatchObject({
+      status: 409,
+      code: 'conflict',
+    });
   });
 });

@@ -169,6 +169,38 @@ change.
 
 ### Added
 
+- **A supervisor keeps the workspace's saved replies from the console, and every agent's
+  reply box follows** (TAR-575) — TAR-31's second acceptance criterion names an admin editing
+  a canned response, and until this there was no admin half: the CRUD surface, the permission
+  split and the composer's read side had all shipped, and nothing in the console called the
+  three writes. The only route to a canned response was a `curl` a tenant admin cannot be
+  asked to run. **Settings → Saved replies** (`/settings/saved-replies`) now lists the library
+  in shortcut order and adds, edits and deletes against the same three endpoints.
+  Gated on **`canned_response:write`** — supervisor-and-above by 0004 — rather than on
+  `:read`, which every agent holds so the composer can expand a shortcut: an agent gets no
+  nav entry and the forbidden state, because a screen whose every control the API would refuse
+  is not a screen worth showing. The gate is asserted three times over — the page, each server
+  action, and the API — since a nav entry that was never rendered is not a gate.
+  The shortcut box **normalises on blur rather than refusing**: `Hours` becomes `/hours`. The
+  column is `citext` and the grammar is lowercase-only, so a form reporting "use lowercase"
+  would enforce a distinction the database does not make, and an admin who types `hours` under
+  a label reading Shortcut has already said what they meant. A duplicate shortcut and the
+  200-per-tenant cap both return `conflict`, which is in `ACTIONABLE_ERROR_CODES`, so the admin
+  reads the API's own sentence instead of the generic line; at the cap the Add button is
+  replaced by a notice naming the way out, because offering a button that can only fail tells
+  nobody what to do about it. An edit sends **only the fields that changed**, so two
+  supervisors editing different halves of the same reply do not clobber each other — on a
+  library the whole workspace shares, that is not hypothetical.
+  ⚠️ **The settings list itself has no realtime subscription.** It refreshes after its own
+  mutation; a second supervisor with the page open sees the change on their next load. The
+  composer is the surface TAR-31's criterion is about and it does update live, through the
+  `canned_response.saved` / `.deleted` events of TAR-485/486 — a `revalidatePath` could never
+  reach another agent's browser. 0011 open question 4 names generalising the socket hook as
+  the work if both are wanted.
+  Documented for the supervisor and admin who use it as
+  [Keep the workspace's saved replies up to date](docs/guides/manage-saved-replies.md), which
+  is where the saved-replies material an agent has no use for now lives (TAR-610).
+
 - **A chatbot answers customers from the tenant's own knowledge base, and hands the
   conversation to a person when it cannot** (TAR-28) — ADR 0010's design, shipped across
   TAR-402 (schema), TAR-406 (API and worker) and TAR-408 (console). An admin writes entries
@@ -434,16 +466,18 @@ RETURNING id`. A ticket that stays open for six hours escalates **once**, not on
   `canned_responses` in [the data model reference](docs/reference/data-model.md) is brought
   up to what TAR-475 actually shipped: `citext`, the four CHECK constraints Prisma cannot
   express, and why the by-creator index stays although no application query reads it.
-  ⚠️ Three gaps are marked rather than left to be discovered. **There is no console screen
-  for writing** — `POST`, `PATCH` and `DELETE` have no settings surface and the web client
-  exposes only the list, so a supervisor manages the library through the API, which is what
-  the guide's last section has to tell a non-technical reader. **The design document the
-  code cites throughout — `docs/architecture/0011-canned-responses-contract.md` — is not in
-  the repository**, so every "0011, decision N" in the reference is transcribed from source
-  comments rather than read from the contract; its number is also already taken by
-  `0011-ticket-reassignment-and-escalation.md`. And **nothing records which responses are
-  used**, so a library nobody prunes cannot be pruned on evidence. Each carries a
-  `TODO(author)` naming the question and who should answer it.
+  ⚠️ Three gaps were marked rather than left to be discovered, and two have since closed.
+  **There was no console screen for writing** — `POST`, `PATCH` and `DELETE` had no settings
+  surface and the web client exposed only the list, so a supervisor managed the library
+  through the API, which is what the guide's last section had to tell a non-technical reader;
+  TAR-575 shipped the screen and TAR-610 rewrote the section as
+  [Keep the workspace's saved replies up to date](docs/guides/manage-saved-replies.md).
+  **The design document the code cites throughout —
+  [`0011-canned-responses-contract.md`](docs/architecture/0011-canned-responses-contract.md) —
+  was not in the repository**, so every "0011, decision N" in the reference was transcribed
+  from source comments rather than read from the contract; TAR-610 committed it from TAR-474's
+  own attachment, keeping the number it is cited by. ⚠️ Still open: **nothing records which
+  responses are used**, so a library nobody prunes cannot be pruned on evidence.
 
 - **The reporting dashboard and its export are documented, for both readers** (TAR-434) —
   TAR-30 shipped a performance dashboard, a CSV export and the guarantee that the two agree,

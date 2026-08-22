@@ -95,42 +95,18 @@ A saved reply that somebody adds, changes or removes while you have a conversati
 updates on your screen on its own. You do not have to reload the page, and a reply you have
 already inserted into the box is left alone — what you are holding is your text now.
 
-## For supervisors and admins: keeping the list up to date
+## Who keeps the list
 
-Open **Settings**, then **Saved replies**. The entry is there for supervisors and admins; an
-agent does not see it, because an agent uses the list rather than keeping it.
+Not you — and that is the point of it. Saved replies are written and changed by a supervisor
+or an admin under **Settings** → **Saved replies**, which does not appear in your navigation.
+If a reply is wrong, out of date or missing, ask one of them; the steps they need are
+[Keep the workspace's saved replies up to date](manage-saved-replies.md).
 
-To **add one**, select **Add saved reply**, fill in the shortcut, the name and the text, and
-select **Add saved reply** again. Agents can use it straight away — nobody has to reload.
+## What this cannot do yet
 
-To **change one**, select **Edit** on its row, make the change, and select **Save changes**.
-Everybody's list updates on its own, and an agent who has already put the old text in their
-reply box keeps what they are holding.
-
-To **remove one**, select **Delete** on its row and confirm. The shortcut stops inserting
-anything for everybody. Messages already sent are not touched, and there is no undo — so read
-what the confirmation names before you accept it.
-
-What is worth knowing:
-
-- **Anyone with supervisor or admin permission may change the list**, and everybody in the
-  workspace sees the same list.
-- **A workspace can hold up to 200 saved replies.** Past that, one has to be removed before
-  another is added.
-- **A shortcut must be unique in your workspace**, and capitals do not make two shortcuts different:
-  `/Hours` and `/hours` count as the same one.
-- **A shortcut starts with `/` and holds lowercase letters, numbers, `-` and `_`** — up to 40
-  characters including the `/`. No spaces, and no second `/`.
-- **A name is up to 80 characters** and is what agents see beside the shortcut in the list, so
-  it should say what the reply is for.
-- **The text is up to 4096 characters** and is inserted exactly as written. There is no way
-  to have it fill in a customer's name or any other detail automatically.
-- **Every change is recorded** — who changed which saved reply, and when.
-
-If you are building against the API instead, the same five routes are documented in
-[the canned responses API reference](../reference/canned-responses-api.md).
-
-> **TODO(author):** the settings screen shipped with TAR-575, so these are real steps now.
-> What is still outstanding is the split: this section addresses a supervisor or admin inside
-> a guide whose reader is an agent, and belongs in its own admin guide, as branding and custom
-> domains are split.
+- **You cannot add or change a saved reply**, or keep one of your own. Every reply belongs to
+  the whole workspace.
+- **A reply cannot fill anything in for you.** The text arrives exactly as it was written —
+  no customer name, no ticket number — so anything specific to this customer is yours to type
+  before you select **Send**.
+- **You cannot search the text of a reply**, only its shortcut and its name.

@@ -49,7 +49,12 @@ did. That is the honest form: the alternative is a guide that answers half the r
 question and does not admit which half. TAR-575 shipped the screen and the section became
 numbered steps in the same change — which is the other half of the rule: **a `TODO(author)`
 naming a missing surface is closed by the story that ships it**, not left to age into a
-sentence the product contradicts.
+sentence the product contradicts. What that change could not do in passing was the split the
+original `TODO(author)` also asked for, so it left one saying so; TAR-610 carried the section
+out to
+[Keep the workspace's saved replies up to date](guides/manage-saved-replies.md) and the two
+guides now name one reader each. **A `TODO(author)` that outlives the story it was written
+for is rewritten to say what is still open**, not deleted because part of it was answered.
 
 **The list stops numbering here.** The ordinals had become the only thing every guide pull
 request needed to edit, so each one conflicted with every other on this one sentence — and the
@@ -73,7 +78,12 @@ defines a field and `contact:write` fills one in, which is two readers on two sc
 does the chatbot, and it shows the rule is about the reader rather than the screen:
 `ai:write` is admin-only and lives on a settings page, while taking a conversation from the
 chatbot is `conversation:claim`, which every role holds and every agent meets in the Inbox
-without opening a setting at all.
+without opening a setting at all. Saved replies split on the same seam once TAR-575 gave the
+write half a screen: `canned_response:read` is what an agent expands a shortcut with in the
+reply box, `canned_response:write` is supervisor-and-above and lives under **Settings**, so
+[Answer common questions with saved replies](guides/use-saved-replies.md) and
+[Keep the workspace's saved replies up to date](guides/manage-saved-replies.md) are two files
+(TAR-610).
 
 **Name what a guide's reader cannot do, under a closing “What this cannot do yet”.** A gap
 the reader discovers by hunting for a button is worse than one the page names — and a guide
@@ -214,6 +224,14 @@ an explicit decision in `docs/adr` or `docs/architecture`. Two rules follow:
 `kebab-case.md`, named for the subject, no dates and no story ids: `admin-api.md`, not
 `tar-50-admin-api.md`. ADRs, architecture and design documents keep their numeric prefix
 (`0002-architecture-and-api-contract.md`) because their order is part of the record.
+
+**Numbers under `docs/architecture/` are not unique, and are not a citation.** `0009`, `0010`
+and `0011` each name two documents, because two designs were numbered in parallel and the
+number is the order they were written in rather than an identifier anything resolves. Cite an
+architecture document by its **full filename** — `0011-canned-responses-contract.md`, never
+"0011" — and take a free number when you add one. A collision is not renamed away once source
+comments cite the path: correcting a documentation number by editing application code costs
+more than the ambiguity does.
 
 ## Templates
 
