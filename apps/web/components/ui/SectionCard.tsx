@@ -14,14 +14,21 @@ import styles from './SectionCard.module.css';
  * `isTitleVisible={false}` keeps the heading for the document outline and for the
  * region's accessible name, and takes it off the screen. For the one card on a
  * route whose title only restates the page's `<h1>` — the ticket queue's "Ticket
- * queue" under "Tickets" (TAR-520). It is not licence to hide a title because a
- * card looks busy: a card that is one of several on a page needs its name.
+ * queue" under "Tickets" (TAR-520), and the contact directory's "Contacts" under
+ * "Contacts" (TAR-727). It is not licence to hide a title because a card looks
+ * busy: a card that is one of several on a page needs its name.
  */
 
 export interface SectionCardProps {
   title: string;
   children: ReactNode;
-  description?: string;
+  /**
+   * The line under the title. A node rather than a string, so a section's
+   * skeleton can put a `SkeletonLine` exactly where the real sentence goes —
+   * without it the card is a line shorter while it loads, and everything below
+   * jumps when the data lands.
+   */
+  description?: ReactNode;
   /** Kept explicit so a section can be nested without breaking heading order. */
   headingLevel?: 2 | 3;
   action?: ReactNode;

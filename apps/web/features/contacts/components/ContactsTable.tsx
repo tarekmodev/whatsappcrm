@@ -26,6 +26,15 @@ import styles from './ContactsTable.module.css';
  * no contacts" and "no contact matches VIP" need different copy and different
  * next actions — offering "clear the filter" to a workspace that has never had a
  * contact would be advice that does nothing.
+ *
+ * ## Why this one is `unstackAt="wide"` (TAR-727)
+ *
+ * Five columns, one of them an avatar and a name, and the table's measured
+ * minimum is 47rem — past `DataTable`'s default 40rem. So between 1000px and
+ * 1090px of viewport it un-stacked into a space it did not fit and pushed the
+ * *document* into horizontal scroll, taking the rail and the top bar off screen
+ * with it. Capping the email column (below) took the minimum down but not under
+ * 40rem, so the threshold moves for this table and this table only.
  */
 export function ContactsTable({
   contacts,
@@ -57,13 +66,14 @@ export function ContactsTable({
       columns={CONTACT_COLUMNS}
       rows={contacts}
       getRowKey={(contact) => contact.id}
+      unstackAt="wide"
     />
   );
 }
 
 const RENDERERS: Record<string, (contact: ContactResponse) => ReactNode> = {
   name: (contact) => (
-    <Cluster gap="3" align="center">
+    <Cluster gap="3" align="center" className={styles.identityCluster}>
       <Avatar name={contact.displayName} tone="neutral" />
       <span className={styles.identity}>
         {/* The whole row's affordance is this link: a `<tr>` with a click handler
@@ -84,11 +94,15 @@ const RENDERERS: Record<string, (contact: ContactResponse) => ReactNode> = {
       {contact.phone}
     </span>
   ),
+  // The full address stays in the DOM — a screen reader reads it whole, and the
+  // ellipsis is CSS. `title` is what gives a pointer the same value back.
   email: (contact) =>
     contact.email === null ? (
       <span className={styles.muted}>{content.contacts.noEmail}</span>
     ) : (
-      contact.email
+      <span className={styles.email} title={contact.email}>
+        {contact.email}
+      </span>
     ),
   tags: (contact) => <ContactTagList tags={contact.tags} />,
   lastContacted: (contact) =>

@@ -88,12 +88,11 @@
  * keep their full size. `break-word` still protects against the one case
  * `anywhere` was added for: a 200-character subject with no spaces in it.
  *
- * ⚠️ **`40rem` must match `DataTable.module.css`'s un-stacking query.** A
- * `@container` condition cannot read a custom property, so the two literals
- * cannot share a token — and tuning one without the other puts this rule on the
- * wrong side of the switch, which is the "Activatio / n" break above.
+ * The switch is `DataTable`'s own `--table-unstacked`, not a repeat of its
+ * threshold: this rule has to land on the same side of the boundary the table
+ * did, and a copied literal is how it stopped doing that (TAR-727).
  */
-@container (min-width: 40rem) {
+@container style(--table-unstacked: 1) {
   .subject,
   .assignee {
     overflow-wrap: break-word;

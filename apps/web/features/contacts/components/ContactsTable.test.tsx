@@ -60,6 +60,25 @@ describe('ContactsTable', () => {
     );
   });
 
+  it('keeps a long email address whole for a screen reader and repeats it in `title`', () => {
+    // The column is capped and the ellipsis is CSS (TAR-727). What must never be
+    // true is that the value is *clipped* — gone from the DOM, or reachable by
+    // nothing.
+    const longEmail = 'alessandra.di-martino@northwind-support.example';
+
+    render(<ContactsTable contacts={[{ ...FATIMA, email: longEmail }]} isFiltered={false} />);
+
+    expect(screen.getByText(longEmail)).toHaveAttribute('title', longEmail);
+  });
+
+  it('leaves the table on the wider un-stacking threshold its five columns need', () => {
+    // Un-stacked into anything narrower, the table pushed the whole document into
+    // horizontal scroll between 1000px and 1090px (TAR-727).
+    render(<ContactsTable contacts={[FATIMA]} isFiltered={false} />);
+
+    expect(document.querySelectorAll('[data-unstack="wide"]')).toHaveLength(1);
+  });
+
   it('says so in words when a contact has no email, no tags and has never been contacted', () => {
     // A blank cell reads as missing data; these read as answers.
     render(<ContactsTable contacts={[KARIM]} isFiltered={false} />);
@@ -113,5 +132,13 @@ describe('ContactsTableSkeleton', () => {
     render(<ContactsTableSkeleton />);
 
     expect(document.querySelectorAll('th')).toHaveLength(loadedColumnCount);
+  });
+
+  it('stacks on the same threshold the loaded table does', () => {
+    // Otherwise the placeholder is a table at a width where the directory it
+    // stands in for is still a stack of cards, and the swap reflows the page.
+    render(<ContactsTableSkeleton />);
+
+    expect(document.querySelectorAll('[data-unstack="wide"]')).toHaveLength(1);
   });
 });

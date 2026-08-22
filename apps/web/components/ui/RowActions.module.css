@@ -31,11 +31,11 @@
  * wrap below that, where the row is a stacked card and wrapping is what keeps
  * the controls at a touch-target size instead of squeezing them.
  *
- * A container query on the same 40rem boundary `DataTable` stacks at, and a
- * literal for the same reason its own comment gives: a `@container` condition
- * cannot read a custom property.
+ * The switch is `DataTable`'s own `--table-unstacked` rather than a repeat of
+ * its threshold, so a table on the `wide` threshold takes this rule at the width
+ * it actually un-stacks at instead of eight rems early (TAR-727).
  */
-@container (min-width: 40rem) {
+@container style(--table-unstacked: 1) {
   .actions {
     flex-wrap: nowrap;
   }

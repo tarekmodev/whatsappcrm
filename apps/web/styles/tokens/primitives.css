@@ -313,6 +313,13 @@
   /* --- Measure and aspect ratios ------------------------------------------ */
   /* Comfortable line length for running text; longer is measurably harder to read. */
   --scale-measure-body: 60ch;
+  /*
+   * The widest a single-line table value may get before it truncates. Measured
+   * from the value it exists for — an email address, the one contact column
+   * whose content has no natural bound — and set so an ordinary address
+   * (`name@company.example`, around 24 characters) still reads whole.
+   */
+  --scale-measure-cell: 20ch;
   --scale-aspect-media: 4 / 3;
   --scale-aspect-square: 1 / 1;
 }
