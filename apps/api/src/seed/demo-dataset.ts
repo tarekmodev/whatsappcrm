@@ -353,11 +353,30 @@ function ahead(now: Date, ms: number): Date {
  * once through `SystemPrisma` and shared — a tenant may read `plans` and may
  * never write it (`tenant-scope.extension.ts`, `shared-read-only`).
  *
- * `entitlements` carries the two quantities TAR-39's usage-counter interface
- * already names, and nothing else. The `FeatureGuard` that reads this column is
- * TAR-37's, and inventing a richer vocabulary here would fix its keys from a
- * seed file — the same reason `TenantProvisioningService` writes no branding
- * row. Prices are integer minor units against an ISO 4217 code, never a float.
+ * `entitlements` is `PlanEntitlementsSchema` — `{ features, limits }` — and it
+ * is that shape because `tenant_entitlements.entitlements` is. TAR-37's billing
+ * contract (decision 4) copies a plan's entitlements into that column inside the
+ * transaction that activates a subscription, and the destination is guarded by
+ * `tenant_entitlements_shape`. A plan seeded in any other shape is an activation
+ * that aborts after the tenant has been charged. `plans_entitlements_shape`
+ * refuses it here instead.
+ *
+ * The vocabulary is no longer being invented by this file — it was published in
+ * `PlanEntitlementsSchema` before this catalogue was written, and the earlier
+ * flat `{ seats, conversationsPerPeriod }` predated it.
+ *
+ * **Every figure below is a placeholder.** TAR-37's contract open question 6
+ * records that the tier numbers are an unmade pricing decision and that they
+ * live in seed data precisely so settling them is a data change rather than a
+ * migration. `null` means unlimited. Prices are integer minor units against an
+ * ISO 4217 code, never a float.
+ *
+ * `providerProductId` is left unset — the Polar product ids are outstanding
+ * (contract open question 4). The checkout route answers `upstream_unavailable`
+ * for a plan with no product id rather than calling Polar with a null, and
+ * `FakeBillingProvider` ignores the column entirely, so the whole flow is
+ * exercisable locally before the credentials land. Filling these in is the
+ * one-line seed edit that half of that handoff consists of.
  */
 export const DEMO_PLANS: readonly Prisma.PlanCreateManyInput[] = [
   {
@@ -367,7 +386,16 @@ export const DEMO_PLANS: readonly Prisma.PlanCreateManyInput[] = [
     priceMinorUnits: 2900,
     currency: 'USD',
     interval: 'month',
-    entitlements: { seats: 3, conversationsPerPeriod: 1_000 },
+    entitlements: {
+      features: ['assignment_rules', 'sla_policies'],
+      limits: {
+        seats: 3,
+        conversationsPerPeriod: 1_000,
+        whatsappNumbers: 1,
+        teams: 2,
+        knowledgeDocuments: 10,
+      },
+    },
     isActive: true,
   },
   {
@@ -377,7 +405,22 @@ export const DEMO_PLANS: readonly Prisma.PlanCreateManyInput[] = [
     priceMinorUnits: 7900,
     currency: 'USD',
     interval: 'month',
-    entitlements: { seats: 10, conversationsPerPeriod: 10_000 },
+    entitlements: {
+      features: [
+        'assignment_rules',
+        'sla_policies',
+        'workflows',
+        'advanced_reporting',
+        'api_access',
+      ],
+      limits: {
+        seats: 10,
+        conversationsPerPeriod: 10_000,
+        whatsappNumbers: 3,
+        teams: 10,
+        knowledgeDocuments: 100,
+      },
+    },
     isActive: true,
   },
   {
@@ -387,7 +430,25 @@ export const DEMO_PLANS: readonly Prisma.PlanCreateManyInput[] = [
     priceMinorUnits: 19900,
     currency: 'USD',
     interval: 'month',
-    entitlements: { seats: 50, conversationsPerPeriod: 100_000 },
+    entitlements: {
+      features: [
+        'assignment_rules',
+        'sla_policies',
+        'workflows',
+        'advanced_reporting',
+        'api_access',
+        'ai_chatbot',
+        'custom_branding',
+        'custom_domain',
+      ],
+      limits: {
+        seats: 50,
+        conversationsPerPeriod: 100_000,
+        whatsappNumbers: 10,
+        teams: 50,
+        knowledgeDocuments: 1_000,
+      },
+    },
     isActive: true,
   },
 ];

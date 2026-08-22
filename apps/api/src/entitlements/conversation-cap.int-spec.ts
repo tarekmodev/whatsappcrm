@@ -171,7 +171,7 @@ describe('the conversation-volume cap', () => {
           key: 'tar405-cap-plan',
           name: 'TAR-405 cap fixture',
           priceMinorUnits: 0,
-          entitlements: {},
+          entitlements: entitlementsWithCap(null),
         },
         update: {},
         select: { id: true },
@@ -210,7 +210,7 @@ describe('the conversation-volume cap', () => {
           key: 'tar405-cap-plan',
           name: 'TAR-405 cap fixture',
           priceMinorUnits: 0,
-          entitlements: {},
+          entitlements: entitlementsWithCap(null),
         },
         update: {},
         select: { id: true },
@@ -388,6 +388,17 @@ describe('the conversation-volume cap', () => {
  * The whole `PlanEntitlements` shape with one limit set, because
  * `tenant_entitlements_shape` refuses a partial one — the five limit keys must
  * all be present and each null or a positive integer.
+ *
+ * Used for `plans.entitlements` too, and deliberately the same helper: TAR-37's
+ * billing contract copies a plan's entitlements straight into
+ * `tenant_entitlements`, so the two columns take the identical shape and
+ * `plans_entitlements_shape` asserts it on both sides of that copy. A fixture
+ * that drifts apart from this helper is a fixture that stops representing what
+ * the copy actually moves.
+ *
+ * The plan fixtures pass `null`: those rows exist only to give a `subscriptions`
+ * row something to point at, and the cap under test comes from
+ * `tenant_entitlements`, never from the plan.
  */
 function entitlementsWithCap(conversationsPerPeriod: number | null): Prisma.InputJsonValue {
   return {

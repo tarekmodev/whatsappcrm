@@ -120,9 +120,91 @@ export const BillingSummaryResponseSchema = z.object({
   /** Live counts against `limits`, so the UI can show "8 of 10 seats". */
   usage: z.object({
     seatsUsed: z.int().nonnegative(),
+    /**
+     * Unaccepted, unrevoked, unexpired invitations. A seat is held the moment it
+     * is offered, not when it is taken — otherwise a tenant invites past its cap
+     * and the refusal lands on the invitee. Counted separately from `seatsUsed`
+     * so the console can say *why* the last seat is gone.
+     */
+    seatsPending: z.int().nonnegative(),
+    conversationsThisPeriod: z.int().nonnegative(),
+  }),
+  /**
+   * When a requested cancellation takes effect, or null. Present here so the
+   * settings page renders its "closing on {date}" banner without a second call.
+   *
+   * Non-null does **not** mean the tenant is cancelled: they have paid through
+   * this date and stay fully serviceable until it.
+   */
+  cancelsAt: TimestampSchema.nullable(),
+});
+
+/**
+ * `GET /api/v1/billing/plans` — the plans view, with the tenant's position in it.
+ *
+ * The two derived booleans are computed server-side rather than left to the
+ * console, because they depend on live usage the client does not hold and would
+ * otherwise have to guess at.
+ */
+export const PlanListResponseSchema = z.object({
+  plans: z.array(
+    PlanSchema.extend({
+      /** True for the plan the tenant is on now. */
+      isCurrent: z.boolean(),
+      /**
+       * False when the plan's ceilings are below the tenant's current usage —
+       * the console disables the button and says which limit blocks it. A
+       * downgrade that would leave a tenant over its own new cap is refused
+       * before checkout rather than after payment.
+       */
+      isSelectable: z.boolean(),
+      /** Which ceilings block selection. Empty when `isSelectable`. */
+      blockedBy: z.array(z.enum(['seats', 'conversationsPerPeriod'])),
+    }),
+  ),
+  usage: z.object({
+    seatsUsed: z.int().nonnegative(),
+    seatsPending: z.int().nonnegative(),
     conversationsThisPeriod: z.int().nonnegative(),
   }),
 });
+
+/** `POST /api/v1/billing/checkout` request. Requires an `Idempotency-Key`. */
+export const CheckoutRequestSchema = z.object({
+  planKey: z.string().min(1).max(40),
+  /**
+   * Defaults to the tenant's current seat count (members + pending invites) and
+   * is never below it — checking out fewer seats than are in use would create a
+   * subscription that is over its own cap the moment it activates.
+   */
+  seats: z.int().positive().optional(),
+  /**
+   * Console-relative **paths, not URLs**. The API composes them against the
+   * tenant's resolved origin. An absolute URL from the client is an open
+   * redirect that a payment provider would faithfully honour, on the one page
+   * where the user is most primed to trust where they land.
+   */
+  successPath: z.string().startsWith('/').max(512).optional(),
+  cancelPath: z.string().startsWith('/').max(512).optional(),
+});
+
+/** `POST /api/v1/billing/portal` request. No idempotency key — see the contract. */
+export const PortalRequestSchema = z.object({
+  /** A path, not a URL, for the reason `CheckoutRequestSchema` states. */
+  returnPath: z.string().startsWith('/').max(512).optional(),
+});
+
+/**
+ * What happens when a tenant crosses its conversation volume allowance.
+ *
+ * `warn` is the default, and deliberately: blocking a helpdesk's replies is the
+ * most damaging thing this system can do to a tenant's *customers*, and a
+ * reseller will want a conversation before it happens. Inbound is never refused
+ * under either policy — a customer's message is always accepted and stored.
+ */
+export const VOLUME_POLICIES = ['warn', 'block'] as const;
+export const VolumePolicySchema = z.enum(VOLUME_POLICIES);
+export type VolumePolicy = (typeof VOLUME_POLICIES)[number];
 
 // ---------------------------------------------------------------------------
 // The port — TAR-37 implements this once, for Polar
@@ -162,6 +244,9 @@ export type PlanLimits = z.infer<typeof PlanLimitsSchema>;
 export type PlanEntitlements = z.infer<typeof PlanEntitlementsSchema>;
 export type Subscription = z.infer<typeof SubscriptionSchema>;
 export type BillingSummaryResponse = z.infer<typeof BillingSummaryResponseSchema>;
+export type PlanListResponse = z.infer<typeof PlanListResponseSchema>;
+export type CheckoutRequest = z.infer<typeof CheckoutRequestSchema>;
+export type PortalRequest = z.infer<typeof PortalRequestSchema>;
 export type BillingEventType = z.infer<typeof BillingEventTypeSchema>;
 export type BillingEvent = z.infer<typeof BillingEventSchema>;
 
@@ -212,8 +297,39 @@ export interface BillingProvider {
    */
   verifyWebhookSignature(rawBody: Uint8Array, headers: Record<string, string | undefined>): boolean;
 
-  /** Translates a verified provider payload into our vocabulary, or `null` to ignore it. */
-  parseWebhookEvent(payload: unknown): BillingEvent | null;
+  /**
+   * Translates a verified provider payload into our vocabulary, or `null` to
+   * ignore it.
+   *
+   * Takes the headers as well as the body because under Standard Webhooks — the
+   * spec Polar signs with — **the event id is a header** (`webhook-id`), not a
+   * body field, and `BillingEvent.providerEventId` is what makes webhook
+   * handling idempotent. A parser given only the body cannot populate the one
+   * field the replay defence turns on.
+   */
+  parseWebhookEvent(
+    payload: unknown,
+    headers: Record<string, string | undefined>,
+  ): BillingEvent | null;
+
+  /**
+   * Resolves a completed checkout into the plan and seats the tenant actually
+   * bought. Called on return from the hosted page so the console reflects the
+   * new plan immediately rather than waiting on a webhook that may be seconds
+   * behind — the redirect lands before the delivery does.
+   *
+   * Returns `null` while the session is still open. Not a substitute for the
+   * webhook: this is the fast path, the webhook is the authoritative one, and
+   * both are made safe to apply by `subscriptions.last_event_at`.
+   */
+  resolveCheckout(input: { tenantId: string; checkoutId: string }): Promise<BillingEvent | null>;
+
+  /**
+   * Moves the tenant to a different plan on the **existing** subscription.
+   * Distinct from `createCheckout`, which only opens one — an upgrade from a
+   * paid tier is a subscription amendment, not a second purchase.
+   */
+  changePlan(input: { tenantId: string; planKey: string; seats: number }): Promise<void>;
 }
 
 /** DI token for the port. Nest binds the concrete adapter to this in `BillingModule`. */
