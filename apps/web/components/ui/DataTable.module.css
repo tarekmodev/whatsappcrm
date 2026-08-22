@@ -14,6 +14,37 @@
   text-align: start;
 }
 
+/*
+ * The stacked/table switch, resolved once here and read by every rule below
+ * through `@container style(--table-unstacked: 1)`.
+ *
+ * The indirection buys a **per-table threshold**. A `@container` condition
+ * cannot read a custom property, so two thresholds would otherwise mean two
+ * copies of the eighty lines that turn a stack of cards back into a table — and
+ * a copy is how a table ends up on the wrong side of its own breakpoint. Setting
+ * a property under each size query and querying *that* keeps one rule body.
+ *
+ * It is set on `.table` rather than on `.container`, because a container query
+ * styles a container's descendants and never the container itself. Every cell,
+ * row and header inherits the value from there, and a style query reads the
+ * nearest ancestor container — which for all of them is inside the table.
+ *
+ * `wide` is for a table whose columns need more than 40rem before they fit:
+ * un-stacking one into a space too narrow for it is what pushes the whole
+ * document into horizontal scroll (TAR-727). See `DataTableUnstackWidth`.
+ */
+@container (min-width: 40rem) {
+  .container:not([data-unstack='wide']) .table {
+    --table-unstacked: 1;
+  }
+}
+
+@container (min-width: 52rem) {
+  .container[data-unstack='wide'] .table {
+    --table-unstacked: 1;
+  }
+}
+
 .caption {
   /* Visually hidden by default: the section heading is already the visible name. */
   position: absolute;
@@ -172,18 +203,18 @@
 /*
  * Once the space around it is wide enough, it is a real table again.
  *
- * 40rem rather than the 48rem this was as a media query, because the two numbers
- * measure different things: 48rem of *viewport* is 26rem of column once the rail
- * takes its share, which is where the old rule went wrong. 40rem is measured —
- * the widest table in the console (the ticket queue, six columns) lays out
- * inside it — and it keeps the un-stacking point at roughly the screen width it
- * used to be, so nothing that fitted before now stacks.
+ * The thresholds are above; this is the layout they switch on. 40rem rather than
+ * the 48rem this was as a media query, because the two numbers measure different
+ * things: 48rem of *viewport* is 26rem of column once the rail takes its share,
+ * which is where the old rule went wrong. 40rem is measured — the ticket queue's
+ * six columns lay out inside it — and it keeps the un-stacking point at roughly
+ * the screen width it used to be, so nothing that fitted before now stacks.
  *
- * ⚠️ `TicketQueueTable.module.css` repeats this `40rem` to switch its
- * `overflow-wrap` on the same boundary. A `@container` condition cannot read a
- * custom property, so there is no token to share — change one and change both.
+ * A table that does *not* fit inside 40rem takes `unstackAt="wide"` rather than
+ * moving this number: 40rem is measured from the tables that do fit, and raising
+ * it would stack every one of them on a laptop to solve one table's problem.
  */
-@container (min-width: 40rem) {
+@container style(--table-unstacked: 1) {
   .head {
     position: static;
     width: auto;

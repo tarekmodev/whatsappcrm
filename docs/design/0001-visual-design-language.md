@@ -441,8 +441,8 @@ timer, in `apps/web/features/tickets/ticket-chips.ts`. Three pills (`Urgent` `Op
 **A mark that loses the budget goes quiet; it does not disappear.** `Badge`’s `quiet`
 variant keeps the word and drops the pill, the tint and the tone. This is the difference a
 table makes: a conversation row can simply omit the chip it did not pick, but a column
-header stays whether or not its cell has anything in it, and below 40rem `DataTable`
-repeats that header beside the value — so an omitted mark is a labelled blank, which reads
+header stays whether or not its cell has anything in it, and in the stacked layout
+`DataTable` repeats that header beside the value — so an omitted mark is a labelled blank, which reads
 as missing data. The reader loses the emphasis, never the fact.
 
 **Nothing the filter has already named is loud**, priority or status: under `?priority=high`
@@ -574,8 +574,37 @@ empty trailing slot is not filled with a secondary control to balance it — a p
 only action is an export gains nothing by promoting the export.
 
 Every filter lives in the URL, never in component state. A refresh, a copied link and the
-back button must reproduce the same list. Below 48rem `DataTable` re-flows each row into a
-stacked card with its column headers repeated per cell — the same markup, no second table.
+back button must reproduce the same list. Below its un-stacking threshold `DataTable`
+re-flows each row into a stacked card with its column headers repeated per cell — the same
+markup, no second table. That threshold is a **container** query on the space the table
+actually has, not a media query on the viewport: the rail takes its share first, and a
+table told it had 768px when it had 528 laid out as a table and pushed the page sideways.
+
+#### A table never makes the document scroll sideways (TAR-727)
+
+At **any** viewport, `document.scrollWidth` must not exceed the viewport width. A page that
+scrolls sideways takes the rail and the top bar off screen with it, so the reader loses the
+navigation to see a column — and it is never the reader who asked for that trade.
+
+Un-stacking is where this goes wrong, because a table's minimum width is a property of its
+_content_ and the threshold is a number somebody chose. Two rules keep them in step:
+
+1. **A column whose content has no natural bound is capped and truncates**, with the full
+   value left in the DOM for assistive technology and repeated in `title` for a pointer.
+   `overflow-wrap: break-word` does not do this: it leaves the column's min-content at the
+   width of the longest unbroken run, and an email address is one unbroken run. The cap is
+   `--measure-cell`.
+2. **A table that still needs more room than the default 40rem takes
+   `unstackAt="wide"`**, so the stacked cards hold until the columns genuinely fit. Raising
+   the default instead would stack every table that _does_ fit, on every laptop, to solve
+   one table's problem.
+
+Both were needed for the contact directory, whose five columns measured 47rem: capping the
+email column alone left it 2rem short, and between 1000px and 1090px of viewport it
+un-stacked into a space it could not fit.
+
+Measure before choosing a threshold — step a route from 320px to 1600px and read
+`document.scrollWidth` — rather than reasoning about it from the column count.
 
 #### Row actions (TAR-709)
 

@@ -327,6 +327,8 @@
   --size-media-inline: var(--scale-size-media-md);
   --size-media-player: var(--scale-size-player);
   --measure-body: var(--scale-measure-body);
+  /* How wide a truncating table cell may get before the ellipsis takes over. */
+  --measure-cell: var(--scale-measure-cell);
   --aspect-media: var(--scale-aspect-media);
   --aspect-media-square: var(--scale-aspect-square);
   --border-hairline: var(--scale-size-border-hairline);

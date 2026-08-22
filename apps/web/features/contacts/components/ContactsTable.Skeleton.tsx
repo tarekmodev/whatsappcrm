@@ -24,6 +24,9 @@ export function ContactsTableSkeleton() {
         caption={content.contacts.listHeading}
         rowCount={CONTACTS_PAGE_SIZE}
         columns={contactColumnMeta(content).map((meta) => ({ ...meta, render: () => null }))}
+        // The real table's threshold. Without it the placeholder is a table at a
+        // width where the loaded directory is still a stack of cards (TAR-727).
+        unstackAt="wide"
       />
     </>
   );

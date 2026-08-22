@@ -96,6 +96,31 @@ describe('DataTable', () => {
 
     expect(document.querySelectorAll('tbody tr[data-tone]')).toHaveLength(0);
   });
+
+  it('keeps the default un-stacking threshold unless a table asks for the wider one', () => {
+    // The seam the module file's container queries select on. A table that fits
+    // inside the default threshold must not be pushed onto the later one, or
+    // every list in the console stacks on a laptop (TAR-727).
+    const { unmount } = render(
+      <DataTable caption="Agents" columns={COLUMNS} rows={ROWS} getRowKey={(row) => row.id} />,
+    );
+
+    expect(document.querySelectorAll('[data-unstack]')).toHaveLength(0);
+
+    unmount();
+
+    render(
+      <DataTable
+        caption="Agents"
+        columns={COLUMNS}
+        rows={ROWS}
+        getRowKey={(row) => row.id}
+        unstackAt="wide"
+      />,
+    );
+
+    expect(document.querySelectorAll('[data-unstack="wide"]')).toHaveLength(1);
+  });
 });
 
 describe('DataTableSkeleton', () => {
@@ -119,5 +144,11 @@ describe('DataTableSkeleton', () => {
     render(<DataTableSkeleton caption="Agents" columns={COLUMNS} rowCount={3} />);
 
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('carries the caller’s un-stacking threshold, so the placeholder stacks when the table does', () => {
+    render(<DataTableSkeleton caption="Agents" columns={COLUMNS} rowCount={3} unstackAt="wide" />);
+
+    expect(document.querySelectorAll('[data-unstack="wide"]')).toHaveLength(1);
   });
 });

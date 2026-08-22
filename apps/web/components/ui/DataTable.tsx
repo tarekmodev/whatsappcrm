@@ -25,6 +25,12 @@ import styles from './DataTable.module.css';
  * scroll. Measuring the space it actually has is the only version of this that
  * cannot be wrong, and it also makes the component correct inside a dialog or a
  * side panel, neither of which the viewport knows about.
+ *
+ * **A table must never make the document scroll sideways** (0001, "List views").
+ * Measuring the space is half of that; the other half is `unstackAt`, because a
+ * table whose columns need more room than the default threshold gives them will
+ * un-stack into a space it cannot fit and push the page sideways anyway — which
+ * is what the contact directory did between 1000px and 1090px (TAR-727).
  */
 
 /**
@@ -80,6 +86,22 @@ export interface DataTableColumn<Row> {
  */
 export type DataTableRowTone = 'danger' | 'warning';
 
+/**
+ * How much room a table's columns need before it stops being a stack of cards.
+ *
+ * `default` is 40rem of container, measured from the tables that fit inside it.
+ * `wide` is 52rem, for a table whose columns need more than that — un-stacking
+ * one into a space too narrow for it is what makes the *document* scroll
+ * sideways, which takes the navigation off screen with it (TAR-727).
+ *
+ * Reach for `wide` only after measuring: the widths live in
+ * `DataTable.module.css`, and a table that fits should keep the earlier
+ * threshold, because a stacked card is a worse way to scan five rows than a
+ * table is.
+ */
+export const DATA_TABLE_UNSTACK_WIDTHS = ['default', 'wide'] as const;
+export type DataTableUnstackWidth = (typeof DATA_TABLE_UNSTACK_WIDTHS)[number];
+
 export interface DataTableProps<Row> {
   /** The table's accessible name. Visually hidden unless `isCaptionVisible`. */
   caption: string;
@@ -104,6 +126,8 @@ export interface DataTableProps<Row> {
    * "Overdue" in words.
    */
   getRowTone?: (row: Row) => DataTableRowTone | undefined;
+  /** How much room the columns need before the stacked cards become a table. */
+  unstackAt?: DataTableUnstackWidth;
 }
 
 export function DataTable<Row>({
@@ -114,9 +138,10 @@ export function DataTable<Row>({
   isCaptionVisible = false,
   isPlaceholder = false,
   getRowTone,
+  unstackAt = 'default',
 }: DataTableProps<Row>) {
   return (
-    <div className={styles.container}>
+    <div className={styles.container} data-unstack={unstackAt === 'wide' ? 'wide' : undefined}>
       <table className={styles.table}>
         <caption className={styles.caption} data-visible={isCaptionVisible ? 'true' : undefined}>
           {caption}
@@ -224,11 +249,14 @@ export function DataTableSkeleton<Row>({
   caption,
   columns,
   rowCount,
+  unstackAt = 'default',
 }: {
   caption: string;
   columns: readonly DataTableColumn<Row>[];
   /** Match the page size the real list requests, so the swap does not shift. */
   rowCount: number;
+  /** Match the real table's threshold, or the placeholder stacks when it does not. */
+  unstackAt?: DataTableUnstackWidth;
 }) {
   const placeholderColumns: DataTableColumn<number>[] = columns.map((column) => ({
     key: column.key,
@@ -250,6 +278,7 @@ export function DataTableSkeleton<Row>({
         rows={Array.from({ length: rowCount }, (_unused, index) => index)}
         getRowKey={(index) => String(index)}
         isPlaceholder
+        unstackAt={unstackAt}
       />
     </div>
   );

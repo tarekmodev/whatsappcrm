@@ -1,3 +1,15 @@
+/*
+ * The avatar and the name stay on one line. `Cluster` wraps by default, which is
+ * right for a toolbar and wrong for a face and the name it belongs to: in a
+ * narrow Name column the avatar dropped to a line of its own and left the row
+ * nearly twice as tall, with the circle sitting above a name it no longer read
+ * as belonging to. A long name wraps inside `.identity` instead, which is where
+ * it should give way.
+ */
+.identityCluster {
+  flex-wrap: nowrap;
+}
+
 .identity {
   display: flex;
   flex-wrap: wrap;
@@ -18,4 +30,37 @@
 .muted {
   color: var(--color-on-surface-muted);
   font-size: var(--font-size-body-sm);
+}
+
+/*
+ * The email address, capped (TAR-727).
+ *
+ * It is the one contact column whose content has no natural bound, and an
+ * address is scanned rather than read — so it took 264px of a 1000px canvas and
+ * a third of the table's minimum width with it, which is where the page's
+ * horizontal scroll came from. `break-word` in `DataTable` does not help: it
+ * leaves a column's *min-content* at the width of the longest unbroken run, and
+ * an address is one unbroken run.
+ *
+ * The full value stays in the DOM, so assistive technology reads it whole and
+ * `title` hands it back to a pointer. See the note beside the cell renderer.
+ */
+.email {
+  display: block;
+  min-inline-size: 0;
+}
+
+/*
+ * Only once the table is a table. In the stacked card layout the cell is a
+ * fixed-width column and the address wraps to as many lines as it needs, which
+ * is the better answer there — nothing is hidden, and there is no column beside
+ * it to stay level with.
+ */
+@container style(--table-unstacked: 1) {
+  .email {
+    max-inline-size: var(--measure-cell);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
 }
