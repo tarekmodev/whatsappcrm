@@ -133,6 +133,56 @@ describe('knowledge base', () => {
     expect(rewritten.chunkCount).toBe(0);
   });
 
+  /**
+   * The mock is a transport, not a per-feature fake (`lib/api/http.ts`), and
+   * `NEXT_PUBLIC_USE_MOCK_API=true` is the shipped default — so a field it
+   * handles differently from the API is a bug an admin meets on the default
+   * local environment, not a test-only inaccuracy.
+   *
+   * `sourceUrl` is the one field on this input that is nullable as well as
+   * optional, which makes it the one field where `??` is the wrong operator.
+   */
+  describe('a source URL', () => {
+    const path = `/v1/knowledge-documents/${MOCK_IDS.knowledgeDocuments.returnsPolicy}`;
+
+    async function patch(body: unknown): Promise<KnowledgeDocumentResponse> {
+      return KnowledgeDocumentResponseSchema.parse(
+        await handleMockRequest({ method: 'PATCH', path, body }),
+      );
+    }
+
+    it('is cleared by an explicit null, which is the only way to say "there is no link"', async () => {
+      expect((await patch({ sourceUrl: null })).sourceUrl).toBeNull();
+
+      // Read back rather than trusted from the response: the point is that the
+      // clear was *stored*, not that one handler returned what it was handed.
+      const reread = KnowledgeDocumentResponseSchema.parse(
+        await handleMockRequest({ method: 'GET', path }),
+      );
+
+      expect(reread.sourceUrl).toBeNull();
+    });
+
+    it('is left alone when the key is absent', async () => {
+      const renamed = await patch({ title: 'Returns policy' });
+
+      expect(renamed.sourceUrl).toBe('https://northwind.example/help/returns');
+    });
+
+    it('is replaced by a new one', async () => {
+      const replaced = await patch({ sourceUrl: 'https://northwind.example/help/refunds' });
+
+      expect(replaced.sourceUrl).toBe('https://northwind.example/help/refunds');
+    });
+
+    it('does not reindex the entry, because it never reached the chunks', async () => {
+      const cleared = await patch({ sourceUrl: null });
+
+      expect(cleared.status).toBe('indexed');
+      expect(cleared.chunkCount).toBeGreaterThan(0);
+    });
+  });
+
   it('indexes an entry on demand, splitting it on blank lines', async () => {
     const created = KnowledgeDocumentResponseSchema.parse(
       await handleMockRequest({

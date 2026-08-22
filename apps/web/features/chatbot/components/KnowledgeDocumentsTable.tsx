@@ -21,7 +21,7 @@ import styles from './KnowledgeDocumentsTable.module.css';
 
 /**
  * The knowledge base, as a table. Usage:
- * `<KnowledgeDocumentsTable documents={documents} canWrite />`.
+ * `<KnowledgeDocumentsTable documents={documents} indexedEntryCount={count} canWrite />`.
  *
  * A client component because the row actions open dialogs; the data is fetched
  * on the server and passed in, so no client-side waterfall is introduced.

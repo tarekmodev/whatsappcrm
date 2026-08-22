@@ -16,7 +16,7 @@ import { LazyKnowledgeEntryDialog } from './knowledge-dialogs.lazy';
 
 /**
  * The knowledge base section: the card, the add trigger and the table. Usage:
- * `<KnowledgeBaseSection documents={documents} hasMore canWrite />`.
+ * `<KnowledgeBaseSection documents={documents} hasMore indexedEntryCount={count} canWrite />`.
  *
  * `canWrite` comes from the server's permission check, so a principal holding
  * only `ai:read` is never rendered a control that leads to a refusal.
