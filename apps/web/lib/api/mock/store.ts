@@ -1,10 +1,13 @@
 import 'server-only';
 
 import {
+  MOCK_AI_CONFIGS,
   MOCK_ASSIGNMENT_RULES,
   MOCK_CANNED_RESPONSES,
   MOCK_CONTACTS,
   MOCK_CONVERSATIONS,
+  MOCK_HANDOFFS,
+  MOCK_KNOWLEDGE_DOCUMENTS,
   MOCK_CUSTOM_FIELD_DEFINITIONS,
   MOCK_INTERNAL_NOTES,
   MOCK_MESSAGES,
@@ -21,10 +24,13 @@ import {
   MOCK_USERS,
   MOCK_WORKFLOWS,
   MOCK_WORKFLOW_RUNS,
+  type MockAiConfigRecord,
   type MockAssignmentRule,
   type MockCannedResponse,
   type MockContact,
   type MockConversation,
+  type MockHandoffRecord,
+  type MockKnowledgeDocument,
   type MockCustomFieldDefinition,
   type MockInternalNote,
   type MockMessage,
@@ -83,6 +89,14 @@ interface MockState {
   /** A log rather than a ledger: nothing here is written by the console. */
   workflowRuns: Map<string, MockWorkflowRun>;
   slaAlerts: Map<string, MockSlaAlert>;
+  knowledgeDocuments: Map<string, MockKnowledgeDocument>;
+  /**
+   * Keyed by **tenant**, like `onboarding` above: a tenant has exactly one
+   * chatbot configuration, and a surrogate key would invite a handler to look
+   * one up by something other than the caller's tenant.
+   */
+  aiConfigs: Map<string, MockAiConfigRecord>;
+  handoffs: Map<string, MockHandoffRecord>;
   /**
    * Keyed by **tenant**, not by an id of its own: a tenant has exactly one
    * checklist, and a surrogate key would invite a handler to look one up by
@@ -175,6 +189,19 @@ function seed(): MockState {
     ),
     workflowRuns: new Map(MOCK_WORKFLOW_RUNS.map((run) => [run.id, run])),
     slaAlerts: new Map(MOCK_SLA_ALERTS.map((item) => [item.id, item])),
+    knowledgeDocuments: new Map(MOCK_KNOWLEDGE_DOCUMENTS.map((item) => [item.id, item])),
+    aiConfigs: new Map(
+      MOCK_AI_CONFIGS.map((config) => [
+        config.tenantId,
+        { ...config, handoffKeywords: [...config.handoffKeywords] },
+      ]),
+    ),
+    handoffs: new Map(
+      MOCK_HANDOFFS.map((handoff) => [
+        handoff.id,
+        { ...handoff, citedDocuments: handoff.citedDocuments.map((document) => ({ ...document })) },
+      ]),
+    ),
     onboarding: new Map(
       MOCK_ONBOARDING_CHECKLISTS.map((checklist) => [
         checklist.tenantId,

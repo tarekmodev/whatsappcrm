@@ -469,6 +469,109 @@ describe('UsersService — role write invariants', () => {
     });
   });
 
+  describe('suspending a user disarms the workflows naming them', () => {
+    // TAR-596. A workflow may only name an *active* user — `REFERENCEABLE_USER`
+    // is the predicate arming resolves against — so a suspension leaves every
+    // workflow naming them armed with an actor the executor will refuse to use.
+    // Before this, the first ticket that reached one failed `reference_missing`
+    // and auto-deactivated it: the admin who suspended the account found out
+    // from a customer rather than from the audit trail.
+    it('disarms with its own reason, and leaves the reference rows standing', async () => {
+      const { users, tenantContext, recorded } = buildService({
+        target: activeAgent,
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+        workflowsNamingTarget: [WORKFLOW_A, WORKFLOW_B],
+      });
+
+      await asPrincipal(tenantContext, 'admin', () =>
+        users.update(TARGET, { status: 'suspended' }),
+      );
+
+      expect(recorded.workflowDisarms).toEqual([
+        {
+          where: { id: { in: [WORKFLOW_A, WORKFLOW_B] } },
+          data: { isActive: false, brokenReason: 'reference_suspended' },
+        },
+      ]);
+      // Not `reference_removed`: the account is still there and still
+      // reinstatable, and the console's copy says which repair applies.
+      //
+      // The reverse index keeps its rows for the same reason — dropping them
+      // would make the workflow's `references` array claim the definition points
+      // at nothing, and lose the id an admin has to repair.
+      expect(recorded.workflowReferenceDeletes).toEqual([]);
+    });
+
+    it('records how many were disarmed on the status-change audit row', async () => {
+      const { users, tenantContext, recorded } = buildService({
+        target: activeAgent,
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+        workflowsNamingTarget: [WORKFLOW_A, WORKFLOW_B],
+      });
+
+      await asPrincipal(tenantContext, 'admin', () =>
+        users.update(TARGET, { status: 'suspended' }),
+      );
+
+      expect(
+        recorded.audits.find((entry) => entry.action === 'user.status_changed')?.metadata,
+      ).toEqual({ from: 'active', to: 'suspended', workflowsDisarmed: 2 });
+    });
+
+    it('touches no workflow when the suspended user is named by none', async () => {
+      // An untargeted `updateMany` here would disarm every workflow in the tenant.
+      const { users, tenantContext, recorded } = buildService({
+        target: activeAgent,
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+      });
+
+      await asPrincipal(tenantContext, 'admin', () =>
+        users.update(TARGET, { status: 'suspended' }),
+      );
+
+      expect(recorded.workflowDisarms).toEqual([]);
+    });
+
+    it('touches no workflow when the status change is a reinstatement', async () => {
+      // Re-arming on reactivation is deliberately not automatic: a workflow
+      // nobody looked at must not start running by itself, which is the rule
+      // `WorkflowService.update` states. The admin repairs and enables it.
+      const { users, tenantContext, recorded } = buildService({
+        target: { ...activeAgent, status: 'suspended' },
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+        workflowsNamingTarget: [WORKFLOW_A],
+      });
+
+      await asPrincipal(tenantContext, 'admin', () => users.update(TARGET, { status: 'active' }));
+
+      expect(recorded.workflowDisarms).toEqual([]);
+    });
+
+    it('touches no workflow when the status is unchanged', async () => {
+      const { users, tenantContext, recorded } = buildService({
+        target: { ...activeAgent, status: 'suspended' },
+        activeAdminIds: [CALLER],
+        teams: [],
+        memberships: [],
+        workflowsNamingTarget: [WORKFLOW_A],
+      });
+
+      await asPrincipal(tenantContext, 'admin', () =>
+        users.update(TARGET, { status: 'suspended' }),
+      );
+
+      expect(recorded.workflowDisarms).toEqual([]);
+    });
+  });
+
   describe('a role, status or team change logs the user out', () => {
     it.each([
       ['role', { role: 'supervisor' as const }, 'user.role_changed'],

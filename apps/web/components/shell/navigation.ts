@@ -110,6 +110,22 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     requiresAny: ['workflow:read'],
   },
   {
+    id: 'settings-chatbot',
+    label: content.nav.chatbot,
+    href: routes.settingsChatbot(),
+    // `note`, for the knowledge base an admin writes here. The conversation icon
+    // belongs to the WhatsApp entry below, and `automation` to the workflow
+    // builder above it — two entries sharing one glyph is exactly what makes a
+    // collapsed rail unreadable.
+    icon: 'note',
+    // The same permissions the endpoints behind it require. `ai:read` alone is
+    // enough to reach the page: `GET /ai/config` and the document list are
+    // readable, and every control the reader may not use is rendered read-only
+    // rather than hidden, so nobody is sent to a 403 for a surface they can
+    // half use.
+    requiresAny: ['ai:read', 'ai:write'],
+  },
+  {
     id: 'settings-whatsapp',
     label: content.nav.whatsapp,
     href: routes.settingsWhatsApp(),

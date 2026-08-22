@@ -1,9 +1,13 @@
 import type {
   AgentAvailability,
+  AiReadinessBlocker,
+  ConversationBotState,
   ConversationStatus,
   CustomFieldType,
   DomainVerificationFailureReason,
   FallbackAssignmentReason,
+  HandoffReason,
+  KnowledgeDocumentStatus,
   MessageStatus,
   MessageType,
   OnboardingStepId,
@@ -79,6 +83,7 @@ export const content = {
     people: 'People',
     assignment: 'Assignment',
     workflows: 'Workflows',
+    chatbot: 'Chatbot',
     whatsapp: 'WhatsApp',
     branding: 'Branding',
     domains: 'Domains',
@@ -279,7 +284,63 @@ export const content = {
     // --- Opening a thread from the list ------------------------------------
     openConversation: (name: string) => `Open the conversation with ${name}`,
     unclaimed: 'Unclaimed',
-    botHandling: 'Bot is answering',
+
+    // --- The chatbot, in the inbox (TAR-28) --------------------------------
+    /**
+     * One badge per state the bot can leave a conversation in. `off` has no
+     * badge at all — a conversation the chatbot never touched is the ordinary
+     * case, and labelling it would put a word on every row for no reader.
+     *
+     * `handed_off` is the one that earns its place: it is not "the bot is
+     * answering" and it is not "nothing happened", and a list that rendered
+     * those two the same would hide the conversations that need somebody now.
+     */
+    botStates: {
+      off: '',
+      bot_active: 'Bot is answering',
+      handed_off: 'Bot handed over',
+      human_active: 'You have taken over',
+    } satisfies Record<ConversationBotState, string>,
+
+    // --- The handoff summary ------------------------------------------------
+    handoffHeading: 'What the chatbot did',
+    handoffLoading: 'Loading the chatbot summary',
+    handoffReasonLabel: 'Why it stopped',
+    handoffReasons: {
+      low_confidence: 'It was not sure enough of the answer.',
+      no_match: 'It found nothing in the knowledge base about this.',
+      customer_requested: 'The customer asked for a person.',
+      max_turns: 'It had already replied as many times as it is allowed to.',
+      agent_requested: 'Somebody on your team took the conversation.',
+      bot_error: 'It could not complete the reply.',
+    } satisfies Record<HandoffReason, string>,
+    handoffTriggerLabel: 'The message it could not take',
+    handoffRepliesLabel: 'Replies before handing over',
+    handoffReplyCount: (count: number) => (count === 1 ? '1 reply' : `${count} replies`),
+    handoffAtLabel: 'Handed over',
+    handoffConfidenceLabel: 'How sure it was',
+    /** The composite score, and the two halves it is the lower of. */
+    handoffConfidenceValue: (score: string) => `${score} sure`,
+    handoffConfidenceBreakdown: (model: string, retrieval: string) =>
+      `Model ${model} · knowledge base ${retrieval}`,
+    handoffConfidenceNone: 'It never reached the model, so there is no score.',
+    /**
+     * The field that catches a confidently wrong answer: the customer asked
+     * about shipping and the bot answered from the refunds policy. Invisible
+     * from the transcript alone, which is why it is named here.
+     */
+    handoffCitedLabel: 'Answered from',
+    handoffCitedNone: 'It cited nothing from the knowledge base.',
+    handoffExchangeLabel: 'The exchange is above, in the conversation itself.',
+    handoffNone: 'The chatbot has not handed this conversation over.',
+
+    // --- Taking a thread from the bot --------------------------------------
+    takeFromBot: 'Take over from the bot',
+    takeFromBotAria: (contact: string) => `Take the conversation with ${contact} from the chatbot`,
+    takeFromBotSuccess: (contact: string) => `The chatbot has stopped answering ${contact}`,
+    /** Said on a thread the bot is on, so an agent knows why it is replying without them. */
+    botActiveNotice:
+      'The chatbot is answering this conversation. Take it over to reply yourself — the chatbot stops for good once you do.',
 
     // --- Claiming ----------------------------------------------------------
     claim: 'Claim',
@@ -745,6 +806,14 @@ export const content = {
     outbound: 'From your team',
     sentBy: (name: string) => `Sent by ${name}`,
     sentByAutomation: 'Sent automatically',
+    /**
+     * Narrower than `sentByAutomation`, and preferred over it wherever the
+     * message says so. Both a chatbot reply (TAR-28) and a workflow reply
+     * (TAR-27) are "sent automatically"; only one of them is something an agent
+     * can take over from, so naming it is what makes the handoff control make
+     * sense on the bubble above it.
+     */
+    sentByBot: 'Sent by the chatbot',
     /**
      * A person sent it and this page could not resolve which one. Distinct from
      * `sentByAutomation` on purpose: attributing a colleague's words to a bot is
@@ -1724,6 +1793,8 @@ export const content = {
       reference_removed: 'Something this workflow points at was removed, so it was switched off.',
       reference_missing:
         'Something this workflow points at went missing while it was running, so it was switched off.',
+      reference_suspended:
+        'Someone this workflow points at was suspended, so it was switched off. Reinstate them or pick a replacement.',
     } satisfies Record<WorkflowBrokenReason, string>,
 
     runStatuses: {
@@ -2367,6 +2438,185 @@ export const content = {
     platformNotRemovable:
       'Your platform subdomain cannot be removed — it is how you always reach the console.',
     limitReached: (limit: number) => `You can have up to ${limit} custom domains.`,
+  },
+
+  /**
+   * The AI chatbot (TAR-28): the knowledge base an admin writes, the settings
+   * that decide when the bot answers, and why it is or is not answering today.
+   *
+   * The vocabulary is fixed here and nowhere else. `docs/STYLE.md` reserves
+   * *agent* for a person, so the machine is only ever **the chatbot** or **the
+   * bot** on screen — never "the agent", and never "AI agent".
+   */
+  chatbot: {
+    title: 'Chatbot',
+    subtitle: 'What the chatbot knows, and when it answers instead of your team.',
+    loading: 'Loading chatbot settings',
+
+    // --- Readiness ---------------------------------------------------------
+    readinessHeading: 'Automated replies',
+    readinessDescription: 'Whether the chatbot is answering customers right now.',
+    readyHeading: 'The chatbot is answering',
+    readyBody: (indexedCount: number) =>
+      indexedCount === 1
+        ? 'It answers from 1 indexed entry, and passes anything it is unsure about to your team.'
+        : `It answers from ${indexedCount} indexed entries, and passes anything it is unsure about to your team.`,
+    notReadyHeading: 'The chatbot is not answering',
+    notReadyBody:
+      'Every conversation goes straight to your team, exactly as it did before. Clear the following to switch automated replies on:',
+    /**
+     * One line per clause of the KB-ready rule, and every failing one is shown
+     * rather than only the first. An admin who fixes one of four and still gets
+     * silence has learned nothing.
+     *
+     * `no_indexed_documents` is TAR-28's third acceptance criterion said out
+     * loud: an empty knowledge base means the chatbot stays quiet, and the
+     * console has to say so rather than leaving a switch that looks on.
+     */
+    blockers: {
+      provider_not_configured:
+        'The AI provider is not configured on this platform. Only the platform operator can change that — contact support.',
+      feature_not_in_plan: 'The chatbot is not included in this workspace’s plan.',
+      disabled: 'The chatbot is switched off below.',
+      no_indexed_documents:
+        'The knowledge base is empty, so there is nothing to answer from. Add an entry and index it — the chatbot never invents an answer.',
+    } satisfies Record<AiReadinessBlocker, string>,
+
+    // --- Configuration -----------------------------------------------------
+    settingsHeading: 'Chatbot settings',
+    settingsDescription: 'When the chatbot replies, and when it hands over.',
+    enabledLabel: 'Answer customers automatically',
+    enabledHint:
+      'Switch this off to send every conversation to your team without changing anything else here.',
+    enabledOn: 'On',
+    enabledOff: 'Off',
+    modelLabel: 'Model',
+    modelHint:
+      'A faster model costs less per reply and is less careful about what it does not know.',
+    modelDefaultOption: (name: string) => `Use the recommended model (${name})`,
+    /** Rendered from the prices the API publishes — never from copy. */
+    modelPrice: (input: string, output: string) =>
+      `${input} in · ${output} out, per million tokens`,
+    confidenceLabel: 'Confidence needed to reply',
+    confidenceHint:
+      'Both the search and the model have to be at least this sure. Raise it to hand over more often; lower it to let the chatbot answer more.',
+    confidenceValue: (percent: string) => `${percent} sure`,
+    maxTurnsLabel: 'Replies before handing over',
+    maxTurnsHint:
+      'The most the chatbot answers in one conversation before a person takes it, however confident it is.',
+    systemPromptLabel: 'How the chatbot should sound',
+    systemPromptHint:
+      'Tone and house rules. It never overrides the knowledge base — the chatbot answers only from what you have written there.',
+    handoffKeywordsLabel: 'Words that ask for a person',
+    handoffKeywordsHint:
+      'Any message containing one of these hands over immediately, before the chatbot looks anything up. Enter one per line.',
+    handoffKeywordsPlaceholder: 'agent\nhuman\nperson',
+    handoffKeywordTooLongError: (max: number) => `Keep each word to ${max} characters or fewer`,
+    handoffKeywordsTooManyError: (max: number) => `Use ${max} words or fewer`,
+    handoffMessageLabel: 'What the customer is told on handover',
+    handoffMessageHint:
+      'Sent once per conversation when the chatbot gives up. Leave it blank to say nothing.',
+    saveSettings: 'Save changes',
+    settingsSavedToast: 'Chatbot settings saved',
+    settingsReadOnlyNotice:
+      'Your role can read these settings but not change them. Ask a workspace admin.',
+    upsellNotice:
+      'The chatbot is not included in this workspace’s plan. These settings are read-only until it is.',
+
+    // --- Knowledge base ----------------------------------------------------
+    knowledgeHeading: 'Knowledge base',
+    knowledgeDescription: 'What the chatbot is allowed to answer from. Nothing else.',
+    knowledgeLoading: 'Loading knowledge base entries',
+    addEntry: 'Add entry',
+    knowledgeEmptyHeading: 'Nothing in the knowledge base yet',
+    /**
+     * The empty state carries TAR-28's AC3 rather than only saying "no rows":
+     * with nothing here the chatbot stays silent, and an admin who does not know
+     * that reads the empty table as a feature that is broken.
+     */
+    knowledgeEmptyBody:
+      'The chatbot answers only from entries you add here, so until there is one it stays quiet and every conversation goes to your team. Add your returns policy, your delivery times, your opening hours.',
+    /**
+     * Said rather than paged. The list is keyset-paginated and a second page is
+     * a real feature; until it exists, naming how many are shown is honest, and
+     * a pager that could not page would not be.
+     */
+    knowledgeShowingFirst: (count: number) =>
+      `Showing the ${count} most recent entries. The chatbot searches every entry, not only these.`,
+
+    columnTitle: 'Title',
+    columnStatus: 'Status',
+    columnChunks: 'Indexed pieces',
+    columnUpdated: 'Updated',
+    columnActions: 'Actions',
+    updatedAt: 'Updated',
+
+    statuses: {
+      pending: 'Indexing',
+      indexed: 'Ready',
+      failed: 'Failed',
+    } satisfies Record<KnowledgeDocumentStatus, string>,
+    statusDescriptions: {
+      pending: 'Being split for search. The chatbot cannot use it yet.',
+      indexed: 'The chatbot can answer from this.',
+      failed: 'It could not be indexed, so the chatbot ignores it.',
+    } satisfies Record<KnowledgeDocumentStatus, string>,
+    chunkCount: (count: number) => (count === 1 ? '1 piece' : `${count} pieces`),
+    chunkCountEmpty: 'None yet',
+
+    // --- The entry editor --------------------------------------------------
+    createTitle: 'Add a knowledge base entry',
+    createDescription:
+      'Write it the way you would explain it to a customer. Separate topics with a blank line — each becomes a piece the chatbot can find on its own.',
+    createSubmit: 'Add entry',
+    createSuccess: (title: string) => `“${title}” added — indexing now`,
+    editTitle: 'Edit knowledge base entry',
+    editDescription:
+      'Changing the text re-indexes the entry, and the chatbot stops using it until that finishes.',
+    editSubmit: 'Save entry',
+    editSuccess: (title: string) => `“${title}” saved`,
+    editEntry: 'Edit',
+    editEntryAria: (title: string) => `Edit ${title}`,
+    /**
+     * The list omits every entry's text — a page of them, each up to 256 KiB, is
+     * a response nobody wants — so the editor fetches the one it is opening.
+     */
+    editLoading: 'Loading this entry',
+    editLoadFailed: 'That entry could not be loaded, so it cannot be edited yet.',
+    editLoadRetry: 'Try again',
+    entryTitleLabel: 'Title',
+    entryTitlePlaceholder: 'Returns and refunds policy',
+    entryTitleTooLongError: (max: number) => `Use ${max} characters or fewer`,
+    entryContentLabel: 'What the chatbot should know',
+    entryContentPlaceholder:
+      'Unopened items can be returned within 30 days of delivery for a full refund.',
+    entryContentTooLongError: 'That entry is too long. Split it into two.',
+    entrySourceUrlLabel: 'Where this came from',
+    entrySourceUrlHint: 'A link for your own team. The customer never sees it.',
+    entrySourceUrlInvalidError: 'Enter a full web address, starting with https://',
+    entryLanguageLabel: 'Language',
+    entryLanguageHint: 'For your own team. Search works the same whichever you pick.',
+    entryLanguageUnset: 'Not set',
+
+    // --- Reindexing and deleting -------------------------------------------
+    reindex: 'Index again',
+    reindexAria: (title: string) => `Index ${title} again`,
+    reindexSuccess: (title: string) => `“${title}” is being indexed again`,
+    indexFailedLabel: 'Why it failed',
+    deleteEntry: 'Delete',
+    deleteEntryAria: (title: string) => `Delete ${title}`,
+    deleteTitle: 'Delete this entry?',
+    deleteBody: (title: string) =>
+      `“${title}” is removed from the knowledge base and the chatbot stops answering from it. This cannot be undone.`,
+    /**
+     * The one warning worth interrupting for: deleting the last entry silently
+     * switches automated replies off, and an admin who did not know that would
+     * read the quiet inbox as a fault.
+     */
+    deleteLastBody: (title: string) =>
+      `“${title}” is the only entry the chatbot can answer from. Deleting it stops automated replies altogether, and every conversation goes to your team. This cannot be undone.`,
+    deleteConfirm: 'Delete entry',
+    deleteSuccess: (title: string) => `“${title}” deleted`,
   },
 
   auth: {

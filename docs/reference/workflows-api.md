@@ -125,19 +125,19 @@ it, because the permission table is data and could change underneath the assumpt
 }
 ```
 
-| Field          | Type             | Notes                                                                                                 |
-| -------------- | ---------------- | ----------------------------------------------------------------------------------------------------- |
-| `name`         | string, 1–80     | Unique per tenant, **case-insensitively** — the column is `citext`                                    |
-| `position`     | integer ≥ 0      | Ascending **execution** order. Ties break on `id`, which is creation order                            |
-| `isActive`     | boolean          | `false` takes the workflow out of evaluation and leaves it in the list. Defaults to `false`           |
-| `brokenReason` | string or `null` | `reference_removed` or `reference_missing`. Non-null only on an auto-deactivated workflow             |
-| `version`      | integer ≥ 1      | Increments when `trigger`, `conditions` or `actions` change. Copied onto every run                    |
-| `trigger`      | object           | Exactly one. See [Triggers](#triggers)                                                                |
-| `conditions`   | array, 0–10      | All must hold. **Empty is legal** and matches every occurrence                                        |
-| `actions`      | array, 1–5       | Executed in the declared order. At least one is required                                              |
-| `references`   | array            | Every taxonomy id the definition names, resolved live. See [References](#references-and-the-taxonomy) |
-| `createdAt`    | timestamp        |                                                                                                       |
-| `updatedAt`    | timestamp        |                                                                                                       |
+| Field          | Type             | Notes                                                                                                            |
+| -------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `name`         | string, 1–80     | Unique per tenant, **case-insensitively** — the column is `citext`                                               |
+| `position`     | integer ≥ 0      | Ascending **execution** order. Ties break on `id`, which is creation order                                       |
+| `isActive`     | boolean          | `false` takes the workflow out of evaluation and leaves it in the list. Defaults to `false`                      |
+| `brokenReason` | string or `null` | `reference_removed`, `reference_suspended` or `reference_missing`. Non-null only on an auto-deactivated workflow |
+| `version`      | integer ≥ 1      | Increments when `trigger`, `conditions` or `actions` change. Copied onto every run                               |
+| `trigger`      | object           | Exactly one. See [Triggers](#triggers)                                                                           |
+| `conditions`   | array, 0–10      | All must hold. **Empty is legal** and matches every occurrence                                                   |
+| `actions`      | array, 1–5       | Executed in the declared order. At least one is required                                                         |
+| `references`   | array            | Every taxonomy id the definition names, resolved live. See [References](#references-and-the-taxonomy)            |
+| `createdAt`    | timestamp        |                                                                                                                  |
+| `updatedAt`    | timestamp        |                                                                                                                  |
 
 **`isActive` defaults to `false` on create, unlike an assignment rule.** A rule that writes
 to tickets is armed on purpose, and the flow the console produces is create → dry-run →
@@ -343,6 +343,16 @@ cannot be deleted while it names it. Removing a **user** still always succeeds �
 security action — and leaves every workflow naming them deactivated with
 `brokenReason: 'reference_removed'` and its reference rows dropped, inside the removal
 transaction.
+
+**Suspending a user disarms them too**, with `brokenReason: 'reference_suspended'` and inside
+the status-change transaction (TAR-596). It has to: `REFERENCEABLE_USER` is `active`, so a
+suspension leaves every workflow naming that person armed against an actor the executor will
+refuse to use — and before this the first ticket to reach one failed `reference_missing` and
+auto-deactivated it anyway, which meant the admin who caused it found out from a customer.
+The reference rows **stay**, unlike on removal: the account is still there and still
+reinstatable, so the console keeps reporting which field names whom. Reactivating the person
+does not re-arm anything — `brokenReason` clears on the next write once every reference
+resolves, and a human with `workflow:write` sends `isActive: true`.
 
 **`workflow_references` carries only the references that resolve.** The reverse index exists
 to make a delete refusable, and a row already gone needs no protection; its composite foreign
@@ -1080,14 +1090,44 @@ workflow that notifies the supervisors and then notifies one of them directly mu
 both — keyed on the run alone, the second was swallowed and reported `no_op`, which in this
 vocabulary means "already in that state" rather than "we dropped your message".
 
-> **TODO(author):** `workflow_notify` rows have **no read surface**. 0009's REST section
-> publishes `GET /api/v1/notifications` and its acknowledge as the generalised inbox, and
-> `docs/reference/data-model.md` describes `notifications` as the read model behind it, but
-> no such controller exists on `main`. `GET /api/v1/sla-alerts` filters `type = 'sla_breach'`
-> and `GET /api/v1/escalation-alerts` filters `type = 'escalation'`, so a `notify` action
-> writes a durable row that nothing lists and nobody can acknowledge. Whoever owns TAR-27's
-> remaining scope should confirm whether the endpoint is a follow-up story or was dropped,
-> and this page and the guide updated either way.
+## Reading and acknowledging notifications
+
+```
+GET  /api/v1/notifications                    → CursorPage<NotificationResponse>  ticket:read
+POST /api/v1/notifications/{id}/acknowledge   → NotificationResponse              ticket:read
+```
+
+The generalised inbox 0009 decision 7 published, shipped by TAR-596. `GET /api/v1/sla-alerts`
+and `GET /api/v1/escalation-alerts` stay exactly as published, as single-type views over the
+same rows.
+
+| Parameter            | In    | Type    | Required | Default | Notes                                                     |
+| -------------------- | ----- | ------- | -------- | ------- | --------------------------------------------------------- |
+| `unacknowledgedOnly` | query | boolean | no       | `true`  | The landing view is what still needs attention            |
+| `type`               | query | string  | no       | —       | One of `sla_breach`, `workflow_notify`, `workflow_broken` |
+| `cursor`             | query | string  | no       | —       | Keyset, on `(created_at DESC, id DESC)`                   |
+| `limit`              | query | integer | no       | `25`    | 1–100                                                     |
+
+A `NotificationResponse` carries `id`, `type`, `ticketId`, `ticketNumber`, the two
+`sla_breach` fields `slaTimerId` and `dueAt`, the three flattened out of `data` — `message`,
+`workflowId`, `workflowRunId` — plus `acknowledgedAt` and `createdAt`. Fields belonging to a
+type other than the row's own are `null`.
+
+**Every read is narrowed to `recipient_user_id = principal.userId`** on top of RLS, which is
+why the route needs `ticket:read` rather than an `_all` permission: an agent may call it and
+sees only what was addressed to them. A notification belonging to another principal answers
+**404, not 403**, on 0002's rule that a 403 confirms the id exists.
+
+The acknowledge is **idempotent**: first write wins in the `WHERE` clause, a second call
+returns the same row with the original `acknowledged_at`, and nothing is a 409. It writes the
+same column on the same row as `POST /api/v1/sla-alerts/{id}/acknowledge`, which is the point
+of one table and one unread count.
+
+**`escalation` rows are deliberately not in this list.** `notification_type` carries a fourth
+label (TAR-468) that `NOTIFICATION_TYPES` does not, because an escalation carries
+`raisedByUserId` and `reason` that `NotificationResponse` has no home for — it is read and
+acknowledged through `GET/POST /api/v1/escalation-alerts` instead. Folding it in is a
+contract change and belongs to whoever owns the console's unread count.
 
 ## Security and isolation
 
@@ -1153,8 +1193,6 @@ Open at the time of writing:
   there is nothing left to re-derive from.
 - **`workflow_runs` is never swept.** `runsRetentionDays` is published as 90 in the catalog
   and enforced by nothing; the table grows with ticket volume × active workflows.
-- **`workflow_notify` notifications have no read endpoint** — see the TODO under
-  [What a `notify` writes](#what-a-notify-writes).
 - **No integration spec for the workflows API**, and none for `WorkflowService` CRUD,
   `WorkflowRunService` or the sweep's SQL. The sweep's anti-join in particular is asserted by
   no test and is the most load-bearing untested statement in the module; it needs a real
@@ -1180,9 +1218,11 @@ Five, each argued where it is made in the source:
 4. **`brokenReason` is derived state rather than a latch.** 0009 decision 6 mechanism 3 was
    amended to this on TAR-399; the document carries the ruling and the note on what it said
    before.
-5. **`GET /api/v1/notifications` and `POST /api/v1/notifications/{id}/acknowledge` are not
-   implemented**, nor is `GET/POST /api/v1/tags` as 0009 pre-empts it — `/api/v1/tags` exists,
-   but from TAR-33's own story rather than from this one.
+5. **`GET/POST /api/v1/tags` did not come from this story.** `/api/v1/tags` exists, but from
+   TAR-33's own scope rather than as 0009 pre-empts it.
+   `GET /api/v1/notifications` and its acknowledge were the other half of this deviation and
+   are no longer one: TAR-596 shipped them — see
+   [Reading and acknowledging notifications](#reading-and-acknowledging-notifications).
 
 ## Verification
 
@@ -1205,3 +1245,19 @@ commit this page was written from.
   database and the real request pipeline.
 - The `curl` invocations show the request shape against a deployed host. **They were not
   run** — there is no deployed host to run them against from here.
+
+TAR-596 added [Reading and acknowledging notifications](#reading-and-acknowledging-notifications)
+and the suspension half of the reference cascade, and re-ran the following on 2026-08-22
+against `main` at commit `9544f4e`:
+
+- **The inbox's `where` clauses, its keyset page and the `data` flattening**:
+  `pnpm --filter @whatsappcrm/api exec jest src/notifications` — 2 suites, 11 tests, all
+  passing.
+- **The suspension cascade, and that a reinstatement re-arms nothing**:
+  `pnpm --filter @whatsappcrm/api exec jest src/people` — 6 suites, 64 tests, all passing.
+- **The whole API suite, typecheck, lint and `nest build`**: `pnpm --filter @whatsappcrm/api
+test` — 162 suites, 2 461 tests, all passing; `pnpm typecheck`, `pnpm lint` and
+  `pnpm format:check` clean.
+- **Still not run**: `pnpm --filter @whatsappcrm/contracts test`, for the same `vitest`
+  environment mismatch recorded above, and no integration suite exists for either surface —
+  the routes and status codes remain read from the source.

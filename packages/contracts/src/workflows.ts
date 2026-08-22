@@ -339,6 +339,15 @@ export const WORKFLOW_BROKEN_REASONS = [
   'reference_removed',
   /** A reference went missing at evaluation time and failed a run, loudly. */
   'reference_missing',
+  /**
+   * A referenced user was suspended; the status change deactivated this.
+   *
+   * Separate from `reference_removed` because the repair is different and the
+   * console says so: a removed account is gone and the field needs a new name,
+   * while a suspended one is reinstatable — and a suspension is far more often
+   * temporary than a removal is.
+   */
+  'reference_suspended',
 ] as const;
 
 export const WorkflowBrokenReasonSchema = z.enum(WORKFLOW_BROKEN_REASONS);

@@ -748,6 +748,161 @@ describe('agent, team and role management API', () => {
   async function liveSessionCount(userId: string): Promise<number> {
     return await systemPrisma.session.count({ where: { userId, revokedAt: null } });
   }
+
+  /**
+   * TAR-596: the automation half of a status change.
+   *
+   * A workflow may only name an **active** user — `REFERENCEABLE_USER` is the
+   * predicate arming resolves against — so both transitions out of `active`
+   * have to disarm every workflow naming them. Removal already did; suspension
+   * did not, and left the workflow armed against an actor the executor refuses
+   * to use until a customer's ticket tripped over it.
+   *
+   * Against a real database because the interesting parts are the constraint
+   * (`workflows_broken_is_inactive` requires both columns to move together) and
+   * the composite `NoAction` foreign key on `workflow_references`, neither of
+   * which a fake has.
+   */
+  describe('TAR-596 — a status change disarms the workflows naming that user', () => {
+    const WORKFLOW_A = '81888888-8888-7888-8888-88888888c001';
+    const REFERENCE_A = '81888888-8888-7888-8888-88888888c002';
+    const OTHER_WORKFLOW_A = '81888888-8888-7888-8888-88888888c003';
+
+    beforeEach(async () => {
+      await systemPrisma.workflow.deleteMany({ where: { tenantId: { in: [TENANT_A, TENANT_B] } } });
+      await systemPrisma.workflow.createMany({
+        data: [
+          {
+            id: WORKFLOW_A,
+            tenantId: TENANT_A,
+            name: 'Escalate to the agent',
+            isActive: true,
+            triggerType: 'ticket_created',
+            definition: {
+              trigger: { type: 'ticket_created' },
+              conditions: [],
+              actions: [{ type: 'reassign', target: 'user', userId: AGENT_A }],
+            },
+          },
+          {
+            // Names nobody. An untargeted `updateMany` in the cascade would
+            // disarm this one too, and nothing else in the suite would notice.
+            id: OTHER_WORKFLOW_A,
+            tenantId: TENANT_A,
+            name: 'Tag the ticket',
+            isActive: true,
+            triggerType: 'ticket_created',
+            definition: {
+              trigger: { type: 'ticket_created' },
+              conditions: [],
+              actions: [{ type: 'set_priority', priority: 'high' }],
+            },
+          },
+        ],
+      });
+      await systemPrisma.workflowReference.create({
+        data: {
+          id: REFERENCE_A,
+          tenantId: TENANT_A,
+          workflowId: WORKFLOW_A,
+          userId: AGENT_A,
+        },
+      });
+    });
+
+    afterAll(async () => {
+      await systemPrisma.workflow.deleteMany({ where: { tenantId: { in: [TENANT_A, TENANT_B] } } });
+    });
+
+    it('disarms on suspension, with its own reason, and keeps the reference row', async () => {
+      const response = await call(HOST_A, 'supervisor')
+        .patch(`/api/v1/users/${AGENT_A}`)
+        .send({ status: 'suspended' });
+
+      expect(response.status).toBe(200);
+
+      const broken = await systemPrisma.workflow.findUnique({ where: { id: WORKFLOW_A } });
+
+      expect(broken).toMatchObject({ isActive: false, brokenReason: 'reference_suspended' });
+      // The account is still there and still reinstatable, so the reverse index
+      // keeps naming them — the console needs the id to show which field to fix.
+      expect(await systemPrisma.workflowReference.count({ where: { userId: AGENT_A } })).toBe(1);
+    });
+
+    it('leaves a workflow that names nobody alone', async () => {
+      await call(HOST_A, 'supervisor')
+        .patch(`/api/v1/users/${AGENT_A}`)
+        .send({ status: 'suspended' });
+
+      expect(
+        await systemPrisma.workflow.findUnique({ where: { id: OTHER_WORKFLOW_A } }),
+      ).toMatchObject({ isActive: true, brokenReason: null });
+    });
+
+    it('records the count on the status-change audit row', async () => {
+      await call(HOST_A, 'supervisor')
+        .patch(`/api/v1/users/${AGENT_A}`)
+        .send({ status: 'suspended' });
+
+      const [audited] = await systemPrisma.auditLog.findMany({
+        where: { tenantId: TENANT_A, action: 'user.status_changed' },
+      });
+
+      expect(audited?.metadata).toEqual({
+        from: 'active',
+        to: 'suspended',
+        workflowsDisarmed: 1,
+      });
+    });
+
+    it('re-arms nothing when the person is reinstated', async () => {
+      await call(HOST_A, 'supervisor')
+        .patch(`/api/v1/users/${AGENT_A}`)
+        .send({ status: 'suspended' });
+      await call(HOST_A, 'supervisor').patch(`/api/v1/users/${AGENT_A}`).send({ status: 'active' });
+
+      // Deliberate: a workflow nobody looked at must not start running by
+      // itself. `broken_reason` clears on the next write once every reference
+      // resolves, and a human with `workflow:write` sends `isActive: true`.
+      expect(await systemPrisma.workflow.findUnique({ where: { id: WORKFLOW_A } })).toMatchObject({
+        isActive: false,
+        brokenReason: 'reference_suspended',
+      });
+    });
+
+    it('disarms on removal with `reference_removed`, and drops the reference row', async () => {
+      const response = await call(HOST_A, 'admin').delete(`/api/v1/users/${AGENT_A}`);
+
+      expect(response.status).toBe(204);
+      expect(await systemPrisma.workflow.findUnique({ where: { id: WORKFLOW_A } })).toMatchObject({
+        isActive: false,
+        brokenReason: 'reference_removed',
+      });
+      // Removal is the one that drops them — which is what makes the composite
+      // `NoAction` foreign key legal at all.
+      expect(await systemPrisma.workflowReference.count({ where: { userId: AGENT_A } })).toBe(0);
+    });
+
+    it('never reaches another tenant’s workflows', async () => {
+      await systemPrisma.workflow.create({
+        data: {
+          tenantId: TENANT_B,
+          name: 'Tenant B automation',
+          isActive: true,
+          triggerType: 'ticket_created',
+          definition: { trigger: { type: 'ticket_created' }, conditions: [], actions: [] },
+        },
+      });
+
+      await call(HOST_A, 'supervisor')
+        .patch(`/api/v1/users/${AGENT_A}`)
+        .send({ status: 'suspended' });
+
+      expect(
+        await systemPrisma.workflow.count({ where: { tenantId: TENANT_B, isActive: true } }),
+      ).toBe(1);
+    });
+  });
 });
 
 /** Loaded from the repository-root `.env` by `jest.int.setup.cjs`. */
