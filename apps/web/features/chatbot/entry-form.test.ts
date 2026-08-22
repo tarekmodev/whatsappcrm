@@ -56,6 +56,32 @@ describe('validateEntry', () => {
   it('treats an empty source URL as absent rather than invalid', () => {
     expect(validateEntry({ ...valid, sourceUrl: '  ' })).toEqual({});
   });
+
+  it('rejects a body past the contract’s cap', () => {
+    const body = 'a'.repeat(KNOWLEDGE_DOCUMENT_LIMITS.contentBytes + 1);
+
+    expect(validateEntry({ ...valid, body })).toEqual({
+      content: content.chatbot.entryContentTooLongError,
+    });
+  });
+
+  it('counts the body in UTF-8 bytes, so the cap means the same thing in Arabic', () => {
+    // The case this check used to pass and the API then refused: Arabic is two
+    // UTF-8 bytes per letter, so half the cap in letters is the whole cap in
+    // bytes. Ported from the contract's own `ai.test.ts`.
+    const arabic = 'ن'.repeat(KNOWLEDGE_DOCUMENT_LIMITS.contentBytes / 2 + 1);
+
+    expect(arabic.length).toBeLessThan(KNOWLEDGE_DOCUMENT_LIMITS.contentBytes);
+    expect(validateEntry({ ...valid, body: arabic })).toEqual({
+      content: content.chatbot.entryContentTooLongError,
+    });
+  });
+
+  it('accepts a body at exactly the cap', () => {
+    const body = 'a'.repeat(KNOWLEDGE_DOCUMENT_LIMITS.contentBytes);
+
+    expect(validateEntry({ ...valid, body })).toEqual({});
+  });
 });
 
 describe('parseKeywords', () => {
@@ -79,14 +105,16 @@ describe('parseKeywords', () => {
 });
 
 describe('validateSettings', () => {
-  it('accepts a short list', () => {
-    expect(validateSettings(['agent', 'human'])).toEqual({});
+  const valid = { keywords: ['agent', 'human'], maxBotTurns: '5' };
+
+  it('accepts a short list and a turn count inside the bounds', () => {
+    expect(validateSettings(valid)).toEqual({});
   });
 
   it('rejects a single keyword past the per-keyword length', () => {
     const keyword = 'a'.repeat(AI_CONFIG_LIMITS.handoffKeywordLength + 1);
 
-    expect(validateSettings([keyword])).toEqual({
+    expect(validateSettings({ ...valid, keywords: [keyword] })).toEqual({
       handoffKeywords: content.chatbot.handoffKeywordTooLongError(
         AI_CONFIG_LIMITS.handoffKeywordLength,
       ),
@@ -99,10 +127,53 @@ describe('validateSettings', () => {
       (_unused, index) => `keyword-${index}`,
     );
 
-    expect(validateSettings(keywords)).toEqual({
+    expect(validateSettings({ ...valid, keywords })).toEqual({
       handoffKeywords: content.chatbot.handoffKeywordsTooManyError(
         AI_CONFIG_LIMITS.handoffKeywordCount,
       ),
+    });
+  });
+
+  describe('the turn count', () => {
+    const turnsError = content.chatbot.maxTurnsInvalidError(
+      AI_CONFIG_LIMITS.minBotTurns,
+      AI_CONFIG_LIMITS.maxBotTurns,
+    );
+
+    it('rejects an emptied field rather than letting it submit as zero', () => {
+      // The reason this check exists: `Number('')` is `0`, which the contract
+      // refuses and nobody typed, and it surfaced as a generic failure with
+      // nothing on screen highlighted.
+      expect(validateSettings({ ...valid, maxBotTurns: '' })).toEqual({
+        maxBotTurns: turnsError,
+      });
+    });
+
+    it('rejects a value below the contract’s floor', () => {
+      expect(
+        validateSettings({ ...valid, maxBotTurns: String(AI_CONFIG_LIMITS.minBotTurns - 1) }),
+      ).toEqual({ maxBotTurns: turnsError });
+    });
+
+    it('rejects a value above the contract’s ceiling', () => {
+      expect(
+        validateSettings({ ...valid, maxBotTurns: String(AI_CONFIG_LIMITS.maxBotTurns + 1) }),
+      ).toEqual({ maxBotTurns: turnsError });
+    });
+
+    it('rejects a fraction, which the contract stores as a whole number', () => {
+      expect(validateSettings({ ...valid, maxBotTurns: '2.5' })).toEqual({
+        maxBotTurns: turnsError,
+      });
+    });
+
+    it('accepts both bounds', () => {
+      expect(
+        validateSettings({ ...valid, maxBotTurns: String(AI_CONFIG_LIMITS.minBotTurns) }),
+      ).toEqual({});
+      expect(
+        validateSettings({ ...valid, maxBotTurns: String(AI_CONFIG_LIMITS.maxBotTurns) }),
+      ).toEqual({});
     });
   });
 });

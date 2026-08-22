@@ -322,8 +322,13 @@ export type KnowledgeDocumentListItem = z.infer<typeof KnowledgeDocumentListItem
  * encoding is never shorter than the string's code-unit count, so a string
  * longer than the cap is over it whatever it contains — which both answers the
  * common case in one comparison and bounds the loop below to the cap.
+ *
+ * **Exported as the predicate rather than as a byte counter**, so a console that
+ * wants the same answer before spending a round trip gets the same answer *and*
+ * the same bound on the loop: a bare counter handed a 10 MB paste would walk all
+ * of it to learn what the first comparison already knew.
  */
-function withinContentCap(content: string): boolean {
+export function withinKnowledgeContentCap(content: string): boolean {
   if (content.length > KNOWLEDGE_DOCUMENT_LIMITS.contentBytes) {
     return false;
   }
@@ -345,14 +350,30 @@ const CONTENT_CAP_MESSAGE = `Content must be at most ${KNOWLEDGE_DOCUMENT_LIMITS
 
 export const CreateKnowledgeDocumentInputSchema = z.object({
   title: z.string().min(1).max(KNOWLEDGE_DOCUMENT_LIMITS.titleLength),
-  content: z.string().min(1).refine(withinContentCap, { message: CONTENT_CAP_MESSAGE }),
+  content: z.string().min(1).refine(withinKnowledgeContentCap, { message: CONTENT_CAP_MESSAGE }),
   sourceUrl: z.url().max(KNOWLEDGE_DOCUMENT_LIMITS.sourceUrlLength).optional(),
   language: LocaleSchema.optional(),
 });
 
 export type CreateKnowledgeDocumentInput = z.infer<typeof CreateKnowledgeDocumentInputSchema>;
 
-export const UpdateKnowledgeDocumentInputSchema = CreateKnowledgeDocumentInputSchema.partial();
+/**
+ * A partial edit, with one field that is deliberately more than partial.
+ *
+ * Every key is optional and an omitted one leaves the stored value alone — but
+ * `sourceUrl` is also **nullable**, because "there is no source URL any more" is
+ * something an admin can mean and absence cannot say. Without it, clearing the
+ * field in the console reported "Saved" and changed nothing.
+ *
+ * `null` is not offered on the create for the same reason it is needed here: on
+ * a document that does not exist yet, "clear it" and "do not set it" are the
+ * same instruction, and two spellings of one meaning is a choice no caller
+ * should have to make.
+ */
+export const UpdateKnowledgeDocumentInputSchema =
+  CreateKnowledgeDocumentInputSchema.partial().extend({
+    sourceUrl: z.url().max(KNOWLEDGE_DOCUMENT_LIMITS.sourceUrlLength).nullable().optional(),
+  });
 
 export type UpdateKnowledgeDocumentInput = z.infer<typeof UpdateKnowledgeDocumentInputSchema>;
 

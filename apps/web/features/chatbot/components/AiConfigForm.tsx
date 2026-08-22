@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState, type FormEvent } from 'react';
+import { useCallback, useRef, useState, type FormEvent } from 'react';
 import { AI_CONFIG_LIMITS, type AiConfigResponse } from '@whatsappcrm/contracts';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
@@ -60,6 +60,8 @@ export function AiConfigForm({
   const [handoffMessage, setHandoffMessage] = useState(config.handoffMessage ?? '');
   const [keywordText, setKeywordText] = useState(formatKeywords(config.handoffKeywords));
   const [fieldErrors, setFieldErrors] = useState<SettingsErrors>({});
+  const maxBotTurnsRef = useRef<HTMLInputElement>(null);
+  const handoffKeywordsRef = useRef<HTMLTextAreaElement>(null);
 
   const perform = useCallback(async () => {
     return updateChatbotSettingsAction({
@@ -89,17 +91,33 @@ export function AiConfigForm({
   return (
     <form
       className={styles.form}
+      // Validated here rather than by the browser, so the two fields with rules
+      // report them through `Field` like every other error in the console
+      // instead of in a native bubble that no theme reaches and no test can read.
       noValidate
       onSubmit={(event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
 
-        const errors = validateSettings(parseKeywords(keywordText));
+        const errors = validateSettings({
+          keywords: parseKeywords(keywordText),
+          maxBotTurns,
+        });
 
         setFieldErrors(errors);
 
-        if (Object.keys(errors).length === 0) {
-          submit();
+        if (Object.keys(errors).length > 0) {
+          // The cursor goes to the first field that is wrong, in the order they
+          // appear: an error message below a control somebody has scrolled past
+          // is an error message nobody reads.
+          const firstInvalid =
+            errors.maxBotTurns === undefined ? handoffKeywordsRef.current : maxBotTurnsRef.current;
+
+          firstInvalid?.focus();
+
+          return;
         }
+
+        submit();
       }}
     >
       <Stack gap="4">
@@ -143,11 +161,17 @@ export function AiConfigForm({
           isDisabled={isDisabled}
         />
 
-        <Field label={content.chatbot.maxTurnsLabel} hint={content.chatbot.maxTurnsHint}>
-          {({ controlId, describedBy }) => (
+        <Field
+          label={content.chatbot.maxTurnsLabel}
+          hint={content.chatbot.maxTurnsHint}
+          error={fieldErrors.maxBotTurns}
+        >
+          {({ controlId, describedBy, isInvalid }) => (
             <TextInput
+              ref={maxBotTurnsRef}
               id={controlId}
               aria-describedby={describedBy}
+              aria-invalid={isInvalid}
               className={styles.number}
               type="number"
               inputMode="numeric"
@@ -159,6 +183,7 @@ export function AiConfigForm({
               disabled={isDisabled}
               onChange={(event) => {
                 setMaxBotTurns(event.target.value);
+                setFieldErrors({});
               }}
             />
           )}
@@ -171,6 +196,7 @@ export function AiConfigForm({
         >
           {({ controlId, describedBy, isInvalid }) => (
             <Textarea
+              ref={handoffKeywordsRef}
               id={controlId}
               aria-describedby={describedBy}
               aria-invalid={isInvalid}

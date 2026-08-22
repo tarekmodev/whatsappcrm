@@ -89,7 +89,7 @@ export function modelOptions(
       value: '',
       label:
         platformDefault === undefined
-          ? content.chatbot.entryLanguageUnset
+          ? content.chatbot.modelDefaultUnavailable
           : content.chatbot.modelDefaultOption(platformDefault.displayName),
     },
     ...config.availableModels.map((option) => ({ value: option.id, label: option.displayName })),

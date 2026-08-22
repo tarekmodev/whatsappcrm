@@ -1,4 +1,8 @@
-import { AI_CONFIG_LIMITS, KNOWLEDGE_DOCUMENT_LIMITS } from '@whatsappcrm/contracts';
+import {
+  AI_CONFIG_LIMITS,
+  KNOWLEDGE_DOCUMENT_LIMITS,
+  withinKnowledgeContentCap,
+} from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 
 /**
@@ -39,7 +43,12 @@ export function validateEntry(values: EntryValues): EntryErrors {
 
   if (body.length === 0) {
     errors.content = content.form.requiredFieldError;
-  } else if (body.length > KNOWLEDGE_DOCUMENT_LIMITS.contentBytes) {
+  } else if (!withinKnowledgeContentCap(body)) {
+    // The contract's own predicate, not `body.length`: the cap is named in
+    // UTF-8 bytes and a code-unit count accepts roughly twice it in Arabic or
+    // Chinese. Measuring it differently here is worse than not measuring it —
+    // the entry passes, the round trip is spent, and the API refuses it with a
+    // byte count nobody was shown.
     errors.content = content.chatbot.entryContentTooLongError;
   }
 
@@ -96,19 +105,34 @@ export function formatKeywords(keywords: readonly string[]): string {
   return keywords.join('\n');
 }
 
+export interface SettingsValues {
+  keywords: readonly string[];
+  /** The raw field value, so an emptied number input is distinguishable from a zero. */
+  maxBotTurns: string;
+}
+
 export interface SettingsErrors {
   handoffKeywords?: string;
+  maxBotTurns?: string;
 }
 
 /**
- * The two bounds on the keyword list the contract enforces — each keyword's
- * length, and how many there are.
+ * The settings form's two checkable fields: the keyword list, and how many
+ * replies the chatbot may send.
  *
- * Length is checked per keyword rather than on the textarea as a whole, because
- * the limit is per keyword: a textarea `maxLength` would either stop somebody
- * entering a fifth valid word or let through a single 200-character one.
+ * Keyword length is checked per keyword rather than on the textarea as a whole,
+ * because the limit is per keyword: a textarea `maxLength` would either stop
+ * somebody entering a fifth valid word or let through a single 200-character
+ * one.
+ *
+ * `maxBotTurns` is checked as the **string the input holds**, not as the number
+ * it coerces to. An emptied number field coerces to `0`, which is a value the
+ * contract refuses and nobody typed — it reached the API as a generic failure
+ * with nothing on screen highlighted. A browser also reports a half-typed
+ * `type="number"` value as `''`, so "empty" and "not a number" are one case
+ * here and get one message that says what a valid answer looks like.
  */
-export function validateSettings(keywords: readonly string[]): SettingsErrors {
+export function validateSettings({ keywords, maxBotTurns }: SettingsValues): SettingsErrors {
   const errors: SettingsErrors = {};
 
   if (keywords.length > AI_CONFIG_LIMITS.handoffKeywordCount) {
@@ -121,5 +145,29 @@ export function validateSettings(keywords: readonly string[]): SettingsErrors {
     );
   }
 
+  if (!isBotTurnCount(maxBotTurns)) {
+    errors.maxBotTurns = content.chatbot.maxTurnsInvalidError(
+      AI_CONFIG_LIMITS.minBotTurns,
+      AI_CONFIG_LIMITS.maxBotTurns,
+    );
+  }
+
   return errors;
+}
+
+/** A whole number inside the contract's turn bounds, read from a raw field value. */
+function isBotTurnCount(raw: string): boolean {
+  const trimmed = raw.trim();
+
+  if (trimmed === '') {
+    return false;
+  }
+
+  const parsed = Number(trimmed);
+
+  return (
+    Number.isInteger(parsed) &&
+    parsed >= AI_CONFIG_LIMITS.minBotTurns &&
+    parsed <= AI_CONFIG_LIMITS.maxBotTurns
+  );
 }

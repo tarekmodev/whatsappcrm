@@ -50,17 +50,25 @@ export function KnowledgeEntryForm({
   const isEditing = entry !== undefined;
 
   const perform = useCallback(async () => {
-    const input = {
-      title: title.trim(),
-      content: body.trim(),
-      // Absent, not `null`: both inputs make every field optional, and an
-      // omitted key leaves the stored value alone rather than clearing it.
-      ...(sourceUrl.trim() === '' ? {} : { sourceUrl: sourceUrl.trim() }),
-    };
+    const fields = { title: title.trim(), content: body.trim() };
+    const trimmedSourceUrl = sourceUrl.trim();
 
-    return entry === undefined
-      ? createKnowledgeEntryAction(input)
-      : updateKnowledgeEntryAction(entry.id, input);
+    if (entry === undefined) {
+      // Absent rather than `null`: on a document that does not exist yet,
+      // "clear it" and "do not set it" are the same instruction.
+      return createKnowledgeEntryAction({
+        ...fields,
+        ...(trimmedSourceUrl === '' ? {} : { sourceUrl: trimmedSourceUrl }),
+      });
+    }
+
+    // `null` rather than absent, and this is the whole reason the update
+    // contract is nullable: an omitted key leaves the stored URL alone, so
+    // emptying the field used to report "Saved" and change nothing.
+    return updateKnowledgeEntryAction(entry.id, {
+      ...fields,
+      sourceUrl: trimmedSourceUrl === '' ? null : trimmedSourceUrl,
+    });
   }, [body, entry, sourceUrl, title]);
 
   const onSuccess = useCallback(

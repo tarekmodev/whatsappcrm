@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { KnowledgeDocumentListItem } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
@@ -36,11 +36,18 @@ function document(overrides: Partial<KnowledgeDocumentListItem> = {}): Knowledge
 
 function renderTable(
   documents: readonly KnowledgeDocumentListItem[],
-  { canWrite = true }: { canWrite?: boolean } = {},
+  {
+    canWrite = true,
+    indexedEntryCount = documents.filter((entry) => entry.status === 'indexed').length,
+  }: { canWrite?: boolean; indexedEntryCount?: number } = {},
 ) {
   return render(
     <ToastProvider>
-      <KnowledgeDocumentsTable documents={documents} canWrite={canWrite} />
+      <KnowledgeDocumentsTable
+        documents={documents}
+        indexedEntryCount={indexedEntryCount}
+        canWrite={canWrite}
+      />
     </ToastProvider>,
   );
 }
@@ -96,5 +103,47 @@ describe('KnowledgeDocumentsTable', () => {
     expect(
       screen.getByRole('button', { name: content.chatbot.deleteEntryAria('Delivery times') }),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * The delete warning is the one place this table makes a claim about the whole
+ * knowledge base rather than about the rows it is showing, and the table shows
+ * one page of up to a thousand entries. Counting the page would tell an admin
+ * that automated replies are about to stop when they are not.
+ *
+ * `fireEvent` rather than `user-event`: the repo does not carry that package.
+ */
+describe('the last-indexed-entry warning', () => {
+  const TITLE = 'Returns and refunds policy';
+
+  function openDelete() {
+    fireEvent.click(screen.getByRole('button', { name: content.chatbot.deleteEntryAria(TITLE) }));
+  }
+
+  it('warns when this is the tenant’s only indexed entry', async () => {
+    renderTable([document()], { indexedEntryCount: 1 });
+    openDelete();
+
+    await expect(
+      screen.findByText(content.chatbot.deleteLastBody(TITLE)),
+    ).resolves.toBeInTheDocument();
+  });
+
+  it('does not warn when the tenant holds indexed entries beyond this page', async () => {
+    // One indexed row on screen, forty in the knowledge base — the case a
+    // page-local count got backwards, claiming automated replies were about to
+    // stop when thirty-nine entries were still answering.
+    renderTable([document()], { indexedEntryCount: 40 });
+    openDelete();
+
+    await expect(screen.findByText(content.chatbot.deleteBody(TITLE))).resolves.toBeInTheDocument();
+  });
+
+  it('does not warn over an entry the chatbot cannot answer from anyway', async () => {
+    renderTable([document({ status: 'failed', chunkCount: 0 })], { indexedEntryCount: 1 });
+    openDelete();
+
+    await expect(screen.findByText(content.chatbot.deleteBody(TITLE))).resolves.toBeInTheDocument();
   });
 });
