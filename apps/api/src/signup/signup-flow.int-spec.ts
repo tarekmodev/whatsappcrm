@@ -10,6 +10,9 @@ import { hashSessionToken } from '../identity/session-token';
 import { SessionService } from '../identity/session.service';
 import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
+import { QueueService } from '../queue/queue.service';
+import { TenantLifecycleNotifier } from '../tenancy/lifecycle/tenant-lifecycle.notifier';
+import { TenantLifecycleService } from '../tenancy/lifecycle/tenant-lifecycle.service';
 import { TenantProvisioningService } from '../tenancy/tenant-provisioning.service';
 import { SignupThrottleService } from './signup-throttle.service';
 import {
@@ -67,6 +70,22 @@ describe('public self-signup', () => {
   let tenantPrisma: TenantPrisma;
   let signup: TenantSignupService;
   let redis: AuthRedisClient;
+  let notifier: TenantLifecycleNotifier;
+
+  /**
+   * The lifecycle service signup hands the genesis event to, with **no Redis**:
+   * every enqueue answers `unavailable`, the row still commits with
+   * `notified_at IS NULL`, and in production the sweep is what would pick it up.
+   * A supported state rather than a stub, and it keeps the welcome-email
+   * assertion below about the mapping and the recipients — which is where
+   * TAR-598's bug was — rather than about BullMQ.
+   */
+  function lifecycleWithoutQueue(): TenantLifecycleService {
+    return new TenantLifecycleService(
+      systemPrisma,
+      new QueueService({ get: () => undefined } as unknown as ConfigService, tenantContext),
+    );
+  }
 
   /** The token as it left in the email — the only place the plaintext exists. */
   function mailedToken(): string {
@@ -118,15 +137,24 @@ describe('public self-signup', () => {
       },
     } as unknown as ConfigService;
 
+    const mailer = {
+      send: (message: OutboundEmail) => {
+        mailbox.push(message);
+        return Promise.resolve();
+      },
+    };
+
+    const lifecycle = lifecycleWithoutQueue();
+
+    // The worker the queue would have run, driven directly by the tests that
+    // care what the genesis row sends.
+    notifier = new TenantLifecycleNotifier(systemPrisma, mailer);
+
     signup = new TenantSignupService(
       systemPrisma,
-      {
-        send: (message: OutboundEmail) => {
-          mailbox.push(message);
-          return Promise.resolve();
-        },
-      },
-      new TenantProvisioningService(systemPrisma, config),
+      mailer,
+      new TenantProvisioningService(systemPrisma, lifecycle, config),
+      lifecycle,
       new PasswordService(),
       new SessionService(tenantPrisma, new SessionCacheService(redis), new EventEmitter2()),
       new SignupThrottleService(redis, systemPrisma),
@@ -244,6 +272,70 @@ describe('public self-signup', () => {
         status: 'active',
         name: 'Ada Founder',
       });
+    });
+
+    /**
+     * TAR-598. `tenant_welcome` is mapped in `TenantLifecycleNotifier` and was
+     * unreachable in production: the notifier only sends off a committed
+     * `lifecycle_events` row, and provisioning wrote none — so a tenant's trail
+     * started empty and its first admin never got a welcome.
+     *
+     * The queue is the one link this does not exercise (there is no Redis here),
+     * and it is the link the other nine templates already share. What is asserted
+     * is the part that was broken: that the row exists, says what it should, and
+     * addresses the notice to the admin the signup just created.
+     */
+    it('writes a genesis lifecycle row that welcomes the new admin', async () => {
+      await signup.request(signupInput(), null);
+      const completed = await signup.verify(mailedToken(), ORIGIN);
+
+      const events = await systemPrisma.lifecycleEvent.findMany({
+        where: { tenantId: completed.tenant.id },
+        select: {
+          id: true,
+          fromState: true,
+          toState: true,
+          trigger: true,
+          actorType: true,
+          occurredAt: true,
+          notifiedAt: true,
+        },
+      });
+
+      expect(events).toHaveLength(1);
+      const [genesis] = events;
+
+      expect(genesis).toMatchObject({
+        fromState: null,
+        toState: 'trialing',
+        trigger: 'system',
+        actorType: 'system',
+        // Nothing has sent it yet, which is what leaves it for the queue — or,
+        // if the queue is down, for the sweep's backstop.
+        notifiedAt: null,
+      });
+
+      mailbox.length = 0;
+      await notifier.notify(genesis?.id ?? '');
+
+      expect(mailbox).toHaveLength(1);
+      expect(mailbox[0]).toMatchObject({
+        template: 'tenant_welcome',
+        to: EMAIL,
+        tenantId: completed.tenant.id,
+      });
+
+      // Claimed, so a redelivery cannot mail the same admin twice.
+      await expect(
+        systemPrisma.lifecycleEvent.findUniqueOrThrow({
+          where: { id: genesis?.id ?? '' },
+          select: { notifiedAt: true },
+        }),
+      ).resolves.toMatchObject({ notifiedAt: expect.any(Date) as Date });
+
+      mailbox.length = 0;
+      await notifier.notify(genesis?.id ?? '');
+      expect(mailbox).toHaveLength(0);
     });
 
     it('starts the trial clock from the published policy', async () => {
@@ -577,6 +669,8 @@ describe('public self-signup', () => {
         getOrThrow: (key: string) => configValue(key),
       } as unknown as ConfigService;
 
+      const lifecycle = lifecycleWithoutQueue();
+
       offline = new TenantSignupService(
         systemPrisma,
         {
@@ -585,7 +679,8 @@ describe('public self-signup', () => {
             return Promise.resolve();
           },
         },
-        new TenantProvisioningService(systemPrisma, config),
+        new TenantProvisioningService(systemPrisma, lifecycle, config),
+        lifecycle,
         new PasswordService(),
         new SessionService(tenantPrisma, new SessionCacheService(deadRedis), new EventEmitter2()),
         new SignupThrottleService(deadRedis, systemPrisma),

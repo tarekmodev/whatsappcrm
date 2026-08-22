@@ -4,6 +4,8 @@ import { LIFECYCLE_POLICY, PLAN_FEATURES, SLA_DEFAULTS } from '@whatsappcrm/cont
 import { type $Enums, type Prisma } from '../generated/prisma/client';
 import { SYSTEM_PRISMA, type SystemPrisma } from '../prisma/prisma.tokens';
 import { isUniqueViolationOn } from '../prisma/unique-violation';
+import { uuidV7 } from '../prisma/uuid-v7';
+import { TenantLifecycleService } from './lifecycle/tenant-lifecycle.service';
 import { PlatformHostnameTakenError, TenantSlugTakenError } from './tenant-provisioning.errors';
 
 /**
@@ -98,25 +100,64 @@ export interface ProvisionTenantResult {
   tenant: ProvisionedTenant;
   /** False when the slug was already provisioned and this call changed nothing. */
   created: boolean;
+  /**
+   * The genesis `lifecycle_events` row this wrote, or null when the tenant
+   * already existed and nothing was written.
+   *
+   * **A caller that passed its own `tx` owns the notification.** `provision`
+   * cannot enqueue it, because the row is not visible to a worker until the
+   * caller's transaction commits and only the caller knows when that is — so it
+   * hands the id back and expects `TenantLifecycleService.notifyOfEvent` after
+   * the commit. Forgetting costs the tenant nothing durable: the row still
+   * carries `notified_at IS NULL` and the lifecycle sweep re-enqueues it a
+   * minute later.
+   */
+  lifecycleEventId: string | null;
 }
 
 /**
  * Admin-triggered tenant provisioning (TAR-19, first acceptance criterion).
  *
- * Creates the four rows that make a tenant exist, be reachable, and behave:
+ * Creates the rows that make a tenant exist, be reachable, and behave:
  *
- *   `tenants`         the tenant itself
- *   `tenant_settings` its operational defaults — timezone, locale
- *   `tenant_domains`  its platform subdomain, so host → tenant resolution can
- *                     find it. A tenant with no domain is unreachable by every
- *                     entry point in TAR-39's request pipeline.
- *   `sla_policies`    its default first-response window (TAR-270, against 0006
- *                     decision 6). See below for why this one is here.
+ *   `tenants`             the tenant itself
+ *   `tenant_settings`     its operational defaults — timezone, locale
+ *   `tenant_domains`      its platform subdomain, so host → tenant resolution
+ *                         can find it. A tenant with no domain is unreachable by
+ *                         every entry point in TAR-39's request pipeline.
+ *   `sla_policies`        its default first-response window (TAR-270, against
+ *                         0006 decision 6). See below for why this one is here.
+ *   `tenant_entitlements` the caps enforcement reads (TAR-403, 0009 Amendment 1
+ *                         ruling 3).
+ *   `lifecycle_events`    its genesis row. See below.
  *
  * and nothing else. In particular it creates no users (TAR-35 invites the first
  * one), no branding row (TAR-29 owns branding, including whether that row is
  * written eagerly) and no subscription (TAR-37). Seeding a table another story
  * owns would fix its defaults here, in the wrong place.
+ *
+ * ## Why the genesis lifecycle row is here
+ *
+ * `TenantLifecycleService.transition()` is the only writer of `tenants.status`
+ * and this service is 0009's one documented exception, because a tenant's first
+ * status is decided by the `INSERT` that creates it — there is no prior state to
+ * transition from. The consequence, until TAR-598, was that creation was the one
+ * arrival with **no** `lifecycle_events` row: a tenant's trail started empty, and
+ * `tenant_welcome` — which 0009 decision 7 maps to arriving at `trialing`, and
+ * which the notifier only sends off a committed row — never fired for a
+ * self-signup tenant at all.
+ *
+ * So the exception now covers the trail as well as the column: the same
+ * transaction that inserts the tenant inserts its genesis row, with
+ * `from_state IS NULL` — the case `lifecycle_events.from_state` is nullable for,
+ * and the shape TAR-403's backfill already gave every tenant that predates the
+ * table. `occurred_at` is the tenant's own `created_at` rather than a second
+ * clock, so the row and the tenant cannot disagree about when it happened.
+ *
+ * Only the creating call writes one. The repair path below deliberately does
+ * not: a tenant already `trialing` when it was written would be owed a welcome
+ * email the sweep would duly deliver, months late, to a customer who has been
+ * using the product since.
  *
  * ## Why the SLA policy is not that mistake
  *
@@ -168,6 +209,7 @@ export class TenantProvisioningService {
 
   constructor(
     @Inject(SYSTEM_PRISMA) private readonly systemPrisma: SystemPrisma,
+    private readonly lifecycle: TenantLifecycleService,
     private readonly config: ConfigService,
   ) {}
 
@@ -185,7 +227,8 @@ export class TenantProvisioningService {
    * back: an orphan workspace, and a verification token that still works.
    *
    * The advisory lock and the unique index behave identically either way; what
-   * changes is only whose commit releases them.
+   * changes is only whose commit releases them — and, because of that, who
+   * enqueues the genesis notification. See `ProvisionTenantResult`.
    */
   async provision(
     command: ProvisionTenantCommand,
@@ -204,8 +247,12 @@ export class TenantProvisioningService {
       const existing = await findProvisionedTenant(client, command.slug);
 
       return existing === null
-        ? { tenant: await createTenant(client, command, hostname), created: true }
-        : { tenant: await completeTenant(client, existing, command, hostname), created: false };
+        ? { ...(await createTenant(client, command, hostname)), created: true }
+        : {
+            tenant: await completeTenant(client, existing, command, hostname),
+            created: false,
+            lifecycleEventId: null,
+          };
     };
 
     const result = await (
@@ -232,6 +279,13 @@ export class TenantProvisioningService {
         ? `Provisioned tenant ${result.tenant.slug} (${result.tenant.id}) at ${hostname}`
         : `Tenant ${result.tenant.slug} (${result.tenant.id}) was already provisioned; no changes made`,
     );
+
+    // Only when this call owned the transaction, because only then has the row
+    // committed. A caller that passed `tx` is handed the id instead and enqueues
+    // after its own commit — see `ProvisionTenantResult.lifecycleEventId`.
+    if (tx === undefined && result.lifecycleEventId !== null) {
+      await this.lifecycle.notifyOfEvent(result.tenant.id, result.lifecycleEventId);
+    }
 
     return result;
   }
@@ -289,16 +343,23 @@ function findProvisionedTenant(tx: Prisma.TransactionClient, slug: string) {
  * The whole tenant in one statement group. Nested writes keep it that way: the
  * settings row and the domain row are inserted with the tenant, inside the
  * caller's transaction, so a constraint failure on either leaves no tenant.
+ *
+ * The genesis `lifecycle_events` row is the one child that cannot be nested:
+ * `Tenant` carries no `lifecycleEvents` relation, by design — 0009 Amendment 1
+ * ruling 2 removed the foreign key so the trail survives the purge that empties
+ * everything else. It is therefore a second statement in the same transaction,
+ * which is the same atomicity by a different route.
  */
 async function createTenant(
   tx: Prisma.TransactionClient,
   command: ProvisionTenantCommand,
   hostname: string,
-): Promise<ProvisionedTenant> {
+): Promise<{ tenant: ProvisionedTenant; lifecycleEventId: string }> {
   const timezone = command.timezone ?? DEFAULT_TIMEZONE;
   const locale = command.locale ?? DEFAULT_LOCALE;
 
-  const start = startingState(command.path ?? 'operator');
+  const path = command.path ?? 'operator';
+  const start = startingState(path);
 
   const tenant = await tx.tenant.create({
     data: {
@@ -326,7 +387,61 @@ async function createTenant(
     select: { id: true, slug: true, name: true, status: true, createdAt: true },
   });
 
-  return { ...tenant, primaryHostname: hostname, timezone, locale };
+  const lifecycleEventId = await createGenesisEvent(tx, tenant, path);
+
+  return { tenant: { ...tenant, primaryHostname: hostname, timezone, locale }, lifecycleEventId };
+}
+
+/**
+ * The first row of the tenant's lifecycle trail, and the producer of
+ * `tenant_welcome`.
+ *
+ * `from_state` is NULL, which is the case `lifecycle_events.from_state` is
+ * nullable for: creation is the one arrival with nothing to have come from, and
+ * `lifecycle_events_transition_changes_state` admits it for exactly that reason.
+ * `TenantLifecycleNotifier` switches on the arrival rather than the departure, so
+ * a `trialing` row maps to `tenant_welcome` and an `active` one — an operator
+ * provisioning a tenant whose admin does not exist yet — maps to nothing.
+ *
+ * **`occurred_at` is the tenant's own `created_at`**, read back from the insert
+ * rather than taken from this process's clock, so the row and the tenant it
+ * describes cannot disagree about when the tenant came into existence. The id is
+ * UUIDv7 stamped from the same instant, which keeps the trail's
+ * `(occurred_at DESC, id DESC)` ordering honest.
+ *
+ * **The actor is `system` even on the operator path.** Provisioning takes no
+ * actor and should not start: `resolveAuditActor` reads the request scope, and a
+ * service that accepts one as an argument can be handed the wrong one — the note
+ * `audit-actor.ts` makes about the table whose whole value is being right. The
+ * operator's own action is already attributed, in `audit_logs`, by the admin
+ * route that called this. What the row records instead is which of the two
+ * onboarding paths ran, which is the question this trail can answer and the
+ * other cannot.
+ */
+async function createGenesisEvent(
+  tx: Prisma.TransactionClient,
+  tenant: { id: string; status: $Enums.TenantStatus; createdAt: Date },
+  path: TenantOnboardingPath,
+): Promise<string> {
+  const id = uuidV7(tenant.createdAt);
+
+  await tx.lifecycleEvent.create({
+    data: {
+      id,
+      tenantId: tenant.id,
+      occurredAt: tenant.createdAt,
+      fromState: null,
+      toState: tenant.status,
+      trigger: 'system',
+      actorType: 'system',
+      actorUserId: null,
+      actorLabel: null,
+      metadata: { onboardingPath: path },
+    },
+    select: { id: true },
+  });
+
+  return id;
 }
 
 /**
