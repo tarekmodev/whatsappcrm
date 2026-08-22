@@ -30,10 +30,22 @@ export function TakeFromBotButton({
   conversationId,
   contactName,
   size = 'md',
+  emphasis = 'accent',
 }: {
   conversationId: string;
   contactName: string;
   size?: 'sm' | 'md';
+  /**
+   * The loudest this control may be, capped by the caller — the same prop and
+   * the same reason `ClaimButton` has one.
+   *
+   * A thread header draws exactly one solid accent button, and on an *unclaimed*
+   * thread the chatbot is answering, that button is `Claim`: stopping the bot
+   * writes nothing about who holds the conversation (`POST …/handoff` is a
+   * handoff, not an assignment), so the agent still could not reply afterwards.
+   * `threadState` is where that order is decided.
+   */
+  emphasis?: 'accent' | 'quiet';
 }) {
   const content = useContent();
   const { showToast } = useToast();
@@ -52,7 +64,7 @@ export function TakeFromBotButton({
   return (
     <Stack gap="2">
       <Button
-        variant="primary"
+        variant={emphasis === 'accent' ? 'primary' : 'secondary'}
         size={size}
         isPending={isPending}
         // The contact's name is in the accessible name, not only in the header

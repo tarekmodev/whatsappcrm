@@ -54,7 +54,9 @@ export function InternalNotesPanel({
 
   return (
     <Stack gap="3">
-      <Notice tone="info">{content.notes.privacyNotice}</Notice>
+      <Notice tone="warning" variant="quiet">
+        {content.notes.privacyNotice}
+      </Notice>
 
       {notes.length === 0 ? (
         <EmptyState
@@ -79,7 +81,9 @@ export function InternalNotesPanel({
           uses, and the honest one: a role that may not write notes at all is not
           told that claiming would let them. */}
       {!canWrite ? null : isUnclaimed ? (
-        <Notice tone="info">{content.inbox.claimBeforeWriting}</Notice>
+        <Notice tone="info" variant="quiet">
+          {content.inbox.claimBeforeWriting}
+        </Notice>
       ) : (
         <InternalNoteForm conversationId={conversationId} />
       )}
@@ -126,7 +130,9 @@ export function InternalNotesPanelSkeleton() {
   return (
     <Stack gap="3">
       <LoadingAnnouncement label={content.notes.loading} />
-      <Notice tone="info">{content.notes.privacyNotice}</Notice>
+      <Notice tone="warning" variant="quiet">
+        {content.notes.privacyNotice}
+      </Notice>
       <ol className={styles.list} aria-hidden="true">
         {Array.from({ length: NOTES_SKELETON_COUNT }, (_unused, index) => (
           <li key={index} className={styles.note}>

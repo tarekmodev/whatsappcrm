@@ -71,4 +71,25 @@ describe('ThreadComposerTabs', () => {
 
     expect(document.getElementById(panelId)).toHaveAttribute('role', 'tabpanel');
   });
+
+  it('changes the surface itself when the destination is the team, not just the tab', () => {
+    // TAR-518's third acceptance criterion. The tab is a small mark at the top
+    // of a box an agent is looking at the bottom of; the box's own colour is the
+    // thing they cannot miss. The panel says it in words too — colour is never
+    // the carrier of something this consequential.
+    const { container } = render(
+      <ThreadComposerTabs
+        reply={<textarea aria-label="Write a message" />}
+        note={<p>Only your team sees these.</p>}
+      />,
+    );
+    const surface = container.querySelector('[data-destination]');
+
+    expect(surface).toHaveAttribute('data-destination', 'reply');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Comment' }));
+
+    expect(surface).toHaveAttribute('data-destination', 'note');
+    expect(screen.getByText('Only your team sees these.')).toBeVisible();
+  });
 });

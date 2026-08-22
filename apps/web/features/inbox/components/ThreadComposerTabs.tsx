@@ -59,7 +59,12 @@ export function ThreadComposerTabs({ reply, note }: ThreadComposerTabsProps) {
   }
 
   return (
-    <div className={styles.composer}>
+    // The destination is on the surface as well as in the tab. A note that
+    // reached a customer is the worst bug this product could have, so the box an
+    // agent is typing into changes colour under them — and the panel itself says
+    // in words that only the team sees it, because colour alone is never the
+    // carrier of anything that matters (TAR-518).
+    <div className={styles.composer} data-destination={active}>
       <div
         ref={stripRef}
         className={styles.strip}

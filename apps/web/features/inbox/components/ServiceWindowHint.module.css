@@ -1,0 +1,33 @@
+/*
+ * One caption in the composer's toolbar, not a banner over the reply box.
+ *
+ * The two states differ in weight rather than in shape: an open window is a
+ * countdown the eye skims, and a closed one is the reason Send does not work, so
+ * it takes the warning role and the room to say the whole sentence.
+ */
+.hint {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  font-size: var(--font-size-caption);
+}
+
+.hint[data-state='open'] {
+  align-items: center;
+  color: var(--color-on-surface-muted);
+}
+
+.hint[data-state='closed'] {
+  /* Given the toolbar's whole line: the sentence is instructions, and wrapping
+     it into a column beside Send is what keeps it readable at 320px. */
+  flex: 1 1 100%;
+  padding: var(--space-2);
+  background: var(--color-warning-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-on-warning-subtle);
+}
+
+.heading {
+  font-weight: var(--font-weight-strong);
+}

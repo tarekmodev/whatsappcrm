@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { CannedResponseResponse, SendMediaInput, SendTextInput } from '@whatsappcrm/contracts';
 import { Button } from '@/components/ui/Button';
 import { FormError } from '@/components/ui/FormError';
+import { Icon } from '@/components/ui/Icon';
 import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
 import { SkeletonBlock, SkeletonLine } from '@/components/ui/Skeleton';
@@ -24,23 +25,33 @@ import {
 } from '@/features/inbox/free-form-draft';
 import { ComposerAttachment, ComposerAttachmentSkeleton } from './ComposerAttachment';
 import { ReplyDraftField } from './ReplyDraftField';
+import styles from './MessageComposer.module.css';
 
 /**
  * The free-form half of the composer: a message the agent writes themselves,
  * optionally carrying one file. Usage:
- * `<FreeFormComposer conversationId={id} isWindowOpen={…} />`.
+ * `<FreeFormComposer conversationId={id} isWindowOpen={…} windowHint={…} templateAction={…} />`.
  *
  * A real `<form>` with a real submit, like the note form beside it. The draft is
  * cleared only on success — a failed send must never make somebody retype a
  * reply — and the field is refocused afterwards, because an agent who sent one
  * message usually sends another.
  *
+ * ## The box, then one toolbar under it
+ *
+ * Before TAR-518 this was five stacked blocks — a two-line banner, a labelled
+ * textarea with a hint, a labelled file input, a status line and a right-aligned
+ * Send — about 630px of composer over a message stream that had been squeezed to
+ * a quarter of the column. Everything that is not the writing surface is now one
+ * row beneath it: attachments and the template picker at the leading edge, the
+ * service-window countdown and Send at the trailing one.
+ *
  * ## Disabled, not hidden, outside the window
  *
  * When the service window shuts the controls go inert and the draft stays put.
  * Removing the box would throw away what was typed and leave the agent guessing
- * why; the banner above says what happened, and the template picker below is the
- * way through.
+ * why; the hint in the toolbar says what happened, and the template picker beside
+ * it is the way through.
  *
  * ## One file, and it is already uploaded
  *
@@ -59,11 +70,17 @@ export function FreeFormComposer({
   conversationId,
   isWindowOpen,
   cannedResponses,
+  windowHint,
+  templateAction,
 }: {
   conversationId: string;
   isWindowOpen: boolean;
   /** The tenant's shortcut library. Empty means the field shows no picker. */
   cannedResponses: readonly CannedResponseResponse[];
+  /** The service-window countdown, inline at the toolbar's trailing edge. */
+  windowHint: ReactNode;
+  /** The template picker's trigger — the way through once the window has shut. */
+  templateAction: ReactNode;
 }) {
   const content = useContent();
   const { showToast } = useToast();
@@ -71,6 +88,7 @@ export function FreeFormComposer({
   const [body, setBody] = useState('');
   const [attachment, setAttachment] = useState<ComposerAttachmentValue>(EMPTY_ATTACHMENT);
   const [problem, setProblem] = useState<FreeFormProblem | null>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Read by `perform`, which `useActionForm` calls after the click. Held in a
   // ref so the payload the guard validated is exactly the one that is sent.
@@ -132,7 +150,7 @@ export function FreeFormComposer({
 
   return (
     <form onSubmit={onSubmit} noValidate>
-      <Stack gap="3">
+      <Stack gap="2">
         <ReplyDraftField
           value={body}
           onChange={setBody}
@@ -140,57 +158,83 @@ export function FreeFormComposer({
           cannedResponses={cannedResponses}
           rows={TEXTAREA_ROWS}
           maxLength={maxLength}
+          isExpanded={isExpanded}
           isDisabled={!isWindowOpen}
           error={problem === null ? undefined : problemMessages[problem]}
           isRequired={attachment.status !== 'ready'}
         />
 
-        <ComposerAttachment
-          label={content.composer.attachLabel}
-          allowedKinds={ATTACHABLE_MEDIA_KINDS}
-          value={attachment}
-          onChange={setAttachment}
-          isDisabled={!isWindowOpen}
-        />
-
+        {/* Above the toolbar, not in a toast: a send that failed is the reason
+            the draft is still on screen, and the reader is looking at the box. */}
         <FormError message={formError} requestId={requestId} />
 
-        <Cluster justify="end" gap="2">
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={!isWindowOpen || attachment.status === 'uploading'}
-            isPending={isPending}
-          >
-            {content.composer.send}
-          </Button>
-        </Cluster>
+        <div className={styles.toolbar} role="group" aria-label={content.composer.toolbarLabel}>
+          <Cluster gap="2" className={styles.toolbarGroup}>
+            <ComposerAttachment
+              label={content.composer.attachLabel}
+              allowedKinds={ATTACHABLE_MEDIA_KINDS}
+              value={attachment}
+              onChange={setAttachment}
+              isDisabled={!isWindowOpen}
+              variant="inline"
+            />
+            {templateAction}
+          </Cluster>
+
+          <div className={styles.toolbarHint}>{windowHint}</div>
+
+          <Cluster gap="2" justify="end" className={styles.toolbarActions}>
+            <button
+              type="button"
+              className={styles.expand}
+              aria-expanded={isExpanded}
+              aria-label={isExpanded ? content.composer.collapse : content.composer.expand}
+              onClick={() => {
+                setIsExpanded((current) => !current);
+              }}
+            >
+              <Icon name={isExpanded ? 'collapse' : 'expand'} size="sm" />
+            </button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!isWindowOpen || attachment.status === 'uploading'}
+              isPending={isPending}
+            >
+              {content.composer.send}
+            </Button>
+          </Cluster>
+        </div>
       </Stack>
     </form>
   );
 }
 
 /**
- * Mirrors `FreeFormComposer`: label, hint, a textarea of the same row count, the
- * attach control's own skeleton, and the Send button's place in the row.
+ * Mirrors `FreeFormComposer`: a textarea of the same row count, and the toolbar's
+ * two groups at the same height — so the swap moves nothing under the cursor of
+ * an agent already reaching for the box.
  */
 export function FreeFormComposerSkeleton() {
   return (
-    <Stack gap="3" aria-hidden="true">
-      <Stack gap="1">
-        <SkeletonLine width="10rem" />
-        <SkeletonLine width="14rem" />
-        <SkeletonBlock height={`calc(var(--size-control-md) * ${String(TEXTAREA_ROWS)} / 2)`} />
-      </Stack>
+    <Stack gap="2" aria-hidden="true">
+      <SkeletonBlock height={`calc(${String(TEXTAREA_ROWS)}lh + var(--space-2) * 2)`} />
 
-      <ComposerAttachmentSkeleton />
-
-      <Cluster justify="end">
-        <SkeletonLine width="5rem" height="var(--size-touch-target)" />
-      </Cluster>
+      <div className={styles.toolbar}>
+        <Cluster gap="2" className={styles.toolbarGroup}>
+          <ComposerAttachmentSkeleton variant="inline" />
+          <SkeletonLine width="8.5rem" height="var(--size-control-md)" />
+        </Cluster>
+        <div className={styles.toolbarHint}>
+          <SkeletonLine width="10rem" />
+        </div>
+        <Cluster gap="2" justify="end" className={styles.toolbarActions}>
+          <SkeletonLine width="5rem" height="var(--size-touch-target)" />
+        </Cluster>
+      </div>
     </Stack>
   );
 }
 
-/** Three lines of reply before it scrolls — and the height its skeleton reserves. */
-const TEXTAREA_ROWS = 3;
+/** Two lines of reply before it grows — the floor its skeleton reserves. */
+const TEXTAREA_ROWS = 2;

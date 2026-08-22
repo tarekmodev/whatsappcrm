@@ -4,29 +4,28 @@ import { useEffect, useRef, useState } from 'react';
 import type { CannedResponseResponse } from '@whatsappcrm/contracts';
 import { Button } from '@/components/ui/Button';
 import { Notice } from '@/components/ui/Notice';
-import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
-import { SkeletonLine } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useContent } from '@/lib/content';
 import { useServiceWindow } from '@/features/inbox/useServiceWindow';
 import type { ServiceWindow } from '@/features/inbox/service-window';
+import type { ComposerGuidance } from '@/features/inbox/thread-state';
 import { FreeFormComposer, FreeFormComposerSkeleton } from './FreeFormComposer';
-import { ServiceWindowBanner, ServiceWindowBannerSkeleton } from './ServiceWindowBanner';
+import { ServiceWindowHint } from './ServiceWindowHint';
 import { LazyTemplatePickerDialog } from './inbox-dialogs.lazy';
 import styles from './MessageComposer.module.css';
 
 /**
  * The reply box: what an agent may send to this customer, and which of the two
- * ways WhatsApp allows it. Usage, at the foot of the thread card:
+ * ways WhatsApp allows it. Usage, in the composer dock at the foot of the thread:
  *
  * ```tsx
  * <MessageComposer
  *   conversationId={conversation.id}
  *   serviceWindowExpiresAt={conversation.serviceWindowExpiresAt}
  *   initialWindow={serviceWindowAt(conversation.serviceWindowExpiresAt, new Date())}
- *   canSend={session.checker.can('conversation:send')}
- *   isUnclaimed={…}
+ *   guidance={state.guidance}
+ *   canWrite={state.canWrite}
  * />
  * ```
  *
@@ -40,6 +39,14 @@ import styles from './MessageComposer.module.css';
  * A template may be sent in either state; it is simply the only option in one of
  * them. Two components would have meant two Send buttons, two error paths and
  * two idempotency keys for one act.
+ *
+ * ## One guidance line, and it is quiet
+ *
+ * Why the box is shut — or why nobody has replied although it is open — is
+ * `thread-state.ts`'s single answer, rendered here as one quiet line. It used to
+ * be up to two full-width saturated notices, one of them above the message
+ * stream, saying overlapping things about the same conversation (TAR-518). It is
+ * sited here because this is where the reply was going to be typed.
  *
  * ## Why the window is a prop *and* a hook
  *
@@ -56,14 +63,18 @@ export interface MessageComposerProps {
   serviceWindowExpiresAt: string | null;
   /** Evaluated on the server, so the first client render agrees with it. */
   initialWindow: ServiceWindow;
-  /** `conversation:send`. Every role above guest has it; a reader may not. */
-  canSend: boolean;
   /**
-   * Nobody is on this thread. The API refuses every send into the shared pool
-   * (TAR-186), so the composer is shut and says why — an agent typing a reply
-   * that can only end in a 409 is worse than no composer at all.
+   * The one line explaining the thread's state, or `null` when there is nothing
+   * to explain. Decided by `threadState` so the header and this cannot disagree.
    */
-  isUnclaimed: boolean;
+  guidance: ComposerGuidance | null;
+  /**
+   * Whether the controls are usable at all. `false` for a role without
+   * `conversation:send`, and for a thread nobody holds — the API refuses every
+   * write into the shared pool (TAR-186), and an agent typing a reply that can
+   * only end in a 409 is worse than no composer at all.
+   */
+  canWrite: boolean;
   /**
    * The tenant's canned-response library, read on the server and handed down
    * whole (ADR 0011, decision 1): the picker matches a typed shortcut against
@@ -84,49 +95,35 @@ export function MessageComposer({
   conversationId,
   serviceWindowExpiresAt,
   initialWindow,
-  canSend,
-  isUnclaimed,
+  guidance,
+  canWrite,
   cannedResponses = NO_CANNED_RESPONSES,
 }: MessageComposerProps) {
-  const content = useContent();
   const window = useServiceWindow(serviceWindowExpiresAt, initialWindow);
   const [isPickingTemplate, setIsPickingTemplate] = useState(false);
 
   useWindowClosedNotice(window);
 
-  if (!canSend) {
-    // Said rather than left as a missing box, for the reason the claim button
-    // gives: a console that showed nothing here would read as a broken screen.
-    return <Notice tone="info">{content.composer.sendNotPermitted}</Notice>;
-  }
-
-  if (isUnclaimed) {
-    // Before the window, because it is the earlier refusal: a claim is needed
-    // whether the 24 hours are open or shut, and offering the template picker
-    // here would be a second box that also cannot send.
-    return <Notice tone="info">{content.inbox.claimBeforeWriting}</Notice>;
-  }
-
   return (
-    <Stack gap="3" className={styles.composer}>
-      <ServiceWindowBanner window={window} />
+    <Stack gap="2" className={styles.composer}>
+      <ComposerGuidanceLine guidance={guidance} />
 
-      <FreeFormComposer
-        conversationId={conversationId}
-        isWindowOpen={window.state === 'open'}
-        cannedResponses={cannedResponses}
-      />
-
-      <Cluster justify="start" gap="2">
-        <Button
-          variant={window.state === 'open' ? 'ghost' : 'primary'}
-          onClick={() => {
-            setIsPickingTemplate(true);
-          }}
-        >
-          {content.composer.useTemplate}
-        </Button>
-      </Cluster>
+      {canWrite ? (
+        <FreeFormComposer
+          conversationId={conversationId}
+          isWindowOpen={window.state === 'open'}
+          cannedResponses={cannedResponses}
+          windowHint={<ServiceWindowHint window={window} />}
+          templateAction={
+            <TemplateTrigger
+              isWindowOpen={window.state === 'open'}
+              onOpen={() => {
+                setIsPickingTemplate(true);
+              }}
+            />
+          }
+        />
+      ) : null}
 
       {isPickingTemplate ? (
         <LazyTemplatePickerDialog
@@ -140,11 +137,49 @@ export function MessageComposer({
   );
 }
 
+/**
+ * Said rather than left as a missing box: a console that simply showed nothing
+ * where the reply goes would read as a broken screen. Quiet rather than filled,
+ * because it is guidance about a state, not a failure — see `Notice`.
+ */
+function ComposerGuidanceLine({ guidance }: { guidance: ComposerGuidance | null }) {
+  const content = useContent();
+
+  if (guidance === null) {
+    return null;
+  }
+
+  // Assigning the content object to the exhaustive record is the check: a new
+  // `ComposerGuidance` without a line of copy fails the build here.
+  const lines: Record<ComposerGuidance, string> = content.composer.guidance;
+
+  return (
+    <Notice tone="info" variant="quiet">
+      {lines[guidance]}
+    </Notice>
+  );
+}
+
+/**
+ * The way through once the window has shut, and an ordinary option while it is
+ * open — which is exactly the difference in emphasis. Never solid: the thread
+ * header owns the screen's one accent button.
+ */
+function TemplateTrigger({ isWindowOpen, onOpen }: { isWindowOpen: boolean; onOpen: () => void }) {
+  const content = useContent();
+
+  return (
+    <Button variant={isWindowOpen ? 'ghost' : 'secondary'} size="sm" onClick={onOpen}>
+      {content.composer.useTemplate}
+    </Button>
+  );
+}
+
 /** Hoisted so the default is one object rather than a new one every render. */
 const NO_CANNED_RESPONSES: readonly CannedResponseResponse[] = [];
 
 /**
- * Mirrors `MessageComposer`: the same seam above it, and each of its three parts
+ * Mirrors `MessageComposer`: the writing surface and its toolbar, each part
  * standing in for itself — so the swap moves nothing under the cursor of an
  * agent already reaching for the box.
  *
@@ -154,12 +189,8 @@ const NO_CANNED_RESPONSES: readonly CannedResponseResponse[] = [];
  */
 export function MessageComposerSkeleton() {
   return (
-    <Stack gap="3" className={styles.composer} aria-hidden="true">
-      <ServiceWindowBannerSkeleton />
+    <Stack gap="2" className={styles.composer} aria-hidden="true">
       <FreeFormComposerSkeleton />
-      <Cluster justify="start">
-        <SkeletonLine width="8.5rem" height="var(--size-touch-target)" />
-      </Cluster>
     </Stack>
   );
 }
@@ -167,9 +198,9 @@ export function MessageComposerSkeleton() {
 /**
  * Announces the window shutting, once, at the moment it happens.
  *
- * The banner above changes on its own, but an agent part-way through a reply is
- * looking at the textarea, not at the notice over it — and the next thing they
- * would otherwise learn is that Send does not work. The toast is the
+ * The hint in the toolbar changes on its own, but an agent part-way through a
+ * reply is looking at the textarea, not at the caption beside Send — and the next
+ * thing they would otherwise learn is that Send does not work. The toast is the
  * interruption that earns its place: it reports a change nobody asked for, on a
  * conversation they are actively working.
  *

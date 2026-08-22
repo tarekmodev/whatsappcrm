@@ -39,12 +39,21 @@
  * Nothing here may simply overflow and be clipped, and what it would clip is the
  * composer.
  *
- * The message stream gives way first, because a scrollbar is exactly what a long
- * conversation is supposed to have — but only down to a quarter of the column,
- * because a conversation view showing no messages at all is not a degraded
- * thread, it is a broken one. Past that the *column* scrolls, and the composer,
- * sticky at its foot, stays on screen while the header and the stream move under
- * it.
+ * The message stream gives way, because a scrollbar is exactly what a long
+ * conversation is supposed to have. It gives way **all the way**, and that is a
+ * correction TAR-518 made: it used to stop at a quarter of the column so that
+ * some conversation was always visible, and the effect was the opposite. Past
+ * that floor the column itself overflowed, and the composer — sticky at its
+ * foot — was pulled up over the content below the fold, which is the stream. At
+ * 1024x900, where the context band takes its own share of the height, that hid
+ * the messages *entirely* and part of the header with them.
+ *
+ * Letting it shrink to nothing means the three parts always fit, so the column
+ * does not scroll and nothing is covered: the header is whole, the composer is
+ * whole, and the stream is whatever is left — small on a short viewport, but
+ * present, scrollable, and showing the newest message, which is the acceptance
+ * criterion. A guaranteed slice of a stream nobody can see was not worth the
+ * header and the composer overlapping to keep.
  *
  * An earlier pass had the header and the composer each scroll inside themselves
  * instead. It fitted the parts in better and it was worse: three nested
@@ -52,10 +61,13 @@
  * behind the composer with nothing to say so. One scrollport, on the column, is
  * the shape the rest of this file follows from.
  *
- * At any viewport with room, nothing shrinks and this costs nothing. The
- * composer's own height is the pressure — roughly 630px — and reducing it is
- * TAR-518's. The one quarter is a layout proportion, not a design value; there is
- * no token for "a quarter of the column".
+ * At any viewport with room, nothing shrinks and this costs nothing. TAR-518
+ * took the composer's own height from roughly 630px to about a third of that —
+ * the banner is a caption in its toolbar, the label and hint are gone, and the
+ * file input is trimmed to its button — so the pressure this rule exists for is
+ * now rare rather than routine. It stays because a landscape phone still meets
+ * it. The one quarter is a layout proportion, not a design value; there is no
+ * token for "a quarter of the column".
  */
 .header {
   flex: 0 0 auto;
@@ -65,8 +77,11 @@
 
 .stream {
   display: flex;
-  flex: 1 50 auto;
-  min-block-size: 25%;
+  /* The only part allowed to shrink, and it shrinks to nothing before the
+     column does — see above. */
+  flex: 1 1 auto;
+  min-block-size: 0;
+  min-inline-size: 0;
   padding-inline: var(--space-4);
   padding-block-start: var(--space-4);
 }

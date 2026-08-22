@@ -58,7 +58,14 @@ export interface ReplyDraftFieldProps {
   cannedResponses: readonly CannedResponseResponse[];
   maxLength: number;
   isDisabled: boolean;
+  /** The box's *floor*. It grows from here as the draft does — see the module. */
   rows: number;
+  /**
+   * The composer's expand control (TAR-518). It raises the ceiling the box grows
+   * to; it does not change the floor, so pressing it never moves the text
+   * already on screen.
+   */
+  isExpanded?: boolean;
   error?: string;
   isRequired?: boolean;
 }
@@ -71,6 +78,7 @@ export function ReplyDraftField({
   maxLength,
   isDisabled,
   rows,
+  isExpanded = false,
   error,
   isRequired = false,
 }: ReplyDraftFieldProps) {
@@ -103,10 +111,18 @@ export function ReplyDraftField({
   return (
     <Field
       label={content.composer.replyLabel}
+      /*
+       * Visible only where it says something the reader cannot already see. The
+       * label repeated the composer's own "Reply on WhatsApp" tab above it, and
+       * the plain hint repeated it again — three sentences of chrome over every
+       * reply an agent writes (TAR-518). The shortcut hint stays, because a `/`
+       * that nothing announces is a feature nobody finds.
+       */
+      isLabelHidden
       hint={
         hasCannedResponses
           ? content.composer.replyHintWithShortcuts(CANNED_RESPONSE_TRIGGER)
-          : content.composer.replyHint
+          : undefined
       }
       error={error}
       isRequired={isRequired}
@@ -117,6 +133,8 @@ export function ReplyDraftField({
             id={controlId}
             ref={textareaRef}
             name="body"
+            className={styles.draft}
+            data-expanded={isExpanded ? 'true' : 'false'}
             value={value}
             rows={rows}
             maxLength={maxLength}

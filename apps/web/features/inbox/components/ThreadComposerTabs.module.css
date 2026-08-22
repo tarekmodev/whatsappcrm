@@ -7,6 +7,23 @@
   background: var(--color-surface-sunken);
   border: var(--border-hairline) solid var(--color-border);
   border-radius: var(--radius-lg);
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    border-color var(--duration-fast) var(--easing-standard);
+}
+
+/*
+ * Writing to the team, not to the customer. The whole surface moves to the
+ * internal-note role — the same one the note cards use — so there is no state in
+ * which an agent is looking at a box that is the colour of a reply and is not
+ * one. The marker on the leading edge carries it into forced-colours mode, where
+ * a background is not guaranteed to survive.
+ */
+.composer[data-destination='note'] {
+  background: var(--color-note);
+  border-color: var(--color-note-marker);
+  border-inline-start: var(--size-marker) solid var(--color-note-marker);
+  color: var(--color-on-note);
 }
 
 .strip {
@@ -46,6 +63,24 @@
   border-block-end-color: var(--color-accent);
   color: var(--color-on-surface);
   font-weight: var(--font-weight-strong);
+}
+
+/*
+ * On the note surface the ordinary text roles are measured against `surface`,
+ * not against this one, so both states take the note's own on-role and stay
+ * apart by weight and by the marker instead of by colour.
+ */
+.composer[data-destination='note'] .strip {
+  border-block-end-color: var(--color-note-marker);
+}
+
+.composer[data-destination='note'] .tab,
+.composer[data-destination='note'] .tab[aria-selected='true'] {
+  color: var(--color-on-note);
+}
+
+.composer[data-destination='note'] .tab[aria-selected='true'] {
+  border-block-end-color: var(--color-note-marker);
 }
 
 .panel {

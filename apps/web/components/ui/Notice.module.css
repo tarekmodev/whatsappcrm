@@ -17,3 +17,35 @@
   border-color: var(--color-warning);
   color: var(--color-on-warning-subtle);
 }
+
+/*
+ * Guidance rather than a banner: the tone survives in the leading marker, and
+ * the fill goes.
+ *
+ * The text **inherits**, deliberately. The tone's `on-*-subtle` role is measured
+ * against its own tint and this variant has none, and `on-surface-muted` would be
+ * measured against `surface` — which is not where this always lands: the
+ * composer's `Comment` destination puts it on the internal-note surface. Taking
+ * the surrounding colour is the only rule that is correct on every surface it can
+ * sit on, and the quiet comes from the missing fill and the smaller type.
+ *
+ * The marker is what keeps the tone from being colour alone at a glance, and it
+ * is a border rather than a pseudo-element so it turns with `dir` for free.
+ */
+.notice[data-variant='quiet'] {
+  padding-inline: var(--space-3);
+  padding-block: var(--space-2);
+  background: none;
+  border-color: transparent;
+  border-inline-start: var(--size-marker) solid var(--color-border-strong);
+  border-radius: 0;
+  color: inherit;
+}
+
+.notice[data-variant='quiet'][data-tone='info'] {
+  border-inline-start-color: var(--color-info);
+}
+
+.notice[data-variant='quiet'][data-tone='warning'] {
+  border-inline-start-color: var(--color-warning);
+}

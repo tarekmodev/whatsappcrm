@@ -1,0 +1,81 @@
+/*
+ * Avatar gutter, then the run's body. Logical properties throughout, so an
+ * outbound run mirrors under `dir="rtl"` with no JavaScript and no second rule.
+ */
+.run {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+/* Outbound hangs from the trailing edge: the avatar follows the bubbles. */
+.run[data-direction='outbound'] {
+  flex-direction: row-reverse;
+}
+
+.avatar {
+  /* Aligned with the label line rather than the top of the box, so the face and
+     the name it belongs to sit on one baseline. */
+  margin-block-start: var(--space-1);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  /* Grows to the column, so a long message reaches its `--measure-body` cap
+     rather than the run's intrinsic width. */
+  flex: 1 1 auto;
+}
+
+.run[data-direction='outbound'] .body {
+  align-items: flex-end;
+}
+
+.label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+.sender {
+  overflow-wrap: anywhere;
+  color: var(--color-on-surface);
+  font-weight: var(--font-weight-medium);
+}
+
+/*
+ * The channel tag. A quiet outline rather than a `Badge`: it repeats on every
+ * run in the thread, and a filled pill that often reads as decoration.
+ */
+.channel {
+  padding-inline: var(--space-2);
+  border: var(--border-hairline) solid currentcolor;
+  border-radius: var(--radius-pill);
+}
+
+/*
+ * `--space-1` between bubbles in a run, against `--space-3` between runs
+ * (`MessageList.module.css`). That difference is what makes a run read as one
+ * utterance without a second border or a bracket drawing it.
+ */
+.bubbles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  inline-size: 100%;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.run[data-direction='outbound'] .bubbles {
+  align-items: flex-end;
+}

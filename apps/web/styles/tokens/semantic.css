@@ -206,6 +206,40 @@
   --space-7: var(--scale-space-7);
   --space-8: var(--scale-space-8);
 
+  /*
+   * --- The thread (TAR-518) ----------------------------------------------
+   *
+   * Two roles the inbox needs by name rather than by borrowing a status tone,
+   * because both are read as *identity* rather than as a status: "this is not a
+   * message to the customer", and "this message did not arrive".
+   *
+   * They alias the status roles rather than the palette on purpose. A tenant
+   * re-theming `warning` should move the note surface with it — a note that
+   * stopped looking like the rest of the workspace's "careful" language would be
+   * the one place the identity did not swap. Declared here, after both theme
+   * blocks, so one declaration follows the theme its target does.
+   */
+
+  /*
+   * An internal note is never a message to the customer, and the surface says so
+   * before the label does. Two consumers, which is why it is a token: the note
+   * cards in `InternalNotesPanel`, and the whole composer surface while its
+   * destination is `Comment`.
+   */
+  --color-note: var(--color-warning-subtle);
+  --color-on-note: var(--color-on-warning-subtle);
+  /* The leading bar on a note. Never the only carrier — the label says it too. */
+  --color-note-marker: var(--color-warning);
+
+  /*
+   * A message that did not reach the customer. The other delivery states —
+   * queued, sent, delivered, read — are metadata and take the bubble's own muted
+   * role, differing by icon and label rather than by colour; this is the only one
+   * that needs acting on, so it is the only one with a colour of its own.
+   * Measured on both bubble surfaces in both themes — see `tokens.test.ts`.
+   */
+  --color-delivery-failed: var(--color-danger);
+
   --font-family-body: var(--scale-font-family-sans);
   --font-family-mono: var(--scale-font-family-mono);
   --font-size-caption: var(--scale-font-size-xs);

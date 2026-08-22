@@ -37,6 +37,22 @@ import styles from './MessageComposer.module.css';
  * two races in it.
  */
 
+/**
+ * How much room the control takes.
+ *
+ * `field` is a form row of its own — the template send form, where picking the
+ * header's media is one of several labelled steps.
+ *
+ * `inline` is a control in a toolbar: the label goes to screen readers only and
+ * the native input is trimmed to its own button, because the browser's "No file
+ * chosen" beside it is both redundant with the status line and the reason a file
+ * input is as wide as a paragraph (TAR-518). Everything that makes it a native
+ * file control — the keyboard, the label, the platform picker, the file name
+ * announced on change — is untouched.
+ */
+export const COMPOSER_ATTACHMENT_VARIANTS = ['field', 'inline'] as const;
+export type ComposerAttachmentVariant = (typeof COMPOSER_ATTACHMENT_VARIANTS)[number];
+
 export interface ComposerAttachmentProps {
   label: string;
   /** Narrowed by a template header: an IMAGE header does not take a PDF. */
@@ -45,6 +61,7 @@ export interface ComposerAttachmentProps {
   onChange: (value: ComposerAttachmentValue) => void;
   hint?: string;
   isDisabled?: boolean;
+  variant?: ComposerAttachmentVariant;
 }
 
 export function ComposerAttachment({
@@ -54,31 +71,47 @@ export function ComposerAttachment({
   onChange,
   hint,
   isDisabled = false,
+  variant = 'field',
 }: ComposerAttachmentProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const { onPick, clear } = useMediaUpload({ allowedKinds, value, onChange, inputRef });
+  const isInline = variant === 'inline';
 
-  return (
+  const control = (
+    <Field
+      label={label}
+      hint={hint}
+      isLabelHidden={isInline}
+      error={value.status === 'failed' ? value.message : undefined}
+    >
+      {({ controlId, describedBy, isInvalid }) => (
+        <FileInput
+          id={controlId}
+          ref={inputRef}
+          name="attachment"
+          className={isInline ? styles.attachmentInline : undefined}
+          accept={mediaAcceptAttribute(allowedKinds)}
+          disabled={isDisabled}
+          aria-describedby={describedBy}
+          aria-invalid={isInvalid}
+          onChange={onPick}
+        />
+      )}
+    </Field>
+  );
+
+  // Inline, the picked file's status sits *beside* the control rather than under
+  // it: in a toolbar a second stacked line is the height this variant exists to
+  // save. The status box reserves its own size either way, so picking a file
+  // never moves the Send button under a cursor already heading for it.
+  return isInline ? (
+    <Cluster gap="2" className={styles.attachmentGroup}>
+      {control}
+      <AttachmentStatus value={value} onRemove={clear} />
+    </Cluster>
+  ) : (
     <Stack gap="2">
-      <Field
-        label={label}
-        hint={hint}
-        error={value.status === 'failed' ? value.message : undefined}
-      >
-        {({ controlId, describedBy, isInvalid }) => (
-          <FileInput
-            id={controlId}
-            ref={inputRef}
-            name="attachment"
-            accept={mediaAcceptAttribute(allowedKinds)}
-            disabled={isDisabled}
-            aria-describedby={describedBy}
-            aria-invalid={isInvalid}
-            onChange={onPick}
-          />
-        )}
-      </Field>
-
+      {control}
       <AttachmentStatus value={value} onRemove={clear} />
     </Stack>
   );
@@ -139,7 +172,20 @@ function AttachmentStatus({
  * the same reserved status box — so an attach control arriving with the thread
  * moves nothing.
  */
-export function ComposerAttachmentSkeleton() {
+export function ComposerAttachmentSkeleton({
+  variant = 'field',
+}: {
+  variant?: ComposerAttachmentVariant;
+}) {
+  if (variant === 'inline') {
+    return (
+      <Cluster gap="2" className={styles.attachmentGroup} aria-hidden="true">
+        <SkeletonLine width="7rem" height="var(--size-control-md)" />
+        <div className={styles.attachmentStatus} />
+      </Cluster>
+    );
+  }
+
   return (
     <Stack gap="2" aria-hidden="true">
       <SkeletonLine width="7rem" />

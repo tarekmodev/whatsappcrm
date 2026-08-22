@@ -7,4 +7,18 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+/*
+ * The header's version, where the name is on screen rather than only in the
+ * accessibility tree. Plain text at caption size — never a pill: assignment is a
+ * *who*, and 0001 is explicit that a who is a face, not a status chip.
+ */
+.holderName {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
 }
