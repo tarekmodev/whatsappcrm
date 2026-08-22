@@ -358,6 +358,18 @@
   --size-swatch: var(--scale-size-swatch);
 
   /*
+   * The drawn form controls (TAR-710). `Switch`, `Slider` and `Checkbox` paint
+   * their own faces, because the platform's painting of a checkbox and a range
+   * is the one thing on a settings screen no theme reaches; these are the boxes
+   * they paint into.
+   */
+  --size-switch-track: var(--scale-size-switch-track);
+  --size-switch-knob: var(--scale-size-switch-knob);
+  --size-slider-track: var(--scale-size-slider-track);
+  --size-slider-knob: var(--scale-size-slider-knob);
+  --size-checkbox: var(--scale-size-checkbox);
+
+  /*
    * How far the toast region sits above the bottom of the viewport, over and
    * above its own inset.
    *

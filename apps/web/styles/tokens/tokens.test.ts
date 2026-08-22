@@ -277,6 +277,75 @@ describe('the chart series', () => {
 });
 
 /**
+ * The drawn form controls (TAR-710).
+ *
+ * `Switch`, `Slider` and `Checkbox` take `appearance: none`, which means the
+ * platform no longer guarantees anything about how visible they are — the token
+ * layer does, and only if somebody measures it. WCAG 2.2 SC 1.4.11 asks 3:1 of
+ * "the visual information required to identify a component and its state", which
+ * for these three is the knob against the track it sits on.
+ *
+ * The knob is measured against **both** track colours rather than only the one
+ * it starts on: a switch spends half its life checked, and a pair that passed
+ * off and failed on would be a control that disappears when it matters.
+ */
+describe('the drawn form controls', () => {
+  /** WCAG 2.2 SC 1.4.11 — a control's parts, not its text. */
+  const GRAPHIC_CONTRAST = 3;
+
+  describe.each(THEMES)('%s theme', (theme) => {
+    it('shows the switch knob against the track it is off on', () => {
+      expect(
+        contrastRatio(token(theme, '--color-surface'), token(theme, '--color-on-surface-muted')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    it('shows the switch knob against the track it is on on', () => {
+      expect(
+        contrastRatio(token(theme, '--color-on-accent'), token(theme, '--color-accent')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    it('shows the off track against the surface behind it', () => {
+      expect(
+        contrastRatio(token(theme, '--color-on-surface-muted'), token(theme, '--color-surface')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    /*
+     * The slider's knob is a surface disc ringed in the accent, and it crosses
+     * two grounds: the unfilled rail, where the ring is what finds it, and the
+     * filled portion — which is the accent, so the ring vanishes there and the
+     * disc inside it is what finds it. Both grounds are measured, each against
+     * the part of the knob that carries it on that ground.
+     */
+    it('rings the slider knob clear of the rail behind it', () => {
+      expect(
+        contrastRatio(token(theme, '--color-accent'), token(theme, '--color-surface-sunken')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    it('shows the slider knob against the filled portion it crosses', () => {
+      expect(
+        contrastRatio(token(theme, '--color-surface'), token(theme, '--color-accent')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    it('shows a checked checkbox against the surface it sits on', () => {
+      expect(
+        contrastRatio(token(theme, '--color-accent'), token(theme, '--color-surface')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    it('shows the tick inside a checked checkbox', () => {
+      expect(
+        contrastRatio(token(theme, '--color-on-accent'), token(theme, '--color-accent')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+  });
+});
+
+/**
  * One role's value in one theme. Throws rather than returning `undefined`: a
  * role this file asks for and the token layer does not declare is the failure
  * these tests exist to catch, and it should not arrive as `NaN` in a ratio.

@@ -5,6 +5,16 @@ import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import { KnowledgeDocumentsTable } from './KnowledgeDocumentsTable';
 
+/*
+ * The table refetches itself while an entry is indexing (`useIndexingRefresh`),
+ * and `useRouter` throws outside a mounted app router. Only that hook is
+ * replaced — `MenuButton` reads the real `usePathname` to close on navigation.
+ */
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => ({ refresh: () => undefined }),
+}));
+
 vi.mock('@/features/chatbot/chatbot.actions', () => ({
   reindexKnowledgeEntryAction: () => Promise.resolve({ status: 'success', data: { title: '' } }),
   deleteKnowledgeEntryAction: () => Promise.resolve({ status: 'success', data: { title: '' } }),

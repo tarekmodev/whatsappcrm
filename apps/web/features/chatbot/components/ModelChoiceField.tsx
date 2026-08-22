@@ -1,5 +1,6 @@
 'use client';
 
+import { useId } from 'react';
 import type { AiConfigResponse } from '@whatsappcrm/contracts';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
@@ -34,6 +35,7 @@ export function ModelChoiceField({
   isDisabled: boolean;
 }) {
   const content = useContent();
+  const priceId = useId();
   const options = modelOptions(content, config);
   const chosen =
     value === ''
@@ -46,7 +48,15 @@ export function ModelChoiceField({
         <>
           <Select
             id={controlId}
-            aria-describedby={describedBy}
+            // The price describes the option that is selected, so it is part of
+            // the control's description rather than a line of text that happens
+            // to sit under it — otherwise the one number that decides the choice
+            // is the one thing a screen reader never reads out (TAR-710).
+            aria-describedby={
+              chosen === undefined
+                ? describedBy
+                : [describedBy, priceId].filter((id) => id !== undefined).join(' ')
+            }
             name="model"
             value={value}
             disabled={isDisabled}
@@ -56,7 +66,7 @@ export function ModelChoiceField({
             }}
           />
           {chosen === undefined ? null : (
-            <p className={styles.price}>
+            <p id={priceId} className={styles.price}>
               {content.chatbot.modelPrice(
                 formatModelPrice(content.locale, chosen.inputPricePerMTokUsd),
                 formatModelPrice(content.locale, chosen.outputPricePerMTokUsd),

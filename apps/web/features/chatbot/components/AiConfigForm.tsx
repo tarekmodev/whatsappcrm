@@ -6,11 +6,15 @@ import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { FormError } from '@/components/ui/FormError';
 import { Notice } from '@/components/ui/Notice';
+import {
+  SettingsForm,
+  SettingsFormActions,
+  SettingsFormSection,
+} from '@/components/ui/SettingsForm';
+import { Switch } from '@/components/ui/Switch';
 import { Textarea } from '@/components/ui/Textarea';
 import { TextInput } from '@/components/ui/TextInput';
 import { useToast } from '@/components/ui/ToastProvider';
-import { Cluster } from '@/components/layout/Cluster';
-import { Stack } from '@/components/layout/Stack';
 import { useActionForm } from '@/lib/hooks/useActionForm';
 import { useContent } from '@/lib/content';
 import { updateChatbotSettingsAction } from '../chatbot.actions';
@@ -30,12 +34,16 @@ import styles from './AiConfigForm.module.css';
  * `<AiConfigForm config={config} canWrite />`.
  *
  * A real `<form>` with a real submit, and every control wired through `Field`
- * once, so none of them can be shipped without a label and an error slot.
+ * once, so none of them can be shipped without a label and an error slot. The
+ * layout is `SettingsForm`'s: name and explanation in the leading column,
+ * control in the trailing one, in two groups — when it answers, and what it says
+ * — divided by a hairline (TAR-710).
  *
  * **The switch is `Answer customers automatically`, not `Enabled`**, and it is
  * first. It is the only control here that changes what a customer experiences,
  * and an admin turning the chatbot off in a hurry should not have to read four
- * other labels to find it.
+ * other labels to find it. It is also the **only** control for that state: the
+ * readiness card above reports what it currently means and sets nothing.
  *
  * `canWrite` comes from the server's permission check and only decides whether
  * the controls are interactive: the server action asserts `ai:write` again and
@@ -89,12 +97,7 @@ export function AiConfigForm({
   const isDisabled = !canWrite;
 
   return (
-    <form
-      className={styles.form}
-      // Validated here rather than by the browser, so the two fields with rules
-      // report them through `Field` like every other error in the console
-      // instead of in a native bubble that no theme reaches and no test can read.
-      noValidate
+    <SettingsForm
       onSubmit={(event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
 
@@ -120,31 +123,21 @@ export function AiConfigForm({
         submit();
       }}
     >
-      <Stack gap="4">
-        {canWrite ? null : <Notice tone="info">{content.chatbot.settingsReadOnlyNotice}</Notice>}
+      {canWrite ? null : <Notice tone="info">{content.chatbot.settingsReadOnlyNotice}</Notice>}
 
+      {/* When it answers, and when it stops. */}
+      <SettingsFormSection>
         <Field label={content.chatbot.enabledLabel} hint={content.chatbot.enabledHint}>
           {({ controlId, describedBy }) => (
-            <Cluster gap="3" align="center">
-              <input
-                id={controlId}
-                aria-describedby={describedBy}
-                className={styles.switch}
-                type="checkbox"
-                name="isEnabled"
-                checked={isEnabled}
-                disabled={isDisabled}
-                onChange={(event) => {
-                  setIsEnabled(event.target.checked);
-                }}
-              />
-              {/* The state in words beside the control: a checkbox's own state
-                  is conveyed to a screen reader, but not to somebody reading
-                  the page in forced-colors mode where the tick may not show. */}
-              <span className={styles.switchState}>
-                {isEnabled ? content.chatbot.enabledOn : content.chatbot.enabledOff}
-              </span>
-            </Cluster>
+            <Switch
+              id={controlId}
+              aria-describedby={describedBy}
+              name="isEnabled"
+              isChecked={isEnabled}
+              disabled={isDisabled}
+              stateLabel={isEnabled ? content.chatbot.enabledOn : content.chatbot.enabledOff}
+              onChange={setIsEnabled}
+            />
           )}
         </Field>
 
@@ -212,7 +205,10 @@ export function AiConfigForm({
             />
           )}
         </Field>
+      </SettingsFormSection>
 
+      {/* What it says, once it has decided to answer or to hand over. */}
+      <SettingsFormSection>
         <Field label={content.chatbot.systemPromptLabel} hint={content.chatbot.systemPromptHint}>
           {({ controlId, describedBy }) => (
             <Textarea
@@ -248,17 +244,23 @@ export function AiConfigForm({
             />
           )}
         </Field>
+      </SettingsFormSection>
 
-        <FormError message={formError} requestId={requestId} />
+      {/* Inline, above the action, rather than a toast: a save that failed is
+          about this form, and a message that slides away takes the reason with
+          it while the user is still looking at the fields that caused it. */}
+      <FormError message={formError} requestId={requestId} />
 
-        {canWrite ? (
-          <Cluster justify="end">
-            <Button type="submit" variant="primary" isPending={isPending}>
-              {content.chatbot.saveSettings}
-            </Button>
-          </Cluster>
-        ) : null}
-      </Stack>
-    </form>
+      {canWrite ? (
+        <SettingsFormActions>
+          {/* The fields stay editable while this is pending: a save that is in
+              flight is not a reason to stop somebody correcting a typo they have
+              just spotted. */}
+          <Button type="submit" variant="primary" isPending={isPending}>
+            {content.chatbot.saveSettings}
+          </Button>
+        </SettingsFormActions>
+      ) : null}
+    </SettingsForm>
   );
 }

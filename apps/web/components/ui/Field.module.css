@@ -5,6 +5,59 @@
   min-inline-size: 0;
 }
 
+/*
+ * The two halves. Stacked, they carry the gap the field itself used to, so a
+ * field reads exactly as it did before it had them; split, they are the two
+ * columns.
+ */
+.labelGroup,
+.controlGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+/* A hidden label with no hint leaves nothing to lay out, so it lays out nothing. */
+.field[data-layout='stacked'] > .labelGroup[data-empty='true'] {
+  display: contents;
+}
+
+/*
+ * The settings-form arrangement (TAR-710): the field's own name and explanation
+ * in the leading column, the control in the trailing one, on one row. Capped at
+ * `--size-container-sm` in both layouts — a threshold slider that stretches to
+ * 1600px is harder to aim at, not easier — which is also what keeps the stacked
+ * form below 64rem identical to what it was before the split existed.
+ */
+.field[data-layout='split'] > .controlGroup {
+  max-inline-size: var(--size-container-sm);
+}
+
+.field[data-layout='split'] > .labelGroup {
+  max-inline-size: var(--measure-body);
+}
+
+@media (min-width: 64rem) {
+  .field[data-layout='split'] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, var(--size-container-sm));
+    column-gap: var(--space-6);
+    align-items: start;
+  }
+
+  .field[data-layout='split'] > .labelGroup {
+    /*
+     * Puts the label's line on the control's line rather than on the top edge of
+     * its box. Derived from the two sizes it sits between, so it stays true if
+     * either token moves.
+     */
+    padding-block-start: calc(
+      (var(--size-touch-target) - var(--font-size-body-sm) * var(--line-height-body)) / 2
+    );
+  }
+}
+
 .label {
   font-size: var(--font-size-body-sm);
   font-weight: var(--font-weight-medium);

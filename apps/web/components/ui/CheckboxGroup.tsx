@@ -1,6 +1,7 @@
 'use client';
 
 import { useId } from 'react';
+import { Checkbox } from './Checkbox';
 import styles from './CheckboxGroup.module.css';
 
 /**
@@ -84,8 +85,7 @@ export function CheckboxGroup({
           {options.map((option) => (
             <li key={option.value}>
               <label className={styles.option}>
-                <input
-                  type="checkbox"
+                <Checkbox
                   name={name}
                   value={option.value}
                   checked={selected.has(option.value)}
