@@ -14,6 +14,7 @@ function renderNav(overrides: Partial<Parameters<typeof InboxFilterNav>[0]> = {}
       scope="assigned"
       status={undefined}
       conversationId={null}
+      sort="newest"
       canManageChannels={false}
       {...overrides}
     />,

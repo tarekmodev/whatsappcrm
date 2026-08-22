@@ -122,10 +122,15 @@
   min-block-size: 0;
 }
 
+/*
+ * No padding. Since TAR-517 the conversation rows run to this column's edges and
+ * pad themselves, so the hairline between two of them is a hairline across the
+ * column rather than a rule floating inside a padded box — the same reason the
+ * four regions of this workspace have no gaps between them.
+ */
 .list {
   display: flex;
   flex-direction: column;
-  padding: var(--space-3);
 }
 
 /*

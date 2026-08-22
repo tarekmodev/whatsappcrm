@@ -1,0 +1,69 @@
+/*
+ * The column's own bar. It sits on `surface-sunken` — the same surface the
+ * column is — with a hairline under it, so it reads as the top of the list
+ * rather than as a card floating over it.
+ */
+.header {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-block-size: var(--size-control-md);
+  padding-inline: var(--row-inline-padding);
+  background: var(--color-surface-sunken);
+  border-block-end: var(--border-hairline) solid var(--color-border);
+}
+
+.count {
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/*
+ * The trigger is metadata in a bar, not a form control: `bare`, muted, and no
+ * taller than the bar it sits in. It is the one control in the app allowed under
+ * `--size-touch-target`, for the same reason the row's revealed action is — the
+ * bar is `--size-control-md`, and a 44px control inside it would make the bar
+ * 44px and cost the column a row.
+ */
+.trigger {
+  flex: 0 0 auto;
+  gap: var(--space-1);
+  min-block-size: var(--size-control-sm);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.menuList {
+  composes: menuList from '../../../components/ui/MenuButton.module.css';
+}
+
+.menuItem {
+  composes: menuItem from '../../../components/ui/MenuButton.module.css';
+}
+
+/*
+ * The tick reserves its box on every entry and only paints on the current one,
+ * so opening the panel does not show two labels at two different indents.
+ */
+.tick {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  inline-size: var(--size-icon-sm);
+  color: var(--color-accent);
+  visibility: hidden;
+}
+
+.tick[data-current='true'] {
+  visibility: visible;
+}

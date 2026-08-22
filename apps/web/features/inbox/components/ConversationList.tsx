@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef } from 'react';
 import type { ConversationResponse } from '@whatsappcrm/contracts';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
@@ -7,7 +8,9 @@ import { TextLink } from '@/components/ui/TextLink';
 import { useContent } from '@/lib/content';
 import { routes } from '@/lib/routes';
 import { CONVERSATIONS_PAGE_SIZE } from '@/features/people/constants';
+import { enteringIds } from '@/features/inbox/entering-rows';
 import { activeInboxFilterId, INBOX_FILTERS } from '@/features/inbox/inbox-filters';
+import { ConversationListHeader, ConversationListHeaderSkeleton } from './ConversationListHeader';
 import {
   ConversationRow,
   ConversationRowSkeleton,
@@ -18,17 +21,25 @@ import styles from './ConversationList.module.css';
 
 /**
  * The conversation list. Usage:
- * `<ConversationList conversations={…} userNames={…} teamNames={…} query={…} selectedId={…} claim={…} canManageChannels={…} />`.
+ * `<ConversationList conversations={…} hasMore={…} userNames={…} teamNames={…} query={…} selectedId={…} claim={…} canManageChannels={…} />`.
  *
- * A list of links: every row opens its thread into the pane beside it, and the
- * URL is what says which one is open — so a refresh, a copied link and the back
- * button all reproduce the same view.
+ * A **queue**: its own sticky header saying how many rows there are and what
+ * order they are in, then a hairline-separated column of `--size-row-list` rows.
+ * Every row opens its thread into the pane beside it, and the URL is what says
+ * which one is open — so a refresh, a copied link and the back button all
+ * reproduce the same view.
+ *
+ * The header is absent while the list is empty: "0 conversations" over an empty
+ * state that has just explained why says the same thing twice, and a sort
+ * control over nothing is a control with nothing to order.
  *
  * Empty is three states rather than one — see `ConversationListEmpty` below.
  */
 
 export interface ConversationListProps {
   conversations: readonly ConversationResponse[];
+  /** There is a page after this one, so the header's count is a floor. */
+  hasMore: boolean;
   userNames: ReadonlyMap<string, string>;
   teamNames: ReadonlyMap<string, string>;
   query: InboxListQuery;
@@ -51,6 +62,7 @@ export interface ConversationListProps {
 
 export function ConversationList({
   conversations,
+  hasMore,
   userNames,
   teamNames,
   query,
@@ -58,33 +70,77 @@ export function ConversationList({
   claim,
   canManageChannels,
 }: ConversationListProps) {
+  const entering = useEnteringConversations(conversations.map((conversation) => conversation.id));
+
   if (conversations.length === 0) {
     return <ConversationListEmpty query={query} canManageChannels={canManageChannels} />;
   }
 
   return (
-    <ul className={styles.list}>
-      {conversations.map((conversation) => (
-        <ConversationRow
-          key={conversation.id}
-          conversation={conversation}
-          assigneeName={
-            conversation.assignedUserId === null
-              ? null
-              : (userNames.get(conversation.assignedUserId) ?? null)
-          }
-          teamName={
-            conversation.assignedTeamId === null
-              ? null
-              : (teamNames.get(conversation.assignedTeamId) ?? null)
-          }
-          isSelected={conversation.id === selectedId}
-          query={query}
-          claim={claim}
-        />
-      ))}
-    </ul>
+    <div className={styles.column}>
+      <ConversationListHeader
+        count={conversations.length}
+        hasMore={hasMore}
+        query={query}
+        conversationId={selectedId}
+      />
+
+      <ul className={styles.list}>
+        {conversations.map((conversation) => (
+          <ConversationRow
+            key={conversation.id}
+            conversation={conversation}
+            isEntering={entering.has(conversation.id)}
+            assigneeName={
+              conversation.assignedUserId === null
+                ? null
+                : (userNames.get(conversation.assignedUserId) ?? null)
+            }
+            teamName={
+              conversation.assignedTeamId === null
+                ? null
+                : (teamNames.get(conversation.assignedTeamId) ?? null)
+            }
+            isSelected={conversation.id === selectedId}
+            query={query}
+            claim={claim}
+          />
+        ))}
+      </ul>
+    </div>
   );
+}
+
+/**
+ * Which rows arrived since the last render, so a conversation the socket pushed
+ * into the column announces itself instead of shunting the queue under the
+ * cursor. `entering-rows.ts` holds the rule and its test.
+ *
+ * A ref keyed on the ids rather than state: this must be decided *during* the
+ * render that first paints the new row, and a `useEffect` would set it one paint
+ * too late — the row would already be on screen at full height. Keying on the
+ * signature makes a repeated render with the same ids return the same answer,
+ * so React rendering the component twice (StrictMode does) changes nothing.
+ */
+function useEnteringConversations(ids: readonly string[]): ReadonlySet<string> {
+  const state = useRef<{
+    signature: string;
+    previous: readonly string[];
+    entering: ReadonlySet<string>;
+  } | null>(null);
+  const signature = ids.join(',');
+
+  if (state.current === null) {
+    state.current = { signature, previous: ids, entering: enteringIds(null, ids) };
+  } else if (state.current.signature !== signature) {
+    state.current = {
+      signature,
+      previous: ids,
+      entering: enteringIds(state.current.previous, ids),
+    };
+  }
+
+  return state.current.entering;
 }
 
 /**
@@ -163,20 +219,28 @@ function ConversationListEmpty({
 }
 
 /**
- * Mirrors `ConversationList`: the same scrolling list holding a full page of
- * row skeletons, so the swap to real conversations moves nothing.
+ * Mirrors `ConversationList`: the same column, the same bar at the top of it,
+ * and a full page of row skeletons under it — so the swap to real conversations
+ * moves nothing.
  */
-export function ConversationListSkeleton({ hasClaim = false }: { hasClaim?: boolean }) {
+export function ConversationListSkeleton({
+  query,
+  conversationId,
+}: {
+  query: InboxListQuery;
+  conversationId: string | null;
+}) {
   const content = useContent();
 
   return (
-    <>
+    <div className={styles.column}>
       <LoadingAnnouncement label={content.inbox.loadingConversations} />
+      <ConversationListHeaderSkeleton query={query} conversationId={conversationId} />
       <ul className={styles.list} aria-hidden="true">
         {Array.from({ length: CONVERSATIONS_PAGE_SIZE }, (_unused, index) => (
-          <ConversationRowSkeleton key={index} hasClaim={hasClaim} />
+          <ConversationRowSkeleton key={index} />
         ))}
       </ul>
-    </>
+    </div>
   );
 }

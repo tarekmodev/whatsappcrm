@@ -585,7 +585,12 @@ describe('the shared inbox, end to end', () => {
       const page = await as(
         principalFor(TENANT_A, OTHER_AGENT_A, 'agent'),
         async () =>
-          await conversations.list({ limit: 25, scope: 'unassigned', status: 'open' as const }),
+          await conversations.list({
+            limit: 25,
+            scope: 'unassigned',
+            status: 'open' as const,
+            sort: 'newest' as const,
+          }),
       );
 
       expect(page.items.map((item) => item.id)).toContain(OPEN_THREAD);
@@ -608,7 +613,8 @@ describe('the shared inbox, end to end', () => {
 
       const page = await as(
         principalFor(TENANT_A, OTHER_AGENT_A, 'agent'),
-        async () => await conversations.list({ limit: 25, scope: 'unassigned' }),
+        async () =>
+          await conversations.list({ limit: 25, scope: 'unassigned', sort: 'newest' as const }),
       );
 
       expect(page.items.map((item) => item.id)).not.toContain(CLOSED_THREAD);
@@ -623,7 +629,8 @@ describe('the shared inbox, end to end', () => {
     it('still shows it to the agent who holds it', async () => {
       const page = await as(
         principalFor(TENANT_A, AGENT_A, 'agent'),
-        async () => await conversations.list({ limit: 25, scope: 'assigned' }),
+        async () =>
+          await conversations.list({ limit: 25, scope: 'assigned', sort: 'newest' as const }),
       );
 
       expect(page.items.map((item) => item.id)).toContain(CLOSED_THREAD);
@@ -691,7 +698,7 @@ describe('the shared inbox, end to end', () => {
     it('never lists another tenant conversation, at any scope', async () => {
       const page = await as(
         principalFor(TENANT_A, AGENT_A, 'supervisor'),
-        async () => await conversations.list({ limit: 100, scope: 'all' }),
+        async () => await conversations.list({ limit: 100, scope: 'all', sort: 'newest' as const }),
       );
 
       expect(page.items.map((item) => item.id)).not.toContain(TENANT_B_THREAD);
@@ -723,7 +730,8 @@ describe('the shared inbox, end to end', () => {
       for (let request = 0; request < 10; request += 1) {
         const page = await as(
           principal,
-          async () => await conversations.list({ limit: 1, scope: 'all', cursor }),
+          async () =>
+            await conversations.list({ limit: 1, scope: 'all', cursor, sort: 'newest' as const }),
         );
 
         seen.push(...page.items.map((item) => item.id));
@@ -743,7 +751,13 @@ describe('the shared inbox, end to end', () => {
       await expect(
         as(
           principalFor(TENANT_A, AGENT_A, 'supervisor'),
-          async () => await conversations.list({ limit: 25, scope: 'all', cursor: 'not-a-cursor' }),
+          async () =>
+            await conversations.list({
+              limit: 25,
+              scope: 'all',
+              cursor: 'not-a-cursor',
+              sort: 'newest' as const,
+            }),
         ),
       ).rejects.toThrow(/cursor is not valid/);
     });

@@ -1,40 +1,79 @@
 /*
- * The list does not scroll itself: since TAR-513 its column does, for its whole
- * height, so a row is never clipped mid-card by a box that stopped at 62dvh.
+ * The conversation column.
+ *
+ * It does not scroll itself: since TAR-513 its region does, for its whole
+ * height, so a row is never clipped mid-row by a box that stopped at 62dvh.
+ * What this owns is the column's *geometry* — the inline padding and the leading
+ * gutter — declared once here because three things have to agree on it: the
+ * row's own padding, the row's leading column, and the hairline between two
+ * rows, which starts exactly where a row's body does.
  */
+.column {
+  --row-inline-padding: var(--space-4);
+  --row-leading-gap: var(--space-3);
+  /* Where a divider begins: past the inline padding and the avatar gutter. */
+  --row-divider-inset: calc(
+    var(--row-inline-padding) + var(--size-control-sm) + var(--row-leading-gap)
+  );
+
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
 .list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
   padding: 0;
   margin: 0;
   list-style: none;
 }
 
-/* On `surface`, because the column behind it is `surface-sunken` now — a row the
-   same colour as its column is a row you cannot see. */
-.row {
-  background: var(--color-surface);
-  border: var(--border-hairline) solid var(--color-border);
-  /* Reserved, and transparent until the row is the open one, so selecting a
-     conversation changes a colour rather than the geometry of the list. */
-  border-inline-start-width: var(--focus-ring-width);
-  border-inline-start-color: transparent;
-  border-radius: var(--radius-md);
+/*
+ * Rows are separated by a hairline, not by gaps between cards: no per-row
+ * border, radius or shadow, and no canvas showing between them — the same rule
+ * the four regions of this workspace follow (0001, "The inbox").
+ *
+ * Inset to the body's edge so the divider runs under the text rather than under
+ * the avatars, which is what makes a column of rows read as one list instead of
+ * a stack of separated things.
+ */
+.item {
+  position: relative;
 }
 
-@media (hover: hover) {
-  .row:hover {
-    background: var(--color-surface-hover);
-  }
+.item:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline: var(--row-divider-inset) 0;
+  block-size: var(--border-hairline);
+  background: var(--color-border);
 }
 
 /*
- * The open thread. Colour is not the only signal — the link carries
- * `aria-current`, and the border weight changes too, so this survives
- * forced-colors mode and reads for anyone who cannot separate the two greens.
+ * A conversation the socket pushed into the column while somebody was reading
+ * it. It expands from nothing to its height rather than appearing, so the queue
+ * visibly changes instead of shunting every row below it under the cursor.
+ *
+ * `grid-template-rows` from `0fr`, which is the only portable way to animate to
+ * a height nobody knows; `overflow` is scoped to the animating row so no other
+ * row is clipping anything. A browser that cannot interpolate the track still
+ * gets the fade. `--duration-medium` is 1ms under `prefers-reduced-motion`, so
+ * the token layer flattens this to an instant appearance rather than leaving a
+ * row half-open.
  */
-.row[data-selected='true'] {
-  background: var(--color-surface-selected);
-  border-inline-start-color: var(--color-accent);
+.item[data-entering='true'] {
+  display: grid;
+  grid-template-rows: 1fr;
+  overflow: hidden;
+  animation: rowEnter var(--duration-medium) var(--easing-enter);
+}
+
+@keyframes rowEnter {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
 }

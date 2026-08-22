@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { ConversationResponse } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import { ConversationList, ConversationListSkeleton } from './ConversationList';
 import type { ClaimContext, InboxListQuery } from './ConversationRow';
+
+// The column header's sort menu is a MenuButton, which closes on route change.
+vi.mock('next/navigation', () => ({
+  usePathname: () => '/inbox',
+}));
 
 vi.mock('@/features/inbox/inbox.actions', () => ({
   claimConversationAction: () => Promise.resolve({ status: 'success', data: {} }),
@@ -60,7 +65,7 @@ function conversation(overrides: Partial<ConversationResponse>): ConversationRes
 const LIANG_ID = '0192f001-0000-7000-8000-000000000104';
 const NAMES = new Map([[AMINA_ID, 'Amina Haddad']]);
 const TEAMS = new Map([[BILLING_ID, 'Billing']]);
-const QUERY = { scope: 'all', status: 'open' } as const;
+const QUERY = { scope: 'all', status: 'open', sort: 'newest' } as const;
 
 function renderList({
   conversations,
@@ -68,17 +73,20 @@ function renderList({
   selectedId = null,
   query = QUERY,
   canManageChannels = false,
+  hasMore = false,
 }: {
   conversations: readonly ConversationResponse[];
   claim?: ClaimContext | null;
   selectedId?: string | null;
   query?: InboxListQuery;
   canManageChannels?: boolean;
+  hasMore?: boolean;
 }) {
   return render(
     <ToastProvider>
       <ConversationList
         conversations={conversations}
+        hasMore={hasMore}
         userNames={NAMES}
         teamNames={TEAMS}
         query={query}
@@ -90,18 +98,40 @@ function renderList({
   );
 }
 
+/**
+ * A row link's accessible name: the contact, then whatever the row is saying in
+ * shape and colour alone. Composed here the way the row composes it, so a test
+ * that looks a row up by name cannot drift from what the row is called.
+ */
+function rowName(...marks: readonly string[]): string {
+  return [content.inbox.openConversation('Fatima Al-Zahra'), ...marks].join(', ');
+}
+
 describe('ConversationList', () => {
   it('opens each conversation through a link that carries the current filters', () => {
     renderList({ conversations: [conversation({})] });
 
-    const link = screen.getByRole('link', {
-      name: content.inbox.openConversation('Fatima Al-Zahra'),
-    });
+    const link = screen.getByRole('link', { name: rowName(content.inbox.unclaimed) });
 
     expect(link).toHaveAttribute(
       'href',
       `/inbox?scope=all&status=open&conversation=${ASSIGNED_ID}`,
     );
+  });
+
+  /**
+   * TAR-517: at `--size-row-list` a row reports unread as a count circle and
+   * selection as an accent bar, both of which are shape and colour and nothing
+   * else. The link's own name is what carries them for anyone who sees neither.
+   */
+  it('names each row by its contact and everything the row shows in colour alone', () => {
+    renderList({ conversations: [conversation({ unreadCount: 2 })] });
+
+    expect(
+      screen.getByRole('link', {
+        name: rowName(content.inbox.unreadSummary(2), content.inbox.unclaimed),
+      }),
+    ).toBeInTheDocument();
   });
 
   it('marks the open conversation for assistive technology, not only in colour', () => {
@@ -157,7 +187,7 @@ describe('ConversationList', () => {
   it('says the workspace has no conversations only on the unfiltered view', () => {
     renderList({
       conversations: [],
-      query: { scope: 'all', status: undefined },
+      query: { scope: 'all', status: undefined, sort: 'newest' },
       canManageChannels: true,
     });
 
@@ -168,14 +198,17 @@ describe('ConversationList', () => {
   });
 
   it('offers no way to connect a number to a principal who may not', () => {
-    renderList({ conversations: [], query: { scope: 'all', status: undefined } });
+    renderList({ conversations: [], query: { scope: 'all', status: undefined, sort: 'newest' } });
 
     expect(screen.getByText(content.inbox.emptyHeading)).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: content.inbox.emptyConnectAction })).toBeNull();
   });
 
   it('names the filter that is empty, and offers to widen it', () => {
-    renderList({ conversations: [], query: { scope: 'assigned', status: undefined } });
+    renderList({
+      conversations: [],
+      query: { scope: 'assigned', status: undefined, sort: 'newest' },
+    });
 
     expect(
       screen.getByText(content.inbox.filteredEmptyHeading(content.inbox.filterAssigned)),
@@ -186,13 +219,19 @@ describe('ConversationList', () => {
   });
 
   it('falls back to unnamed copy for a filter combination no entry names', () => {
-    renderList({ conversations: [], query: { scope: 'unassigned', status: 'resolved' } });
+    renderList({
+      conversations: [],
+      query: { scope: 'unassigned', status: 'resolved', sort: 'newest' },
+    });
 
     expect(screen.getByText(content.inbox.filteredEmptyUnnamedHeading)).toBeInTheDocument();
   });
 
   it('quotes a search back and offers to clear it', () => {
-    renderList({ conversations: [], query: { scope: 'all', status: 'open', q: '+971 50' } });
+    renderList({
+      conversations: [],
+      query: { scope: 'all', status: 'open', q: '+971 50', sort: 'newest' },
+    });
 
     expect(screen.getByText(content.search.emptyHeading('+971 50'))).toBeInTheDocument();
     expect(screen.getByRole('link', { name: content.search.clear })).toBeInTheDocument();
@@ -212,7 +251,9 @@ describe('ConversationList — claiming from the list', () => {
   it('offers no control at all to a principal holding neither permission', () => {
     renderList({ conversations: [conversation({})], claim: null });
 
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    // Named rather than 'any button': the column's own header carries a sort
+    // control, which is not a row action and is there for every principal.
+    expect(screen.queryByRole('button', { name: /claim|release|take over/i })).toBeNull();
   });
 
   it('offers a claim on an unclaimed row', () => {
@@ -248,7 +289,7 @@ describe('ConversationList — claiming from the list', () => {
     // there in the first place.
     renderList({ conversations: [conversation({ assignedUserId: LIANG_ID })], claim: agent });
 
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /claim|release|take over/i })).toBeNull();
   });
 
   it('offers a take-over, never a claim, on a row somebody else holds', () => {
@@ -280,9 +321,58 @@ describe('ConversationList — claiming from the list', () => {
   });
 });
 
+/**
+ * TAR-517's list chrome: how many rows are in front of you, and what order they
+ * are in — the two things the column could not say for itself.
+ */
+describe('ConversationList — the column header', () => {
+  it('counts the rows it is showing', () => {
+    renderList({ conversations: [conversation({}), conversation({ id: UNCLAIMED_ID })] });
+
+    expect(screen.getByText(content.inbox.conversationCount(2))).toBeInTheDocument();
+  });
+
+  it('says the count is a floor when there is another page behind it', () => {
+    // The list read carries no `count(*)`, so the honest answer for a page with
+    // a cursor after it is "at least this many" — never a total it never had.
+    renderList({ conversations: [conversation({})], hasMore: true });
+
+    expect(screen.getByText(content.inbox.conversationCountAtLeast(1))).toBeInTheDocument();
+    expect(screen.queryByText(content.inbox.conversationCount(1))).toBeNull();
+  });
+
+  it('puts the order in the URL, keeping the filters and the open thread', () => {
+    renderList({ conversations: [conversation({})], selectedId: ASSIGNED_ID });
+    fireEvent.click(screen.getByRole('button', { name: content.inbox.sortLabel }));
+
+    expect(screen.getByRole('link', { name: content.inbox.sorts.oldest })).toHaveAttribute(
+      'href',
+      `/inbox?scope=all&status=open&conversation=${ASSIGNED_ID}&sort=oldest`,
+    );
+  });
+
+  it('leaves the default order out of the URL rather than writing it on every link', () => {
+    renderList({ conversations: [conversation({})] });
+    fireEvent.click(screen.getByRole('button', { name: content.inbox.sortLabel }));
+
+    expect(screen.getByRole('link', { name: content.inbox.sorts.newest })).toHaveAttribute(
+      'href',
+      '/inbox?scope=all&status=open',
+    );
+  });
+
+  it('offers no header over an empty list', () => {
+    // "0 conversations" over an empty state that has just explained itself says
+    // the same thing twice, and a sort control over nothing orders nothing.
+    renderList({ conversations: [], query: { scope: 'all', status: undefined, sort: 'newest' } });
+
+    expect(screen.queryByRole('button', { name: content.inbox.sortLabel })).toBeNull();
+  });
+});
+
 describe('ConversationListSkeleton', () => {
   it('announces the load exactly once, politely', () => {
-    render(<ConversationListSkeleton />);
+    render(<ConversationListSkeleton query={QUERY} conversationId={null} />);
 
     const announcements = screen.getAllByRole('status');
 
@@ -291,7 +381,7 @@ describe('ConversationListSkeleton', () => {
   });
 
   it('hides its placeholder rows from assistive technology', () => {
-    const { container } = render(<ConversationListSkeleton />);
+    const { container } = render(<ConversationListSkeleton query={QUERY} conversationId={null} />);
 
     expect(container.querySelector('ul')).toHaveAttribute('aria-hidden', 'true');
   });

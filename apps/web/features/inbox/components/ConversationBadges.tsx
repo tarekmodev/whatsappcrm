@@ -1,7 +1,7 @@
 'use client';
 
 import type { ConversationResponse } from '@whatsappcrm/contracts';
-import { Avatar } from '@/components/ui/Avatar';
+import { Avatar, type AvatarSize } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
 import { Cluster } from '@/components/layout/Cluster';
 import { VisuallyHidden } from '@/components/layout/VisuallyHidden';
@@ -61,6 +61,10 @@ export function ConversationBadges({
   const isRow = view === 'row';
   const chips = conversationChips(conversation, filter, isRow ? CHIP_LIMIT.row : CHIP_LIMIT.detail);
   const size = isRow ? 'sm' : 'md';
+  // A row is `--size-row-list` tall since TAR-517 and the mark shares its line
+  // with a chip and a count, so the holder is the smallest avatar that still
+  // reads as one. A header has the room for the ordinary size.
+  const avatarSize: AvatarSize = isRow ? 'xs' : 'sm';
 
   return (
     <Cluster gap="2">
@@ -85,6 +89,7 @@ export function ConversationBadges({
           exists to report. */}
       {conversation.assignedUserId === null ? null : (
         <Holder
+          size={avatarSize}
           name={assigneeName}
           label={
             assigneeName === null
@@ -94,7 +99,7 @@ export function ConversationBadges({
         />
       )}
       {teamName === null ? null : (
-        <Holder name={teamName} label={content.inbox.assignedToTeam(teamName)} />
+        <Holder size={avatarSize} name={teamName} label={content.inbox.assignedToTeam(teamName)} />
       )}
     </Cluster>
   );
@@ -105,10 +110,10 @@ export function ConversationBadges({
  * travels beside it invisibly for assistive technology and in `title` for a
  * pointer — an initial in a circle is not self-explanatory to either.
  */
-function Holder({ name, label }: { name: string | null; label: string }) {
+function Holder({ name, label, size }: { name: string | null; label: string; size: AvatarSize }) {
   return (
     <span className={styles.holder} title={label}>
-      <Avatar name={name ?? ''} tone="neutral" />
+      <Avatar name={name ?? ''} tone="neutral" size={size} />
       <VisuallyHidden>{label}</VisuallyHidden>
     </span>
   );

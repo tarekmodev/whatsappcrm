@@ -1,4 +1,3 @@
-import { Stack } from '@/components/layout/Stack';
 import { Notice } from '@/components/ui/Notice';
 import { content } from '@/content/en';
 import { verifySession } from '@/lib/session/session';
@@ -12,7 +11,9 @@ import styles from './InboxSection.module.css';
  *
  * No card and no heading: since TAR-513 the list is a column of the workspace
  * rather than a section of a document, and `InboxLayout` owns the column's
- * frame, its scrolling and its accessible name.
+ * frame, its scrolling and its accessible name. Since TAR-517 it owns no padding
+ * either — the rows run to the column's edges and pad themselves, which is what
+ * lets the hairline between two of them be a hairline rather than a gap.
  */
 
 export interface InboxSectionProps {
@@ -24,7 +25,7 @@ export interface InboxSectionProps {
 }
 
 export async function InboxSection({ query, selectedId, isScopeNarrowed }: InboxSectionProps) {
-  const [session, { conversations, userNames, teamNames }] = await Promise.all([
+  const [session, { conversations, hasMore, userNames, teamNames }] = await Promise.all([
     verifySession(),
     loadInbox(query),
   ]);
@@ -38,36 +39,51 @@ export async function InboxSection({ query, selectedId, isScopeNarrowed }: Inbox
     canClaim || canAssign ? { currentUserId: session.principal.userId, canClaim, canAssign } : null;
 
   return (
-    <Stack gap="3" className={styles.sections}>
+    <div className={styles.column}>
       {isScopeNarrowed ? (
         // The API narrows `all` rather than refusing it; saying so is what
         // stops an agent wondering why a shared supervisor link shows so
-        // little.
-        <Notice tone="info">{content.inbox.scopeNarrowedAllNotice}</Notice>
+        // little. Padded, because it is prose rather than a row.
+        <div className={styles.notice}>
+          <Notice tone="info">{content.inbox.scopeNarrowedAllNotice}</Notice>
+        </div>
       ) : null}
       <ConversationList
         conversations={conversations}
+        hasMore={hasMore}
         userNames={userNames}
         teamNames={teamNames}
-        query={{ scope: query.scope, status: query.status, q: query.q }}
+        query={{ scope: query.scope, status: query.status, q: query.q, sort: query.sort }}
         selectedId={selectedId}
         claim={claim}
         canManageChannels={session.checker.can('channel:manage')}
       />
-    </Stack>
+    </div>
   );
 }
 
 /**
  * Mirrors `InboxSection`'s frame, with the list's own skeleton inside it.
  *
- * `hasClaim` matches what the principal's real rows will carry, so a supervisor's
- * taller badge row is reserved rather than appearing when the data lands.
+ * It takes the view rather than a permission flag: the column's header shows the
+ * order while the rows are still in flight, and the row's height no longer
+ * depends on who is looking — the claim control left the resting row in TAR-517,
+ * so a supervisor's rows and an agent's are the same height and there is nothing
+ * left to reserve.
  */
-export function InboxSectionSkeleton({ hasClaim = false }: { hasClaim?: boolean }) {
+export function InboxSectionSkeleton({
+  query,
+  selectedId,
+}: {
+  query: Pick<InboxQuery, 'scope' | 'status' | 'q' | 'sort'>;
+  selectedId: string | null;
+}) {
   return (
-    <Stack gap="3" className={styles.sections}>
-      <ConversationListSkeleton hasClaim={hasClaim} />
-    </Stack>
+    <div className={styles.column}>
+      <ConversationListSkeleton
+        query={{ scope: query.scope, status: query.status, q: query.q, sort: query.sort }}
+        conversationId={selectedId}
+      />
+    </div>
   );
 }

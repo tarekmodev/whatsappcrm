@@ -1,5 +1,10 @@
-import { permissionsForRole, type SessionPrincipal } from '@whatsappcrm/contracts';
+import {
+  permissionsForRole,
+  type ConversationListQuery,
+  type SessionPrincipal,
+} from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
+import { encodeTimestampCursor } from '../common/pagination/timestamp-keyset';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import type { ConversationRow } from './conversation.mapper';
 import { ConversationQueryService } from './conversation-query.service';
@@ -91,6 +96,84 @@ function asPrincipal<T>(
     async () => await work(new ConversationQueryService(prisma, tenantContext)),
   );
 }
+
+/**
+ * The service over a stubbed page, returning the arguments it built. The list is
+ * a query rather than a decision, so what is worth proving is the query.
+ */
+async function listedQuery(
+  query: Partial<ConversationListQuery> = {},
+): Promise<Record<string, unknown>> {
+  const tenantContext = new TenantContextService();
+  let captured: Record<string, unknown> = {};
+  const prisma = {
+    conversation: {
+      findMany: (args: Record<string, unknown>): Promise<ConversationRow[]> => {
+        captured = args;
+        return Promise.resolve([]);
+      },
+    },
+  } as unknown as TenantPrisma;
+  const principal = agentPrincipal({
+    role: 'supervisor',
+    permissions: [...permissionsForRole('supervisor')],
+  });
+
+  await tenantContext.run(
+    { requestId: 'spec', tenantId: TENANT, userId: principal.userId, principal },
+    async () => {
+      await new ConversationQueryService(prisma, tenantContext).list({
+        scope: 'all',
+        limit: 25,
+        sort: 'newest',
+        ...query,
+      });
+    },
+  );
+
+  return captured;
+}
+
+/**
+ * TAR-517 puts the column's order in the agent's hands. It is one direction on
+ * one column, and the half that is easy to get silently wrong is the keyset:
+ * a cursor read in the opposite direction to the `orderBy` returns the rows
+ * *before* the boundary rather than after it — a page that quietly repeats
+ * itself, with no error anywhere.
+ */
+describe('ordering the inbox list', () => {
+  const CURSOR_AT = new Date('2026-08-11T09:00:00.000Z');
+  const cursor = encodeTimestampCursor({ at: CURSOR_AT, id: CONVERSATION });
+
+  it('reads newest first by default', async () => {
+    await expect(listedQuery()).resolves.toMatchObject({
+      orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
+    });
+  });
+
+  it('reverses both keys for the oldest-first order, never just the leading one', async () => {
+    // `id` is the tie-breaker that makes the order total. Left descending under
+    // an ascending timestamp, a tie group comes back in the wrong order and the
+    // keyset skips part of it.
+    await expect(listedQuery({ sort: 'oldest' })).resolves.toMatchObject({
+      orderBy: [{ lastMessageAt: 'asc' }, { id: 'asc' }],
+    });
+  });
+
+  it('resumes forward from the cursor in whichever direction was asked for', async () => {
+    const newest = await listedQuery({ cursor });
+    const oldest = await listedQuery({ cursor, sort: 'oldest' });
+
+    expect(newest.where).toMatchObject({
+      lastMessageAt: { lte: CURSOR_AT },
+      NOT: { lastMessageAt: CURSOR_AT, id: { gte: CONVERSATION } },
+    });
+    expect(oldest.where).toMatchObject({
+      lastMessageAt: { gte: CURSOR_AT },
+      NOT: { lastMessageAt: CURSOR_AT, id: { lte: CONVERSATION } },
+    });
+  });
+});
 
 describe('reading one conversation', () => {
   it('opens an unclaimed thread for any agent — the shared inbox', async () => {

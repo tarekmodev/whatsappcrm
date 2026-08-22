@@ -170,15 +170,26 @@ brand from being invisible against the surface it was chosen to sit on.
 
 ### Surfaces
 
-| Role              | Light       | Dark        |
-| ----------------- | ----------- | ----------- |
-| `--color-canvas`  | `slate-50`  | `slate-950` |
-| `--color-surface` | `white`     | `slate-900` |
-| `--color-border`  | `slate-200` | `slate-700` |
+| Role                           | Light       | Dark        |
+| ------------------------------ | ----------- | ----------- |
+| `--color-canvas`               | `slate-50`  | `slate-950` |
+| `--color-surface`              | `white`     | `slate-900` |
+| `--color-surface-sunken`       | `slate-100` | `slate-950` |
+| `--color-surface-hover`        | `slate-100` | `slate-800` |
+| `--color-surface-sunken-hover` | `slate-200` | `slate-800` |
+| `--color-border`               | `slate-200` | `slate-700` |
 
 Light grey canvas, white cards, hairline borders. A card is separated from the canvas by
 its **border** first and its shadow second — a shadow doing the whole job reads as a
 floating panel rather than a section of a page.
+
+**There are two hover surfaces, and picking the wrong one is silent.**
+`--color-surface-hover` is for something sitting on `--color-surface`;
+`--color-surface-sunken-hover` is for something sitting on `--color-surface-sunken` — a
+conversation row, which has no surface of its own and takes its column's. In the light
+theme `--color-surface-hover` _is_ `--color-surface-sunken`, so a row that used it was
+hovered to exactly the colour it already was, and a row with no action gave no feedback at
+all (TAR-517). Match the hover role to the surface underneath, not to the component.
 
 ### The rail
 
@@ -443,6 +454,52 @@ decoration:
 The filter entries are data (`features/inbox/inbox-filters.ts`), each a scope plus an
 optional status — so there is no entry the conversations endpoint cannot answer. The
 composer's destination (customer, or internal note) is a labelled tab strip, never a mode.
+
+#### The conversation list is a queue, not a stack of cards (TAR-517)
+
+The list column is the one place in this product where **density is the feature**. An
+agent triaging it is scanning, not reading, and a column that shows three conversations is
+a column they have to scroll to understand. The rules:
+
+- A row is **`--size-row-list`** (64px): a leading `Avatar`, a body of exactly two lines —
+  contact name, then one line of preview, both truncated with an ellipsis — and a trailing
+  zone holding the timestamp over the row's marks. A row whose height depends on how much
+  the customer typed is not a row.
+- Rows are separated by a **hairline inset to the body's edge**, so it starts after the
+  avatar gutter. No per-row border, radius, shadow or gap — the same rule the four regions
+  follow, for the same reason. `ConversationList.module.css` owns that inset and the
+  row's inline padding, because the divider and the row's leading column have to be one
+  number.
+- **No action rests in the row.** `Claim` / `Take over` appear in the trailing zone on
+  hover and on `:focus-within`, as `secondary` — never solid accent, which repeated down a
+  column outnumbers the screen's one real primary action. Where there is no hover to
+  reveal them (`@media not all and (hover: hover)`) they are simply always there, at full
+  touch-target height, and the row is taller to fit: this document's "never hover-only"
+  rule is answered by the focus and pointer rules, not by an overflow menu.
+- **The selected row lifts to `--color-surface`** — the reading surface, matching the
+  thread column beside it — plus a `--size-marker` accent bar on its leading edge. Not
+  `--color-surface-selected`: that role is a green tint in the light theme and a slate one
+  step off the surface in the dark one, so the same rule read as two different states. A
+  surface change plus a marker reads identically in both and survives forced colours.
+- **The column has a header**: the result count on the left, the order on the right, both
+  sticky. The count is the page's own, never a tenant total — the list read carries no
+  `count(*)` — so a page with a cursor behind it says "25+".
+- The order is `CONVERSATION_SORTS`, and it is **in the URL** (`?sort=oldest`), carried by
+  every row link and every filter entry. The default is left out of the URL rather than
+  written on every link. This is the one list whose order the console picks; the ticket
+  queue's order is still the API's alone (ADR 0006 §6), because that queue has one right
+  answer and this one has two.
+- A row the socket pushes in **expands from nothing to its height** at `--duration-medium`
+  / `--easing-enter`, so the queue visibly changes rather than shunting under the cursor.
+  The first render is a page load, not twenty-five arrivals — `features/inbox/entering-rows.ts`.
+- A row's accessible name is the contact plus everything the row says in shape and colour
+  alone: `"Open the conversation with Fatima Al-Zahra, 2 unread, Bot handed over"`. The
+  unread circle and the selection bar are never the only carriers.
+
+Not built yet, and deliberately: the leading slot's **selection checkbox** and the
+header's select-all with bulk actions. 0002's conversation endpoints all address a single
+id — there is no bulk claim, assign or status route — so a checkbox would select rows for
+actions that cannot be performed. It lands with the endpoints.
 
 ### Ticket status
 

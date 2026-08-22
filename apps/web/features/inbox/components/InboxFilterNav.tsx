@@ -2,6 +2,7 @@
 
 import { useId, useState } from 'react';
 import Link from 'next/link';
+import type { ConversationSort } from '@whatsappcrm/contracts';
 import { Icon } from '@/components/ui/Icon';
 import { TextLink } from '@/components/ui/TextLink';
 import { useContent } from '@/lib/content';
@@ -54,6 +55,12 @@ export interface InboxFilterNavProps {
   status: ConversationStatusFilter | undefined;
   /** The open thread, carried into every entry so filtering does not close it. */
   conversationId: string | null;
+  /**
+   * The order the column is in, carried for the same reason: changing which
+   * conversations you are looking at is not a request to change how they are
+   * ordered, and losing it would silently reset the sort on every filter click.
+   */
+  sort: ConversationSort;
   /** `channel:manage` — the permission behind the settings link at the foot. */
   canManageChannels: boolean;
 }
@@ -62,6 +69,7 @@ export function InboxFilterNav({
   scope,
   status,
   conversationId,
+  sort,
   canManageChannels,
 }: InboxFilterNavProps) {
   const content = useContent();
@@ -80,6 +88,7 @@ export function InboxFilterNav({
       scope: filter.scope,
       status: filter.status,
       conversationId: conversationId ?? undefined,
+      sort,
     });
   }
 

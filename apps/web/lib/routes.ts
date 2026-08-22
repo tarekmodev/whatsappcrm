@@ -1,6 +1,8 @@
 import {
+  CONVERSATION_SORT_DEFAULT,
   ONBOARDING_STEP_IDS,
   type ConversationListQuery,
+  type ConversationSort,
   type OnboardingStepId,
   type ReportScope,
   type TicketListQuery,
@@ -194,6 +196,16 @@ export const searchParamKeys = {
   inboxConversation: 'conversation',
   /** The inbox's search term. Same spelling as `peopleQuery`, on purpose. */
   inboxQuery: 'q',
+  /**
+   * The list column's order (TAR-517). Spelled as `ConversationListQuerySchema`
+   * names it, and omitted from the URL while it is the default — a `?sort=newest`
+   * on every filter link would be a parameter that never says anything.
+   *
+   * Unlike the ticket queue, whose order is the API's alone (see `tickets`
+   * above), the inbox has two honest readings of the same column and the agent
+   * picks: what has just arrived, or what nobody has touched for longest.
+   */
+  inboxSort: 'sort',
   /**
    * The queue's three filters. Spelled exactly as `TicketListQuerySchema` names
    * them, so a URL parameter and the query it becomes cannot drift.
@@ -431,6 +443,8 @@ export interface InboxQuery {
   conversationId?: string;
   /** A search term, passed through to `GET /conversations?q=`. */
   q?: string;
+  /** The list column's order. The default is dropped from the URL. */
+  sort?: ConversationSort;
 }
 
 export interface PeopleQuery {
@@ -457,6 +471,11 @@ function inboxSearchParams(query: InboxQuery | undefined): Record<string, string
     [searchParamKeys.inboxStatus]: query?.status,
     [searchParamKeys.inboxConversation]: query?.conversationId,
     [searchParamKeys.inboxQuery]: query?.q,
+    // The default order is what an unparameterised arrival already gets, so
+    // writing it would put `?sort=newest` on every row link and every filter
+    // entry for no reader. `withQuery` drops an `undefined`.
+    [searchParamKeys.inboxSort]:
+      query?.sort === CONVERSATION_SORT_DEFAULT ? undefined : query?.sort,
   };
 }
 

@@ -51,13 +51,15 @@ export default async function InboxPage({
 }) {
   const { checker } = await verifySession();
   const params = await searchParams;
-  const { scope, status, conversationId, q } = parseInboxParams({
+  const { scope, status, conversationId, q, sort } = parseInboxParams({
     scope: firstSearchParam(params[searchParamKeys.inboxScope]),
     status: firstSearchParam(params[searchParamKeys.inboxStatus]),
     conversationId: firstSearchParam(params[searchParamKeys.inboxConversation]),
     q: firstSearchParam(params[searchParamKeys.inboxQuery]),
+    sort: firstSearchParam(params[searchParamKeys.inboxSort]),
   });
-  const threadQuery = { scope, status, q };
+  const listQuery = { scope, status, q, sort };
+  const threadQuery = listQuery;
 
   return (
     <PageShell variant="fill">
@@ -72,26 +74,21 @@ export default async function InboxPage({
             scope={scope}
             status={status}
             conversationId={conversationId}
+            sort={sort}
             canManageChannels={checker.can('channel:manage')}
           />
         }
         list={
           <SectionErrorBoundary>
-            {/* Keyed on the filters so changing one shows the skeleton again
-                rather than leaving the previous scope's rows on screen. */}
+            {/* Keyed on the filters and the order, so changing one shows the
+                skeleton again rather than leaving the previous view's rows on
+                screen in the previous view's order. */}
             <Suspense
-              key={`${scope}:${status ?? ''}:${q ?? ''}`}
-              fallback={
-                // Either permission puts a control on some row, and the
-                // skeleton reserves its height so nothing shifts when the data
-                // lands. Since TAR-186 an agent has one too.
-                <InboxSectionSkeleton
-                  hasClaim={checker.canAny(['conversation:claim', 'conversation:assign'])}
-                />
-              }
+              key={`${scope}:${status ?? ''}:${q ?? ''}:${sort}`}
+              fallback={<InboxSectionSkeleton query={listQuery} selectedId={conversationId} />}
             >
               <InboxSection
-                query={{ scope, status, q }}
+                query={listQuery}
                 selectedId={conversationId}
                 isScopeNarrowed={isConversationScopeNarrowed(checker, scope)}
               />

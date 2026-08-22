@@ -3393,13 +3393,13 @@ function listConversations({ principal, query }: RouteContext): CursorPage<Conve
     throw validationFailed();
   }
 
-  const { status, limit, scope, q } = parsed.data;
+  const { status, limit, scope, q, sort } = parsed.data;
 
   const items = tenantConversations(principal)
     .filter((conversation) => status === undefined || conversation.status === status)
     .filter((conversation) => matchesScope(conversation, scope, principal))
     .filter((conversation) => matchesSearch(conversation, q))
-    .sort(byLastActivityDescending)
+    .sort(sort === 'oldest' ? byLastActivityAscending : byLastActivityDescending)
     .slice(0, limit)
     .map(toConversationResponse);
 
@@ -5734,6 +5734,11 @@ function byLastActivityDescending(left: MockConversation, right: MockConversatio
   return (right.lastMessageAt ?? right.createdAt).localeCompare(
     left.lastMessageAt ?? left.createdAt,
   );
+}
+
+/** `?sort=oldest` (TAR-517): the thread nobody has touched for longest, first. */
+function byLastActivityAscending(left: MockConversation, right: MockConversation): number {
+  return byLastActivityDescending(right, left);
 }
 
 function forbidden(permission: Permission): ApiRequestError {

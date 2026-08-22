@@ -128,6 +128,14 @@ const ICON_PATHS = {
     'M8 4v4',
     'M16 4v4',
   ],
+  /**
+   * A row's overflow actions (TAR-517). Horizontal rather than vertical, because
+   * this set already leans on vertical strokes for the rail's markers and a
+   * column of three dots reads as one at row density. Drawn as three
+   * zero-length strokes so the round line cap makes each dot, which keeps the
+   * glyph on the same 1.75 stroke grid as the rest of the set.
+   */
+  more: ['M6 12h.01', 'M12 12h.01', 'M18 12h.01'],
   /** Opens a menu below its trigger; never mirrored, unlike the chevrons below. */
   chevronDown: ['m6 9 6 6 6-6'],
   /** Points along the reading direction; mirrored under `dir="rtl"`. */

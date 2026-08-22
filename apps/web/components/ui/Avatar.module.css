@@ -8,6 +8,12 @@
   text-transform: uppercase;
 }
 
+.avatar[data-size='xs'] {
+  inline-size: var(--size-icon-md);
+  block-size: var(--size-icon-md);
+  font-size: var(--font-size-caption);
+}
+
 .avatar[data-size='sm'] {
   inline-size: var(--size-control-sm);
   block-size: var(--size-control-sm);

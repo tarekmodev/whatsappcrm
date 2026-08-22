@@ -1,3 +1,4 @@
+import { CONVERSATION_SORT_DEFAULT } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { VisuallyHidden } from '@/components/layout/VisuallyHidden';
 import { PageShell } from '@/components/shell/PageShell';
@@ -34,6 +35,7 @@ export default function InboxLoading() {
             scope="assigned"
             status={undefined}
             conversationId={null}
+            sort={CONVERSATION_SORT_DEFAULT}
             // The permission is not resolved this early; the settings link is
             // one entry, and offering it here to somebody who may not hold
             // `channel:manage` for the half-second before the page arrives is
@@ -41,7 +43,20 @@ export default function InboxLoading() {
             canManageChannels={false}
           />
         }
-        list={<InboxSectionSkeleton />}
+        list={
+          <InboxSectionSkeleton
+            // Same reasoning as `hasThread` below: the search parameters are not
+            // read this early, so this is the view an unparameterised arrival
+            // lands in — which is where an arrival at this route lands anyway.
+            query={{
+              scope: 'assigned',
+              status: undefined,
+              q: undefined,
+              sort: CONVERSATION_SORT_DEFAULT,
+            }}
+            selectedId={null}
+          />
+        }
         thread={<NoThreadSelected />}
         context={null}
       />

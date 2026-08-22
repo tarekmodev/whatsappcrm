@@ -1,64 +1,237 @@
 /*
- * The card's interior. The frame itself is `ConversationList.module.css`'s
- * `.row`, so the row, its skeleton and the selected state share one outline.
+ * One queue row. The column's geometry — the leading gutter, the inline padding
+ * and the hairline between rows — is declared once on `.column` in
+ * `ConversationList.module.css`, because the divider has to start exactly where
+ * the row's content does and two files owning that number is how they drift.
  */
 
-.card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  /* The positioning context the stretched link resolves against. */
+.row {
+  /*
+   * The row's action and the marks it stands in front of, as one switch. Two
+   * properties rather than eight selectors: every state that reveals the action
+   * hides the marks, and writing that twice is how the two fall out of step and
+   * a chip ends up sliced down the middle by the strip's edge.
+   */
+  --actions-visibility: hidden;
+  --marks-visibility: visible;
+
+  /* The positioning context the stretched link, the selection bar and the
+     revealed action all resolve against. */
   position: relative;
-  padding: var(--space-4);
+  display: grid;
+  grid-template-columns: var(--size-control-sm) minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--row-leading-gap);
+  /*
+   * Both a floor and, in practice, the height: two lines of `body-sm` beside a
+   * chip come to a little under this, so every row is exactly
+   * `--size-row-list` whether or not it carries a chip, an avatar or a count.
+   * That is what makes the column scannable and what keeps the skeleton honest.
+   */
+  min-block-size: var(--size-row-list);
+  padding-block: var(--space-2);
+  padding-inline: var(--row-inline-padding);
+  transition: background-color var(--duration-fast) var(--easing-standard);
 }
 
-.link {
+.content {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  color: inherit;
-  text-decoration: none;
+  min-inline-size: 0;
 }
 
-/*
- * Stretches the link's hit area over the whole card, so the target is far
- * larger than the 44px minimum while the claim button stays a sibling rather
- * than a nested interactive element.
- */
-.link::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
+/* A flexible text cell and a fixed trailing one. Twice: name over preview, and
+   timestamp over marks. */
+.line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.contact,
+.preview {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-tight);
 }
 
 .contact {
+  display: block;
+  color: inherit;
   font-weight: var(--font-weight-medium);
-  overflow-wrap: anywhere;
+  text-decoration: none;
 }
 
 .preview {
   color: var(--color-on-surface-muted);
-  font-size: var(--font-size-body-sm);
-  /* Two lines maximum, so one long message cannot stretch a row off the screen. */
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-}
-
-.footer {
-  min-inline-size: 0;
 }
 
 /*
- * Above the stretched link, so a click here claims rather than navigates. A
- * stacking context of its own rather than a bare `z-index`, so nothing inside
- * the card can escape it.
+ * Stretches the link's hit area over the whole row, so the target is far larger
+ * than the 44px minimum while the claim control stays a sibling rather than a
+ * nested interactive element.
  */
-.action {
-  position: relative;
-  z-index: var(--z-sticky);
+.contact::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+/*
+ * Unread. Weight, not colour — and the count circle beside it and the row link's
+ * own accessible name carry the same fact, so this is the third partner rather
+ * than the only one.
+ */
+.row[data-unread='true'] .contact {
+  font-weight: var(--font-weight-strong);
+  color: var(--color-on-surface);
+}
+
+/*
+ * They keep their space while the action stands in front of them — `visibility`
+ * rather than `display` — so revealing it moves the preview's ellipsis by
+ * nothing.
+ */
+.time,
+.marks {
+  display: flex;
   flex: 0 0 auto;
+  align-items: center;
+  visibility: var(--marks-visibility);
+}
+
+/*
+ * The row's action, drawn *over* the trailing cells rather than in place of
+ * them. Absolute, so revealing it grows nothing and moves nothing: the row keeps
+ * its height and the preview keeps its ellipsis exactly where it was.
+ *
+ * A stacking context of its own rather than a bare `z-index`, so nothing inside
+ * the row can escape it, and an opaque background matching the row's own so it
+ * covers the marks it stands in front of.
+ */
+.actions {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  min-block-size: 100%;
+  padding-inline: var(--row-inline-padding);
+  background: var(--color-surface-sunken-hover);
+  visibility: var(--actions-visibility);
+}
+
+/*
+ * A device that can hover reveals the action, and a keyboard reaches it the same
+ * way: `:focus-within` fires when the row's own link takes focus, so the button
+ * is the next tab stop.
+ *
+ * The open row is deliberately *not* in this list. Its claim control is in the
+ * thread header a few hundred pixels to the right, and a second copy of it would
+ * cost that row its timestamp and its status chip for the rest of the session.
+ *
+ * `role="alert"` is `FormError`, inside the actions: a failed claim must not
+ * disappear with the pointer, so while there is one the row keeps the strip —
+ * and it grows downward over the row beneath, which is the one case where a
+ * row's chrome is allowed out of its box.
+ */
+@media (hover: hover) {
+  .row:hover,
+  .row:focus-within {
+    background: var(--color-surface-sunken-hover);
+  }
+
+  .row:hover,
+  .row:focus-within,
+  .row:has(.actions [role='alert']) {
+    --actions-visibility: visible;
+    --marks-visibility: hidden;
+  }
+}
+
+/*
+ * No hover to reveal anything, so nothing is revealed: the action is simply
+ * there, at full touch-target height, in a column of its own at the row's end.
+ *
+ * A third grid track rather than a strip laid over the marks — an overlay you
+ * cannot escape by moving the pointer would hide the status permanently. The
+ * row stays `--size-row-list`, because a 44px control still fits inside it; the
+ * preview simply has less room, which is the right thing to give up on a phone.
+ */
+@media not all and (hover: hover) {
+  .row {
+    grid-template-columns: var(--size-control-sm) minmax(0, 1fr) auto;
+    --actions-visibility: visible;
+  }
+
+  .actions {
+    position: static;
+    padding-inline: 0;
+    background: none;
+  }
+}
+
+/*
+ * The open thread. The row lifts to the *reading* surface — the same colour as
+ * the thread column beside it — and takes an accent bar on its leading edge.
+ *
+ * That pairing replaces the `--color-surface-selected` fill this used to be,
+ * which worked in the light theme and all but vanished in the dark one, where
+ * the role maps to a slate one step from the surface. A surface change plus a
+ * marker reads identically in both, survives forced colours, and does not depend
+ * on telling two greens apart. `aria-current` on the link carries it for anyone
+ * who sees neither.
+ */
+.row[data-selected='true'] {
+  background: var(--color-surface);
+}
+
+.row[data-selected='true']::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  inline-size: var(--size-marker);
+  background: var(--color-accent);
+}
+
+@media (hover: hover) {
+  /* Selected wins over hover: the row is already on the reading surface, and a
+     second fill on top of it would read as a third state. The action strip is
+     opaque and has to match, or hovering the open row paints a hover-coloured
+     rectangle on a row that is not hover-coloured. */
+  .row[data-selected='true']:hover,
+  .row[data-selected='true']:focus-within {
+    background: var(--color-surface);
+  }
+
+  .row[data-selected='true'] .actions {
+    background: var(--color-surface);
+  }
+}
+
+/*
+ * The ring goes on the row, not on the link: the link is one line of text whose
+ * hit area is stretched over the row, so an outline on it would frame the name
+ * rather than the thing that is focused.
+ *
+ * Inset, so it is not clipped by the column's scroll container — an outline
+ * drawn outside a row at the top of the list is drawn outside the box that
+ * scrolls, and half of it disappears.
+ */
+.row:has(.contact:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: calc(var(--focus-ring-width) * -1);
+}
+
+@media (forced-colors: active) {
+  .row[data-selected='true']::before {
+    background: Highlight;
+  }
 }
