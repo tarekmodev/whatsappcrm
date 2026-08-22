@@ -238,6 +238,29 @@ architecture document by its **full filename** — `0011-canned-responses-contra
 comments cite the path: correcting a documentation number by editing application code costs
 more than the ambiguity does.
 
+**A bare `ADR NNNN` resolves by subject, not by number.** The bare form predates the rule
+above and is what most of the codebase actually uses: 360 lines cite `ADR 0009`, `ADR 0010`
+or `ADR 0011` with no filename, against 37 that name one of those six documents in full.
+Those 360 are grandfathered — they are not errors and are not worth a mass rewrite, for the
+same reason a collision is not renamed away. Read one like this:
+
+1. **The number narrows; the subject decides.** Where a number names two documents, the
+   subject of the file you are standing in picks between them. `ADR 0009` under
+   `apps/api/src/tenancy/` is `0009-tenant-lifecycle-and-self-signup.md`; under
+   `apps/web/features/workflows/` it is `0009-workflow-triggers-conditions-actions.md`.
+2. **Where the number and the subject disagree, the subject wins and the citation is stale.**
+   `ADR 0009 decision 6` in reporting code means `0010-reporting-dashboard-and-export.md` —
+   that design was drafted as `0009` and merged as `0010`, and the comments were never
+   updated. Follow the subject, then fix the citation.
+3. **`ADR 0002` may mean either directory.** `docs/adr/` numbers separately from
+   `docs/architecture/`, and both hold an `0002`. In application code it is
+   `docs/architecture/0002-architecture-and-api-contract.md`; in `README.md` it is
+   `docs/adr/0002-observability-and-environments.md`. Nothing but the subject separates them.
+
+When the surrounding file does not make the subject obvious, qualify the number where it
+stands rather than renumbering anything: `ADR 0010 (reporting dashboard and export)`. New
+writing still uses the full filename.
+
 ## Templates
 
 ### Reference — endpoint
