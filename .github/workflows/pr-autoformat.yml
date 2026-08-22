@@ -1,0 +1,190 @@
+name: Auto-format agent pull requests
+
+# `Lint` runs `pnpm format:check` before it runs ESLint, so a stray blank line or
+# a line one character past `printWidth` fails a *required* check — and because
+# `main` requires all four checks, that pull request cannot land until somebody
+# runs `pnpm format` for it. Twice now that somebody has been a sweep run
+# hand-patching whitespace mid-review to unblock a merge (TAR-390 / #217, and
+# once before it). The formatting was never in dispute; Prettier's output is not
+# a judgement call, so nothing about that round trip was a review (TAR-737).
+#
+# This closes it. When an `agent/` pull request carries Prettier-fixable drift,
+# this workflow applies `prettier --write` and pushes the result back to the
+# branch. The push reruns the required checks against the formatted tree, and
+# `Lint`'s Prettier step passes on its own.
+#
+# **Prettier only, deliberately.** This runs no ESLint autofix, no codemod, and
+# no `--fix` of any kind. An ESLint error, a type error or a failing test still
+# fails its own check and is still reported — the point is to remove the one
+# failure a machine can settle, not to make red checks go away. Nothing here
+# reports a status that gates the merge, either: if this workflow cannot fix the
+# branch, `Lint` simply stays red, which is the correct outcome.
+#
+# A pre-commit hook was the other candidate and is deliberately not used. It
+# would still need this workflow behind it — a hook only exists on a runtime that
+# ran `pnpm install`, it is one `--no-verify` from being skipped, and it cannot
+# touch the draft pull requests `agent-branch-pr-guard.yml` opens for branches
+# whose own run already ended. Two mechanisms, one guarantee.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [main]
+
+# Read-only for `GITHUB_TOKEN`. The push below goes out over `AUTOMERGE_TOKEN`
+# instead — see the comment on the checkout step.
+permissions:
+  contents: read
+
+concurrency:
+  # Per pull request, and superseded runs are cancelled: if a second push lands
+  # while this one is formatting, the older run's tree is already stale and its
+  # push would be rejected as non-fast-forward anyway.
+  group: pr-autoformat-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+  NEXT_TELEMETRY_DISABLED: 1
+  TURBO_CACHE_DIR: .turbo/cache
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Same-repository `agent/` branches only. A fork pull request cannot reach
+    # the secret below, and pushing a commit onto untrusted code from a workflow
+    # that runs with repository credentials is the wrong thing to automate even
+    # where it is possible.
+    #
+    # Drafts are included on purpose: `agent-branch-pr-guard.yml` opens its
+    # recovery pull requests as drafts, and those are exactly the branches whose
+    # own agent is no longer around to run `pnpm format`.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'agent/')
+
+    env:
+      # The `secrets` context reaches neither a job-level `if` nor a step-level
+      # one, and a checkout handed an empty `token:` fails rather than skipping.
+      # So the question "is the secret set" is answered once, here, where
+      # `secrets` *is* in scope, and every step below gates on the answer.
+      HAS_TOKEN: ${{ secrets.AUTOMERGE_TOKEN != '' }}
+
+    steps:
+      - name: AUTOMERGE_TOKEN is not configured
+        if: env.HAS_TOKEN != 'true'
+        shell: bash
+        run: |
+          {
+            echo "## Not configured"
+            echo
+            echo "\`AUTOMERGE_TOKEN\` is not set, so this branch was not formatted."
+            echo "See the *Continuous integration* section of the README."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::AUTOMERGE_TOKEN is not set — Prettier drift on this branch was not fixed."
+
+      # The head branch itself, not the merge ref a `pull_request` event checks
+      # out by default: the commit has to land on the branch the pull request is
+      # made of.
+      #
+      # Deliberately NOT `github.token`. GitHub does not start workflows for
+      # pushes made with it, so a formatting commit pushed that way would never
+      # rerun `Lint` — the check would sit red on a tree that is now clean, which
+      # is worse than the drift it fixed. Same reason `pr-autoupdate.yml` and
+      # `pr-enable-automerge.yml` use this secret.
+      - name: Check out the head branch
+        if: env.HAS_TOKEN == 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.AUTOMERGE_TOKEN }}
+
+      - name: Set up the workspace
+        if: env.HAS_TOKEN == 'true'
+        uses: ./.github/actions/setup-workspace
+
+      - name: Apply Prettier and push the result
+        if: env.HAS_TOKEN == 'true'
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+
+          # `--list-different` names exactly the files `prettier --write` would
+          # rewrite, under the same `.prettierignore` `pnpm format:check` uses.
+          # Asking first, rather than diffing afterwards, is what keeps the
+          # commit to Prettier's own work: the setup action writes `.env` and
+          # generates the Prisma client, and while both are gitignored today, a
+          # commit built from "whatever changed in the tree" is one `.gitignore`
+          # edit away from carrying something nobody meant to send.
+          drift=$(pnpm exec prettier --list-different .)
+          status=$?
+          if [ "$status" -gt 1 ]; then
+            echo "::error::prettier failed to run (exit $status)"
+            exit "$status"
+          fi
+
+          if [ -z "$drift" ]; then
+            echo "Already Prettier-clean; nothing to push."
+            echo "Already Prettier-clean — nothing to push." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "Unformatted:"
+          printf '%s\n' "$drift" | sed 's/^/  /'
+
+          mapfile -t files <<<"$drift"
+          pnpm exec prettier --write "${files[@]}" || exit 1
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "${files[@]}"
+
+          # Prettier reported drift but staging produced nothing: the working
+          # tree already matched. Nothing to do, and an empty commit would cost
+          # every branch queued behind this one a CI run for no change.
+          if git diff --cached --quiet; then
+            echo "Nothing staged after formatting; leaving the branch alone."
+            exit 0
+          fi
+
+          count=${#files[@]}
+          git commit --quiet --message 'chore: apply Prettier' \
+            --message "$(printf '%s\n' \
+              "Pushed by .github/workflows/pr-autoformat.yml so #$PR's Lint check" \
+              "passes without anybody running \`pnpm format\` by hand (TAR-737)." \
+              "" \
+              "Formatting only — no ESLint autofix, no behaviour change.")"
+
+          # Rejected means the branch moved while this ran — the agent pushed
+          # again, or two events raced. Not an error: that push raised its own
+          # `synchronize`, and the run it started formats the newer tree. Warn
+          # rather than redden, because `Lint` is still the gate and it will say
+          # so if the drift really did survive.
+          if ! git push origin "HEAD:refs/heads/$HEAD_REF"; then
+            echo "::warning::could not push the formatting commit to $HEAD_REF — the branch moved while this ran."
+            {
+              echo "## Could not push"
+              echo
+              echo "\`$HEAD_REF\` moved while this run was formatting it, so the commit was"
+              echo "rejected. The push that moved it started its own run."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "## Formatted $count file(s)"
+            echo
+            echo "Prettier-fixable drift on \`$HEAD_REF\` was fixed and pushed, which reruns"
+            echo "the required checks against the formatted tree."
+            echo
+            for f in "${files[@]}"; do
+              echo "- \`$f\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
