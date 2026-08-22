@@ -33,6 +33,10 @@
  * width where a pinned composer matters most. Flex already knows the real
  * number, and it stays right when the bar changes.
  *
+ * Knowing it is not the same as keeping it: flex will shrink the bar back below
+ * its content to make the column fit, which is what `flex-shrink: 0` in
+ * `AppTopBar.module.css` refuses (TAR-652). `main` is the item that gives way.
+ *
  * `:has()` rather than a prop, because the shell is an ancestor of the page and
  * a page cannot hand its ancestor one. `[data-page-shell]` is the documented
  * seam, the same kind as `[data-rail]` in the other direction.
