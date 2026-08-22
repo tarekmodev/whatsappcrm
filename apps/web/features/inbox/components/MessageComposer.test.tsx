@@ -4,6 +4,7 @@ import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import { fieldByLabel } from '@/lib/testing/field-queries';
 import { serviceWindowAt } from '@/features/inbox/service-window';
+import type { ComposerGuidance } from '@/features/inbox/thread-state';
 import { MessageComposer } from './MessageComposer';
 
 const sendMessageAction = vi.fn();
@@ -27,17 +28,21 @@ const OPEN_UNTIL = '2026-08-12T13:00:00.000Z';
 
 function renderComposer({
   expiresAt = OPEN_UNTIL,
-  canSend = true,
-  isUnclaimed = false,
-}: { expiresAt?: string | null; canSend?: boolean; isUnclaimed?: boolean } = {}) {
+  canWrite = true,
+  guidance = null,
+}: {
+  expiresAt?: string | null;
+  canWrite?: boolean;
+  guidance?: ComposerGuidance | null;
+} = {}) {
   return render(
     <ToastProvider>
       <MessageComposer
         conversationId={CONVERSATION_ID}
         serviceWindowExpiresAt={expiresAt}
         initialWindow={serviceWindowAt(expiresAt, NOW)}
-        canSend={canSend}
-        isUnclaimed={isUnclaimed}
+        canWrite={canWrite}
+        guidance={guidance}
       />
     </ToastProvider>,
   );
@@ -325,9 +330,9 @@ describe('the window closing mid-conversation', () => {
 
 describe('without conversation:send', () => {
   it('explains itself rather than rendering nothing', () => {
-    renderComposer({ canSend: false });
+    renderComposer({ canWrite: false, guidance: 'send-not-permitted' });
 
-    expect(screen.getByText(content.composer.sendNotPermitted)).toBeInTheDocument();
+    expect(screen.getByText(content.composer.guidance['send-not-permitted'])).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: content.composer.send })).not.toBeInTheDocument();
   });
 });
@@ -337,20 +342,44 @@ describe('on a thread nobody has claimed', () => {
     // The API refuses this send outright (TAR-186), so a composer here would be
     // a box whose every use ends in a 409 — and two agents typing into it is the
     // duplicate reply the refusal exists to stop.
-    renderComposer({ isUnclaimed: true });
+    renderComposer({ canWrite: false, guidance: 'claim-first' });
 
-    expect(screen.getByText(content.inbox.claimBeforeWriting)).toBeInTheDocument();
+    expect(screen.getByText(content.composer.guidance['claim-first'])).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: content.composer.send })).not.toBeInTheDocument();
   });
 
   it('offers no template picker either, window open or shut', () => {
     // A template is the way through a *closed window*, not through an unclaimed
     // thread — the API refuses both alike.
-    renderComposer({ isUnclaimed: true, expiresAt: null });
+    renderComposer({ canWrite: false, guidance: 'claim-first', expiresAt: null });
 
     expect(
       screen.queryByRole('button', { name: content.composer.useTemplate }),
     ).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * TAR-518: one quiet line, sited at the composer, replacing the two full-width
+ * saturated notices the thread used to stack — one above the message stream and
+ * one here — saying overlapping things about the same conversation.
+ */
+describe('the guidance line', () => {
+  it('explains the silence on a thread the chatbot is answering, without shutting the box', () => {
+    renderComposer({ guidance: 'bot-answering' });
+
+    expect(screen.getByText(content.composer.guidance['bot-answering'])).toBeInTheDocument();
+    // The reply box still works: a thread the reader holds can be replied to
+    // whatever the chatbot is doing.
+    expect(sendButton()).toBeInTheDocument();
+  });
+
+  it('says nothing at all when there is nothing to explain', () => {
+    const { container } = renderComposer();
+
+    for (const line of Object.values(content.composer.guidance)) {
+      expect(container.textContent).not.toContain(line);
+    }
   });
 });
 

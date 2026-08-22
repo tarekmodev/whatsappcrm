@@ -1,17 +1,16 @@
 'use client';
 
 import type { MessageResponse } from '@whatsappcrm/contracts';
-import { RelativeTime } from '@/components/ui/RelativeTime';
-import { SkeletonLine, SkeletonText } from '@/components/ui/Skeleton';
-import { VisuallyHidden } from '@/components/layout/VisuallyHidden';
+import { SkeletonText } from '@/components/ui/Skeleton';
 import { useContent } from '@/lib/content';
-import { isBotMessage } from '@/features/inbox/bot-state';
+import { hasDeliveryState } from '@/features/inbox/delivery-state';
 import { MessageAttachmentView } from './MessageAttachment';
+import { MessageDelivery } from './MessageDelivery';
 import styles from './MessageBubble.module.css';
 
 /**
  * One message in the thread. Usage:
- * `<MessageBubble message={…} senderName={…} />`.
+ * `<MessageBubble message={…} contactName={…} />`, inside a `MessageRun`.
  *
  * Direction decides the side and the tone, and it is expressed as a data
  * attribute the module file reads rather than as a second class name — so a
@@ -21,28 +20,31 @@ import styles from './MessageBubble.module.css';
  * content; a location, a shared contact or a type Meta invented after this was
  * written render a labelled placeholder, because a customer who sent their
  * location deserves a row saying so rather than a gap in the conversation.
+ *
+ * ## What this no longer carries
+ *
+ * Who sent it, when, and over which channel used to be a meta line **inside
+ * every bubble**. They are the run's now (`MessageRun`): four consecutive
+ * messages from one customer repeated their name and the time four times, which
+ * is what made a thread read as a message table rather than a conversation. What
+ * stays here is what is genuinely per-message — the content, and whether that
+ * particular message reached the customer.
  */
 
 export interface MessageBubbleProps {
   message: MessageResponse;
-  /** Resolved display name for `sentByUserId`; `null` for inbound or automation. */
-  senderName: string | null;
+  /** Named in the retry's accessible name on a failed message. */
+  contactName: string;
 }
 
-export function MessageBubble({ message, senderName }: MessageBubbleProps) {
+export function MessageBubble({ message, contactName }: MessageBubbleProps) {
   const content = useContent();
   const body = message.body?.trim() ?? '';
   const hasAttachments = message.attachments.length > 0;
 
   return (
-    <li className={styles.row} data-direction={message.direction}>
+    <li className={styles.row}>
       <article className={styles.bubble} data-direction={message.direction}>
-        {/* The direction is carried in text, not only in the alignment and the
-            colour: a screen reader has neither. */}
-        <VisuallyHidden>
-          {message.direction === 'inbound' ? content.thread.inbound : content.thread.outbound}
-        </VisuallyHidden>
-
         {hasAttachments ? (
           <div className={styles.attachments}>
             {message.attachments.map((attachment) => (
@@ -64,96 +66,24 @@ export function MessageBubble({ message, senderName }: MessageBubbleProps) {
           </p>
         ) : null}
 
-        <MessageMeta message={message} senderName={senderName} />
+        {hasDeliveryState(message) ? (
+          <MessageDelivery message={message} contactName={contactName} />
+        ) : null}
       </article>
     </li>
   );
 }
 
-function MessageMeta({ message, senderName }: MessageBubbleProps) {
-  const content = useContent();
-
-  return (
-    <p className={styles.meta}>
-      {message.direction === 'outbound' ? (
-        <OutboundAuthor message={message} senderName={senderName} />
-      ) : null}
-      <RelativeTime isoTimestamp={message.sentAt} label={content.thread.sentAt} />
-      {message.direction === 'outbound' ? (
-        <span className={styles.status} data-status={message.status}>
-          {content.messageStatuses[message.status]}
-        </span>
-      ) : null}
-      {/* Which channel this travelled over. One channel exists today, so it is
-          always the same word — it is on the bubble because the day a second
-          one lands, a thread that never said "WhatsApp" becomes ambiguous
-          retrospectively, and this is the row that would have to be rewritten. */}
-      <span className={styles.channel} title={content.thread.sentVia(content.channels.whatsapp)}>
-        {content.channels.whatsapp}
-      </span>
-      {message.failureReason === null ? null : (
-        <span className={styles.failure}>
-          {content.thread.failureReason(message.failureReason)}
-        </span>
-      )}
-    </p>
-  );
-}
-
 /**
- * Who sent an outbound message, in the order the answers are trustworthy.
- *
- * `origin` is asked first, then `sentByAutomation`, then the resolved name.
- *
- * `origin` is the narrower answer and the only one that can name *which* system
- * replied: TAR-27's workflows also send with a null sender, so "sent
- * automatically" is about to stop distinguishing them from the chatbot, and an
- * agent deciding whether to take a thread over needs to know which it was (ADR
- * 0010, decision 14).
- *
- * `sentByAutomation` is the contract's answer to "was a human involved", and it
- * is asked **before the name** — because a missing name is not evidence of a
- * bot. The directory that resolves `sentByUserId` is one page of users, so in a
- * tenant with more than a page of them a real agent's reply resolved to no name
- * and was captioned "Sent automatically": a lie about the one thing this product
- * is a record of. An unresolved human is now said to be an unresolved human.
+ * Mirrors `MessageBubble`: the same list row, the same bubble frame and two body
+ * lines. The sender label and the avatar belong to the run above it, so
+ * `MessageRunSkeleton` stands in for those — this is only the box.
  */
-function OutboundAuthor({ message, senderName }: MessageBubbleProps) {
-  const content = useContent();
-
-  if (isBotMessage(message.origin)) {
-    return <span>{content.thread.sentByBot}</span>;
-  }
-
-  if (message.sentByAutomation) {
-    // A workflow (TAR-27), or a status placeholder the ingest writer created.
-    // Worth saying: an agent should not have to wonder who replied on their
-    // behalf.
-    return <span>{content.thread.sentByAutomation}</span>;
-  }
-
-  if (senderName !== null) {
-    return <span>{content.thread.sentBy(senderName)}</span>;
-  }
-
-  return <span>{content.thread.sentByTeammate}</span>;
-}
-
-/**
- * Mirrors `MessageBubble`: the same list row, the same bubble frame, two body
- * lines and a meta line — and it alternates sides, because a thread skeleton
- * that is all one side does not read as a conversation.
- */
-export function MessageBubbleSkeleton({ index }: { index: number }) {
-  const direction = index % 2 === 0 ? 'inbound' : 'outbound';
-
+export function MessageBubbleSkeleton({ direction }: { direction: 'inbound' | 'outbound' }) {
   return (
-    <li className={styles.row} data-direction={direction} aria-hidden="true">
+    <li className={styles.row} aria-hidden="true">
       <div className={styles.bubble} data-direction={direction}>
         <SkeletonText lines={2} />
-        <p className={styles.meta}>
-          <SkeletonLine width="5rem" />
-        </p>
       </div>
     </li>
   );

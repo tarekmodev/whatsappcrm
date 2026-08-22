@@ -3,7 +3,7 @@ import styles from './Notice.module.css';
 
 /**
  * An inline informational banner. Usage:
- * `<Notice tone="info">…</Notice>`.
+ * `<Notice tone="info">…</Notice>`, or `<Notice tone="info" variant="quiet">…</Notice>`.
  *
  * Not a toast: a toast is transient and for the result of an action, while this
  * explains something about the content that is on screen right now.
@@ -12,9 +12,33 @@ import styles from './Notice.module.css';
 export const NOTICE_TONES = ['info', 'warning'] as const;
 export type NoticeTone = (typeof NOTICE_TONES)[number];
 
-export function Notice({ children, tone = 'info' }: { children: ReactNode; tone?: NoticeTone }) {
+/**
+ * How loudly it says it.
+ *
+ * `filled` is the default and is right for a notice that changes what the reader
+ * can do — the service window having closed, a plan limit reached.
+ *
+ * `quiet` is for **guidance**: true, worth saying, and not an error. It keeps the
+ * tone's text colour and drops the tint and the border, so it reads as a line of
+ * copy rather than as a banner. TAR-518 is the case it exists for: the thread
+ * carried two full-width saturated blocks, one above the message stream and one
+ * in the composer, saying overlapping things about the same state — and a
+ * saturated fill repeated like that out-shouts the button that answers it.
+ */
+export const NOTICE_VARIANTS = ['filled', 'quiet'] as const;
+export type NoticeVariant = (typeof NOTICE_VARIANTS)[number];
+
+export function Notice({
+  children,
+  tone = 'info',
+  variant = 'filled',
+}: {
+  children: ReactNode;
+  tone?: NoticeTone;
+  variant?: NoticeVariant;
+}) {
   return (
-    <p className={styles.notice} data-tone={tone}>
+    <p className={styles.notice} data-tone={tone} data-variant={variant}>
       {children}
     </p>
   );

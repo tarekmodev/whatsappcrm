@@ -1,18 +1,128 @@
 .composer {
-  /* Separated from the thread it appends to, without a margin on a sibling —
-     the same seam the notes form uses below it. */
-  padding-block-start: var(--space-3);
-  border-block-start: var(--border-hairline) solid var(--color-border);
+  min-inline-size: 0;
 }
 
-.bannerHeading {
-  font-weight: var(--font-weight-medium);
+/*
+ * Everything that is not the writing surface, on one line under it: attachments
+ * and the template picker at the leading edge, the service-window countdown, the
+ * expand control and Send at the trailing one.
+ *
+ * It wraps rather than overflowing — a toolbar that cannot wrap is the commonest
+ * source of horizontal scroll at 320px — and each group wraps within itself, so
+ * at that width the two stack instead of interleaving.
+ */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-inline-size: 0;
 }
 
-.bannerSkeleton {
-  /* The notice's own frame is not drawn while it is a placeholder, so the box
-     stands in for its padding too and the swap does not nudge the form. */
+.toolbarGroup {
+  /* Allowed to shrink, so the controls wrap among themselves before the row
+     does — the same rule the thread header's control cluster follows. */
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}
+
+/*
+ * The countdown gives way first. It is the one thing in the toolbar that is not
+ * a control, and at a phone's width the three parts cannot share a line: below
+ * about 12rem of room it takes a row of its own rather than pushing Send onto a
+ * third one — the difference between a two-row toolbar and a three-row one on
+ * the screen with the least height to spare. A flex basis rather than a
+ * breakpoint, because what decides it is the space actually left over.
+ */
+.toolbarHint {
+  flex: 1 1 12rem;
+  min-inline-size: 0;
+}
+
+/*
+ * A *closed* window is not a countdown, it is the reason Send does not work, and
+ * it is three sentences of instructions. It takes the toolbar's whole line rather
+ * than the gap left over beside the buttons, where it wrapped into a five-line
+ * column. `:has()` rather than a prop threaded down from the composer: which
+ * state the hint is in is the hint's own, and this is the parent asking.
+ */
+.toolbarHint:has([data-state='closed']) {
+  flex: 1 1 100%;
+}
+
+/* Send and the expand control keep their line whatever else has to wrap. */
+.toolbarActions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  margin-inline-start: auto;
+}
+
+/*
+ * The expand control. An icon button rather than a labelled one because it sits
+ * beside Send, and two words there compete with the only action on the row that
+ * reaches a customer. Its accessible name changes with its state.
+ */
+.expand {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  inline-size: var(--size-control-md);
+  block-size: var(--size-control-md);
+  padding: 0;
+  background: none;
+  border: var(--border-hairline) solid transparent;
   border-radius: var(--radius-md);
+  color: var(--color-on-surface-muted);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .expand:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}
+
+.expand[aria-expanded='true'] {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border);
+  color: var(--color-on-surface);
+}
+
+/*
+ * The attach control and what it has picked, on one line. The status box keeps
+ * its height whether or not there is a file, so picking one does not move the
+ * Send button under a cursor already heading for it.
+ */
+.attachmentGroup {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+}
+
+/*
+ * The native file input trimmed to its own button.
+ *
+ * The browser's "No file chosen" beside it says nothing the status line does not
+ * and is why an untouched file input is as wide as a paragraph. `font-size: 0`
+ * removes that text from the layout without removing the element, so the control
+ * keeps everything that makes it native — the keyboard, its `<label>`, the file
+ * name announced on change, the platform picker on a phone. The button restores
+ * its own size, since it is the only part still on screen.
+ */
+.attachmentInline {
+  inline-size: fit-content;
+  min-block-size: var(--size-control-md);
+  padding: 0;
+  background: none;
+  border: 0;
+  font-size: 0;
+}
+
+.attachmentInline::file-selector-button {
+  margin-inline-end: 0;
+  font-size: var(--font-size-body-sm);
 }
 
 .attachmentStatus {

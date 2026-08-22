@@ -91,6 +91,7 @@ export function ConversationBadges({
         <Holder
           size={avatarSize}
           name={assigneeName}
+          isNamed={!isRow}
           label={
             assigneeName === null
               ? content.inbox.assignedToUnresolved
@@ -99,22 +100,49 @@ export function ConversationBadges({
         />
       )}
       {teamName === null ? null : (
-        <Holder size={avatarSize} name={teamName} label={content.inbox.assignedToTeam(teamName)} />
+        <Holder
+          size={avatarSize}
+          name={teamName}
+          isNamed={!isRow}
+          label={content.inbox.assignedToTeam(teamName)}
+        />
       )}
     </Cluster>
   );
 }
 
 /**
- * Who holds the thread. The avatar is decorative by construction, so the name
- * travels beside it invisibly for assistive technology and in `title` for a
+ * Who holds the thread.
+ *
+ * On a **row** the avatar stands alone: the column is scanned rather than read,
+ * a name would cost it the width its preview line needs, and the label travels
+ * beside the mark invisibly for assistive technology and in `title` for a
  * pointer — an initial in a circle is not self-explanatory to either.
+ *
+ * In a **header** the name is on screen (TAR-518). One conversation is open and
+ * being read, there is room for the sentence, and "who is on this" is a question
+ * an agent should not have to hover a circle to answer.
  */
-function Holder({ name, label, size }: { name: string | null; label: string; size: AvatarSize }) {
+function Holder({
+  name,
+  label,
+  size,
+  isNamed,
+}: {
+  name: string | null;
+  label: string;
+  size: AvatarSize;
+  /** Show the label in text beside the mark rather than only to a screen reader. */
+  isNamed: boolean;
+}) {
   return (
-    <span className={styles.holder} title={label}>
+    <span className={styles.holder} title={isNamed ? undefined : label}>
       <Avatar name={name ?? ''} tone="neutral" size={size} />
-      <VisuallyHidden>{label}</VisuallyHidden>
+      {isNamed ? (
+        <span className={styles.holderName}>{label}</span>
+      ) : (
+        <VisuallyHidden>{label}</VisuallyHidden>
+      )}
     </span>
   );
 }

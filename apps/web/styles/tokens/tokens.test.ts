@@ -53,6 +53,27 @@ describe('token contrast', () => {
       }
     });
 
+    /*
+     * TAR-518's two roles. The note surface carries body copy, so it is held to
+     * the same 4.5:1 a chip is; the failure colour is text *on a bubble*, and
+     * the bubble it lands on is the outbound one — never `surface`, which is
+     * what a naive measurement would have checked and passed.
+     */
+    it('keeps an internal note readable on its own surface', () => {
+      expect(
+        contrastRatio(token(theme, '--color-on-note'), token(theme, '--color-note')),
+      ).toBeGreaterThanOrEqual(AA_TEXT_CONTRAST);
+    });
+
+    it.each(['--color-accent-subtle', '--color-surface-sunken', '--color-surface'])(
+      'keeps a failed delivery readable on %s',
+      (surfaceRole) => {
+        expect(
+          contrastRatio(token(theme, '--color-delivery-failed'), token(theme, surfaceRole)),
+        ).toBeGreaterThanOrEqual(AA_TEXT_CONTRAST);
+      },
+    );
+
     it('gives every chip tint the same weight, so no status shouts', () => {
       const surface = token(theme, '--color-surface');
       const standOffs = CHIP_TONES.map((tone) =>

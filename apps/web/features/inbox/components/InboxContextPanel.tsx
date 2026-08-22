@@ -2,14 +2,12 @@ import type { ReactNode } from 'react';
 import type { ContactResponse, ConversationResponse } from '@whatsappcrm/contracts';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge } from '@/components/ui/Badge';
-import { Notice } from '@/components/ui/Notice';
+import { DetailList, type DetailListItem } from '@/components/ui/DetailList';
 import { SectionCard } from '@/components/ui/SectionCard';
 import { SkeletonLine, SkeletonText } from '@/components/ui/Skeleton';
-import { TextLink } from '@/components/ui/TextLink';
 import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
 import { content } from '@/content/en';
-import { routes } from '@/lib/routes';
 import styles from './InboxContextPanel.module.css';
 
 /**
@@ -49,10 +47,13 @@ import styles from './InboxContextPanel.module.css';
 export function InboxContextPanel({
   conversation,
   chatbot,
+  ticket,
 }: {
   conversation: ConversationResponse;
   /** The chatbot card's contents; omitted for a conversation it never touched. */
   chatbot?: ReactNode;
+  /** The ticket card's contents; omitted for a conversation with no ticket yet. */
+  ticket?: ReactNode;
 }) {
   return (
     <Stack gap="4">
@@ -67,55 +68,70 @@ export function InboxContextPanel({
       )}
 
       <SectionCard id="ticket" title={content.inbox.ticketHeading} headingLevel={3}>
-        <TicketLink ticketId={conversation.ticketId} />
+        {ticket ?? <NoTicketYet />}
       </SectionCard>
     </Stack>
   );
 }
 
+/**
+ * The contact, and the fields the panel knows about them.
+ *
+ * The identity is a face beside two lines; everything under it is a `DetailList`
+ * (TAR-518). They were loose paragraphs — an email address with nothing saying
+ * it was one, and a row of tags with nothing saying what they were — which is a
+ * `<dl>` written without the terms. A screen reader now hears "Email,
+ * fatima@…" as one unit instead of a floating string.
+ */
 function ContactIdentity({ contact }: { contact: ContactResponse }) {
+  const items: DetailListItem[] = [
+    {
+      id: 'phone',
+      term: content.inbox.contactPhoneLabel,
+      // `dir="ltr"`: a phone number reads left to right whatever the surrounding
+      // text direction is.
+      value: <span dir="ltr">{contact.phone}</span>,
+    },
+  ];
+
+  if (contact.email !== null) {
+    items.push({ id: 'email', term: content.inbox.contactEmailLabel, value: contact.email });
+  }
+
+  if (contact.tags.length > 0) {
+    items.push({
+      id: 'tags',
+      term: content.inbox.contactTagsLabel,
+      value: (
+        <Cluster gap="2">
+          {contact.tags.map((tag) => (
+            <Badge key={tag.id}>{tag.name}</Badge>
+          ))}
+        </Cluster>
+      ),
+    });
+  }
+
   return (
     <Stack gap="3">
       <Cluster gap="3" align="center">
         <Avatar name={contact.displayName} size="md" tone="neutral" />
         <div className={styles.identity}>
           <p className={styles.name}>{contact.displayName}</p>
-          {/* `dir="ltr"`: a phone number reads left to right whatever the
-              surrounding text direction is. */}
-          <p className={styles.detail} dir="ltr">
-            {contact.phone}
-          </p>
         </div>
       </Cluster>
 
-      {contact.email === null ? null : <p className={styles.detail}>{contact.email}</p>}
-
-      {contact.tags.length === 0 ? null : (
-        <Cluster gap="2">
-          {contact.tags.map((tag) => (
-            <Badge key={tag.id}>{tag.name}</Badge>
-          ))}
-        </Cluster>
-      )}
+      <DetailList items={items} />
     </Stack>
   );
 }
 
-function TicketLink({ ticketId }: { ticketId: string | null }) {
-  if (ticketId === null) {
-    return (
-      <Stack gap="2">
-        <p className={styles.name}>{content.inbox.ticketUnlinked}</p>
-        <p className={styles.detail}>{content.inbox.ticketUnlinkedBody}</p>
-      </Stack>
-    );
-  }
-
+/** A conversation the auto-linker has not put on a ticket yet — see the header. */
+function NoTicketYet() {
   return (
     <Stack gap="2">
-      <Notice tone="info">{content.inbox.ticketLinked}</Notice>
-      <p className={styles.detail}>{content.inbox.ticketLinkedBody}</p>
-      <TextLink href={routes.ticket(ticketId)}>{content.inbox.ticketOpen}</TextLink>
+      <p className={styles.name}>{content.inbox.ticketUnlinked}</p>
+      <p className={styles.detail}>{content.inbox.ticketUnlinkedBody}</p>
     </Stack>
   );
 }
@@ -134,9 +150,11 @@ export function InboxContextPanelSkeleton() {
             <SkeletonLine width="var(--size-control-md)" height="var(--size-control-md)" />
             <div className={styles.identity}>
               <SkeletonLine width="9rem" />
-              <SkeletonLine width="7rem" />
             </div>
           </Cluster>
+          {/* The phone row the `DetailList` always has; email and tags are the
+              contact's own and are not promised by a placeholder. */}
+          <SkeletonLine width="7rem" />
         </Stack>
       </SectionCard>
 

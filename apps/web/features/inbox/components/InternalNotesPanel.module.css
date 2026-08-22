@@ -17,11 +17,18 @@
   flex-direction: column;
   gap: var(--space-1);
   padding: var(--space-3);
-  /* A warning-tinted surface, so a note never reads as a message to the
-     customer even at a glance. The notice above says it in words. */
-  background: var(--color-warning-subtle);
+  /*
+   * A card on the note surface rather than a second tint of it. Since TAR-518
+   * the whole composer carries `--color-note` while the `Comment` destination is
+   * active, so a note tinted the same colour as the panel behind it was a card
+   * with no edges. The leading marker is what still says "internal" at a glance
+   * — and it is the part that survives forced colours, where a background does
+   * not.
+   */
+  background: var(--color-surface);
+  border-inline-start: var(--size-marker) solid var(--color-note-marker);
   border-radius: var(--radius-md);
-  color: var(--color-on-warning-subtle);
+  color: var(--color-on-surface);
 }
 
 .author {

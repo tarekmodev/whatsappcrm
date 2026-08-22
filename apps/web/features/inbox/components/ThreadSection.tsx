@@ -3,7 +3,8 @@ import { verifySession } from '@/lib/session/session';
 import { loadConversationThread } from '@/features/inbox/thread.data';
 import { loadCannedResponses } from '@/features/inbox/canned-responses.data';
 import { nameFor } from '@/features/inbox/directory.data';
-import { isConversationUnclaimed } from '@/features/inbox/conversation-hold';
+import { conversationHold, isConversationUnclaimed } from '@/features/inbox/conversation-hold';
+import { threadState } from '@/features/inbox/thread-state';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { serviceWindowAt } from '@/features/inbox/service-window';
 import { InternalNotesPanel } from './InternalNotesPanel';
@@ -63,6 +64,7 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
   }
 
   const { conversation, messages, hasOlderMessages, notes, userNames, teamNames } = result.thread;
+  const assigneeName = nameFor(userNames, conversation.assignedUserId);
   // The shared pool is readable by everyone and writable by nobody (TAR-186):
   // the API refuses a send, a note and a status change on a thread nobody holds,
   // so the console shuts both boxes rather than letting an agent type a reply
@@ -71,20 +73,33 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
     conversation.assignedUserId,
     conversation.assignedTeamId,
   );
+  const holdPermissions = {
+    canClaim: session.checker.can('conversation:claim'),
+    canAssign: session.checker.can('conversation:assign'),
+  };
+  // One decision, read by the header and by the composer: which control is this
+  // screen's solid accent button, and the single line that says why the reply
+  // box is shut. Deciding it in each of them is how the thread came to render
+  // two accent buttons above two overlapping notices (TAR-518).
+  const state = threadState({
+    hold: conversationHold(conversation.assignedUserId, session.principal.userId, assigneeName),
+    isUnclaimed,
+    botState: conversation.botState,
+    permissions: holdPermissions,
+    canSend: session.checker.can('conversation:send'),
+  });
 
   return (
     <div className={styles.thread}>
       <div className={styles.header}>
         <ThreadHeader
           conversation={conversation}
-          assigneeName={nameFor(userNames, conversation.assignedUserId)}
+          assigneeName={assigneeName}
           teamName={nameFor(teamNames, conversation.assignedTeamId)}
-          holdPermissions={{
-            canClaim: session.checker.can('conversation:claim'),
-            canAssign: session.checker.can('conversation:assign'),
-          }}
+          holdPermissions={holdPermissions}
           currentUserId={session.principal.userId}
           query={query}
+          emphasis={state.emphasis}
           isUnclaimed={isUnclaimed}
         />
       </div>
@@ -92,6 +107,7 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
       <div className={styles.stream}>
         <MessageList
           messages={messages}
+          contactName={conversation.contact.displayName}
           senderNames={userNames}
           hasOlderMessages={hasOlderMessages}
         />
@@ -108,8 +124,8 @@ export async function ThreadSection({ conversationId, query }: ThreadSectionProp
               conversationId={conversation.id}
               serviceWindowExpiresAt={conversation.serviceWindowExpiresAt}
               initialWindow={serviceWindowAt(conversation.serviceWindowExpiresAt, new Date())}
-              canSend={session.checker.can('conversation:send')}
-              isUnclaimed={isUnclaimed}
+              guidance={state.guidance}
+              canWrite={state.canWrite}
               cannedResponses={cannedResponses}
             />
           }

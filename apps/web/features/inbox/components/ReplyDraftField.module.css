@@ -13,3 +13,30 @@
   position: relative;
   display: block;
 }
+
+/*
+ * The reply box grows with the draft and then scrolls, rather than standing at a
+ * fixed three rows whatever is in it (TAR-518).
+ *
+ * `field-sizing: content` is the whole mechanism: `rows` stays the floor, this
+ * is the ceiling, and there is no JavaScript measuring `scrollHeight` on every
+ * keystroke. Where it is not supported the control simply stays at `rows` and
+ * scrolls inside itself — which is exactly what it did before, so the
+ * degradation costs nothing.
+ *
+ * Row counts rather than lengths: this is "eight lines of typing", and a token
+ * for it would claim the number means something outside this control. The
+ * expanded ceiling is the same measurement with the composer given the column.
+ */
+.draft {
+  --reply-max-rows: 8;
+
+  field-sizing: content;
+  /* The rows themselves, plus the padding `Control.module.css` puts around them. */
+  max-block-size: calc(var(--reply-max-rows) * 1lh + var(--space-2) * 2);
+  transition: max-block-size var(--duration-medium) var(--easing-standard);
+}
+
+.draft[data-expanded='true'] {
+  --reply-max-rows: 18;
+}

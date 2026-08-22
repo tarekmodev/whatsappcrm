@@ -57,8 +57,8 @@ function composer(cannedResponses: readonly CannedResponseResponse[]) {
         conversationId={CONVERSATION_ID}
         serviceWindowExpiresAt={OPEN_UNTIL}
         initialWindow={serviceWindowAt(OPEN_UNTIL, NOW)}
-        canSend
-        isUnclaimed={false}
+        guidance={null}
+        canWrite
         cannedResponses={cannedResponses}
       />
     </ToastProvider>
@@ -328,7 +328,7 @@ describe('an admin edits the library while the agent is typing', () => {
 
     expect(options()).toHaveLength(0);
     expect(box).not.toHaveAttribute('aria-autocomplete');
-    expect(screen.getByText(content.composer.replyHint)).toBeInTheDocument();
+    expect(screen.queryByText(content.composer.replyHintWithShortcuts('/'))).toBeNull();
   });
 
   it('offers a response an admin has just added, to a tenant that had none', () => {
@@ -388,7 +388,7 @@ describe('dismissing and degrading', () => {
     expect(options()).toHaveLength(0);
     expect(box).not.toHaveAttribute('aria-autocomplete');
     expect(screen.queryByText(content.composer.cannedMatchCount(1))).not.toBeInTheDocument();
-    expect(screen.getByText(content.composer.replyHint)).toBeInTheDocument();
+    expect(screen.queryByText(content.composer.replyHintWithShortcuts('/'))).toBeNull();
 
     // Enter is a newline again, and nothing intercepts it.
     fireEvent.keyDown(box, { key: 'Enter' });

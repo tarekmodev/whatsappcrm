@@ -1,0 +1,63 @@
+/*
+ * The delivery row sits at the bubble's trailing edge, which is the *end* of the
+ * reading direction rather than the right — so it turns with `dir="rtl"` on its
+ * own.
+ */
+.delivery {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  align-self: flex-end;
+  max-inline-size: 100%;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  /*
+   * `--bubble-meta` is the seam `MessageBubble.module.css` publishes: the bubble
+   * knows which surface it painted and this row does not, and on the outbound
+   * tint the ordinary muted role drops below AA. The fallback is for any future
+   * caller that renders this outside a bubble.
+   */
+  color: var(--bubble-meta, var(--color-on-surface-muted));
+  font-size: var(--font-size-caption);
+}
+
+.delivery[data-status='read'] .state {
+  /* Read is the rung an agent looks for, and it is weight rather than colour —
+     a second hue on the bubble would be a third thing competing with the text
+     on it. */
+  font-weight: var(--font-weight-strong);
+}
+
+.delivery[data-status='failed'] {
+  align-items: flex-start;
+  align-self: stretch;
+  /* A failure is the one delivery state that changes what the agent has to do,
+     so it gets a rule of its own rather than a quieter tick. */
+  padding-block-start: var(--space-2);
+  border-block-start: var(--border-hairline) solid var(--color-delivery-failed);
+}
+
+.delivery[data-status='failed'] .state {
+  color: var(--color-delivery-failed);
+  font-weight: var(--font-weight-medium);
+}
+
+.failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.reason {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-delivery-failed);
+  font-size: var(--font-size-caption);
+}

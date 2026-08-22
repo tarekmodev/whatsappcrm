@@ -136,6 +136,26 @@ const ICON_PATHS = {
    * glyph on the same 1.75 stroke grid as the rest of the set.
    */
   more: ['M6 12h.01', 'M12 12h.01', 'M18 12h.01'],
+  /**
+   * The outbound delivery ladder (TAR-518), one glyph per rung of
+   * `MESSAGE_STATUSES`. Deliberately **not** `check` above: that one confirms a
+   * choice in a menu, and its own comment says it is never a status tick — two
+   * meanings on one shape is how an icon set stops meaning anything.
+   *
+   * The glyph is never the only carrier. Every one of them ships beside its own
+   * word, because "one tick or two" is a convention a reader either knows or
+   * cannot guess, and `failed` additionally carries a colour and a retry.
+   */
+  clock: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18', 'M12 7.5V12l2.5 1.5'],
+  tick: ['m5 12.5 4.5 4.5L19 8'],
+  tickDouble: ['m2 12.5 4.5 4.5L16 8', 'm12 17 6.5-6.5'],
+  /** A file on the reply an agent is writing. */
+  attach: [
+    'M19 11.5 12 18.5a4.5 4.5 0 0 1-6.4-6.4l7.2-7.2a3 3 0 0 1 4.2 4.2l-7.1 7.1a1.5 1.5 0 0 1-2.1-2.1L14 8.4',
+  ],
+  /** Grows and shrinks the reply box. Two glyphs, because one rotated is a lie. */
+  expand: ['M9 4H4v5', 'M15 20h5v-5', 'm4 4 5.5 5.5', 'm20 20-5.5-5.5'],
+  collapse: ['M10 9H5', 'M10 9V4', 'M14 15h5', 'M14 15v5', 'm4 4 6 5', 'm20 20-6-5'],
   /** Opens a menu below its trigger; never mirrored, unlike the chevrons below. */
   chevronDown: ['m6 9 6 6 6-6'],
   /** Points along the reading direction; mirrored under `dir="rtl"`. */

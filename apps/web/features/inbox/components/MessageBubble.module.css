@@ -1,14 +1,23 @@
+/*
+ * A bubble fills the run's body column, and the run decides which side that
+ * column hangs from — so nothing here has to know about direction except the
+ * tint and the one squared corner.
+ */
 .row {
   display: flex;
-  /* Logical, so the thread mirrors correctly under `dir="rtl"` with no JS. */
-  justify-content: flex-start;
-}
-
-.row[data-direction='outbound'] {
-  justify-content: flex-end;
+  min-inline-size: 0;
 }
 
 .bubble {
+  /*
+   * The seam the delivery row reads its colour through. A bubble knows which
+   * surface it painted and `MessageDelivery` does not, so the surface publishes
+   * the role and the row consumes it — rather than the row reaching in, or the
+   * bubble styling the row's internals. On the outbound tint the ordinary muted
+   * role would drop below AA, which is the whole reason this is a variable.
+   */
+  --bubble-meta: var(--color-on-surface-muted);
+
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -21,9 +30,24 @@
   border-radius: var(--radius-md);
   /* One corner squared off, pointing at the side the message came from. */
   border-start-start-radius: var(--radius-sm);
+  /*
+   * Arriving messages rise into place rather than appearing. The run above is
+   * what moves them; this is the bubble's own arrival, and the token layer
+   * flattens the duration to 1ms under `prefers-reduced-motion`.
+   */
+  animation: bubbleEnter var(--duration-medium) var(--easing-enter);
+}
+
+@keyframes bubbleEnter {
+  from {
+    opacity: 0;
+    translate: 0 var(--space-2);
+  }
 }
 
 .bubble[data-direction='outbound'] {
+  --bubble-meta: var(--color-on-accent-subtle);
+
   background: var(--color-accent-subtle);
   border-color: var(--color-accent-subtle);
   color: var(--color-on-accent-subtle);
@@ -54,41 +78,5 @@
 
 .placeholderKind {
   color: var(--color-on-surface);
-  font-weight: var(--font-weight-medium);
-}
-
-.meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2);
-  color: var(--color-on-surface-muted);
-  font-size: var(--font-size-caption);
-}
-
-.bubble[data-direction='outbound'] .meta {
-  /* Inherits the accent-subtle surface, so the muted role would drop below AA. */
-  color: var(--color-on-accent-subtle);
-}
-
-.status {
-  font-weight: var(--font-weight-medium);
-}
-
-/*
- * The channel tag. A quiet outline rather than a `Badge`: it repeats on every
- * bubble in the thread, and a filled pill that often reads as decoration.
- */
-.channel {
-  padding-inline: var(--space-2);
-  border: var(--border-hairline) solid currentcolor;
-  border-radius: var(--radius-pill);
-  font-size: var(--font-size-caption);
-}
-
-/* Failure is never colour alone — the word "Not delivered" carries it too. */
-.status[data-status='failed'],
-.failure {
-  color: var(--color-danger);
   font-weight: var(--font-weight-medium);
 }

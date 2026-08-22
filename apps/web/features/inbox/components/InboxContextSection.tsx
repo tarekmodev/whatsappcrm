@@ -5,6 +5,7 @@ import { loadConversationThread } from '@/features/inbox/thread.data';
 import { HandoffPanelSkeleton } from './HandoffPanel';
 import { HandoffSection } from './HandoffSection';
 import { InboxContextPanel } from './InboxContextPanel';
+import { TicketSummarySection, TicketSummarySkeleton } from './TicketSummarySection';
 
 /**
  * Fetches the open conversation for the context column. Usage: inside a Suspense
@@ -33,6 +34,8 @@ export async function InboxContextSection({ conversationId }: { conversationId: 
 
   const { conversation } = result.thread;
 
+  const { ticketId } = conversation;
+
   return (
     <InboxContextPanel
       conversation={conversation}
@@ -44,6 +47,19 @@ export async function InboxContextSection({ conversationId }: { conversationId: 
             </Suspense>
           </SectionErrorBoundary>
         ) : undefined
+      }
+      ticket={
+        // A third endpoint, and the same rule as the chatbot card: asked for
+        // only when there is something to ask about — `ticketId` is null until
+        // the auto-linker has run, and a read that can only 404 is one the
+        // console should not make.
+        ticketId === null ? undefined : (
+          <SectionErrorBoundary>
+            <Suspense fallback={<TicketSummarySkeleton />}>
+              <TicketSummarySection ticketId={ticketId} />
+            </Suspense>
+          </SectionErrorBoundary>
+        )
       }
     />
   );

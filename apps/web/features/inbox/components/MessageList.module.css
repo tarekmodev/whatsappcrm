@@ -7,22 +7,36 @@
   min-block-size: 0;
 }
 
+/*
+ * The scroller and the pill that floats over its foot. A positioned wrapper
+ * rather than putting the pill inside the scrollport, where it would scroll away
+ * from the reader it is trying to reach.
+ */
+.stream {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-block-size: 0;
+}
+
 .scroller {
   /* Whatever the thread column left between its header and its composer, and
      the same box whether it holds skeletons, messages or nothing — so the swap
-     never resizes anything around it. Filling a constrained column rather than
-     standing at a fixed 62dvh is also what finally gives `useStickToBottom` a
-     container that can overflow. */
+     never resizes anything around it. */
   flex: 1 1 auto;
   min-block-size: 0;
-  /* The containing block for what it scrolls. A message's `VisuallyHidden`
-     timestamp is `position: absolute`, and a scroll container only clips a
-     descendant it is also the containing block for — without this, a long thread
-     resolves them against an outer box and stretches *that* instead. */
+  min-inline-size: 0;
+  /* The containing block for what it scrolls. A `VisuallyHidden` label inside a
+     run is `position: absolute`, and a scroll container only clips a descendant
+     it is also the containing block for — without this, a long thread resolves
+     them against an outer box and stretches *that* instead. */
   position: relative;
   overflow-y: auto;
   /* Keeps the newest message pinned while earlier ones load above it. */
   overflow-anchor: auto;
+  /* A flex column so the list below can push itself to the bottom. */
+  display: flex;
+  flex-direction: column;
   padding-inline-end: var(--space-2);
   /* Momentum scrolling on iOS without trapping the page's own scroll. */
   overscroll-behavior: contain;
@@ -46,8 +60,18 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  /*
+   * The thread is bottom-anchored: a conversation with two messages in it sits
+   * on the composer rather than at the top of a column with five hundred pixels
+   * of canvas under it (TAR-518). `margin-block-start: auto` in a flex column is
+   * what does it, and it costs nothing once the thread is taller than the
+   * scrollport — which is when `overflow-y` takes over and the margin collapses
+   * to zero of its own accord.
+   */
+  margin-block-start: auto;
   padding: 0;
-  margin: 0;
+  margin-inline: 0;
+  margin-block-end: 0;
   list-style: none;
 }
 
@@ -70,4 +94,46 @@
   color: var(--color-on-surface-muted);
   font-size: var(--font-size-caption);
   font-weight: var(--font-weight-medium);
+}
+
+/*
+ * "3 new messages ↓" — the alternative to yanking the viewport out from under
+ * somebody reading. Centred over the foot of the stream, raised off the messages
+ * it covers, and only in the DOM while there is something to catch up on.
+ */
+.pill {
+  position: absolute;
+  inset-block-end: var(--space-3);
+  inset-inline: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  inline-size: fit-content;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-4);
+  margin-inline: auto;
+  background: var(--color-accent);
+  border: 0;
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-overlay);
+  color: var(--color-on-accent);
+  font: inherit;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  animation: pillEnter var(--duration-medium) var(--easing-enter);
+}
+
+@keyframes pillEnter {
+  from {
+    opacity: 0;
+    translate: 0 var(--space-3);
+  }
+}
+
+@media (hover: hover) {
+  .pill:hover {
+    background: var(--color-accent-hover);
+  }
 }

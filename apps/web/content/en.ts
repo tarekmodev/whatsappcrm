@@ -51,6 +51,19 @@ import type { FileSizeUnit } from '@/lib/format/file-size';
  * Keys describe *meaning*, not position, and interpolation is a function rather
  * than string concatenation so a translated sentence can reorder its parts.
  */
+/**
+ * Why the reply box is shut on a thread in the shared pool (TAR-186), hoisted
+ * because two places say it: the composer's guidance line, and the internal-note
+ * panel behind the composer's other tab.
+ *
+ * The reason is the customer's, not the reader's role — two agents looking at the
+ * same unclaimed thread would both reply, and claiming is what makes one of them
+ * the one answering. An object literal cannot reference its own keys, so a line
+ * used twice is a const rather than a copy.
+ */
+const CLAIM_BEFORE_WRITING =
+  'Nobody is handling this conversation yet. Claim it above to reply — that is what stops two of you answering the same customer.';
+
 export const content = {
   /**
    * The locale this module is written in, for `Intl` formatters that phrase a
@@ -438,9 +451,6 @@ export const content = {
     takeFromBot: 'Take over from the bot',
     takeFromBotAria: (contact: string) => `Take the conversation with ${contact} from the chatbot`,
     takeFromBotSuccess: (contact: string) => `The chatbot has stopped answering ${contact}`,
-    /** Said on a thread the bot is on, so an agent knows why it is replying without them. */
-    botActiveNotice:
-      'The chatbot is answering this conversation. Take it over to reply yourself — the chatbot stops for good once you do.',
 
     // --- Claiming ----------------------------------------------------------
     claim: 'Claim',
@@ -473,21 +483,11 @@ export const content = {
       `You are handling ${contact}, taken over from ${holder}`,
     /** Stands in for a holder whose name this page could not resolve. */
     unresolvedHolder: 'Another agent',
-    /**
-     * Said plainly rather than left as a missing button. Every role holds
-     * `conversation:claim` since TAR-186, so this is now the rare case — a
-     * principal whose role has had it taken away.
-     */
-    claimNotPermitted:
-      'Anyone can read a conversation nobody has claimed. Your role cannot take one — ask a supervisor, and it will appear in your assigned list.',
-    /**
-     * Why the composer and the note box are shut on a thread in the shared pool
-     * (TAR-186). The reason is the customer's, not the reader's role: two agents
-     * looking at the same unclaimed thread would both reply, and claiming is
-     * what makes one of them the one answering.
-     */
-    claimBeforeWriting:
-      'Nobody is handling this conversation yet. Claim it to reply — that is what stops two of you answering the same customer.',
+    /** Why the note box is shut on a thread in the shared pool — see the const. */
+    claimBeforeWriting: CLAIM_BEFORE_WRITING,
+    /** Who holds the thread, in the header's second row. */
+    assignedToLabel: 'Assigned to',
+    assignedToNobody: 'Nobody yet',
 
     // --- The two-pane layout ------------------------------------------------
     threadHeading: 'Conversation',
@@ -542,6 +542,10 @@ export const content = {
 
     // --- The context column -------------------------------------------------
     contextHeading: 'Contact',
+    /** The contact's fields, as terms in a `DetailList` rather than loose lines. */
+    contactPhoneLabel: 'Phone',
+    contactEmailLabel: 'Email',
+    contactTagsLabel: 'Tags',
     contextToggle: 'Conversation details',
     contextShow: 'Show conversation details',
     contextHide: 'Hide conversation details',
@@ -552,16 +556,17 @@ export const content = {
      * agent pressing a button — so this panel reports the link rather than
      * offering to make one.
      */
-    ticketLinked: 'A ticket is open for this conversation.',
     ticketLinkedBody:
       'It was opened automatically when the customer wrote in, and everything said here is on it.',
+    /** The per-tenant number, which is what agents and customers actually quote. */
+    ticketReferenceLabel: 'Reference',
     /**
-     * The link the panel's original comment promised would land with
-     * `GET /tickets/{id}`. Resolving the ticket empties this section rather than
-     * leaving a link to work that is finished — `conversation.ticketId` names
-     * the *active* ticket, so it goes null the moment one is resolved.
+     * A ticket the reader may not open. The API answers `not_found` rather than
+     * `forbidden` so nothing can be enumerated, and this is that answer said in
+     * words — the alternative was an empty card that read as a failed load.
      */
-    ticketOpen: 'Open the ticket',
+    ticketUnavailable:
+      'A ticket is open for this conversation, and it is outside what your role can see.',
     ticketUnlinked: 'No ticket yet',
     ticketUnlinkedBody:
       'A ticket opens by itself with the customer’s next message, and this conversation joins it.',
@@ -915,26 +920,67 @@ export const content = {
     /** The thread opens on one page; older messages are a follow-up (TAR-20g). */
     olderMessagesNotice: (count: number) =>
       `Showing the most recent ${String(count)} messages in this conversation.`,
+    /**
+     * Which way a message went, said in words. The bubble's side and tint carry
+     * it for a sighted reader and carry nothing at all for a screen reader, so
+     * this rides on the run's sender label — once per run, not once per bubble.
+     */
     inbound: 'From the customer',
     outbound: 'From your team',
-    sentBy: (name: string) => `Sent by ${name}`,
-    sentByAutomation: 'Sent automatically',
     /**
-     * Narrower than `sentByAutomation`, and preferred over it wherever the
-     * message says so. Both a chatbot reply (TAR-28) and a workflow reply
-     * (TAR-27) are "sent automatically"; only one of them is something an agent
-     * can take over from, so naming it is what makes the handoff control make
-     * sense on the bubble above it.
+     * Who a run of messages is from — the name alone, because the run's label
+     * line is a name followed by a time, not a sentence. The contact's own
+     * display name is used for an inbound run.
+     *
+     * `senderBot` is narrower than `senderAutomation` and preferred wherever the
+     * message says so: both a chatbot reply (TAR-28) and a workflow reply
+     * (TAR-27) are automation, and only one of them is something an agent can
+     * take over from.
      */
-    sentByBot: 'Sent by the chatbot',
+    senderBot: 'Chatbot',
+    senderAutomation: 'Automation',
     /**
      * A person sent it and this page could not resolve which one. Distinct from
-     * `sentByAutomation` on purpose: attributing a colleague's words to a bot is
+     * `senderAutomation` on purpose: attributing a colleague's words to a bot is
      * a lie about the one thing this product is a record of.
      */
-    sentByTeammate: 'Sent by a teammate',
+    senderTeammate: 'A teammate',
     sentAt: 'Sent',
     failureReason: (reason: string) => `Not delivered: ${reason}`,
+
+    // --- Delivery, and the one state that needs acting on -------------------
+    /**
+     * The icon beside a delivery state is decorative; the word beside it is what
+     * says which state it is. This names the pair for a screen reader so the
+     * bubble reads "Delivered" rather than "image Delivered".
+     */
+    deliveryState: (label: string) => `Delivery: ${label}`,
+    retrySend: 'Try again',
+    retrySendAria: (contact: string) => `Send this message to ${contact} again`,
+    retrySendSuccess: 'Message sent',
+    /**
+     * A failed send this console cannot rebuild. WhatsApp carries one media
+     * object per message and a send names the upload's own id, which a delivered
+     * message does not publish — so a failed photo is re-sent by attaching it
+     * again, not by a button that would send the caption on its own.
+     */
+    retryUnavailable: 'Attach the file again in the reply box below to send this.',
+
+    // --- Following a live thread --------------------------------------------
+    /**
+     * Offered instead of yanking the viewport: an agent who has scrolled up to
+     * read something is reading it, and a thread that jumps under them is the
+     * behaviour this pill exists to replace.
+     */
+    newMessages: (count: number) =>
+      count === 1 ? '1 new message' : `${String(count)} new messages`,
+    jumpToLatest: 'Jump to the newest message',
+    /**
+     * What a screen reader hears when a message lands, once, in a region of its
+     * own. The sender is named because a thread is a conversation and "you have
+     * a new message" does not say which of two people just spoke.
+     */
+    messageArrived: (sender: string, body: string) => `${sender}: ${body}`,
     /** The date chip between two days of a thread. */
     dayLabel: (date: string) => `Messages on ${date}`,
     /** Which channel a message travelled over, on the bubble. */
@@ -962,7 +1008,13 @@ export const content = {
      * send, so both lines name the consequence first.
      */
     windowOpenLabel: 'Free replies close',
-    windowOpenNotice: 'You can reply freely until then. After that, only an approved template.',
+    /**
+     * The open state is one caption in the composer's toolbar, not a banner: it
+     * is a countdown on a box that works, and a two-line saturated notice above
+     * every reply an agent writes was most of the composer's height (TAR-518).
+     * The closed state below still gets the full explanation — that is the one
+     * that changes what the composer can do.
+     */
     windowClosedHeading: 'This conversation is outside the 24-hour window',
     windowClosedBody:
       'WhatsApp only accepts an approved template until the customer writes again. Send one below, and their reply reopens free messaging for another 24 hours.',
@@ -972,15 +1024,18 @@ export const content = {
     // --- Free-form ----------------------------------------------------------
     replyLabel: 'Reply to the customer',
     replyPlaceholder: 'Write a reply…',
-    replyHint: 'The customer receives this on WhatsApp.',
     /**
-     * The same line plus the shortcut affordance, shown only to a tenant that
-     * has canned responses. The trigger is interpolated from the contract rather
-     * than written into the sentence: one character, one source, and a hint that
-     * cannot promise a key the picker does not listen for.
+     * The hint, shown only to a tenant that *has* canned responses — a `/` that
+     * nothing announces is a feature nobody finds. There is no plain version any
+     * more: "the customer receives this on WhatsApp" repeated the composer's own
+     * `Reply on WhatsApp` tab directly above it, and the label repeated it a
+     * third time (TAR-518).
+     *
+     * The trigger is interpolated from the contract rather than written into the
+     * sentence: one character, one source, and a hint that cannot promise a key
+     * the picker does not listen for.
      */
-    replyHintWithShortcuts: (trigger: string) =>
-      `The customer receives this on WhatsApp. Type ${trigger} to insert a saved reply.`,
+    replyHintWithShortcuts: (trigger: string) => `Type ${trigger} to insert a saved reply.`,
     send: 'Send',
     sendSuccess: 'Message sent',
     /**
@@ -994,13 +1049,29 @@ export const content = {
       'attachment-uploading': 'Wait for the file to finish uploading.',
       'attachment-failed': 'Remove the file that could not be uploaded, or pick another.',
     },
+
+    // --- The toolbar --------------------------------------------------------
     /**
-     * Said rather than left as a missing control. An agent without
-     * `conversation:send` can read a thread and reply to nothing in it, and a
-     * composer that simply was not there would read as a broken screen.
+     * Names the row of controls under the reply box for a screen reader. The
+     * controls in it are icon-only, so each carries its own accessible name too.
      */
-    sendNotPermitted:
-      'Your role can read this conversation but not reply to it. Ask a workspace admin.',
+    toolbarLabel: 'Reply tools',
+    expand: 'Make the reply box taller',
+    collapse: 'Make the reply box shorter',
+    /**
+     * The reply box's own guidance line, which replaces the two full-width
+     * saturated notices the thread used to stack (TAR-518). One line, sited where
+     * the reply was going to be typed, and quiet — it is guidance, not an error.
+     */
+    guidance: {
+      'send-not-permitted':
+        'Your role can read this conversation but not reply to it. Ask a workspace admin.',
+      'claim-not-permitted':
+        'Anyone can read a conversation nobody has claimed. Your role cannot take one — ask a supervisor, and it will appear in your assigned list.',
+      'claim-first': CLAIM_BEFORE_WRITING,
+      'bot-answering':
+        'The chatbot is answering this conversation. Take it over above to reply yourself — the chatbot stops for good once you do.',
+    },
 
     // --- Attachments --------------------------------------------------------
     attachLabel: 'Attach a file',

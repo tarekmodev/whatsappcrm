@@ -151,6 +151,30 @@ asserts both against the token files, so neither can drift the way the dark them
 Text floor 4.5:1. The accent's own stand-off is **5.37:1 light and 5.07:1 dark**, so the
 ordering on any screen is: solid accent button > chip > body text > muted text.
 
+#### Two roles that are identity, not status (TAR-518)
+
+Both alias a status role rather than a primitive, so a tenant re-theming `warning` moves
+the note surface with it and a tenant re-theming `danger` moves the failure. They are
+named separately because a component reading them is asking a different question: not
+"how urgent is this" but "what kind of thing am I looking at".
+
+| Role                      | Aliases                     | Where                                               |
+| ------------------------- | --------------------------- | --------------------------------------------------- |
+| `--color-note`            | `--color-warning-subtle`    | The composer while its destination is `Comment`     |
+| `--color-on-note`         | `--color-on-warning-subtle` | The text on it                                      |
+| `--color-note-marker`     | `--color-warning`           | The leading bar on that surface and on a note card  |
+| `--color-delivery-failed` | `--color-danger`            | An outbound message that did not reach the customer |
+
+A note reaching a customer is the worst bug this product could have, so "internal" is
+carried three ways at once: the surface, the marker, and the words on the panel. Colour
+alone is never the carrier, and the marker is what survives forced-colours mode.
+
+`--color-delivery-failed` is measured on the **bubble surfaces** rather than on `surface`,
+because that is where it lands — `--color-accent-subtle` for an outbound bubble. It clears
+AA on all three in both themes (`tokens.test.ts` asserts it). The other four delivery
+states have no colour of their own: they are metadata, they take the bubble's own muted
+role, and they differ by glyph and by the word beside it.
+
 #### Why the stand-off, and not the hue
 
 TAR-29 lets a tenant replace the accent, and the seeded workspace resolves it to a blue —
@@ -501,6 +525,67 @@ header's select-all with bulk actions. 0002's conversation endpoints all address
 id — there is no bulk claim, assign or status route — so a checkbox would select rows for
 actions that cannot be performed. It lands with the endpoints.
 
+#### The thread column is a conversation, not a message table (TAR-518)
+
+Three parts in a fixed-height column: a header that stays put, a stream that scrolls, and
+the composer pinned to the foot.
+
+**The header** is two rows. Identity first — a 32px `Avatar`, the contact's name at
+`--font-size-heading-sm`, the number under it — with the action cluster opposite. Then at
+most **two** status chips, who holds the thread _in words_ beside their mark, and when it
+started. It carries **no notice of its own**.
+
+**Exactly one solid accent button** on the screen, and which one is a decision, not an
+accident: `features/inbox/thread-state.ts` names it, and every other control is
+`secondary`. On an unclaimed thread the chatbot is answering, that button is `Claim` —
+stopping the bot writes nothing about who holds the conversation, so an agent who pressed
+`Take over from the bot` first still could not reply. Both controls are on screen; only one
+is inviting.
+
+**Why the header says nothing.** It used to carry a full-width saturated notice about the
+chatbot while the composer carried a second one about the claim — two loud blocks in one
+column, overlapping in meaning, above and below the messages they were about. There is now
+**one line, quiet, at the composer**, because that is where the reply the reader cannot
+send was going to be typed. `Notice variant="quiet"` is the treatment: the tone survives in
+a leading marker, the fill goes, and the text inherits so it is legible on whatever surface
+it lands on.
+
+**The stream** groups consecutive messages from one sender, within five minutes, into a
+**run**: one avatar, one label line — sender, time, channel — and the bubbles under it at
+`--space-1` against `--space-3` between runs. Four lines from one customer are one person
+saying one thing; a name and a timestamp over each of them is a message table with rounded
+corners. `features/inbox/message-runs.ts` decides where a run starts.
+
+- **Direction is in the text**, not only in the side and the tint: the label line opens
+  with a visually hidden "From the customer" / "From your team", once per run.
+- **The stream is bottom-anchored.** A two-message conversation sits on the composer, not
+  at the top of a column with five hundred pixels of nothing under it.
+- **Delivery state** rides at an outbound bubble's trailing edge as a glyph plus its own
+  word. A failure is on the message with a retry beside it — never only in a toast, which
+  is gone in seconds while the bubble stays looking sent for as long as the thread exists.
+- **A reader who has scrolled up is not yanked.** New messages raise an "N new messages"
+  pill over the foot of the stream instead.
+- The stream is a `log` landmark whose own live behaviour is **off**, with a separate
+  polite region carrying one sentence — "sender: text" — per arrival. A live `<ol>`
+  announces whatever React moved, which on a thread grouped into runs is the last run
+  entire.
+
+**The composer** is the writing surface and one toolbar under it: attachments and the
+template picker at the leading edge, the service-window countdown, an expand control and
+Send at the trailing one. It was five stacked blocks and about 630px tall — a two-line
+banner over a labelled textarea over a labelled file input over a status line over a Send
+row — which on a 1440x900 screen left the message stream a quarter of its column. The
+banner is a caption, the labels that repeated the composer's own tab are gone, and the file
+input is trimmed to its button.
+
+The destination stays a labelled tab strip, never a mode — and selecting `Comment` moves
+**the whole surface** to `--color-note`, because the tab is a small mark at the top of a
+box an agent is looking at the bottom of.
+
+Internal notes stay **out of the message stream**, deliberately. They are a separate entity
+behind separate endpoints specifically so no send path can pick one up by accident, and
+interleaving them into the stream would put note content inside the structure a send walks.
+
 ### Ticket status
 
 A column in the list, rendered as a `Badge`. Not a pipeline, not a board, not a drag
@@ -512,6 +597,11 @@ every inbound message on one ([0003](../architecture/0003-ticket-auto-linking-co
 and 0002's endpoint table has no `POST /tickets` for that reason. The inbox's context
 panel therefore _reports_ the link rather than offering to make one. If a screen ever
 needs a "create a ticket from this" affordance, the endpoint comes first.
+
+Reporting it means reporting **what it says**: its reference, its status and priority as
+the queue's own `TicketStatusBadge` and `TicketPriorityBadge`, and who is on it — a second
+endpoint behind its own Suspense and error boundary, so a contact card is never held up or
+taken down by a read about something attached to it (TAR-518).
 
 ## Every state (TAR-515)
 

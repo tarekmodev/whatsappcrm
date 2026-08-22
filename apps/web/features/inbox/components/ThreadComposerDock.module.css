@@ -27,4 +27,17 @@
   padding-block-end: calc(var(--space-4) + env(safe-area-inset-bottom));
   background: var(--color-surface);
   border-block-start: var(--border-hairline) solid var(--color-border);
+  /*
+   * It lifts off the messages it is covering. TAR-518 asked for this only while
+   * the stream above is scrolled; expressing that without JavaScript needs a
+   * named `scroll-timeline` declared on the stream's scrollport and a
+   * `timeline-scope` on the column between them, which ships in Chromium alone
+   * today — and the alternative, a scroll listener setting state, re-renders the
+   * composer on every frame an agent scrolls the thread.
+   *
+   * Always-on is the honest simplification: the stream is bottom-anchored since
+   * this same change, so there is a message directly under this edge in every
+   * state except an empty conversation.
+   */
+  box-shadow: var(--shadow-raised);
 }
