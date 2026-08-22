@@ -1815,9 +1815,16 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
   database and five of the seed's six stub users would resolve to somebody else. The row's
   `token_hash` is the digest of a token generated and immediately forgotten, so nothing readable
   in the repository can be presented as a session cookie, and the principal now reports the
-  deadline the row carries instead of a fixed date in 2026. `realtime-stub-handshake.int-spec.ts`
-  covers it end to end — ticket over HTTP, then a real socket — across two tenants and two roles,
-  and asserts that an unissued ticket and a spent one are still refused.
+  deadline the row carries instead of a fixed date in 2026.
+  A stub session that dies is replaced rather than left dead, because there is no login to
+  perform: a revocation — which any team-membership or role edit triggers through
+  `SessionRevocationService` — and a row that has reached `absolute_expires_at` both start a
+  fresh session on the next request, which is what signing back in would do. What a request
+  does **not** do is push the cap: while `absolute_expires_at` is still ahead it is carried
+  over untouched, with `created_at`, so the column keeps the meaning `schema.prisma` gives it.
+  `realtime-stub-handshake.int-spec.ts` covers all of it end to end — ticket over HTTP, then a
+  real socket — across two tenants and two roles, and asserts that an unissued ticket and a
+  spent one are still refused.
 
 - **Detaching a tenant's primary custom domain no longer leaves invite and password-reset
   links pointing at it** (TAR-534) — `AdminDomainsService.deactivate()` cleared

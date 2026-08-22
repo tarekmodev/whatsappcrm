@@ -66,6 +66,12 @@ interface LiveSessionRow {
   token_hash: string;
 }
 
+interface SessionRow extends LiveSessionRow {
+  revoked_at: Date | null;
+  created_at: Date;
+  absolute_expires_at: Date;
+}
+
 describe('the realtime handshake under the interim auth stub', () => {
   let app: INestApplication;
   let systemPrisma: PrismaClient;
@@ -123,6 +129,17 @@ describe('the realtime handshake under the interim auth stub', () => {
          AND expires_at > now()
          AND absolute_expires_at > now()
     `;
+  }
+
+  /** The stub's row for `userId`, live or not, as an operator would read it. */
+  async function sessionOf(userId: string): Promise<SessionRow | undefined> {
+    const [row] = await systemPrisma.$queryRaw<SessionRow[]>`
+      SELECT id, tenant_id, user_id, token_hash, revoked_at, created_at, absolute_expires_at
+        FROM sessions
+       WHERE user_id = ${userId}::uuid
+    `;
+
+    return row;
   }
 
   async function removeFixture(): Promise<void> {
@@ -274,6 +291,67 @@ describe('the realtime handshake under the interim auth stub', () => {
     const sessions = await liveSessions(TENANT_A);
 
     expect(sessions.map((session) => session.user_id).sort()).toEqual([ADMIN_A, AGENT_A].sort());
+  });
+
+  /**
+   * The three lines of the upsert nothing else would fail on, and the reason
+   * they are here: under the stub there is no login to perform, so a session
+   * that dies stays dead until somebody reseeds — TAR-576 again, on a timer.
+   * Deleting any of them leaves every case above green.
+   */
+  describe('a stub session that has died', () => {
+    it('is revived after a revocation, the way signing back in would', async () => {
+      await fetchTicket(HOST_A, 'agent');
+
+      // What `SessionRevocationService` writes when an admin edits a team
+      // membership or a role — `TeamsService` and `UsersService` both reach it.
+      await systemPrisma.$executeRaw`
+        UPDATE sessions
+           SET revoked_at = now(), revoked_reason = 'deactivation'
+         WHERE user_id = ${AGENT_A}::uuid
+      `;
+
+      const ticket = await fetchTicket(HOST_A, 'agent');
+
+      await expect(connectWith(ticket.ticket)).resolves.toBeDefined();
+      expect((await sessionOf(AGENT_A))?.revoked_at).toBeNull();
+    });
+
+    it('is restarted once it reaches its absolute cap', async () => {
+      await fetchTicket(HOST_A, 'agent');
+
+      // A developer's stack left running past `sessionAbsoluteMs`. The idle
+      // window slides on use; the cap deliberately does not, so without this
+      // the row is unresolvable for ever and no login exists to replace it.
+      await systemPrisma.$executeRaw`
+        UPDATE sessions
+           SET created_at = now() - interval '31 days',
+               absolute_expires_at = now() - interval '1 day'
+         WHERE user_id = ${AGENT_A}::uuid
+      `;
+
+      const ticket = await fetchTicket(HOST_A, 'agent');
+      const restarted = await sessionOf(AGENT_A);
+
+      await expect(connectWith(ticket.ticket)).resolves.toBeDefined();
+      expect(restarted?.absolute_expires_at.getTime()).toBeGreaterThan(Date.now());
+      // Restamped with the cap, so `absolute_expires_at = created_at +
+      // sessionAbsoluteMs` still reads true of the row.
+      expect(restarted?.created_at.getTime()).toBeGreaterThan(Date.now() - 60_000);
+    });
+
+    it('does not have its cap pushed forward by simply being used', async () => {
+      await fetchTicket(HOST_A, 'agent');
+      const before = await sessionOf(AGENT_A);
+
+      await fetchTicket(HOST_A, 'agent');
+      const after = await sessionOf(AGENT_A);
+
+      // The whole point of a cap is that use does not extend it — the sliding
+      // `expires_at` is what a request moves.
+      expect(after?.absolute_expires_at).toEqual(before?.absolute_expires_at);
+      expect(after?.created_at).toEqual(before?.created_at);
+    });
   });
 
   it('still refuses a socket presenting no ticket the API issued', async () => {

@@ -156,12 +156,20 @@ export class StubPrincipalSource implements PrincipalSource {
    *   * **Both deadlines come from the database's `now()`**, as everything in
    *     `SessionService` does, so a stub session and a real one are read by the
    *     same predicates against the same clock.
-   *   * **A revoked row is revived.** Under the stub there is no login to
-   *     perform after `revokeAllForUser` runs — an admin changing a team
-   *     membership would otherwise leave local realtime dead until a reseed.
-   *     Reviving it on the next request is what signing back in would do; the
-   *     revocation path itself is proved against real sessions by
-   *     `session-lifecycle.int-spec.ts`, not by this.
+   *   * **A dead session is replaced, and a live one is never extended past its
+   *     cap.** Under the stub there is no login to perform, so a row that has
+   *     been revoked — `TeamsService` and `UsersService` both reach
+   *     `revokeAllForUsers` through `SessionRevocationService` — or that has
+   *     reached `absolute_expires_at` would otherwise leave local realtime dead
+   *     until somebody reseeded, which is TAR-576 again on a timer. Starting a
+   *     new session on the row is what signing back in would do. What use does
+   *     **not** do is push the cap: while `absolute_expires_at` is still in the
+   *     future it is carried over untouched, so the column keeps the meaning
+   *     `schema.prisma` gives it — `created_at + sessionAbsoluteMs`, the bound
+   *     the sliding `expires_at` may not cross — and `created_at` is restamped
+   *     with it so the two cannot disagree. The revocation path itself is
+   *     proved against real sessions by `session-lifecycle.int-spec.ts`, not by
+   *     this; what is proved here is that the stub recovers from it.
    */
   private async holdSessionOpen(
     sessionId: string,
@@ -185,10 +193,21 @@ export class StubPrincipalSource implements PrincipalSource {
       )
       ON CONFLICT (id) DO UPDATE
          SET expires_at          = EXCLUDED.expires_at,
-             absolute_expires_at = EXCLUDED.absolute_expires_at,
              last_seen_at        = now(),
              revoked_at          = NULL,
-             revoked_reason      = NULL
+             revoked_reason      = NULL,
+             -- Carried over while the cap is still ahead, restarted once it is
+             -- not: a request extends the idle window and never the cap.
+             created_at          = CASE
+                                     WHEN sessions.absolute_expires_at > now()
+                                     THEN sessions.created_at
+                                     ELSE EXCLUDED.created_at
+                                   END,
+             absolute_expires_at = CASE
+                                     WHEN sessions.absolute_expires_at > now()
+                                     THEN sessions.absolute_expires_at
+                                     ELSE EXCLUDED.absolute_expires_at
+                                   END
       RETURNING expires_at
     `;
 
