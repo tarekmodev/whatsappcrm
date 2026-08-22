@@ -64,10 +64,12 @@ const ICON_PATHS = {
     'M12 17.5h.01',
   ],
   /**
-   * A narrowing, for the empty state of a list a filter has emptied. Three lines
-   * that taper, deliberately unlike `menu`'s three equal ones — the two never
-   * appear together, but a set in which "filter" and "menu" are the same shape
-   * is a set with one glyph too few.
+   * A narrowing: the empty state of a list a filter has emptied (TAR-515), and
+   * the trigger that collapses a filter row's secondary groups (TAR-516). Three
+   * lines that taper, deliberately unlike `menu`'s three equal ones — below
+   * 48rem the mobile-menu trigger and a queue's "Filters" trigger are on screen
+   * together, so a set in which the two were the same shape would be a set with
+   * one glyph too few.
    */
   filter: ['M4 6h16', 'M7 12h10', 'M10 18h4'],
   /** A custom domain (TAR-29): a hostname, not a link and not a padlock. */
@@ -126,11 +128,6 @@ const ICON_PATHS = {
     'M8 4v4',
     'M16 4v4',
   ],
-  /**
-   * Narrowing a list. A funnel rather than three sliders: sliders read as
-   * "settings", and `settings` already owns that shape in this set.
-   */
-  filter: ['M4 6h16l-6 7v6l-4-2v-4z'],
   /** Opens a menu below its trigger; never mirrored, unlike the chevrons below. */
   chevronDown: ['m6 9 6 6 6-6'],
   /** Points along the reading direction; mirrored under `dir="rtl"`. */
