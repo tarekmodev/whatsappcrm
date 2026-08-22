@@ -432,6 +432,17 @@ async function writeSubscription(
  * `tenants`, so this one statement takes the whole dataset with it and stays
  * correct as the schema grows — the same reasoning the integration fixtures use.
  *
+ * **`lifecycle_events` is the one thing it cannot take**, and that is the table
+ * behaving as designed rather than a gap here. ADR 0009 Amendment 1 ruling 2
+ * dropped its foreign key so the trail survives the purge that empties
+ * everything else, and `whatsappcrm_system` holds `SELECT, INSERT` and no
+ * `DELETE` so an append-only table stays append-only. Each re-seed therefore
+ * leaves the previous run's genesis rows behind, pointing at tenant ids that no
+ * longer resolve — a pair of dangling audit rows per seed on a developer's
+ * database, which is what the trail outliving its tenant means in a place where
+ * tenants are thrown away. Nothing reads them: the lifecycle sweep claims each
+ * one once, and an operator-path row maps to no email.
+ *
  * `SystemPrisma`, necessarily: `tenants` carries no RLS policy and `TenantPrisma`
  * refuses to write it at all.
  */
