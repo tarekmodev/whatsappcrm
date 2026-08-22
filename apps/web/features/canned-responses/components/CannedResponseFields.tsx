@@ -51,7 +51,11 @@ export function CannedResponseFields({
             // left-to-right even when the console is in RTL.
             dir="ltr"
             disabled={isDisabled}
-            maxLength={CANNED_RESPONSE_LIMITS.shortcutLength}
+            // One less while the box has no leading trigger, because blur is
+            // about to add one: `shortcutLength` counts the `/`, so a full 40
+            // characters typed without it would normalise to 41 and be refused
+            // by a control that had just accepted exactly that input.
+            maxLength={shortcutMaxLength(draft.shortcut)}
             placeholder={content.cannedResponses.shortcutPlaceholder}
             value={draft.shortcut}
             onChange={(event) => {
@@ -113,4 +117,20 @@ export function CannedResponseFields({
       </Field>
     </>
   );
+}
+
+/**
+ * The cap the shortcut box stops at, measured on what the value will *become*
+ * rather than on what it currently is.
+ *
+ * `CANNED_RESPONSE_LIMITS.shortcutLength` counts the leading `/`, and
+ * `normaliseShortcut` adds one on blur when the admin has not typed it. Without
+ * this, pasting 40 characters with no slash fills the box to its own limit and
+ * then fails validation at 41 — a control refusing exactly the input it just
+ * accepted, which reads as a bug even though the message is correct.
+ */
+function shortcutMaxLength(value: string): number {
+  return value.startsWith(CANNED_RESPONSE_TRIGGER)
+    ? CANNED_RESPONSE_LIMITS.shortcutLength
+    : CANNED_RESPONSE_LIMITS.shortcutLength - 1;
 }

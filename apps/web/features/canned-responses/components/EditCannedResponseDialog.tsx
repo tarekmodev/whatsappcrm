@@ -70,8 +70,10 @@ export function EditCannedResponseDialog({
       isPending={isPending}
       formError={formError}
       requestId={requestId}
-      // Nothing changed is not an error to report — the update schema refuses an
-      // empty body, and there is nothing here for the admin to fix.
+      // Nothing changed is not an error to report, and not a refusal either:
+      // the update schema is the create input *partial*, so an empty PATCH
+      // parses and round-trips as an accepted no-op. Disabling is right because
+      // there is nothing to save, not because the API would turn it down.
       isSubmitDisabled={Object.keys(patch).length === 0}
       onClose={onClose}
       onSubmit={() => {

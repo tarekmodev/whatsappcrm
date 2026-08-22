@@ -1152,14 +1152,29 @@ function updateCannedResponse({ principal, params, body }: RouteContext): Canned
 }
 
 /**
- * `204`, and idempotent: an id this tenant does not hold is a `not_found`, but
- * deleting the same row twice is not — the second call finds nothing and says
- * so, which is the same answer the API gives.
+ * `204` whatever it finds — the one route here that does **not** answer a
+ * missing row with `not_found`.
+ *
+ * Idempotent in the strong sense the API is: `canned-responses.int-spec.ts`
+ * pins 204 for a repeat delete ("deletes idempotently") *and* 204 for another
+ * tenant's id, with the row left standing and nothing announced. A mock that
+ * raised `not_found` for either would be stricter than the thing it stands in
+ * for, and the console pays for the difference — `not_found` is not in
+ * `ACTIONABLE_ERROR_CODES`, so a second admin deleting a row the first already
+ * removed would read "we could not save that" over a dialog that will not
+ * close, where the real API closes it with a success.
+ *
+ * Not an enumeration oracle, which is the usual reason to prefer 404: answering
+ * 204 for every id tells a caller nothing, because it is the same answer for an
+ * id that never existed. `deleteAssignmentRule` is written exactly this way.
  */
 function deleteCannedResponse({ principal, params }: RouteContext): null {
-  const existing = findCannedResponseInTenant(principal, params[0]);
+  const id = params[0];
+  const existing = tenantCannedResponses(principal).find((candidate) => candidate.id === id);
 
-  mockState().cannedResponses.delete(existing.id);
+  if (existing !== undefined) {
+    mockState().cannedResponses.delete(existing.id);
+  }
 
   return null;
 }
