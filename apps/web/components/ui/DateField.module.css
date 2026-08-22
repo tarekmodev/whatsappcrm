@@ -1,0 +1,31 @@
+.group {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.input {
+  /* The field's own box; the trigger beside it keeps its intrinsic width. */
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}
+
+.trigger {
+  /* Square, so the icon sits on the input's own height rather than beside it. */
+  flex: 0 0 auto;
+  justify-content: center;
+  inline-size: var(--size-touch-target);
+  padding-inline: 0;
+}
+
+.panel {
+  padding: var(--space-4);
+  /*
+   * Seven day columns plus the two fields above them, but never wider than the
+   * screen: `MenuButton` caps the panel at the viewport with `max-inline-size`,
+   * and a `min` larger than that cap wins and takes the page into horizontal
+   * scroll at 320px.
+   */
+  min-inline-size: min(var(--size-pane-side), calc(100vw - var(--space-6)));
+}

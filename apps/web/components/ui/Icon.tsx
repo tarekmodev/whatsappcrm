@@ -88,6 +88,23 @@ const ICON_PATHS = {
     'M7 14h3',
   ],
   plus: ['M12 5v14', 'M5 12h14'],
+  /** Confirms the chosen entry in a listbox or a menu; never a status tick. */
+  check: ['m5 12.5 4.5 4.5L19 8'],
+  /**
+   * A date control's affordance. Deliberately not `reports` — that shape is a
+   * bar chart, and a month grid is a header row over a page, not a measurement.
+   */
+  calendar: [
+    'M4 7a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z',
+    'M4 10h16',
+    'M8 4v4',
+    'M16 4v4',
+  ],
+  /**
+   * Narrowing a list. A funnel rather than three sliders: sliders read as
+   * "settings", and `settings` already owns that shape in this set.
+   */
+  filter: ['M4 6h16l-6 7v6l-4-2v-4z'],
   /** Opens a menu below its trigger; never mirrored, unlike the chevrons below. */
   chevronDown: ['m6 9 6 6 6-6'],
   /** Points along the reading direction; mirrored under `dir="rtl"`. */

@@ -1,0 +1,68 @@
+.list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  /*
+   * Shorter than a control and taller than a caption: a chip is a summary of a
+   * filter that is already applied, and at full control height a row of six
+   * reads as a second bank of filters rather than as a report on the first.
+   * The whole chip is the target, which clears the minimum for a non-inline
+   * control comfortably.
+   */
+  min-block-size: var(--size-control-sm);
+  padding-inline: var(--space-3);
+  background: var(--color-accent-subtle);
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--color-on-accent-subtle);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  text-decoration: none;
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .chip:hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border-strong);
+    color: var(--color-on-surface);
+  }
+}
+
+/* Forced colours flattens the tinted background; the border is what remains. */
+@media (forced-colors: active) {
+  .chip {
+    border-color: ButtonText;
+  }
+}
+
+.clearAll {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--size-control-sm);
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+@media (hover: hover) {
+  .clearAll:hover {
+    color: var(--color-on-surface);
+  }
+}

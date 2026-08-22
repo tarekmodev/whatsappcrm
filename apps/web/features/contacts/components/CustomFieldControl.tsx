@@ -1,6 +1,7 @@
 'use client';
 
 import { CUSTOM_FIELD_LIMITS, type CustomFieldDefinition } from '@whatsappcrm/contracts';
+import { DateField } from '@/components/ui/DateField';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { TextInput } from '@/components/ui/TextInput';
@@ -70,10 +71,19 @@ export function CustomFieldControl({
           case 'boolean':
             return <Select {...shared} value={value} options={booleanSelectOptions()} />;
           case 'date':
-            // The native date control. Its value is already `YYYY-MM-DD`, which
-            // is exactly what `CUSTOM_FIELD_DATE_PATTERN` wants, and it accepts
-            // typed input as well as the picker.
-            return <TextInput {...shared} type="date" value={value} />;
+            // `DateField` rather than `type="date"` (TAR-516): the native control
+            // paints the browser's calendar glyph and reads back the browser's
+            // locale, both of which disagree with the rest of this form. Its
+            // value is still a `YYYY-MM-DD` string, which is exactly what
+            // `CUSTOM_FIELD_DATE_PATTERN` wants, and it still accepts typing.
+            return (
+              <DateField
+                {...shared}
+                value={value}
+                accessibleName={definition.label}
+                onChange={onChange}
+              />
+            );
           case 'number':
             // `type="text"` with a numeric keypad, deliberately not
             // `type="number"`: a browser reports an unparseable entry in a

@@ -7,6 +7,7 @@ import {
   type ReportExportSection,
   type ReportScope,
 } from '@whatsappcrm/contracts';
+import { shiftDays, toCalendarDate } from '@/lib/date/calendar-date';
 import { DEFAULT_RANGE_DAYS } from '@/features/reports/constants';
 
 /**
@@ -124,20 +125,14 @@ function parseScope(value: string | undefined): ReportScope {
   return parsed.success ? parsed.data : 'all';
 }
 
-const MS_PER_DAY = 86_400_000;
-
 /**
  * Calendar arithmetic on a `YYYY-MM-DD`, in UTC.
  *
- * UTC deliberately: these are date *labels*, not instants, and adding a day to a
- * local-time value crosses a DST boundary twice a year and lands on the same
- * date it started from.
+ * Re-exported rather than reimplemented: `DateRangeField`'s grid walks days with
+ * the same function, and two copies of "add a day" are two chances to disagree
+ * about the end of February.
  */
-export function shiftDays(date: string, days: number): string {
-  return new Date(Date.parse(`${date}T00:00:00.000Z`) + days * MS_PER_DAY)
-    .toISOString()
-    .slice(0, 'YYYY-MM-DD'.length);
-}
+export { shiftDays };
 
 /**
  * The server's calendar day, as the picker's ceiling and the default range's end.
@@ -147,5 +142,5 @@ export function shiftDays(date: string, days: number): string {
  * recomputed there, so nothing hydrates against a different day.
  */
 export function todayInUtc(now: Date): string {
-  return now.toISOString().slice(0, 'YYYY-MM-DD'.length);
+  return toCalendarDate(now);
 }

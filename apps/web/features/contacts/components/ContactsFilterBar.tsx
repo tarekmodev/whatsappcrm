@@ -3,15 +3,14 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { Tag } from '@whatsappcrm/contracts';
-import { Cluster } from '@/components/layout/Cluster';
 import { Field } from '@/components/ui/Field';
+import { FilterBar } from '@/components/ui/FilterBar';
+import { SearchField } from '@/components/ui/SearchField';
 import { Select } from '@/components/ui/Select';
-import { TextInput } from '@/components/ui/TextInput';
 import { useContent } from '@/lib/content';
 import { useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
 import { routes, searchParamKeys } from '@/lib/routes';
 import { UNSET_VALUE, tagFilterOptions } from '../presentation';
-import styles from './ContactsFilterBar.module.css';
 
 /**
  * Search and tag filters for the directory. Usage:
@@ -72,52 +71,40 @@ export function ContactsFilterBar({
   }, [debouncedQuery, queryParam, tagParam, router]);
 
   return (
-    <Cluster gap="3" align="start" className={styles.bar}>
-      <div className={styles.search}>
-        <Field label={content.contacts.searchLabel} isLabelHidden>
-          {({ controlId }) => (
-            <TextInput
-              id={controlId}
-              type="search"
-              name="q"
-              autoComplete="off"
-              placeholder={content.contacts.searchPlaceholder}
-              value={draftQuery}
-              onChange={(event) => {
-                setDraftQuery(event.target.value);
-              }}
-            />
-          )}
-        </Field>
-      </div>
-      <div className={styles.tag}>
-        <Field
-          label={content.contacts.filterTagLabel}
-          isLabelHidden
-          hint={isTruncated ? content.contacts.tagFilterTruncatedHint : undefined}
-        >
-          {({ controlId, describedBy }) => (
-            <Select
-              id={controlId}
-              aria-describedby={describedBy}
-              name="tag"
-              value={tagParam}
-              options={tagFilterOptions(tags, tagParam === UNSET_VALUE ? undefined : tagParam)}
-              onChange={(event) => {
-                const nextTagId = event.target.value;
+    <FilterBar label={content.contacts.filtersLabel}>
+      <SearchField
+        label={content.contacts.searchLabel}
+        placeholder={content.contacts.searchPlaceholder}
+        value={draftQuery}
+        onChange={setDraftQuery}
+      />
+      <Field
+        label={content.contacts.filterTagLabel}
+        isLabelHidden
+        hint={isTruncated ? content.contacts.tagFilterTruncatedHint : undefined}
+      >
+        {({ controlId, describedBy }) => (
+          <Select
+            id={controlId}
+            aria-describedby={describedBy}
+            name="tag"
+            variant="filter"
+            value={tagParam}
+            options={tagFilterOptions(tags, tagParam === UNSET_VALUE ? undefined : tagParam)}
+            onChange={(event) => {
+              const nextTagId = event.target.value;
 
-                router.replace(
-                  routes.contacts({
-                    tagId: nextTagId === UNSET_VALUE ? undefined : nextTagId,
-                    q: queryParam === '' ? undefined : queryParam,
-                  }),
-                  { scroll: false },
-                );
-              }}
-            />
-          )}
-        </Field>
-      </div>
-    </Cluster>
+              router.replace(
+                routes.contacts({
+                  tagId: nextTagId === UNSET_VALUE ? undefined : nextTagId,
+                  q: queryParam === '' ? undefined : queryParam,
+                }),
+                { scroll: false },
+              );
+            }}
+          />
+        )}
+      </Field>
+    </FilterBar>
   );
 }

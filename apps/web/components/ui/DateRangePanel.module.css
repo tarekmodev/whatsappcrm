@@ -1,0 +1,71 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  /*
+   * Seven day columns plus the two fields above them, but never wider than the
+   * screen: `MenuButton` caps the panel at the viewport with `max-inline-size`,
+   * and a `min` larger than that cap wins and takes the page into horizontal
+   * scroll at 320px.
+   */
+  min-inline-size: min(var(--size-pane-side), calc(100vw - var(--space-6)));
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.preset {
+  min-block-size: var(--size-control-sm);
+  padding-inline: var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .preset:hover:not([aria-pressed='true']) {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}
+
+.preset[aria-pressed='true'] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-on-accent);
+  font-weight: var(--font-weight-strong);
+}
+
+.dates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Top-aligned: the field carrying the error message grows downwards, so the
+     two boxes stay on one line rather than the shorter one drifting to centre. */
+  align-items: start;
+  gap: var(--space-3);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.divider {
+  border: 0;
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}

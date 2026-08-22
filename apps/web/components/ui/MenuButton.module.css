@@ -32,6 +32,34 @@
   border-color: var(--color-border);
 }
 
+/*
+ * The trigger as a form control, for a picker or a filter that stands in a row
+ * of inputs. Every value here is the one `Control.module.css` gives `TextInput`,
+ * so the two are the same box — a hairline that only appears on hover is what
+ * made the old filter row read as two different products.
+ */
+.trigger[data-variant='control'] {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  padding-inline: var(--space-3);
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-body-sm);
+  text-align: start;
+}
+
+.trigger[data-variant='control'][aria-expanded='true'] {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+@media (hover: hover) {
+  .trigger[data-variant='control']:hover {
+    background: var(--color-surface-hover);
+  }
+}
+
 .panel {
   position: absolute;
   inset-block-start: calc(100% + var(--space-1));

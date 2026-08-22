@@ -1,4 +1,5 @@
 import type { AgentReportRow } from '@whatsappcrm/contracts';
+import { formatCalendarDate, formatCalendarDay } from '@/lib/format/calendar-date';
 import type { Content } from '@/lib/content';
 
 /**
@@ -87,26 +88,17 @@ export function formatCount(value: number, content: Content): string {
 /**
  * A `YYYY-MM-DD` as "17 Jul 2026".
  *
- * Formatted in **UTC** with an explicit locale, matching `RelativeTime`: these
- * are calendar labels rather than instants, and a formatter left to the runtime's
- * own zone would render the previous day for half the world.
+ * `lib/format/calendar-date`'s, not its own: `DateRangeField` writes the range on
+ * the control at the top of this page, and a second formatter here is how the
+ * control and the subtitle under it end up disagreeing (TAR-516).
  */
 export function formatReportDate(date: string, content: Content): string {
-  return new Intl.DateTimeFormat(content.locale, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(`${date}T00:00:00.000Z`));
+  return formatCalendarDate(date, content.locale);
 }
 
 /** The same date without its year, for an axis where the year is already said. */
 export function formatReportDayLabel(date: string, content: Content): string {
-  return new Intl.DateTimeFormat(content.locale, {
-    day: 'numeric',
-    month: 'short',
-    timeZone: 'UTC',
-  }).format(new Date(`${date}T00:00:00.000Z`));
+  return formatCalendarDay(date, content.locale);
 }
 
 /**

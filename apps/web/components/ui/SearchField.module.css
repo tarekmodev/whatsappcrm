@@ -1,0 +1,75 @@
+.field {
+  /*
+   * A search box in a filter row is a filter, not a form field: past this width
+   * it stops reading as "narrow this list" and starts reading as "fill this in".
+   *
+   * Sized by `inline-size` rather than by `flex-basis`, deliberately. A basis is
+   * measured along the *container's* main axis, and `FilterBar` turns into a
+   * column below 48rem — so a basis meant as "20rem wide" became "20rem tall" and
+   * opened a 320px hole between the search box and the control under it.
+   */
+  flex: 1 1 auto;
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: var(--size-container-sm);
+}
+
+.control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-inline-size: 0;
+}
+
+.leadingIcon {
+  position: absolute;
+  inset-inline-start: var(--space-3);
+  color: var(--color-on-surface-muted);
+  /* Part of the control's face; the input beneath it takes the click. */
+  pointer-events: none;
+}
+
+.input {
+  padding-inline-start: calc(var(--size-icon-sm) + var(--space-3) * 2);
+}
+
+.input[data-has-value='true'] {
+  padding-inline-end: calc(var(--size-icon-sm) + var(--space-3) * 2);
+}
+
+/*
+ * WebKit paints its own clear affordance inside `type="search"`. It is unlabelled
+ * and invisible to the keyboard, and it would sit under ours.
+ */
+.input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.clear {
+  position: absolute;
+  inset-inline-end: var(--space-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /*
+   * Smaller than the 44px minimum on purpose: the target it sits inside is the
+   * search box itself, which is already 44px tall, and a full-size button here
+   * would overhang the control's own border.
+   */
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-on-surface-muted);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .clear:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}

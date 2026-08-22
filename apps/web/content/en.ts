@@ -243,6 +243,42 @@ export const content = {
     none: 'None',
     unassigned: 'Unassigned',
     notifications: 'Notifications',
+    clearSearch: 'Clear search',
+
+    // --- The filter row (0001, TAR-516) -------------------------------------
+    filters: 'Filters',
+    /** The trigger's badge is a bare numeral; on its own it reads as "Filters 2". */
+    filtersWithCount: (count: number) =>
+      count === 1 ? 'Filters, 1 applied' : `Filters, ${String(count)} applied`,
+    activeFilters: 'Active filters',
+    /** Names what a chip's × does; `chip` is the "Status: Resolved" text on it. */
+    clearFilter: (chip: string) => `Clear ${chip}`,
+    clearAllFilters: 'Clear all',
+    /** A chip: the group and the value it is narrowed to. */
+    filterChip: (group: string, value: string) => `${group}: ${value}`,
+  },
+
+  /**
+   * `DateRangeField`'s copy. Its own group rather than a screen's, because the
+   * control is shared and none of this is about reporting.
+   */
+  dateRange: {
+    fromLabel: 'From',
+    toLabel: 'To',
+    presetsLabel: 'Quick ranges',
+    previousMonth: 'Previous month',
+    nextMonth: 'Next month',
+    openCalendar: (field: string) => `Open the calendar for ${field}`,
+    gridLabel: (month: string) => `${month}, choose a date`,
+    apply: 'Apply',
+    /** The one place a date format is spelled out, as a placeholder and a hint. */
+    format: 'YYYY-MM-DD',
+    /** An en dash, which is the typographic form for a span of dates. */
+    displayValue: (from: string, to: string) => `${from} – ${to}`,
+    /** The same span said aloud; a screen reader does not read "–" as "to". */
+    spokenValue: (from: string, to: string) => `${from} to ${to}`,
+    triggerName: (label: string, value: string) => `${label}: ${value}`,
+    invalidDate: 'Enter both dates as YYYY-MM-DD',
   },
 
   errors: {
@@ -1033,6 +1069,7 @@ export const content = {
     filteredEmptyHeading: 'No contacts match this filter',
     filteredEmptyBody: 'Clear the search or the tag to see everyone again.',
     clearFilters: 'Clear filters',
+    filtersLabel: 'Contact filters',
 
     columnName: 'Name',
     columnPhone: 'Phone',
@@ -1270,7 +1307,10 @@ export const content = {
     columnStatus: 'Status',
     columnAvailability: 'Availability',
     columnActions: 'Actions',
+    filtersLabel: 'Agent filters',
     filterRoleLabel: 'Filter by role',
+    /** Says what it filters, so the control needs no label above it (0001). */
+    filterRoleAll: 'All roles',
     searchAgentsLabel: 'Search agents',
     searchAgentsPlaceholder: 'Name or email',
 
@@ -2975,12 +3015,11 @@ export const content = {
     title: 'Performance',
     subtitle: 'Response and resolution times, ticket volume and per-agent workload.',
 
+    filtersLabel: 'Report filters',
+
     // --- The range ----------------------------------------------------------
+    /** Names `DateRangeField` for assistive technology; nothing shows it. */
     rangeHeading: 'Date range',
-    rangeFromLabel: 'From',
-    rangeToLabel: 'To',
-    rangeApply: 'Apply range',
-    rangePresetLabel: 'Quick ranges',
     presetLast7: 'Last 7 days',
     presetLast30: 'Last 30 days',
     presetLast90: 'Last 90 days',
@@ -2988,7 +3027,6 @@ export const content = {
     rangeSummary: (from: string, to: string) => `${from} to ${to}, in your workspace’s time zone`,
     rangeOrderError: 'The start date must be on or before the end date',
     rangeTooLongError: (maxDays: number) => `Pick a range of ${String(maxDays)} days or fewer`,
-    rangeInvalidError: 'Enter both dates as YYYY-MM-DD',
 
     // --- Scope --------------------------------------------------------------
     scopeFilterLabel: 'Scope',

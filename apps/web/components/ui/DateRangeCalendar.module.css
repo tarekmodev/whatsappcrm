@@ -1,0 +1,147 @@
+.calendar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.monthLabel {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-strong);
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  padding: 0;
+  background: none;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .step:not(:disabled):hover {
+    background: var(--color-surface-hover);
+  }
+}
+
+.step:disabled {
+  color: var(--color-on-surface-subtle);
+  cursor: not-allowed;
+}
+
+.grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.week {
+  display: grid;
+  /* Seven equal tracks that shrink together, so the grid never sets the popover's
+     width — the two date fields above it do. */
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--space-1);
+}
+
+.heading {
+  padding-block: var(--space-1);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  text-align: center;
+}
+
+.cell {
+  display: flex;
+  min-inline-size: 0;
+}
+
+.day {
+  /*
+   * `--size-control-sm` rather than the 44px target minimum: seven of those in a
+   * row is 308px before gaps, which overflows a 320px viewport. A calendar grid
+   * is the case WCAG 2.2's target-size rule exempts as an "inline" arrangement
+   * whose spacing is essential, and every date here is also reachable by typing
+   * it into the field above.
+   */
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 0;
+  block-size: var(--size-control-sm);
+  padding: 0;
+  background: none;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .day:not(:disabled):hover {
+    background: var(--color-surface-hover);
+  }
+}
+
+.day:disabled {
+  color: var(--color-on-surface-subtle);
+  cursor: not-allowed;
+}
+
+/* A day belonging to the month either side of the one on screen. */
+.day[data-outside='true'] {
+  color: var(--color-on-surface-muted);
+}
+
+.day[data-in-range='true'] {
+  background: var(--color-surface-selected);
+  color: var(--color-on-surface);
+}
+
+.day[data-edge='start'],
+.day[data-edge='end'] {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-weight: var(--font-weight-strong);
+}
+
+/*
+ * Colour carries no meaning on its own here: the two ends of the range are also
+ * the only cells with a border, which is what survives forced-colors mode and a
+ * reader who cannot separate the tint from the surface.
+ */
+.day[data-edge='start'],
+.day[data-edge='end'] {
+  border-color: var(--color-accent-hover);
+}
+
+@media (forced-colors: active) {
+  .day[data-in-range='true'] {
+    border-color: Highlight;
+  }
+
+  .day[data-edge='start'],
+  .day[data-edge='end'] {
+    background: Highlight;
+    color: HighlightText;
+  }
+}

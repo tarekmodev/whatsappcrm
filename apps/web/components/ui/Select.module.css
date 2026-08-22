@@ -1,0 +1,47 @@
+/*
+ * The frame around the native `<select>`: it owns the chevron and the width cap,
+ * while the box itself is still `Control.module.css` — the same rules `TextInput`
+ * uses, so the two cannot drift apart.
+ */
+
+.wrapper {
+  position: relative;
+  display: flex;
+  inline-size: 100%;
+  min-inline-size: 0;
+}
+
+/*
+ * A filter is a control for narrowing a list, not a form field, and a list view
+ * hands it whatever inline size the row has left. Capped at the same width a
+ * `MenuButton` panel opens at, so a seven-option role filter cannot stretch to
+ * the full width of a page.
+ */
+.wrapper[data-variant='filter'] {
+  max-inline-size: var(--size-menu);
+}
+
+.chevron {
+  position: absolute;
+  inset-inline-end: var(--space-3);
+  inset-block-start: 50%;
+  translate: 0 -50%;
+  color: var(--color-on-surface-muted);
+  /* The chevron is part of the control's face, not a second hit target. */
+  pointer-events: none;
+}
+
+.wrapper:has(select:disabled) .chevron {
+  color: var(--color-on-surface-subtle);
+}
+
+/*
+ * `appearance: none` strips the platform arrow, so forced-colors mode no longer
+ * paints one — draw it back from the system palette rather than leaving the
+ * control with no disclosure affordance at all.
+ */
+@media (forced-colors: active) {
+  .chevron {
+    color: ButtonText;
+  }
+}
