@@ -6,6 +6,7 @@ import {
   TenantSlugSchema,
   TenantStatusSchema,
 } from './tenant';
+import { WebhookEventStatusSchema, WebhookProviderSchema } from './webhooks';
 
 /**
  * The **platform-admin** surface: operations performed by us on the platform,
@@ -261,11 +262,67 @@ export const AdminDomainParamsSchema = z.object({
   hostname: z.string().min(4).max(253),
 });
 
+// ---------------------------------------------------------------------------
+// Replaying a parked webhook event — TAR-94
+// ---------------------------------------------------------------------------
+
+/**
+ * `POST /api/v1/admin/webhook-events/{webhookEventId}/replay` — put a parked
+ * inbound event back in front of the sweeper.
+ *
+ * TAR-67 parks an event it cannot apply — an `unknown_phone_number_id`, a
+ * deactivated tenant — with its raw payload intact, and deliberately refuses to
+ * re-claim it: retrying a refusal that has not changed spends the retry budget
+ * for nothing. Recovery is therefore a status reset back to `received`, which
+ * the next sweep collects. This is the authorised, audited way to perform that
+ * reset; before it, the only way was an operator typing `UPDATE webhook_events`
+ * into psql.
+ *
+ * **Not scoped by tenant slug**, unlike every other route on this surface, and
+ * that is the point rather than an omission: the flagship parked event is a
+ * number connected *after* its customers messaged it, so the row names no tenant
+ * at all. Requiring a slug would mean either refusing the one case this exists
+ * for, or accepting a tenant the operator asserted and filing the trail under
+ * it. The event id is the identity of the request.
+ */
+export const AdminWebhookEventParamsSchema = z.object({
+  webhookEventId: IdSchema,
+});
+
+/**
+ * What the replay reports back.
+ *
+ * `status` is always `received` on success and is returned anyway, because the
+ * operator's next question is "will the sweeper pick it up" and the answer is
+ * this field. `parkedError` is what the row carried before the reset cleared
+ * it — the reason being recovered, echoed so a run against several events reads
+ * as a report rather than as a list of ids.
+ *
+ * `replayedAt` is when the reset committed, not when the event will be
+ * reprocessed. The sweep interval is `WEBHOOK_STUCK_AFTER_MS`, so reprocessing
+ * happens up to that long afterwards.
+ *
+ * `provider` is reported because it decides *which* sweeper collects the row,
+ * and only the WhatsApp one runs today: a `billing` event reset to `received`
+ * waits for the worker TAR-37 adds rather than being reprocessed on the next
+ * interval. That is a fact about the platform, not about the request, so it is
+ * an echoed field rather than a refusal.
+ */
+export const AdminWebhookEventReplayResponseSchema = z.object({
+  id: IdSchema,
+  provider: WebhookProviderSchema,
+  status: WebhookEventStatusSchema,
+  parkedError: z.string().nullable(),
+  replayedAt: TimestampSchema,
+});
+
 export type ProvisionTenantInput = z.infer<typeof ProvisionTenantInputSchema>;
 export type AdminPendingDomain = z.infer<typeof AdminPendingDomainSchema>;
 export type AdminPendingDomainListResponse = z.infer<typeof AdminPendingDomainListResponseSchema>;
 export type AdminDomainQuery = z.infer<typeof AdminDomainQuerySchema>;
 export type AdminDomainParams = z.infer<typeof AdminDomainParamsSchema>;
+export type AdminWebhookEventParams = z.infer<typeof AdminWebhookEventParamsSchema>;
+export type AdminWebhookEventReplayResponse = z.infer<typeof AdminWebhookEventReplayResponseSchema>;
 export type ProvisionedTenantResponse = z.infer<typeof ProvisionedTenantResponseSchema>;
 export type DeactivateTenantParams = z.infer<typeof DeactivateTenantParamsSchema>;
 export type DeactivateTenantInput = z.infer<typeof DeactivateTenantInputSchema>;

@@ -278,23 +278,31 @@ Two things to know about the client handed to your callback:
 The extension's hook is `async`, so the extended client returns ordinary promises rather than
 the `PrismaPromise`s an array batch needs. Use `$tenantTransaction`.
 
-### The five tables with no RLS policy
+### The six tables with no RLS policy
 
-`tenants`, `plans`, `webhook_events`, `tenant_signups` and `lifecycle_events` carry no
-`tenant_isolation` policy, so `TenantPrisma` applies its own rule instead. Anything not listed
-here is tenant-scoped and needs nothing from the client beyond the GUC.
+`tenants`, `plans`, `webhook_events`, `webhook_event_replays`, `tenant_signups` and
+`lifecycle_events` carry no `tenant_isolation` policy, so `TenantPrisma` applies its own rule
+instead. Anything not listed here is tenant-scoped and needs nothing from the client beyond the
+GUC.
 
-| Model            | Rule               | Reads                            | Writes                                          |
-| ---------------- | ------------------ | -------------------------------- | ----------------------------------------------- |
-| `Tenant`         | `own-row`          | Narrowed to the tenant in scope  | Refused — `UnscopedModelAccessError`            |
-| `Plan`           | `shared-read-only` | Allowed; platform-wide catalogue | Refused — `UnscopedModelAccessError`            |
-| `WebhookEvent`   | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
-| `TenantSignup`   | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
-| `LifecycleEvent` | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
+| Model                | Rule               | Reads                            | Writes                                          |
+| -------------------- | ------------------ | -------------------------------- | ----------------------------------------------- |
+| `Tenant`             | `own-row`          | Narrowed to the tenant in scope  | Refused — `UnscopedModelAccessError`            |
+| `Plan`               | `shared-read-only` | Allowed; platform-wide catalogue | Refused — `UnscopedModelAccessError`            |
+| `WebhookEvent`       | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
+| `WebhookEventReplay` | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
+| `TenantSignup`       | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
+| `LifecycleEvent`     | `system-only`      | Refused                          | Refused — the app role is granted nothing on it |
 
-The last three are the tables where the **grant is the enforcement** rather than a policy. The
-first two are written before there is a tenant to scope to: a webhook arrives before it is
-routed, and a signup exists before its tenant is provisioned (TAR-440, ADR 0009 decision 3).
+The last four are the tables where the **grant is the enforcement** rather than a policy. The
+first two of those are written before there is a tenant to scope to: a webhook arrives before it
+is routed, and a signup exists before its tenant is provisioned (TAR-440, ADR 0009 decision 3).
+
+`webhook_event_replays` (TAR-94) inherits the first one's position rather than having its own:
+it records an operator replaying a parked `webhook_events` row, and the parked row this exists to
+recover is exactly the one whose `tenant_id` is still NULL, so there is nothing for a policy to
+compare against there either. It is also append-only — the grant withholds UPDATE and DELETE from
+`SystemPrisma` as well, and a `BEFORE UPDATE` trigger refuses the table owner on top of that.
 
 `lifecycle_events` is there for the opposite reason — it is written after, and outlives what it
 describes (ADR 0009 Amendment 1 ruling 2). It is also the one to be careful with: unlike the
