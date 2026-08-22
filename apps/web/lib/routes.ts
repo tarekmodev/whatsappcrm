@@ -129,6 +129,20 @@ export const routes = {
    */
   settingsWorkflows: () => '/settings/workflows',
   /** Where a tenant admin connects its own WhatsApp Business Account (TAR-169). */
+  /**
+   * The tenant's response deadlines — the SLA window every new ticket is
+   * measured against (TAR-390, ADR 0006).
+   *
+   * `sla` rather than `response-deadlines`, and it is the on-screen word rule
+   * being followed rather than broken: *SLA* is what the ticket queue's column
+   * and its Overdue filter are already labelled, so a customer reading this path
+   * is reading a word the console says to them. The page's own heading spells it
+   * out for anyone who has not met the acronym.
+   *
+   * No query parameters. The surface is one card holding the tenant's single
+   * catch-all policy; there is no filter or selection anybody would share.
+   */
+  settingsSla: () => '/settings/sla',
   settingsWhatsApp: () => '/settings/whatsapp',
   /** Logo, favicon and the two brand colours (TAR-29). */
   settingsBranding: () => '/settings/branding',

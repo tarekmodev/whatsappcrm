@@ -98,6 +98,12 @@ export const content = {
     savedReplies: 'Saved replies',
     people: 'People',
     assignment: 'Assignment',
+    /**
+     * Spelt out rather than "SLA". The queue's column has the width for an
+     * acronym and the settings tab list has the width for the words, and a
+     * destination somebody visits twice a year should say what it is.
+     */
+    sla: 'Response deadlines',
     workflows: 'Workflows',
     chatbot: 'Chatbot',
     whatsapp: 'WhatsApp',
@@ -953,6 +959,121 @@ export const content = {
      * honest version: the console would have to page the whole table to know one.
      */
     moreAlerts: 'More alerts are waiting. Open the ticket queue and filter by Overdue.',
+  },
+
+  /**
+   * The supervisor's SLA settings screen (TAR-390).
+   *
+   * Its own group rather than more keys on `sla` above, which is the
+   * ticket-facing half: a badge and an alert describe somebody else's ticket,
+   * while everything here labels a control that changes the workspace. The two
+   * share a feature and share no sentence.
+   *
+   * The screen says **deadline** and **response window**, matching
+   * `docs/guides/track-overdue-tickets.md`; *breach* stays the contract's word
+   * and never reaches the screen.
+   */
+  slaSettings: {
+    title: 'Response deadlines',
+    subtitle: 'The window every new ticket is measured against before it is marked overdue.',
+    loading: 'Loading response deadlines',
+
+    // --- The tenant's own window -------------------------------------------
+    windowHeading: 'Response window',
+    windowDescription: 'How long your team has to answer before a ticket is marked overdue.',
+    /**
+     * TAR-390's second acceptance criterion, on screen rather than in a release
+     * note. A supervisor shortening the window needs to know before they save
+     * that yesterday's tickets are not about to turn red.
+     */
+    futureTicketsNotice:
+      'A change applies to new tickets only. Tickets already running keep the deadline they were given.',
+    /**
+     * The read-only variant's explanation. `sla:read` without `sla:write` is not
+     * a role today, so nobody currently sees this — it is what stops a custom
+     * role that can look but not touch from meeting a form whose every submit
+     * the API refuses.
+     */
+    readOnlyNotice: 'Your role can see these settings but not change them.',
+    /**
+     * A workspace with no catch-all policy. Rare and real: the two writers that
+     * seed one are both guarded on "no policy at all", so a workspace holding
+     * only per-priority rows has none. Names who can fix it rather than leaving
+     * a blank card.
+     */
+    noPolicyHeading: 'This workspace has no default response window',
+    noPolicyBody:
+      'New tickets get no deadline unless a priority override covers them. Ask whoever operates the platform to add one.',
+
+    activeLabel: 'Give new tickets a deadline',
+    activeHint:
+      'Switch this off and new tickets show No SLA instead. Deadlines already running are left alone, and no new alerts are raised.',
+    activeOn: 'On',
+    activeOff: 'Off',
+    /**
+     * The read-only variant's three rows read as facts rather than as controls,
+     * so the switch's imperative label and its `On` / `Off` state become a term
+     * and a sentence. `sla.firstResponse` and `sla.resolution` serve as the
+     * other two terms — the queue's badge already names those targets, and one
+     * feature saying "First response" on one screen and "First reply" on
+     * another is two features to the reader.
+     */
+    activeTerm: 'Deadlines',
+    activeYes: 'On — new tickets get a deadline',
+    activeNo: 'Off — new tickets show No SLA',
+    standardLabel: 'Standard setting',
+    standardHint: 'What the platform gives a workspace that has not changed it.',
+
+    /**
+     * The unit is in the label rather than beside the control, following
+     * `workflows.ageMinutesLabel`: a unit that lives in the label is read out
+     * with the field, where one painted next to the box is decoration a screen
+     * reader may never reach.
+     */
+    firstResponseLabel: 'First response, in minutes',
+    /**
+     * Names the platform's own setting, so "the current default response window"
+     * is on screen whether or not this workspace has changed it. `standard`
+     * rather than `default`, which the console already uses for the name of the
+     * policy row.
+     */
+    firstResponseHint: (standard: string) =>
+      `How long until a first reply is due, counted from the customer’s message. Only a person’s reply stops the clock. The standard setting is ${standard}.`,
+    resolutionLabel: 'Resolution, in minutes',
+    resolutionHint:
+      'How long until the ticket has to be resolved. Leave this empty for no resolution deadline, which is the standard setting.',
+    /** What a window reads as when the workspace has not set one. */
+    windowUnset: 'No deadline',
+
+    save: 'Save changes',
+    savedToast: 'Response deadlines updated',
+    /**
+     * Says what a valid answer looks like rather than what was wrong with this
+     * one. An emptied number field and a half-typed one are the same value to
+     * the browser, so one message has to serve both. The ceiling is thirty days
+     * in minutes, read from the contract rather than restated here.
+     */
+    windowInvalidError: (min: number, max: number) =>
+      `Enter a whole number of minutes between ${min} and ${max}, or leave it empty`,
+
+    // --- Per-priority policies ----------------------------------------------
+    /**
+     * Shown only when the workspace has a policy that is not the catch-all.
+     * Creating and editing those is out of TAR-390's scope — the API accepts no
+     * `priority` on a write and has no create route — so they are reported
+     * rather than offered as controls, which is more honest than a screen that
+     * pretends they are not there.
+     */
+    overridesHeading: 'Priority overrides',
+    overridesDescription: 'Windows that apply to one priority instead of the workspace default.',
+    overridesNotice:
+      'These are set through the API. This screen changes the workspace default only.',
+    /** A row's value: the two windows one override sets. */
+    overrideWindows: (firstResponse: string, resolution: string) =>
+      `First response ${firstResponse} · Resolution ${resolution}`,
+    overrideInactive: 'Not in use — tickets of this priority fall back to the workspace default.',
+    overridesTruncated:
+      'This workspace has more overrides than are shown here. Ask whoever operates the platform for the full list.',
   },
 
   thread: {

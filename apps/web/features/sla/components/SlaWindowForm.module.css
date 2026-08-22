@@ -1,0 +1,39 @@
+/*
+ * The form's frame, its measure and its two columns belong to `SettingsForm`
+ * and `Field`; the switch belongs to `Switch`. Only what is genuinely this
+ * screen's is here.
+ */
+
+/*
+ * A window is at most five digits — 43 200 is the contract's ceiling — and a
+ * full-width box for one invites a wrong answer by looking like it wants a
+ * sentence. `--space-8` is what `AiConfigForm` caps its turn count at, for the
+ * same reason.
+ */
+.window {
+  max-inline-size: var(--space-8);
+}
+
+/*
+ * The skeleton's stand-in for the switch, capped at the track's own width. The
+ * height is what stops the card reflowing and a full-width block would have got
+ * that right — but a slab across the whole trailing column where a 44px control
+ * goes is a skeleton lying about the shape of what is coming.
+ */
+.togglePlaceholder {
+  max-inline-size: var(--size-switch-track);
+}
+
+/*
+ * The skeleton's stand-in for the submit button. Sized from the button's own box
+ * — touch target, inline padding, radius — rather than from its label alone, so
+ * the action row is exactly as tall before the form arrives as after.
+ */
+.actionPlaceholder {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-4);
+  border-radius: var(--radius-md);
+  background-color: var(--color-skeleton-base);
+}

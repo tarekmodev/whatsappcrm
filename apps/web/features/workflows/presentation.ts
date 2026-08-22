@@ -10,6 +10,7 @@ import {
   type WorkflowTaxonomyKind,
   type WorkflowTrigger,
 } from '@whatsappcrm/contracts';
+import { formatMinutes } from '@/lib/format/duration';
 import type { Content } from '@/lib/content';
 
 /**
@@ -82,7 +83,7 @@ export function describeTrigger(trigger: WorkflowTrigger, content: Content): str
     case 'ticket_sla_breached':
       return copy.summaryTriggerSlaBreached;
     case 'ticket_unresolved_for':
-      return copy.summaryTriggerUnresolvedFor(formatDuration(trigger.minutes, content));
+      return copy.summaryTriggerUnresolvedFor(formatMinutes(trigger.minutes, content));
   }
 }
 
@@ -144,7 +145,7 @@ export function describeCondition(
       );
 
     case 'ticket_age': {
-      const duration = formatDuration(condition.minutes, content);
+      const duration = formatMinutes(condition.minutes, content);
 
       return condition.operator === 'gte'
         ? copy.summaryAgeAtLeast(duration)
@@ -301,29 +302,4 @@ function formatTagNames(
  */
 function formatAlternatives(values: readonly string[], content: Content): string {
   return new Intl.ListFormat(content.locale, { style: 'long', type: 'disjunction' }).format(values);
-}
-
-const MINUTES_PER_HOUR = 60;
-const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
-
-/**
- * A minute count as the largest whole unit it divides into: 240 reads "4 hours",
- * 90 reads "90 minutes", 2880 reads "2 days".
- *
- * `Intl.NumberFormat`'s unit style rather than hand-rolled arithmetic and an "s",
- * so pluralisation is the browser's problem and a second locale needs no code.
- */
-export function formatDuration(minutes: number, content: Content): string {
-  const [value, unit] =
-    minutes % MINUTES_PER_DAY === 0
-      ? ([minutes / MINUTES_PER_DAY, 'day'] as const)
-      : minutes % MINUTES_PER_HOUR === 0
-        ? ([minutes / MINUTES_PER_HOUR, 'hour'] as const)
-        : ([minutes, 'minute'] as const);
-
-  return new Intl.NumberFormat(content.locale, {
-    style: 'unit',
-    unit,
-    unitDisplay: 'long',
-  }).format(value);
 }

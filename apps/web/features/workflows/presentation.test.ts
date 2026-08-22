@@ -7,16 +7,14 @@ import {
   describeBrokenReferences,
   describeCondition,
   describeTrigger,
-  formatDuration,
   type WorkflowVocabulary,
 } from './presentation';
 
 /**
  * What a workflow *says* is the whole point of the list surface, so the sentence
  * each trigger, condition and action turns into is tested rather than eyeballed
- * — including the two cases a supervisor is most likely to hit and least likely
- * to expect: a tag deleted after the workflow was written, and a duration
- * entered in minutes but read back in hours.
+ * — including the case a supervisor is most likely to hit and least likely to
+ * expect: a tag deleted after the workflow was written.
  */
 
 const TEAM: TeamResponse = {
@@ -213,16 +211,5 @@ describe('describeBrokenReferences', () => {
     );
 
     expect(broken).toStrictEqual([copy.referenceKinds.user]);
-  });
-});
-
-describe('formatDuration', () => {
-  it.each([
-    [30, '30 minutes'],
-    [90, '90 minutes'],
-    [240, '4 hours'],
-    [2880, '2 days'],
-  ])('reads %i minutes as %s', (minutes, expected) => {
-    expect(formatDuration(minutes, content)).toBe(expected);
   });
 });
