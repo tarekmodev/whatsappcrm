@@ -904,6 +904,25 @@ the Prisma client is generated rather than committed. **Lint** covers both
 ADR 0001's decision 12. An unformatted file therefore fails the **Lint** check — run
 `pnpm format` and push again.
 
+On an `agent/` branch you do not have to. `.github/workflows/pr-autoformat.yml` runs
+`prettier --write` on every pull request from one, and if that changes anything it commits
+the result to the branch and pushes it. The push reruns the required checks against the
+formatted tree, so **Lint**'s Prettier step goes green on its own. This exists because
+Prettier's output is not a judgement call, and a required check that only a machine's
+opinion of whitespace was failing had twice cost a sweep run a round of hand-patching to
+unblock a merge (TAR-737). Expect one wasted CI run when it fires: the first run and the
+formatting run start together, so **Lint** goes red before the push that fixes it. Running
+`pnpm format` before you push avoids that, which is still worth doing.
+
+It formats and nothing else — no ESLint autofix, no codemod. A real ESLint error, type
+error or failing test is untouched by it and still fails its own check. It also needs
+`AUTOMERGE_TOKEN` (below); without the secret it logs a warning and leaves the branch
+alone, and **Lint** stays red, which is the correct outcome. A pre-commit hook was the
+other candidate and is deliberately not used: a hook only exists where `pnpm install` has
+run, is one `--no-verify` from being skipped, and cannot reach the draft pull requests
+`agent-branch-pr-guard.yml` opens for branches whose agent has already finished — so it
+would need this workflow behind it anyway.
+
 `main` is protected, and **Lint**, **Type-check**, **Test** and **Database** are all
 **required** — they gate the merge rather than merely reporting on it. **Database** joined
 that list in TAR-96: it is the only check that proves tenant isolation, so leaving it
@@ -962,6 +981,8 @@ moves to an organization, replace this workflow with a queue and add `merge_grou
 Two consequences worth knowing. The sweep needs `AUTOMERGE_TOKEN` — a fine-grained
 personal access token scoped to this repository with **Contents: read and write** and
 **Pull requests: read and write**, set under _Settings → Secrets and variables → Actions_.
+It is the same secret `pr-enable-automerge.yml` and `pr-autoformat.yml` use, for the same
+reason, so those two stop working if it is ever removed.
 It cannot use the built-in `GITHUB_TOKEN`, because GitHub does not start workflows for
 pushes made with it, and a branch refreshed without rerunning its checks would carry green
 checks belonging to its previous head. Without the secret the sweep logs a warning and
