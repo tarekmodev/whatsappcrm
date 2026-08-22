@@ -91,6 +91,19 @@ describe('WorkflowCard', () => {
     expect(screen.getByRole('button', { name: copy.enableAria(BROKEN.name) })).toBeDisabled();
   });
 
+  it('arms a repaired workflow whose brokenReason has not been rewritten yet', () => {
+    // `brokenReason` is derived state, not a latch (ADR 0009 decision 6, as
+    // amended on TAR-399). Only a *write* rewrites the stored column, so a
+    // reference that comes back on its own — a removed agent re-invited onto the
+    // same row — leaves the field standing over references that all resolve. The
+    // API would accept this arming request; gating on the field refused it here
+    // and left the workflow permanently off.
+    renderCard({ workflow: { ...WORKFLOW, brokenReason: 'reference_removed' } });
+
+    expect(screen.getByRole('button', { name: copy.enableAria(WORKFLOW.name) })).toBeEnabled();
+    expect(screen.queryByText(new RegExp(copy.referenceKinds.team))).not.toBeInTheDocument();
+  });
+
   it('still lets a broken workflow that is on be turned off', () => {
     // Turning one *off* can never make things worse, and it is the fastest thing
     // a supervisor can do about a workflow misbehaving on live tickets.
