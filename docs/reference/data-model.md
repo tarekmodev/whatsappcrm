@@ -1110,7 +1110,7 @@ acknowledge endpoint; first write wins.
 inbox and spreads `type IN ('sla_breach', 'workflow_notify', 'workflow_broken')`;
 `GET /api/v1/sla-alerts` and `GET /api/v1/escalation-alerts` are the single-type views over
 the same rows, each spreading its own shared `where` fragment — `SLA_BREACH_ONLY`,
-`ESCALATION_ONLY` and `PUBLISHED_NOTIFICATION_TYPES_ONLY`. All four acknowledge endpoints
+`ESCALATION_ONLY` and `PUBLISHED_NOTIFICATION_TYPES_ONLY`. All three acknowledge endpoints
 write the same `acknowledged_at` with the same first-write-wins predicate, which is what makes
 one unread count possible. `escalation` is deliberately outside the generalised list: it is
 the one type whose response carries fields `NotificationResponse` has no home for.
@@ -1140,6 +1140,18 @@ escalation side it is the transaction that writes the `escalated` event and its
 notifications together. No unique index is partial, where 0009 proposed a predicate:
 PostgreSQL does not collide NULLs, so the predicate would change nothing and would cost the
 describer trap that partial indexes carry in this schema.
+
+**Both workflow keys name the run, never the workflow** (TAR-605). `workflow_notify` spends
+`${run_id}:${action_index}` and `workflow_broken` spends `workflow-broken:${run_id}`, so each
+covers exactly the window between a claim and its inserts. `workflow_broken` used to key on
+the workflow id, on the reasoning that an admin needs telling once and not once per ticket —
+harmless while nothing could write `acknowledged_at` on such a row, and suppression the
+moment TAR-596's acknowledge endpoint could: acknowledge the first break, repair the
+workflow, re-arm it, and the next break collided, inserted nothing, and left the admin's
+inbox showing only the row they had already dismissed. "Once per break rather than once per
+ticket" never rested on the key and still does not — `WorkflowTriggerService.deactivate`
+continues only when its `UPDATE … WHERE is_active` matched a row, and a disarmed workflow is
+not a candidate for the next ticket anyway.
 
 **`ticket_event_id` is TAR-468's group key and idempotency key at once**, and a real column
 with a composite foreign key rather than a `dedupe_key` string. N recipient rows point at

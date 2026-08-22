@@ -59,6 +59,7 @@ import {
   USER_STATUSES,
   UserResponseSchema,
   UserUpdateInputSchema,
+  UserUpdateResponseSchema,
 } from './users';
 import {
   ConnectedWhatsAppBusinessAccountResponseSchema,
@@ -393,6 +394,25 @@ describe('lockout visibility (TAR-53)', () => {
     });
 
     expect(visible.security?.failedLoginAttempts).toBe(3);
+  });
+
+  it('reports a suspension’s disarmed workflows on the update response only', () => {
+    // TAR-605. The count belongs to the request that caused it, so `GET /users`
+    // is not made to carry a number that means nothing there — and it is
+    // required rather than optional, so a client reads one field instead of
+    // inferring from `status` whether the value is meaningful.
+    const updated = UserUpdateResponseSchema.parse({
+      ...baseUser,
+      status: 'suspended',
+      security: null,
+      workflowsDisarmed: 2,
+    });
+
+    expect(updated.workflowsDisarmed).toBe(2);
+    expect(() => UserUpdateResponseSchema.parse({ ...baseUser, security: null })).toThrow();
+    expect(UserResponseSchema.parse({ ...baseUser, security: null })).not.toHaveProperty(
+      'workflowsDisarmed',
+    );
   });
 });
 

@@ -142,9 +142,84 @@ function claimStore(): {
   return { claim, finish, runCount: jest.fn(() => Promise.resolve(0)), claimedKeys, finished };
 }
 
+/** One `workflow_broken` row, as `deactivate` writes it plus the column it reads back. */
+interface NotificationRowStub {
+  readonly tenantId: string;
+  readonly type: 'workflow_broken';
+  readonly ticketId: string;
+  readonly recipientUserId: string;
+  readonly data: { workflowId: string; workflowRunId: string };
+  readonly dedupeKey: string;
+  acknowledgedAt: Date | null;
+}
+
+/**
+ * The notification rows `deactivate` writes, and the unique index they land
+ * against.
+ *
+ * `UNIQUE (tenant_id, recipient_user_id, dedupe_key)` with `skipDuplicates`, so
+ * a key already held inserts nothing — modelled rather than mocked away, because
+ * TAR-605's bug *is* that behaviour meeting a key that outlived its occurrence.
+ * `acknowledgedAt` is here for the same reason: it is what turned a duplicate
+ * from harmless into invisible.
+ */
+function notificationStore(): {
+  createMany: jest.Mock;
+  insert: (data: readonly Omit<NotificationRowStub, 'acknowledgedAt'>[]) => { count: number };
+  rows: NotificationRowStub[];
+  acknowledgeAll: () => void;
+  unacknowledged: () => string[];
+} {
+  const rows: NotificationRowStub[] = [];
+
+  const insert = (
+    data: readonly Omit<NotificationRowStub, 'acknowledgedAt'>[],
+  ): {
+    count: number;
+  } => {
+    let count = 0;
+
+    for (const row of data) {
+      const held = rows.some(
+        (existing) =>
+          existing.recipientUserId === row.recipientUserId && existing.dedupeKey === row.dedupeKey,
+      );
+
+      if (!held) {
+        rows.push({ ...row, acknowledgedAt: null });
+        count += 1;
+      }
+    }
+
+    return { count };
+  };
+
+  return {
+    createMany: jest.fn(
+      ({ data }: { data: Omit<NotificationRowStub, 'acknowledgedAt'>[]; skipDuplicates: true }) =>
+        Promise.resolve(insert(data)),
+    ),
+    insert,
+    rows,
+    acknowledgeAll: () => {
+      for (const row of rows) {
+        row.acknowledgedAt ??= new Date();
+      }
+    },
+    // What `GET /api/v1/notifications` shows under its default
+    // `unacknowledgedOnly=true` — the inbox, not the table.
+    unacknowledged: () =>
+      rows.filter((row) => row.acknowledgedAt === null).map((row) => row.dedupeKey),
+  };
+}
+
 interface Harness {
   readonly service: WorkflowTriggerService;
   readonly store: ReturnType<typeof claimStore>;
+  readonly notifications: ReturnType<typeof notificationStore>;
+  readonly disarmed: string[];
+  /** Switches a disarmed workflow back on, as a supervisor repairing it does. */
+  readonly rearm: (workflowId: string) => boolean;
   readonly execute: jest.Mock;
   readonly enqueue: jest.Mock;
   readonly loadFacts: jest.Mock;
@@ -152,9 +227,21 @@ interface Harness {
 
 function harness(
   rows: readonly WorkflowRowStub[],
-  options: { readonly facts?: WorkflowFacts; readonly factsError?: Error } = {},
+  options: {
+    readonly facts?: WorkflowFacts;
+    readonly factsError?: Error;
+    readonly admins?: readonly string[];
+  } = {},
 ): Harness {
   const store = claimStore();
+  const notifications = notificationStore();
+  const admins = options.admins ?? [];
+  // Every break, in order — one entry per workflow the engine actually disarmed,
+  // which is the count the notification rows are read against. `inactive` is the
+  // arm state behind it, so `rearm` models the supervisor who repaired the
+  // reference and switched the workflow back on.
+  const disarmed: string[] = [];
+  const inactive = new Set<string>();
   const execute = jest.fn(() =>
     Promise.resolve({ outcome: 'applied' as const, reason: null, occurrence: null }),
   );
@@ -183,9 +270,23 @@ function harness(
     $queryRaw: store.claim,
     $tenantTransaction: (work: (tx: unknown) => Promise<unknown>) =>
       work({
-        workflow: { updateMany: jest.fn(() => Promise.resolve({ count: 1 })) },
-        user: { findMany: jest.fn(() => Promise.resolve([])) },
-        notification: { createMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+        workflow: {
+          // `deactivate`'s guard: only the statement that actually flipped
+          // `is_active` continues, so a workflow already disarmed answers 0 and
+          // writes no second incident.
+          updateMany: jest.fn(({ where }: { where: { id: string } }) => {
+            if (inactive.has(where.id)) {
+              return Promise.resolve({ count: 0 });
+            }
+
+            inactive.add(where.id);
+            disarmed.push(where.id);
+
+            return Promise.resolve({ count: 1 });
+          }),
+        },
+        user: { findMany: jest.fn(() => Promise.resolve(admins.map((id) => ({ id })))) },
+        notification: { createMany: notifications.createMany },
       }),
   } as unknown as TenantPrisma;
 
@@ -197,7 +298,16 @@ function harness(
     { record: jest.fn(() => Promise.resolve()) } as unknown as AuditService,
   );
 
-  return { service, store, execute, enqueue, loadFacts };
+  return {
+    service,
+    store,
+    notifications,
+    disarmed,
+    rearm: (workflowId: string) => inactive.delete(workflowId),
+    execute,
+    enqueue,
+    loadFacts,
+  };
 }
 
 describe('the claim', () => {
@@ -557,5 +667,102 @@ describe('outcomes on the run row', () => {
     expect(store.finished).toEqual([
       { runId: 'run-1', status: 'failed', failureReason: 'internal_error' },
     ]);
+  });
+});
+
+describe('disarming a broken workflow', () => {
+  const ADMIN = '019fed83-0000-7000-8000-00000000fa01';
+  const OTHER_ADMIN = '019fed83-0000-7000-8000-00000000fa02';
+
+  function referenceMissing(): Harness {
+    const built = harness([{ id: WORKFLOW, version: 1, definition: statusDefinition() }], {
+      admins: [ADMIN, OTHER_ADMIN],
+    });
+
+    built.execute.mockResolvedValue({
+      outcome: 'failed',
+      reason: 'reference_missing',
+      occurrence: null,
+    });
+
+    return built;
+  }
+
+  it('tells every active admin once, keyed on the run that disarmed it', async () => {
+    const { service, notifications, disarmed } = referenceMissing();
+
+    await service.evaluate(trigger());
+
+    const broken = {
+      tenantId: TENANT,
+      type: 'workflow_broken',
+      ticketId: TICKET,
+      data: { workflowId: WORKFLOW, workflowRunId: 'run-1' },
+      dedupeKey: 'workflow-broken:run-1',
+      acknowledgedAt: null,
+    };
+
+    expect(disarmed).toEqual([WORKFLOW]);
+    expect(notifications.rows).toEqual([
+      { ...broken, recipientUserId: ADMIN },
+      { ...broken, recipientUserId: OTHER_ADMIN },
+    ]);
+  });
+
+  it('raises a fresh notification when the same workflow breaks a second time', async () => {
+    // TAR-605, and the reason the key moved off the workflow id. Before it did,
+    // the second `createMany` collided on
+    // `(tenant_id, recipient_user_id, dedupe_key)`, inserted nothing, and left
+    // the admin's inbox holding only the row they had already dismissed — so a
+    // live break showed up nowhere under the default `unacknowledgedOnly=true`.
+    const { service, notifications, disarmed, rearm } = referenceMissing();
+
+    await service.evaluate(trigger());
+
+    // The admin reads it, repairs the reference and switches the workflow back
+    // on. Both halves matter: acknowledging is what makes a suppressed duplicate
+    // invisible rather than merely stale.
+    notifications.acknowledgeAll();
+    rearm(WORKFLOW);
+
+    // A week later, on a different ticket event, it breaks again.
+    await service.evaluate(trigger({ occurrenceId: `${EVENT}-later` }));
+
+    expect(disarmed).toEqual([WORKFLOW, WORKFLOW]);
+    expect(notifications.unacknowledged()).toEqual([
+      'workflow-broken:run-2',
+      'workflow-broken:run-2',
+    ]);
+  });
+
+  it('writes nothing when somebody else disarmed it first', async () => {
+    // A concurrent run, or a supervisor who saw the first failure. The `count`
+    // guard is what makes it one notification per break rather than one per
+    // ticket that trips over it — never the dedupe key.
+    const { service, notifications, disarmed } = referenceMissing();
+
+    await service.evaluate(trigger());
+    await service.evaluate(trigger({ occurrenceId: `${EVENT}-concurrent` }));
+
+    expect(disarmed).toEqual([WORKFLOW]);
+    expect(notifications.rows).toHaveLength(2);
+  });
+
+  it('inserts nothing when one deactivation is delivered twice', async () => {
+    // The key's remaining job, and the reason it is a key at all: the load-bearing
+    // guarantee is the run claim, and this covers the window between that claim
+    // and these inserts. Stable within a run, exactly as `notifyDedupeKey` is.
+    const { service, notifications } = referenceMissing();
+
+    await service.evaluate(trigger());
+
+    const [written] = notifications.rows;
+
+    if (written === undefined) {
+      throw new Error('unreachable: the deactivation above writes one row per admin');
+    }
+
+    expect(notifications.insert([written])).toEqual({ count: 0 });
+    expect(notifications.rows).toHaveLength(2);
   });
 });

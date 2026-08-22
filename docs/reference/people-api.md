@@ -233,9 +233,27 @@ curl -X PATCH -b cookies.txt \
   "occupiesSeat": true,
   "lastSeenAt": "2026-08-12T08:28:59.681Z",
   "security": { "lockedUntil": null, "failedLoginAttempts": 0 },
-  "createdAt": "2026-06-15T08:30:59.681Z"
+  "createdAt": "2026-06-15T08:30:59.681Z",
+  "workflowsDisarmed": 0
 }
 ```
+
+**`workflowsDisarmed` is the one field this response carries that `GET /users/{id}` does
+not** (TAR-605). Suspending somebody switches off every workflow whose definition names
+them — a workflow may only name an _active_ user, so the alternative is leaving it armed
+with an actor the executor will refuse — and the admin who caused that is the one person who
+has to hear about it. It is `0` on every request that suspended nobody, so a client reads
+one field rather than inferring from `status` whether the number means anything.
+
+Deliberately a response field and **not** a `workflow_broken` notification like the ones the
+engine's own disarm path writes: `notifications.ticket_id` is `NOT NULL` and
+`NotificationResponse` publishes `ticketId` and `ticketNumber` as required, because every
+notification the table has ever held was raised _about a ticket_. A suspension is raised
+about a person, so a row for it would take a migration relaxing that column, both CHECKs
+rewritten, and a published field made nullable — a breaking change to deliver
+asynchronously what the acting admin is better told in the response. `DELETE
+/api/v1/users/{id}` answers `204` and has nowhere to put it; its count stays on the
+`user.removed` audit row beside the assignments it cleared and the invitations it revoked.
 
 | Status | Code                  | Cause                                                                                                                               |
 | ------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |

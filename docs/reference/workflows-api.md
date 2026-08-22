@@ -1129,6 +1129,23 @@ label (TAR-468) that `NOTIFICATION_TYPES` does not, because an escalation carrie
 acknowledged through `GET/POST /api/v1/escalation-alerts` instead. Folding it in is a
 contract change and belongs to whoever owns the console's unread count.
 
+**A `workflow_broken` row is written once per break, not once per workflow** (TAR-605). Its
+`dedupe_key` is `workflow-broken:${runId}` — the run that disarmed it — against
+`UNIQUE (tenant_id, recipient_user_id, dedupe_key)`, so a redelivery of one deactivation
+inserts nothing and a _second_ break a week later is a new, unacknowledged row. The key named
+the workflow until this issue, which was harmless while nothing could write
+`acknowledged_at` on such a row and became suppression the moment the acknowledge endpoint
+above could: repair a broken workflow, re-arm it, and its next break landed in no inbox under
+the default `unacknowledgedOnly=true`. "Once per break rather than once per ticket that trips
+over it" is enforced by `deactivate`'s `UPDATE … WHERE is_active` matching a row, and never
+was the key's job.
+
+**A workflow disarmed by a suspension or a removal writes no notification at all**, and that
+is a decision rather than a gap. `PATCH /api/v1/users/{id}` answers `workflowsDisarmed`
+instead — see [people-api.md](./people-api.md#patch-apiv1usersid) for the count and the
+argument, which is that `notifications.ticket_id` is `NOT NULL` because every row in that
+table is raised about a ticket, and a suspension is raised about a person.
+
 ## Security and isolation
 
 - Every request path runs through `TenantPrisma`. `workflows`, `workflow_runs` and
@@ -1240,9 +1257,8 @@ commit this page was written from.
 - **Every route, status code, permission and error code on this page** is read from
   `apps/api/src/workflows/workflows.controller.ts`, `workflow-catalog.controller.ts`,
   `workflows.http.ts` and `workflows.errors.ts`, and every JSON body from the schemas in
-  `packages/contracts/src/workflows.ts`. **There is no integration suite for this surface**,
-  so unlike the assignment-rules reference these are not asserted end to end against a real
-  database and the real request pipeline.
+  `packages/contracts/src/workflows.ts`. At the time of writing there was no integration
+  suite for this surface; TAR-596 added one, and the correction is below.
 - The `curl` invocations show the request shape against a deployed host. **They were not
   run** — there is no deployed host to run them against from here.
 
@@ -1259,5 +1275,31 @@ against `main` at commit `9544f4e`:
 test` — 162 suites, 2 461 tests, all passing; `pnpm typecheck`, `pnpm lint` and
   `pnpm format:check` clean.
 - **Still not run**: `pnpm --filter @whatsappcrm/contracts test`, for the same `vitest`
-  environment mismatch recorded above, and no integration suite exists for either surface —
-  the routes and status codes remain read from the source.
+  environment mismatch recorded above — the routes and status codes remain read from the
+  source.
+
+**Correction (TAR-605): an integration suite for this surface does exist.** The bullet above
+was written before TAR-596 landed and was left stale in that PR. `#184` added
+`apps/api/src/notifications/notifications-api.int-spec.ts` — 17 cases over two tenants and
+two recipients, asserting the list shape, the keyset page, the acknowledge and that no row
+crosses a tenant or a recipient boundary — and six cases in
+`apps/api/src/people/people-rbac.int-spec.ts` covering the reference cascade on suspension
+and on removal, including that it never reaches another tenant's workflows. Both run against
+a real PostgreSQL through the real request pipeline, under `pnpm test:db`.
+
+TAR-605 re-keyed the `workflow_broken` `dedupe_key` and added `workflowsDisarmed` to
+`PATCH /api/v1/users/{id}`. Run on 2026-08-22 against `main` at commit `90df2bb`:
+
+- **The deactivation path, the new key and the disarm response**: `pnpm --filter
+@whatsappcrm/api test` — 162 suites, 2 478 tests, all passing. The four new
+  `workflow-trigger.service.spec.ts` cases were confirmed to **fail** against the old
+  workflow-keyed spelling before the fix, rather than passing either way.
+- **The unique index itself, against a real PostgreSQL**: `pnpm test:db` — 49 suites, 909
+  tests, all passing, including two new cases in
+  `apps/api/src/prisma/workflow-schema.int-spec.ts` proving a second break inserts a fresh
+  unacknowledged row while a redelivery of one deactivation still inserts nothing.
+- **`pnpm typecheck`, `pnpm lint` and `pnpm format:check`**: clean.
+- **Still not run**: `pnpm --filter @whatsappcrm/contracts test`, same `vitest` mismatch on
+  Node v22.15.0. `UserUpdateResponseSchema` was instead exercised directly against the built
+  `packages/contracts/dist` — it parses a valid body, rejects a missing or negative
+  `workflowsDisarmed`, and `UserResponseSchema` strips the field.

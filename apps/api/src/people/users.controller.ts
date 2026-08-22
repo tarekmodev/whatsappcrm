@@ -22,6 +22,7 @@ import {
   type UserParams,
   type UserResponse,
   type UserUpdateInput,
+  type UserUpdateResponse,
 } from '@whatsappcrm/contracts';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ZodValidationPipe } from '../common/validation/zod-validation.pipe';
@@ -83,13 +84,18 @@ export class UsersController {
    * requires `user:set_role`, which the service enforces because the guard's
    * metadata is static and this condition is not. A caller without it is
    * refused rather than served with the field dropped.
+   *
+   * Answers a `UserResponse` plus `workflowsDisarmed` (TAR-605): suspending
+   * somebody switches off every workflow naming them, and the admin who did it
+   * is the one person who has to hear about it. `UserUpdateResponseSchema`
+   * carries why that is a response field rather than a notification.
    */
   @Patch(':id')
   @RequirePermission('user:update')
   update(
     @Param(new ZodValidationPipe(UserParamsSchema)) params: UserParams,
     @Body(new ZodValidationPipe(UserUpdateInputSchema)) input: UserUpdateInput,
-  ): Promise<UserResponse> {
+  ): Promise<UserUpdateResponse> {
     return this.users.update(params.id, input).catch(translatePeopleFailure);
   }
 

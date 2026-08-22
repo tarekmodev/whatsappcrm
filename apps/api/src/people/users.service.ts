@@ -8,6 +8,7 @@ import {
   type UserResponse,
   type UserStatus,
   type UserUpdateInput,
+  type UserUpdateResponse,
   type WorkflowBrokenReason,
 } from '@whatsappcrm/contracts';
 import { AUDIT_ACTIONS } from '../audit/audit.actions';
@@ -124,7 +125,7 @@ export class UsersService {
    * field dropped — a privilege change that appears to have succeeded is the
    * worse of the two failures.
    */
-  async update(userId: string, input: UserUpdateInput): Promise<UserResponse> {
+  async update(userId: string, input: UserUpdateInput): Promise<UserUpdateResponse> {
     const principal = this.tenantContext.requirePrincipal();
     const tenantId = this.tenantContext.requireTenantId();
 
@@ -182,14 +183,21 @@ export class UsersService {
 
       await this.recordUserChanges(tx, tenantId, before, input, teamsChanged, workflowsDisarmed);
 
-      return toUserResponse(
-        // `teamMemberships` was read before the membership write, so it would
-        // report the old set. Re-read rather than patch the object by hand.
-        input.teamIds === undefined
-          ? after
-          : { ...after, teamMemberships: input.teamIds.map((teamId) => ({ teamId })) },
-        this.securityFor(after),
-      );
+      return {
+        ...toUserResponse(
+          // `teamMemberships` was read before the membership write, so it would
+          // report the old set. Re-read rather than patch the object by hand.
+          input.teamIds === undefined
+            ? after
+            : { ...after, teamMemberships: input.teamIds.map((teamId) => ({ teamId })) },
+          this.securityFor(after),
+        ),
+        // TAR-605. Reported rather than notified — `UserUpdateResponseSchema`
+        // holds the argument. Always present, `0` on the requests that disarmed
+        // nothing, so a client reads one field instead of inferring from
+        // `status`.
+        workflowsDisarmed,
+      };
     });
 
     // The second cache purge, after the commit. See `SessionRevocationService`
