@@ -17,6 +17,7 @@ import { BillingWebhookController } from './billing-webhook.controller';
 import { BillingWebhookService } from './billing-webhook.service';
 import { CheckoutService } from './checkout.service';
 import { FakeBillingProvider } from './providers/fake/fake-billing.provider';
+import { FakeCheckoutController } from './providers/fake/fake-checkout.controller';
 import { PolarBillingProvider } from './providers/polar/polar-billing.provider';
 import { SeatSyncService } from './seat-sync.service';
 import { SubscriptionSyncService } from './subscription-sync.service';
@@ -58,12 +59,18 @@ import { VolumeNotifierService } from './volume-notifier.service';
  *
  * ## What it exports
  *
- * Nothing. Its whole public surface is two HTTP controllers, a queue worker and
+ * Nothing. Its whole public surface is three HTTP controllers, a queue worker and
  * two event subscribers.
+ *
+ * The third controller is `FakeCheckoutController`, the stand-in hosted checkout
+ * page (TAR-658). It is mounted unconditionally and answers `not_found` unless
+ * the factory above bound `FakeBillingProvider` — a conditional `controllers`
+ * array would have to read the driver at decoration time, before `ConfigService`
+ * exists, which is exactly the scattered `process.env` read this factory removes.
  */
 @Module({
   imports: [EntitlementsModule, IdempotencyModule, IdentityModule, TenancyModule, WebhooksModule],
-  controllers: [BillingController, BillingWebhookController],
+  controllers: [BillingController, BillingWebhookController, FakeCheckoutController],
   providers: [
     {
       provide: BILLING_PROVIDER,
