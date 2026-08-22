@@ -31,7 +31,8 @@ import type { BillingEvent, SubscriptionStatus } from '@whatsappcrm/contracts';
  *
  * `customer_seat.*` — we own seat identity and Polar bills a count (billing
  * contract, decision 1). `checkout.*` — `subscription.active` is authoritative,
- * and the console's fast path is `resolveCheckout`, not a webhook. `customer.*`,
+ * and since TAR-651 removed the console's checkout-return call it is also the
+ * only thing that writes a subscription, so nothing reads a checkout. `customer.*`,
  * `benefit*.*`, `product.*`, `refund.*`, `discount.*`, `organization.updated` —
  * none of them move a tenant or change what it may do.
  *
