@@ -44,6 +44,7 @@ import {
   RequestHandoffInputSchema,
   SendMessageInputSchema,
   SlaAlertListQuerySchema,
+  SlaPolicyUpdateInputSchema,
   TICKET_ACTIVE_STATUSES,
   TICKET_PRIORITIES,
   TICKET_STATUS_REQUIRES_CLOSE,
@@ -113,6 +114,7 @@ import {
   type SessionPrincipal,
   type SessionResponse,
   type SlaAlertResponse,
+  type SlaPolicyResponse,
   type Tag,
   type TeamResponse,
   type TenantBranding,
@@ -155,6 +157,7 @@ import type {
   MockMessageTemplate,
   MockOnboardingChecklist,
   MockSlaAlert,
+  MockSlaPolicy,
   MockTag,
   MockTeam,
   MockTenantDomain,
@@ -554,6 +557,27 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/v1/tickets/${UUID_SEGMENT}$`),
     permission: 'ticket:read',
     handle: getTicket,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/sla-policies$/,
+    // `sla:read`, which supervisor and admin hold and an agent does not — unlike
+    // the alert routes below, whose gate is `ticket:read` because the narrowing
+    // that matters there is per-recipient rather than per-role.
+    permission: 'sla:read',
+    handle: listSlaPolicies,
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/v1/sla-policies/${UUID_SEGMENT}$`),
+    permission: 'sla:read',
+    handle: getSlaPolicy,
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/v1/sla-policies/${UUID_SEGMENT}$`),
+    permission: 'sla:write',
+    handle: updateSlaPolicy,
   },
   {
     method: 'GET',
@@ -4306,6 +4330,83 @@ function reportDashboardExport({ principal, query }: RouteContext): string {
     }),
     section,
   );
+}
+
+// --- SLA policies (TAR-26, ADR 0006; the console screen is TAR-390) ---------
+
+/**
+ * `GET /v1/sla-policies` — the tenant's policies, **oldest first**, so the
+ * seeded catch-all a supervisor is looking for leads the page.
+ *
+ * The order is the API's keyset order `(createdAt ASC, id ASC)` and it is
+ * load-bearing rather than tidy: the settings screen reads the catch-all off
+ * this list, and a fixture layer that answered in map-insertion order would let
+ * a console bug through review.
+ */
+function listSlaPolicies({ principal, query }: RouteContext): CursorPage<SlaPolicyResponse> {
+  const parsed = CursorPageQuerySchema.safeParse(Object.fromEntries(query));
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const items = tenantSlaPolicies(principal)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+    .slice(0, parsed.data.limit)
+    .map(stripTenant);
+
+  return { items, nextCursor: null };
+}
+
+/** `GET /v1/sla-policies/{id}`. Another tenant's row is `404`, never `403`. */
+function getSlaPolicy(context: RouteContext): SlaPolicyResponse {
+  return stripTenant(findSlaPolicyInTenant(context));
+}
+
+/**
+ * `PATCH /v1/sla-policies/{id}` — the one write on this resource.
+ *
+ * **Modelled as idempotent**, like the API: the same body replayed lands the row
+ * in the same state, which is why neither side asks for an `Idempotency-Key`.
+ *
+ * `priority` and `businessHoursOnly` are refused by the schema rather than by
+ * this handler, and that is the point of parsing with the contract's own object:
+ * a console that grew a control for either would fail here exactly as it would
+ * against the real API.
+ *
+ * Nothing recalculates a running timer, which is not an omission — an edit
+ * reaches future tickets only, because a timer carries the `dueAt` written when
+ * it started.
+ */
+function updateSlaPolicy(context: RouteContext): SlaPolicyResponse {
+  const current = findSlaPolicyInTenant(context);
+  const parsed = SlaPolicyUpdateInputSchema.safeParse(context.body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const updated: MockSlaPolicy = { ...current, ...parsed.data, updatedAt: MOCK_UPDATED_AT };
+
+  mockState().slaPolicies.set(updated.id, updated);
+
+  return stripTenant(updated);
+}
+
+function tenantSlaPolicies(principal: SessionPrincipal): MockSlaPolicy[] {
+  return [...mockState().slaPolicies.values()].filter(
+    (policy) => policy.tenantId === principal.tenantId,
+  );
+}
+
+function findSlaPolicyInTenant({ principal, params }: RouteContext): MockSlaPolicy {
+  const policy = tenantSlaPolicies(principal).find((candidate) => candidate.id === params[0]);
+
+  if (policy === undefined) {
+    throw notFound();
+  }
+
+  return policy;
 }
 
 // --- SLA alerts (TAR-26, ADR 0006) -----------------------------------------

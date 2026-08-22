@@ -13,6 +13,7 @@ import {
   type MessageTemplateResponse,
   type OnboardingChecklistResponse,
   type SlaAlertResponse,
+  type SlaPolicyResponse,
   type TeamResponse,
   type TenantLifecycleResponse,
   type TenantResponse,
@@ -1286,6 +1287,127 @@ describe('supervisor SLA alerts (TAR-26)', () => {
     await expect(acknowledgeSlaAlert(MOCK_IDS.slaAlerts.omarFatimaUrgent)).rejects.toMatchObject({
       code: 'not_found',
     });
+  });
+});
+
+// --- The SLA policy resource (TAR-26; the console screen is TAR-390) --------
+
+describe('SLA policies', () => {
+  async function listSlaPolicies(): Promise<CursorPage<SlaPolicyResponse>> {
+    return (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/sla-policies?limit=100',
+    })) as CursorPage<SlaPolicyResponse>;
+  }
+
+  async function patchPolicy(id: string, body: unknown): Promise<SlaPolicyResponse> {
+    return (await handleMockRequest({
+      method: 'PATCH',
+      path: `/v1/sla-policies/${id}`,
+      body,
+    })) as SlaPolicyResponse;
+  }
+
+  it('leads with the catch-all every ticket falls back to', async () => {
+    // Oldest first is the API's keyset order, and the settings screen reads the
+    // catch-all off this list — an order that followed map insertion instead
+    // would let a console bug through review.
+    asRole('supervisor');
+
+    const page = await listSlaPolicies();
+
+    expect(page.items[0]?.id).toBe(MOCK_IDS.slaPolicies.catchAll);
+    expect(page.items[0]?.priority).toBeNull();
+  });
+
+  it('never returns another tenant’s policy', async () => {
+    asRole('admin');
+
+    const page = await listSlaPolicies();
+
+    expect(page.items.map((policy) => policy.id)).not.toContain(
+      MOCK_IDS.slaPolicies.otherTenant,
+    );
+  });
+
+  it('refuses an agent, who holds neither SLA permission', async () => {
+    // Unlike the alert routes, where every role may ask and the narrowing is
+    // per-recipient: a policy is the tenant's configuration, and `sla:read` is
+    // supervisor-and-above.
+    asRole('agent');
+
+    await expect(listSlaPolicies()).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('saves a window and reports it back', async () => {
+    asRole('supervisor');
+
+    const updated = await patchPolicy(MOCK_IDS.slaPolicies.catchAll, {
+      firstResponseMinutes: 30,
+      resolutionMinutes: null,
+      isActive: true,
+    });
+
+    expect(updated).toMatchObject({ firstResponseMinutes: 30, resolutionMinutes: null });
+
+    // Read back through the list, so a handler that answered from its argument
+    // rather than from the store would fail here.
+    const reread = (await listSlaPolicies()).items.find(
+      (policy) => policy.id === MOCK_IDS.slaPolicies.catchAll,
+    );
+
+    expect(reread?.firstResponseMinutes).toBe(30);
+  });
+
+  it('turns SLA off without deleting the row running timers point at', async () => {
+    // There is no DELETE, deliberately: `isActive: false` is how a tenant stops
+    // giving new tickets a deadline, and the row stays.
+    asRole('supervisor');
+
+    await expect(
+      patchPolicy(MOCK_IDS.slaPolicies.catchAll, { isActive: false }),
+    ).resolves.toMatchObject({ id: MOCK_IDS.slaPolicies.catchAll, isActive: false });
+  });
+
+  it('refuses a window past the contract’s thirty-day ceiling', async () => {
+    asRole('supervisor');
+
+    await expect(
+      patchPolicy(MOCK_IDS.slaPolicies.catchAll, { firstResponseMinutes: 43_201 }),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+  });
+
+  it('refuses an empty body rather than reporting a save that changed nothing', async () => {
+    asRole('supervisor');
+
+    await expect(patchPolicy(MOCK_IDS.slaPolicies.catchAll, {})).rejects.toMatchObject({
+      code: 'validation_failed',
+    });
+  });
+
+  it('answers 404, not 403, for another tenant’s policy id', async () => {
+    // A 403 would confirm the id names a real row somebody else owns.
+    asRole('admin');
+
+    await expect(
+      patchPolicy(MOCK_IDS.slaPolicies.otherTenant, { firstResponseMinutes: 30 }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('refuses a supervisor’s attempt to set a field the write schema omits', async () => {
+    // `priority` belongs with the per-priority UI that is out of scope, and
+    // `businessHoursOnly` is modelled but not implemented. Neither may be set,
+    // which is why the console publishes no control for either.
+    asRole('supervisor');
+
+    const updated = await patchPolicy(MOCK_IDS.slaPolicies.catchAll, {
+      firstResponseMinutes: 30,
+      priority: 'urgent',
+      businessHoursOnly: true,
+    });
+
+    expect(updated.priority).toBeNull();
+    expect(updated.businessHoursOnly).toBe(false);
   });
 });
 

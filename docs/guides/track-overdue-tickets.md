@@ -113,13 +113,23 @@ have theirs.
 
 ## Change the response window
 
-There is no screen for this yet.
+Supervisors and admins can change it themselves. Agents cannot, and do not see the screen.
 
-> **TODO(author):** the response window is set through the API and has no console surface, so
-> a supervisor cannot change it themselves. Until a settings screen ships, ask whoever
-> operates the platform for you — the endpoint and what an edit does are in
-> [the SLA timers reference](../reference/sla-timers.md#configuring-the-window). Whoever builds
-> that screen should replace this section with the steps.
+1. Open **Settings → Response deadlines**.
+2. Set **First response, in minutes**. The standard setting is 60 minutes, and the screen
+   tells you what it is so you can see whether your workspace has changed it.
+3. Set **Resolution, in minutes** if you want a second deadline for closing the ticket. Leave
+   it empty for none, which is the standard setting.
+4. Use **Give new tickets a deadline** to switch deadlines off for the whole workspace without
+   losing the numbers you set.
+5. Select **Save changes**.
+
+A window is anything from 1 minute to 43,200 (thirty days). Anything outside that is refused
+with the reason shown beside the field.
+
+If your workspace has a window that applies to one priority instead of the default, it is
+listed under **Priority overrides** on the same screen. Those are read-only here — ask whoever
+operates the platform to change one.
 
 Two things about a change, whenever you make one:
 

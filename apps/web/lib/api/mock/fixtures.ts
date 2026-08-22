@@ -1,6 +1,7 @@
 import {
   AI_CONFIG_DEFAULTS,
   ONBOARDING_STEP_IDS,
+  SLA_DEFAULTS,
   type AiConfigResponse,
   type AssignmentRuleResponse,
   type CannedResponseResponse,
@@ -16,6 +17,7 @@ import {
   type OnboardingStep,
   type Plan,
   type SlaAlertResponse,
+  type SlaPolicyResponse,
   type Subscription,
   type Tag,
   type TeamResponse,
@@ -275,6 +277,9 @@ export type MockTicket = TicketResponse &
  * narrowing this feature's role-scoping rests on.
  */
 export type MockSlaAlert = SlaAlertResponse & TenantScoped & { readonly recipientUserId: string };
+
+/** The tenant's SLA configuration. Nothing on the response is tenant-scoped. */
+export type MockSlaPolicy = SlaPolicyResponse & TenantScoped;
 
 export type MockTicketEvent = TicketEvent & TenantScoped;
 
@@ -2061,6 +2066,70 @@ export const MOCK_SLA_ALERTS: readonly MockSlaAlert[] = [
   },
 ];
 
+// --- SLA policies (TAR-26, ADR 0006; the settings screen is TAR-390) --------
+//
+// Three rows, and each earns its place:
+//
+//   1. **The catch-all** every ticket falls back to — `priority: null`, seeded
+//      from `SLA_DEFAULTS` exactly as `TenantProvisioningService` does. It is
+//      `SLA_POLICY_ID`, the same id the ticket fixtures' timers already point
+//      at, so "which policy is this ticket running under" has one answer in
+//      mock mode rather than two.
+//   2. **A per-priority override**, so the settings screen's read-only
+//      overrides section is reachable without hand-editing a fixture. The API
+//      accepts no `priority` on a write and has no create route, which is
+//      exactly why the console reports these rather than offering controls.
+//   3. **A row in the second tenant**, so tenant scoping is assertable.
+//
+// Oldest first is the order `GET /sla-policies` publishes, and the array is
+// written in that order so a handler that forgot to sort would still have to
+// be wrong on purpose.
+
+const SLA_POLICY_IDS = {
+  urgentOverride: '0192f010-0000-7000-8000-000000001002',
+  otherTenant: '0192f010-0000-7000-8000-000000001099',
+} as const;
+
+export const MOCK_SLA_POLICIES: readonly MockSlaPolicy[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: SLA_POLICY_ID,
+    name: 'Default',
+    priority: null,
+    ...SLA_DEFAULTS,
+    // Modelled, not implemented: always false, and the write schema does not
+    // accept it, so no console control may set it.
+    businessHoursOnly: false,
+    isActive: true,
+    createdAt: '2026-07-01T09:00:00.000Z',
+    updatedAt: '2026-07-01T09:00:00.000Z',
+  },
+  {
+    tenantId: MOCK_TENANT_ID,
+    id: SLA_POLICY_IDS.urgentOverride,
+    name: 'Urgent tickets',
+    priority: 'urgent',
+    firstResponseMinutes: 15,
+    resolutionMinutes: 240,
+    businessHoursOnly: false,
+    isActive: true,
+    createdAt: '2026-07-14T08:30:00.000Z',
+    updatedAt: '2026-07-14T08:30:00.000Z',
+  },
+  {
+    // Present only so tenant scoping can be asserted, never rendered.
+    tenantId: OTHER_TENANT_ID,
+    id: SLA_POLICY_IDS.otherTenant,
+    name: 'Default',
+    priority: null,
+    ...SLA_DEFAULTS,
+    businessHoursOnly: false,
+    isActive: true,
+    createdAt: '2026-05-02T09:00:00.000Z',
+    updatedAt: '2026-05-02T09:00:00.000Z',
+  },
+];
+
 // --- Workflows (TAR-27, ADR 0009) -------------------------------------------
 //
 // The prefixes continue the file's one-per-entity-type rule. They were `…010`
@@ -2650,6 +2719,7 @@ export const MOCK_IDS = {
   assignmentRules: ASSIGNMENT_RULE_IDS,
   cannedResponses: CANNED_RESPONSE_IDS,
   slaAlerts: SLA_ALERT_IDS,
+  slaPolicies: { catchAll: SLA_POLICY_ID, ...SLA_POLICY_IDS },
   tenantDomains: TENANT_DOMAIN_IDS,
   workflows: WORKFLOW_IDS,
   workflowRuns: WORKFLOW_RUN_IDS,

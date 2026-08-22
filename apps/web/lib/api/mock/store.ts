@@ -15,6 +15,7 @@ import {
   MOCK_ONBOARDING_CHECKLISTS,
   MOCK_PLANS,
   MOCK_SLA_ALERTS,
+  MOCK_SLA_POLICIES,
   MOCK_SUBSCRIPTIONS,
   MOCK_TAGS,
   MOCK_TEAMS,
@@ -39,6 +40,7 @@ import {
   type MockMessageTemplate,
   type MockOnboardingChecklist,
   type MockSlaAlert,
+  type MockSlaPolicy,
   type MockTag,
   type MockTeam,
   type MockTenantDomain,
@@ -91,6 +93,11 @@ interface MockState {
   /** A log rather than a ledger: nothing here is written by the console. */
   workflowRuns: Map<string, MockWorkflowRun>;
   slaAlerts: Map<string, MockSlaAlert>;
+  /**
+   * Keyed by row id, not by tenant: a tenant holds a catch-all policy and may
+   * hold per-priority ones beside it, and `PATCH /sla-policies/{id}` names one.
+   */
+  slaPolicies: Map<string, MockSlaPolicy>;
   knowledgeDocuments: Map<string, MockKnowledgeDocument>;
   /**
    * Keyed by **tenant**, like `onboarding` above: a tenant has exactly one
@@ -215,6 +222,7 @@ function seed(): MockState {
     ),
     workflowRuns: new Map(MOCK_WORKFLOW_RUNS.map((run) => [run.id, run])),
     slaAlerts: new Map(MOCK_SLA_ALERTS.map((item) => [item.id, item])),
+    slaPolicies: new Map(MOCK_SLA_POLICIES.map((item) => [item.id, item])),
     knowledgeDocuments: new Map(MOCK_KNOWLEDGE_DOCUMENTS.map((item) => [item.id, item])),
     aiConfigs: new Map(
       MOCK_AI_CONFIGS.map((config) => [

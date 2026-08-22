@@ -115,6 +115,24 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     requiresAny: ['report:read_all', 'assignment_rule:read'],
   },
   {
+    id: 'settings-sla',
+    label: content.nav.sla,
+    href: routes.settingsSla(),
+    // `clock`, which no other settings entry uses: the page is about a deadline,
+    // and two entries sharing one glyph is exactly what makes a collapsed rail
+    // unreadable.
+    icon: 'clock',
+    /**
+     * Either permission, on the same rule as Workspace and Chatbot: `sla:read`
+     * reaches the current window, `sla:write` is what changes it. Both are
+     * supervisor-and-above under today's role table, so the union changes
+     * nothing now — it is what stops a custom role holding only the read from
+     * being sent to a 403 for a page it can use half of. An agent holds neither
+     * and never sees the entry, which is TAR-22's third criterion in the UI.
+     */
+    requiresAny: ['sla:read', 'sla:write'],
+  },
+  {
     id: 'settings-workflows',
     label: content.nav.workflows,
     href: routes.settingsWorkflows(),

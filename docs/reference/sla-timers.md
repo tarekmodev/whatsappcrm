@@ -112,12 +112,32 @@ ticket's priority cannot move a deadline that is already running.
 a tenant is deactivated rather than deleted and leaves the row that running timers point at
 intact.
 
-> **TODO(author):** there is no console screen for any of this. `apps/web/lib/api/sla.ts`
-> records `/sla-policies` as deliberately absent, so a supervisor cannot change their
-> workspace's window without an authenticated API call made on their behalf. TAR-26 shipped
-> the configuration surface as API-only; whoever builds the settings screen should replace
-> this note with the steps, and add them to
-> [Watch tickets that miss their deadline](../guides/track-overdue-tickets.md).
+### The console surface
+
+TAR-390 added **Settings → Response deadlines** (`/settings/sla`), so the window no longer
+needs an API call made on somebody's behalf. It reads `GET /sla-policies` and writes
+`PATCH /sla-policies/{id}`; there is nothing it can do that this page does not describe.
+
+| Console control                     | Field on the request                     |
+| ----------------------------------- | ---------------------------------------- |
+| Give new tickets a deadline         | `isActive`                               |
+| First response, in minutes          | `firstResponseMinutes` — empty is `null` |
+| Resolution, in minutes              | `resolutionMinutes` — empty is `null`    |
+
+It edits **the catch-all only**. Per-priority policies are listed read-only under _Priority
+overrides_, because `SlaPolicyUpdateInputSchema` accepts no `priority` and the resource has no
+`POST` — a control for either would be one the API refuses. `businessHoursOnly` has no
+control for the same reason.
+
+The form submits all three fields on every save rather than a diff. `PATCH` is partial either
+way, and replaying the same three values is idempotent by construction; a diff computed in the
+browser against values that may already be stale is the version that silently drops an edit.
+
+Gating is `sla:read` to reach the page and `sla:write` to change anything — the two the table
+above already assigns. A principal holding only the read gets the same figures as a
+description list rather than a 403 or a form of disabled inputs. The steps a supervisor
+follows are in
+[Watch tickets that miss their deadline](../guides/track-overdue-tickets.md#change-the-response-window).
 
 ## `GET /api/v1/sla-policies`
 
