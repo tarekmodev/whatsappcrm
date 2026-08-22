@@ -5,11 +5,11 @@ import type {
   WorkflowCondition,
   WorkflowMatchOperator,
 } from '@whatsappcrm/contracts';
-import { CheckboxGroup, type CheckboxOption } from '@/components/ui/CheckboxGroup';
+import { CheckboxGroup } from '@/components/ui/CheckboxGroup';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { useContent } from '@/lib/content';
-import { conditionOperatorValues, labelledOptions } from '../builder';
+import { conditionOperatorValues, labelledOptions, tagOptions } from '../builder';
 import type { WorkflowVocabulary } from '../presentation';
 
 /** The two conditions built out of "a match mode and a set of tag ids". */
@@ -76,24 +76,4 @@ export function TagConditionFields({
       />
     </>
   );
-}
-
-/**
- * The workspace's tags, plus a row for any id the condition holds that no longer
- * resolves — checked, and labelled the way the card labels it, so the supervisor
- * sees the same thing in both places and can uncheck it.
- */
-function tagOptions(
-  vocabulary: WorkflowVocabulary,
-  selectedTagIds: readonly string[],
-  unknownLabel: string,
-): readonly CheckboxOption[] {
-  const known = new Set(vocabulary.tags.map((tag) => tag.id));
-
-  return [
-    ...vocabulary.tags.map((tag) => ({ value: tag.id, label: tag.name })),
-    ...selectedTagIds
-      .filter((tagId) => !known.has(tagId))
-      .map((tagId) => ({ value: tagId, label: unknownLabel })),
-  ];
 }

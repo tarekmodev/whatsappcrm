@@ -7,7 +7,10 @@ import {
   BRANDING_ASSET_LIMITS,
   BRANDING_UPLOAD_FIELD,
   BrandingAssetKindSchema,
+  CANNED_RESPONSE_LIMITS,
   CUSTOM_FIELD_LIMITS,
+  CannedResponseCreateInputSchema,
+  CannedResponseUpdateInputSchema,
   ContactListQuerySchema,
   ContactUpdateInputSchema,
   ConversationAssignInputSchema,
@@ -306,14 +309,34 @@ const ROUTES: readonly Route[] = [
     handle: deleteAssignmentRule,
   },
   {
-    // Read only. 0011 decision 1 has the console hold the whole set and match a
-    // typed shortcut locally, so this is the one route the composer needs; the
-    // writes belong to a settings screen that does not exist yet, and a mock
-    // route with no caller is a route nobody would notice going wrong.
+    // 0011 decision 1 has the console hold the whole set and match a typed
+    // shortcut locally, so this one route is all the composer needs.
     method: 'GET',
     pattern: /^\/v1\/canned-responses$/,
     permission: 'canned_response:read',
     handle: listCannedResponses,
+  },
+  {
+    // The three writes, added with the settings screen that calls them
+    // (TAR-575). `canned_response:write`, which 0004 grants
+    // supervisor-and-above — so an agent driving the mock transport meets the
+    // same refusal the API gives them.
+    method: 'POST',
+    pattern: /^\/v1\/canned-responses$/,
+    permission: 'canned_response:write',
+    handle: createCannedResponse,
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/v1/canned-responses/${UUID_SEGMENT}$`),
+    permission: 'canned_response:write',
+    handle: updateCannedResponse,
+  },
+  {
+    method: 'DELETE',
+    pattern: new RegExp(`^/v1/canned-responses/${UUID_SEGMENT}$`),
+    permission: 'canned_response:write',
+    handle: deleteCannedResponse,
   },
   {
     method: 'GET',
@@ -954,18 +977,165 @@ function updateTeam({ principal, params, body }: RouteContext): TeamResponse {
 
 // --- Canned responses (TAR-31, contract 0011) ------------------------------
 //
-// Read only, and deliberately so: the composer expands a shortcut, and nothing
-// in the console writes one yet.
+// The read the composer expands a shortcut from, and the three writes the saved
+// replies settings screen calls (TAR-575).
+//
+// The writes enforce the two refusals that screen has to render — a shortcut
+// this tenant already holds, and the per-tenant cap — because a fixture layer
+// that said yes to both would let a console that mishandles them through review.
 
 function listCannedResponses({ principal }: RouteContext): CannedResponseListResponse {
-  // Ascending `shortcut`, as the API orders it — the picker ranks what it is
-  // given, so a transport that returned them unordered would flatter it.
-  const items = [...mockState().cannedResponses.values()]
-    .filter((response) => response.tenantId === principal.tenantId)
-    .sort((left, right) => left.shortcut.localeCompare(right.shortcut))
-    .map(toCannedResponseResponse);
+  return {
+    items: orderedCannedResponses(principal).map(toCannedResponseResponse),
+    nextCursor: null,
+  };
+}
 
-  return { items, nextCursor: null };
+function createCannedResponse({ principal, body }: RouteContext): CannedResponseResponse {
+  const parsed = CannedResponseCreateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const existing = tenantCannedResponses(principal);
+
+  // `conflict`, not `plan_limit_exceeded`: the cap is a property of the design —
+  // the console downloads the whole set to resolve a shortcut without a request
+  // per keystroke — not of the tenant's plan (0011, error shapes).
+  if (existing.length >= CANNED_RESPONSE_LIMITS.perTenant) {
+    throw refused(
+      'conflict',
+      `This workspace already has ${String(CANNED_RESPONSE_LIMITS.perTenant)} canned responses, ` +
+        'which is the maximum. Delete or merge one before adding another.',
+      HTTP_CONFLICT,
+    );
+  }
+
+  if (hasShortcut(existing, parsed.data.shortcut, null)) {
+    throw shortcutTaken(parsed.data.shortcut);
+  }
+
+  const created: MockCannedResponse = {
+    tenantId: principal.tenantId,
+    id: nextMockId(),
+    shortcut: parsed.data.shortcut,
+    title: parsed.data.title,
+    body: parsed.data.body,
+    createdByUserId: principal.userId,
+    createdAt: MOCK_CREATED_AT,
+    updatedAt: MOCK_UPDATED_AT,
+  };
+
+  mockState().cannedResponses.set(created.id, created);
+
+  return toCannedResponseResponse(created);
+}
+
+/**
+ * Every field is writable — unlike a custom field's key, a shortcut is what an
+ * agent types rather than what a stored value is filed under.
+ */
+function updateCannedResponse({ principal, params, body }: RouteContext): CannedResponseResponse {
+  const existing = findCannedResponseInTenant(principal, params[0]);
+  const parsed = CannedResponseUpdateInputSchema.safeParse(body);
+
+  if (!parsed.success) {
+    throw validationFailed();
+  }
+
+  const { shortcut, title, body: text } = parsed.data;
+
+  if (
+    shortcut !== undefined &&
+    hasShortcut(tenantCannedResponses(principal), shortcut, existing.id)
+  ) {
+    throw shortcutTaken(shortcut);
+  }
+
+  const updated: MockCannedResponse = {
+    ...existing,
+    shortcut: shortcut ?? existing.shortcut,
+    title: title ?? existing.title,
+    body: text ?? existing.body,
+    updatedAt: MOCK_UPDATED_AT,
+  };
+
+  mockState().cannedResponses.set(updated.id, updated);
+
+  return toCannedResponseResponse(updated);
+}
+
+/**
+ * `204`, and idempotent: an id this tenant does not hold is a `not_found`, but
+ * deleting the same row twice is not — the second call finds nothing and says
+ * so, which is the same answer the API gives.
+ */
+function deleteCannedResponse({ principal, params }: RouteContext): null {
+  const existing = findCannedResponseInTenant(principal, params[0]);
+
+  mockState().cannedResponses.delete(existing.id);
+
+  return null;
+}
+
+/**
+ * Ascending `shortcut`, as the API orders it — the picker ranks what it is
+ * given, so a transport that returned them unordered would flatter it, and the
+ * settings table renders the same order for the same reason.
+ */
+function orderedCannedResponses(principal: SessionPrincipal): MockCannedResponse[] {
+  return tenantCannedResponses(principal).sort((left, right) =>
+    left.shortcut.localeCompare(right.shortcut),
+  );
+}
+
+function tenantCannedResponses(principal: SessionPrincipal): MockCannedResponse[] {
+  return [...mockState().cannedResponses.values()].filter(
+    (response) => response.tenantId === principal.tenantId,
+  );
+}
+
+function findCannedResponseInTenant(
+  principal: SessionPrincipal,
+  id: string | undefined,
+): MockCannedResponse {
+  const response = tenantCannedResponses(principal).find((candidate) => candidate.id === id);
+
+  if (response === undefined) {
+    throw notFound();
+  }
+
+  return response;
+}
+
+/**
+ * `shortcut` is `citext`, so `/Hours` and `/hours` are the same row. The grammar
+ * only accepts lowercase, so this comparison can only differ from `===` for a
+ * fixture — which is exactly the case worth keeping honest.
+ *
+ * `exceptId` is the row being edited: renaming a reply to the shortcut it
+ * already has is not a conflict with itself.
+ */
+function hasShortcut(
+  responses: readonly MockCannedResponse[],
+  shortcut: string,
+  exceptId: string | null,
+): boolean {
+  const wanted = shortcut.toLowerCase();
+
+  return responses.some(
+    (response) => response.id !== exceptId && response.shortcut.toLowerCase() === wanted,
+  );
+}
+
+function shortcutTaken(shortcut: string): ApiRequestError {
+  return refused(
+    'conflict',
+    `A canned response for ${shortcut} already exists in this workspace. Shortcuts are ` +
+      'case-insensitive.',
+    HTTP_CONFLICT,
+  );
 }
 
 // --- Assignment rules (TAR-24, contract 0007) ------------------------------
