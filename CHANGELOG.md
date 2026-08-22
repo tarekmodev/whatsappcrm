@@ -169,6 +169,76 @@ change.
 
 ### Added
 
+- **A tenant admin can buy a plan, and its allowances take effect the moment the provider
+  confirms the payment** (TAR-37) — shipped across TAR-616 (the contract), TAR-617 (schema and
+  migrations), TAR-618 (backend), TAR-619 (console) and TAR-622 (these docs). TAR-18's
+  original "billing is out of scope" note is superseded; Polar.sh is the rail, chosen because
+  it acts as merchant of record and so removes per-country tax registration and invoicing from
+  a reseller selling into GCC and EU markets from one platform. The metering unit is the
+  **agent seat** — what a buyer already thinks in, and predictable for a reseller quoting a
+  client — with a per-tier conversation allowance so a low-seat tenant cannot drive unbounded
+  WhatsApp cost.
+  Five routes under `/api/v1/billing` (`plans`, `subscription`, `usage`, `checkout`, `portal`)
+  on `billing:read` and `billing:manage`, both admin-only, plus a signature-verified receiver
+  at `/api/webhooks/billing`. **Every one of the five is `@AvailableWhileSuspended()`**, which
+  is the exception `TENANT_STATUS_EFFECTS` exists to allow: a suspended tenant whose admin
+  cannot reach checkout cannot pay its way out.
+  **The provider is behind a port and named in two files.** `BillingProvider` is expressed in
+  `planKey`/`seats`/`tenantId` and provider ids are opaque strings only the adapter reads;
+  `PolarBillingProvider` and `polar-event.mapper.ts` are the whole of what knows Polar exists,
+  and `FakeBillingProvider` — the default driver everywhere — runs the same flow with no
+  account, no network and no money. Adding a second provider is a sibling directory.
+  **The webhook is the only writer of a subscription**, and the pipeline is verify → store to
+  Postgres → answer 200 → enqueue → apply. That order is the durability rule Meta's ingest
+  already follows: enqueueing first would make a Redis outage silent permanent loss of billing
+  events, and Polar disables an endpoint after ten consecutive non-2xx responses. Replay is
+  defended twice — `ON CONFLICT (provider, provider_event_id) DO NOTHING` on the `webhook-id`
+  header, then the status-scoped claim — and out-of-order delivery once, by
+  `subscriptions.last_event_at`, so a retried `past_due` landing after a fresh `active` cannot
+  walk a tenant backwards into dunning it has already left.
+  Activation copies `plans.entitlements` onto `tenant_entitlements` in the same transaction,
+  which is what "limits take effect immediately" means and what keeps enforcement reading one
+  RLS-scoped row rather than joining an unscoped catalogue on the request path. Seats are
+  pushed to the provider off the request path, from the domain bus, keyed on the tenant so
+  five invitations in a minute collapse to one push — **increases immediately, reductions
+  deferred**, because releasing a seat mid-period credits one that may be re-filled next week.
+  Conversation volume warns at 80% and again at the cap by email to every admin, and
+  `BILLING_VOLUME_POLICY` decides what the cap does: **`warn` by default, deliberately**,
+  because blocking a helpdesk's replies is the most damaging thing this system can do to a
+  tenant's own customers. Inbound is never refused under either policy.
+  Dunning needed no new code path: a failed renewal writes `past_due`, the lifecycle stamps
+  `grace_period_ends_at`, and `TenantLifecycleSweeper` — a timer — moves the tenant to
+  `suspended`. `LIFECYCLE_POLICY.pastDueGraceDays` **rises from 14 to 21**, and the number is
+  Polar's rather than a guess: it retries on days 2, 7, 14 and 21, so at 14 we suspended
+  tenants whose day-21 retry would have succeeded — locking an admin out on the exact day they
+  were about to be charged, and leaving them unable to reach billing to fix it. A nightly
+  reconciliation compares our rows against the provider's, because a missed webhook is silent;
+  the provider wins on status and period, **we win on seats**, since accepting their count
+  would lower a tenant's cap to whatever the last failed push left behind.
+  ⚠️ **Nothing can be paid for anywhere.** Every environment runs `BILLING_PROVIDER_DRIVER=fake`
+  and will until Tarek supplies a Polar Organization Access Token, a webhook signing secret and
+  one product id per tier; the switch itself is `POLAR_ENVIRONMENT`, defaulting to `sandbox`,
+  because the failure direction of a missing value has to be "no live charges". The handoff is
+  [the billing provider runbook](docs/runbooks/billing-provider.md).
+  ⚠️ **Do not flip that driver yet.** TAR-663 is open: on the `polar` driver a real
+  subscription webhook parses to nothing and is marked processed anyway, so a tenant that
+  completed checkout is never activated and no parked row records it. It is invisible on the
+  fake driver, which is every environment, which is why it reached `main`.
+  ⚠️ **Plan features are published and not enforced.** `PLAN_FEATURES` names eight capability
+  gates and every tier carries a set of them; no `@RequireFeature` guard exists, so a tier's
+  feature list records what was sold and stops nothing. TAR-37's scope names feature gating and
+  no sub-issue delivered it — the story that closes it is still to be filed.
+  ⚠️ **Two smaller divergences, both under-billing rather than over-serving.** Deferred seat
+  reductions fire on any event carrying a period start rather than only on a roll (the billing
+  contract's amendment 1 names the one-line fix), and `plans.key` has no database constraint
+  behind the pattern the contract publishes — a hand-written key with a hyphen in it took the
+  whole billing page down for every tenant until TAR-657.
+  Documented as [the billing API reference](docs/reference/billing-api.md) for engineers,
+  [Choose a plan and manage billing](docs/guides/manage-your-plan-and-billing.md) for the
+  tenant admin, and [Connecting the billing
+  provider](docs/runbooks/billing-provider.md) for the operator. 0009's risk 4 — a trial tenant
+  at its seat cap with nothing to upgrade to — is closed by the same change.
+
 - **A supervisor keeps the workspace's saved replies from the console, and every agent's
   reply box follows** (TAR-575) — TAR-31's second acceptance criterion names an admin editing
   a canned response, and until this there was no admin half: the CRUD surface, the permission
@@ -1965,6 +2035,32 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
   a second read of the driver setting so no configuration can make the gate and the binding
   disagree. Reloading a settled page is absorbed by the receiver, because the event id is
   derived from the checkout id.
+
+- **One malformed plan can no longer take the billing page down for every tenant**
+  (TAR-657) — `GET /billing/plans` returns every active row of the platform-wide plan
+  catalogue, and the console validates that response against `PlanListResponseSchema`. So a
+  single row whose `key` the contract refuses was not a bad plan card: it failed the parse
+  for the whole response, and `/settings/billing` rendered its error boundary — plans,
+  usage, seat messaging and the portal link together — for every tenant on the platform,
+  with nothing on screen to recover from. The row that proved it was a test fixture keyed
+  `tar405-cap-plan`: `plans` is global rather than tenant-scoped, so it did not cascade
+  away with the fixture's tenants and survived every later `pnpm test:db`.
+  Fixed on both sides, because either alone leaves the hole open. `plans.key` now carries
+  **`plans_key_format`**, character for character the `tenant_entitlements_plan_key_format`
+  that has guarded the _copy_ of this value since TAR-403 — the source of it was the half
+  that was never constrained, which is how a seed, a fixture or an admin tool could write a
+  key the API then published and no client could accept. The migration repairs any row
+  already there by renaming it deterministically rather than deleting a catalogue row a
+  tenant may be subscribed to. And `getBillingPlans` now validates the plans **one at a
+  time**, dropping and logging only the row that fails: a pricing page missing a tier is a
+  bad page, a pricing page that will not render is no page. The envelope's `usage` is still
+  parsed strictly, because those are the numbers the seat and volume messaging is computed
+  from and inventing them would be worse than failing.
+  The fixture that wrote the row is fixed too — it uses a conforming key and removes it in
+  `removeFixture`, so the leak cannot recur — and `plan-catalogue-schema.int-spec.ts` pins
+  the constraint's body against the contract's own `PLAN_KEY_PATTERN`, which nothing else in
+  the toolchain would notice disappearing: Prisma cannot express a CHECK and does not
+  describe one.
 
 - **Acknowledging a broken-workflow notification no longer silences every later break of
   that workflow** (TAR-605) — `WorkflowTriggerService.deactivate` keyed its

@@ -51,9 +51,12 @@ is the **only** thing both write-time enforcement and the console read, so a ref
 just received and the "3 of 3" on their screen cannot come from different stores.
 
 The row is a **snapshot** of a catalogue rather than a pointer into one: a tenant keeps what it
-was sold when the catalogue moves under it. `plans` stays the platform catalogue and belongs to
-TAR-37; when that lands, its plan sync becomes this table's writer. Swapping the trial placeholder
-for real plan data is an update to these rows — not a code change and not an API change.
+was sold when the catalogue moves under it. `plans` stays the platform catalogue, and TAR-37's
+`SubscriptionSyncService` is now this table's writer — it copies `plans.entitlements` onto the
+tenant inside the transaction that writes the subscription, which is what makes a purchased
+plan's limits take effect immediately. Swapping the trial placeholder for real plan data is an
+update to these rows — not a code change and not an API change. The whole billing surface is
+[the billing API reference](billing-api.md).
 
 ### The trial plan
 
@@ -83,14 +86,23 @@ actual contract.
 "Enforced, not merely displayed" is TAR-36's second acceptance criterion. Two of the five limits
 have a write path that refuses today.
 
-| Limit                    | Refused at                                        | Code                  | Built               |
-| ------------------------ | ------------------------------------------------- | --------------------- | ------------------- |
-| `seats`                  | `POST /users/invites` **and** invite acceptance   | `plan_limit_exceeded` | Yes                 |
-| `conversationsPerPeriod` | The outbound send, once the counter is at the cap | `plan_limit_exceeded` | Yes                 |
-| `whatsappNumbers`        | WABA connect                                      | `plan_limit_exceeded` | No                  |
-| `teams`                  | Team create                                       | `plan_limit_exceeded` | No                  |
-| `knowledgeDocuments`     | Document create                                   | `plan_limit_exceeded` | No                  |
-| `features`               | `@RequireFeature`, pipeline stage 6               | `feature_not_in_plan` | No — TAR-37's guard |
+| Limit                    | Refused at                                        | Code                  | Built          |
+| ------------------------ | ------------------------------------------------- | --------------------- | -------------- |
+| `seats`                  | `POST /users/invites` **and** invite acceptance   | `plan_limit_exceeded` | Yes            |
+| `conversationsPerPeriod` | The outbound send, once the counter is at the cap | `plan_limit_exceeded` | Yes            |
+| `whatsappNumbers`        | WABA connect                                      | `plan_limit_exceeded` | No             |
+| `teams`                  | Team create                                       | `plan_limit_exceeded` | No             |
+| `knowledgeDocuments`     | Document create                                   | `plan_limit_exceeded` | No             |
+| `features`               | `@RequireFeature`, pipeline stage 6               | `feature_not_in_plan` | No — see below |
+
+**`features` was TAR-37's to enforce and TAR-37 did not enforce it.** Billing shipped the seat
+and volume halves; no `@RequireFeature` guard exists in `apps/api/src`, the identifier appears
+in one comment and nowhere else, and `feature_not_in_plan` is a published code nothing throws.
+A tier's `features` array is an honest record of what that tier was sold with, and it is not a
+runtime check.
+
+> **TODO(author):** which story closes feature gating? It is named in TAR-37's scope and in no
+> sub-issue that shipped.
 
 `plan_limit_exceeded` carries the limit name, the cap and the current usage, so a caller can
 render "3 of 3 seats in use" without a second request. There is one error code for all five
@@ -151,10 +163,11 @@ invite route start refusing for tenants nobody ever capped.
 Provisioning writes the row on both paths precisely so that fallback stays unreachable in
 practice. It is a backstop for rows written before that change.
 
-> ⚠️ **The trial's caps are enforced before anything can be bought.** A tenant that hits the
-> three-seat cap during its trial has no route to a larger plan until TAR-37 ships, and the
-> `plan_limit_exceeded` message names a support contact rather than a checkout page. This is a
-> known temporary state (0009, risk 4).
+**0009's risk 4 is closed.** A tenant that hits its trial's three-seat cap now has a route to a
+larger plan: TAR-37 shipped `GET /api/v1/billing/plans` and `POST /api/v1/billing/checkout`, and
+`PlanLimitExceededError` names billing settings rather than a support contact. What remains
+outstanding is the payment provider's credentials, not the surface — see
+[Connecting the billing provider](../runbooks/billing-provider.md).
 
 ## The lifecycle trail
 
