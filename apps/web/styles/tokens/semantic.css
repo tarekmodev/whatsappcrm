@@ -37,6 +37,17 @@
   --color-on-accent-subtle: var(--palette-green-700);
 
   /* --- Status ------------------------------------------------------------- */
+  /*
+   * The `*-subtle` pair is a **chip**, not a fill: a tint the reader's eye skims
+   * past, carrying its meaning in the text on it. That is what keeps the accent
+   * the loudest thing on a screen — see 0001's "Status vocabulary".
+   *
+   * `neutral` is a status like the rest and has its own pair rather than
+   * borrowing `surface-sunken` + `on-surface-muted`, which is how it came to be
+   * the one chip nobody had measured: that pair is 4.34:1, under AA (TAR-514).
+   */
+  --color-neutral-subtle: var(--palette-slate-100);
+  --color-on-neutral-subtle: var(--palette-slate-600);
   --color-success: var(--palette-green-600);
   --color-success-subtle: var(--palette-green-100);
   --color-on-success-subtle: var(--palette-green-700);
@@ -108,22 +119,38 @@
 
   --color-accent: var(--palette-green-500);
   --color-accent-hover: var(--palette-green-300);
-  --color-accent-subtle: var(--palette-green-700);
+  /*
+   * A tint of the accent, not a saturated step of it. The tenant override
+   * derives this same role by mixing the brand colour 86% toward the surface
+   * (`packages/contracts/src/branding-theme.ts`), so a mid-scale primitive here
+   * made the *unbranded* console the only one whose selected rows, avatars and
+   * accent chips were solid blocks of colour. Now both agree.
+   */
+  --color-accent-subtle: var(--palette-green-900);
   --color-on-accent: var(--palette-slate-950);
   --color-on-accent-subtle: var(--palette-green-100);
 
+  /*
+   * The chip tints, one stand-off from the surface for every hue. Before
+   * TAR-514 these were mid-scale primitives — `green-700`, `blue-500`,
+   * `amber-600`, `red-600` — which made a dark conversation row read as four
+   * solid pills beside a button that was quieter than all of them. The
+   * hierarchy is: solid accent button > chip > body text > muted text.
+   */
+  --color-neutral-subtle: var(--palette-slate-750);
+  --color-on-neutral-subtle: var(--palette-slate-100);
   --color-success: var(--palette-green-300);
-  --color-success-subtle: var(--palette-green-700);
+  --color-success-subtle: var(--palette-green-900);
   --color-on-success-subtle: var(--palette-green-100);
   --color-warning: var(--palette-amber-100);
-  --color-warning-subtle: var(--palette-amber-600);
+  --color-warning-subtle: var(--palette-amber-900);
   --color-on-warning-subtle: var(--palette-amber-100);
   --color-danger: var(--palette-red-300);
   --color-danger-hover: var(--palette-red-100);
-  --color-danger-subtle: var(--palette-red-600);
+  --color-danger-subtle: var(--palette-red-900);
   --color-on-danger-subtle: var(--palette-red-100);
   --color-info: var(--palette-blue-300);
-  --color-info-subtle: var(--palette-blue-500);
+  --color-info-subtle: var(--palette-blue-900);
   --color-on-info-subtle: var(--palette-blue-100);
 
   /*
@@ -243,6 +270,7 @@
   --size-rail-collapsed: var(--scale-size-rail-collapsed);
   --size-bar: var(--scale-size-bar);
   --size-marker: var(--scale-size-marker);
+  --size-marker-dot: var(--scale-size-marker-dot);
   /* The tenant logo's reserved box: chrome-sized in the shell, larger above the
      sign-in form. See `BrandLogo` for why both axes are fixed. */
   --size-brand-block: var(--scale-size-brand-block-sm);

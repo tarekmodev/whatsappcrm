@@ -268,7 +268,13 @@ export const content = {
     emptyHeading: 'No conversations here yet',
     emptyBody: 'Conversations assigned to you or your teams appear in this list.',
     emptyAllBody: 'Nothing in the workspace matches this filter.',
-    unreadCount: (count: number) => `${count} unread`,
+    /**
+     * The word beside the number in a `Badge variant="count"`. The chip shows
+     * the digits and nothing else — a count is a count, not the sentence "2
+     * unread" in a pill (0001, "Status vocabulary") — so this travels with it
+     * invisibly and is what a screen reader hears after the number.
+     */
+    unreadUnit: 'unread',
     assignedTo: (name: string) => `Assigned to ${name}`,
     /**
      * Somebody holds this thread and the console could not resolve who — the

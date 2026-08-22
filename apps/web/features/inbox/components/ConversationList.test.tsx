@@ -126,9 +126,12 @@ describe('ConversationList', () => {
       ],
     });
 
+    // Both holders are avatars since TAR-514, so the name they stand for is
+    // what a screen reader hears rather than what a pill spells out.
     expect(screen.getByText(content.inbox.assignedTo('Amina Haddad'))).toBeInTheDocument();
     expect(screen.getByText(content.inbox.assignedToTeam('Billing'))).toBeInTheDocument();
-    expect(screen.getByText(content.inbox.unreadCount(2))).toBeInTheDocument();
+    // And the unread count is a count, not the sentence "2 unread" in a pill.
+    expect(screen.getByText(content.inbox.unreadUnit).parentElement).toHaveTextContent('2');
     expect(screen.queryByText(AMINA_ID)).not.toBeInTheDocument();
     expect(screen.queryByText(content.inbox.unclaimed)).not.toBeInTheDocument();
   });

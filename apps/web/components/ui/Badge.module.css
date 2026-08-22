@@ -2,20 +2,43 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  padding-inline: var(--space-2);
-  padding-block: var(--space-1);
   border: var(--border-hairline) solid transparent;
   border-radius: var(--radius-pill);
-  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-medium);
   line-height: var(--line-height-tight);
   white-space: nowrap;
 }
 
+/* --- Sizes ---------------------------------------------------------------- */
+/*
+ * Two, and the difference is the chip's whole weight: `sm` is what a row or a
+ * table cell carries, `md` is the one chip a detail header is allowed. A third
+ * size is how a chip starts competing with a button.
+ */
+.badge[data-size='sm'] {
+  padding-inline: var(--space-2);
+  padding-block: var(--space-1);
+  font-size: var(--font-size-caption);
+}
+
+.badge[data-size='md'] {
+  padding-inline: var(--space-3);
+  padding-block: var(--space-1);
+  font-size: var(--font-size-body-sm);
+}
+
+/* --- Tones ---------------------------------------------------------------- */
+/*
+ * Every tone is a `*-subtle` tint with its `on-*-subtle` text — a chip the eye
+ * skims past, never a saturated fill. The dark theme's tints sit the same
+ * distance above its surface as the light theme's sit below white, so a chip
+ * cannot out-shout the accent button beside it whatever hue a tenant picks
+ * (0001, "Status vocabulary").
+ */
 .badge[data-tone='neutral'] {
-  background: var(--color-surface-sunken);
+  background: var(--color-neutral-subtle);
   border-color: var(--color-border);
-  color: var(--color-on-surface-muted);
+  color: var(--color-on-neutral-subtle);
 }
 
 .badge[data-tone='accent'] {
@@ -43,10 +66,85 @@
   color: var(--color-on-info-subtle);
 }
 
+/* --- Variants ------------------------------------------------------------- */
+/*
+ * Low-emphasis metadata — a channel, a team. Deliberately toneless: it is the
+ * variant for the things that are *not* status, so a tone on it would be the
+ * badge soup this variant exists to drain. It reads `on-neutral-subtle` rather
+ * than `on-surface-muted` because a chip lands on the sunken regions too, where
+ * muted text is 4.34:1.
+ */
+.badge[data-variant='outline'] {
+  background: none;
+  border-color: var(--color-border);
+  color: var(--color-on-neutral-subtle);
+}
+
+/*
+ * A number, not a sentence. `tabular-nums` and a min-width keep `1` and `99` the
+ * same shape, so a column of counts does not jitter as they change.
+ */
+.badge[data-variant='count'] {
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-weight-strong);
+}
+
+.badge[data-variant='count'][data-size='sm'] {
+  min-inline-size: var(--size-icon-md);
+  padding-inline: var(--space-1);
+}
+
+.badge[data-variant='count'][data-size='md'] {
+  min-inline-size: var(--size-control-sm);
+  padding-inline: var(--space-2);
+}
+
+/*
+ * Presence, with no number to give. Decorative by construction — the parent
+ * names it — so it carries no text and no border of its own, and it takes the
+ * *solid* status colour rather than the tint: at 8px a tint is invisible.
+ */
+.badge[data-variant='dot'] {
+  inline-size: var(--size-marker-dot);
+  block-size: var(--size-marker-dot);
+  padding: var(--space-0);
+  border-color: transparent;
+}
+
+.badge[data-variant='dot'][data-tone='neutral'] {
+  background: var(--color-on-surface-muted);
+}
+
+.badge[data-variant='dot'][data-tone='accent'] {
+  background: var(--color-accent);
+}
+
+.badge[data-variant='dot'][data-tone='success'] {
+  background: var(--color-success);
+}
+
+.badge[data-variant='dot'][data-tone='warning'] {
+  background: var(--color-warning);
+}
+
+.badge[data-variant='dot'][data-tone='danger'] {
+  background: var(--color-danger);
+}
+
+.badge[data-variant='dot'][data-tone='info'] {
+  background: var(--color-info);
+}
+
 /* In forced-colors mode the tone backgrounds are dropped, so the border is what
-   keeps the badge readable as a discrete object. */
+   keeps the badge readable as a discrete object. The dot has no text to fall
+   back on, so it keeps a filled shape instead. */
 @media (forced-colors: active) {
   .badge {
     border-color: CanvasText;
+  }
+
+  .badge[data-variant='dot'] {
+    background: CanvasText;
   }
 }

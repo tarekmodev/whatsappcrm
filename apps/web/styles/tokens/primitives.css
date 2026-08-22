@@ -13,6 +13,24 @@
   --palette-white: #ffffff;
   --palette-black: #000000;
 
+  /*
+   * --- A note on the `*-900` steps, and on `slate-750` ---------------------
+   *
+   * They are one family across four hues: the **dark chip tints**, the dark
+   * theme's answer to what `green-100` does in the light one. A status chip
+   * renders on a tint the eye skims past, never on a saturated fill.
+   *
+   * Each is its hue at half saturation, tuned to the *same* stand-off from the
+   * dark surface — 1.45:1, against the light tints' 1.10–1.23:1 below white — so
+   * no status shouts louder than another, and none of them competes with a solid
+   * accent button, which stands off that surface at 2.7–5.4:1 whatever hue a
+   * tenant supplies (TAR-514). The separation is lightness and chroma, never
+   * hue, which is why a blue-branded tenant does not re-break it.
+   *
+   * Re-measure both stand-offs, not only the text pair, before moving one — see
+   * 0001's contrast tables, which `styles/tokens/tokens.test.ts` asserts.
+   */
+
   --palette-slate-50: #f8fafc;
   --palette-slate-100: #f1f5f9;
   --palette-slate-200: #e2e8f0;
@@ -21,6 +39,12 @@
   --palette-slate-500: #64748b;
   --palette-slate-600: #475569;
   --palette-slate-700: #334155;
+  /*
+   * The neutral member of the chip-tint family noted above. Between 700 and 800
+   * so a neutral chip clears both the dark surface it sits on and the raised one
+   * (`slate-800`), which `slate-700` — the dark selected row — does not.
+   */
+  --palette-slate-750: #28344a;
   --palette-slate-800: #1e293b;
   --palette-slate-900: #0f172a;
   --palette-slate-950: #020617;
@@ -35,6 +59,7 @@
   --palette-green-500: #069c68;
   --palette-green-600: #067a52;
   --palette-green-700: #05613f;
+  --palette-green-900: #143c2e;
 
   /*
    * Sidebar navy. Its own family rather than a reuse of the slate scale: the
@@ -49,15 +74,18 @@
   --palette-amber-100: #fdf0d5;
   --palette-amber-500: #a16207;
   --palette-amber-600: #854d0e;
+  --palette-amber-900: #443217;
 
   --palette-red-100: #fde3e3;
   --palette-red-500: #b3261e;
   --palette-red-600: #8f1d17;
   --palette-red-300: #f0a9a4;
+  --palette-red-900: #5c221f;
 
   --palette-blue-100: #dde9fb;
   --palette-blue-500: #1d4ed8;
   --palette-blue-300: #a4bff2;
+  --palette-blue-900: #213263;
 
   /*
    * --- Spacing scale ------------------------------------------------------
@@ -155,6 +183,11 @@
   --scale-size-bar: 3.5rem;
   /* The width the accent marker on a current nav entry occupies. */
   --scale-size-marker: 3px;
+  /*
+   * The dot a `Badge variant="dot"` draws. Wider than `--scale-size-marker`,
+   * which is a 3px rule beside a label and disappears as a circle on its own.
+   */
+  --scale-size-marker-dot: 0.5rem;
 
   /*
    * The box a tenant's uploaded logo is drawn into (TAR-29). Fixed in both axes

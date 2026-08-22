@@ -1,0 +1,10 @@
+/*
+ * The avatar that stands in for a text "Assigned to …" pill. `inline-flex` so
+ * the visually-hidden name it carries cannot open a gap beside the circle, and
+ * so it sits on the chip row's baseline like the chips do.
+ */
+.holder {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
