@@ -27,9 +27,17 @@ export type PlanLimitName = 'seats' | 'conversationsPerPeriod';
  * knows whether the tenant is at the cap or past it — the second is a bug in
  * enforcement and the first is enforcement working.
  *
- * The message names a support contact rather than a checkout page on purpose:
- * TAR-37 is in `backlog`, so there is no plan to upgrade to yet (0009, risk 4).
- * When it lands, this string is the one place that changes.
+ * The message names the **upgrade path** rather than a support contact, and
+ * that is the one line TAR-37 changed here. Until billing landed there was no
+ * plan to upgrade to (0009, risk 4), so "contact support" was the only honest
+ * answer; now `GET /api/v1/billing/plans` exists and the refusal can tell an
+ * admin what to do about it.
+ *
+ * It names the destination in words rather than as a URL. The console renders
+ * the link — from this error's `code` and `details`, which is what
+ * `PlanListResponse` and the seat panel are for — and a message carrying a path
+ * would put a routing decision inside a domain error, where a console redesign
+ * would silently make it wrong.
  */
 export class PlanLimitExceededError extends Error {
   constructor(
@@ -51,7 +59,8 @@ export class PlanLimitExceededError extends Error {
       cap,
       used,
       `This workspace's plan includes ${cap} seat(s) and all of them are taken. ` +
-        'Remove a member or withdraw a pending invitation, or contact support to raise the limit.',
+        'Remove a member, withdraw a pending invitation, or upgrade to a plan with more seats ' +
+        'from billing settings.',
     );
   }
 
@@ -69,8 +78,8 @@ export class PlanLimitExceededError extends Error {
       cap,
       used,
       `This workspace's plan includes ${cap} conversation(s) per period, and that has been ` +
-        'reached. Incoming messages are still being received and stored; contact support to ' +
-        'raise the limit before replying.',
+        'reached. Incoming messages are still being received and stored; upgrade to a plan with ' +
+        'a larger allowance from billing settings to reply.',
     );
   }
 }

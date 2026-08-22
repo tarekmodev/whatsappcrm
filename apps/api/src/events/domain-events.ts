@@ -33,6 +33,8 @@ export const TICKET_ESCALATED_EVENT = 'ticket.escalated';
 export const CONVERSATION_ASSIGNED_EVENT = 'conversation.assigned';
 export const SLA_BREACHED_EVENT = 'sla.breached';
 export const CANNED_RESPONSE_CHANGED_EVENT = 'canned_response.changed';
+export const SEATS_CHANGED_EVENT = 'tenant.seats_changed';
+export const CONVERSATION_VOLUME_CHANGED_EVENT = 'tenant.conversation_volume_changed';
 
 /**
  * Something happened that may have ended one or more of this user's sessions —
@@ -338,4 +340,67 @@ export interface CannedResponseChangedEvent {
   readonly tenantId: string;
   readonly cannedResponseId: string;
   readonly change: 'saved' | 'deleted';
+}
+
+/**
+ * The number of seats a tenant holds may have changed (TAR-37).
+ *
+ * Emitted after the transaction that changed it commits, by the invitation and
+ * membership paths — the two places `PlanLimitsService.assertSeatAvailable`
+ * already guards. It says *that* the count moved, never what to; billing re-reads
+ * the number, because a job that ran with a count in its payload would push a
+ * stale one after a retry.
+ *
+ * ## Why an event rather than a call
+ *
+ * `IdentityModule` and `PeopleModule` must not know that billing exists. They
+ * own who holds a seat; whether anyone is charged for it is a different
+ * question, answered by a module the layering rule forbids either of them to
+ * import. So what they share is this type rather than a class — the same shape
+ * `WebhooksModule` and `RealtimeModule` already use across the same boundary.
+ *
+ * On the in-process bus, where loss is acceptable: a missed push means the
+ * provider's seat count lags ours until the nightly reconciliation corrects it,
+ * which is under-billing for a few hours and never over-serving. The durable
+ * mechanism is the queued job the subscriber creates, not this emit.
+ */
+export interface SeatsChangedEvent {
+  readonly tenantId: string;
+  /** What moved the count. Log context only; nothing branches on it. */
+  readonly cause: 'invite_created' | 'invite_revoked' | 'invite_accepted' | 'member_removed';
+}
+
+/**
+ * A tenant opened a conversation and its metered total moved (TAR-37).
+ *
+ * Emitted after the transaction that recorded it commits, and **only when the
+ * tenant has a finite allowance** — a tenant with no ceiling has no threshold to
+ * cross, and announcing every conversation it opens would be a message per
+ * thread for nobody.
+ *
+ * ## It carries the count, not the verdict
+ *
+ * Whether this crossed a warning line is billing's question: the fraction is
+ * `BILLING_VOLUME_WARN_AT`, the policy is `BILLING_VOLUME_POLICY`, and neither
+ * belongs to the ingest path. So this says what happened — `opened` conversations
+ * against `cap`, in the period starting `periodStart` — and the subscriber
+ * decides what it means.
+ *
+ * ## Once per crossing, by construction
+ *
+ * `opened` is the value the counter holds **after** this increment, and the
+ * increment was one. So the subscriber knows the previous value exactly, and
+ * "crossed" is `previous < threshold <= opened` — true for exactly one event per
+ * period, because the upsert that produced it took a row lock. That is what
+ * makes the warning once-per-period without a second table remembering whether
+ * it has already been sent.
+ */
+export interface ConversationVolumeChangedEvent {
+  readonly tenantId: string;
+  /** Conversations opened in this period, **after** the increment that caused this. */
+  readonly opened: number;
+  /** The plan's ceiling. Always finite — an uncapped tenant emits nothing. */
+  readonly cap: number;
+  /** The period the count belongs to, so a subscriber can name it. */
+  readonly periodStart: Date;
 }

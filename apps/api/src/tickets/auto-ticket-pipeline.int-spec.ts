@@ -17,7 +17,9 @@ import { WebhookEventsRepository } from '../webhooks/webhook-events.repository';
 import { WebhookIngestService } from '../webhooks/webhook-ingest.service';
 import { WhatsAppAccountResolver } from '../webhooks/whatsapp-account.resolver';
 import { WhatsAppEventProcessor } from '../webhooks/whatsapp-event.processor';
+import { PlanLimitsService } from '../entitlements/plan-limits.service';
 import { UsageCounterService } from '../entitlements/usage-counter.service';
+import { volumePolicyConfig } from '../entitlements/volume-policy.test-config';
 import { UsagePeriodResolver } from '../entitlements/usage-period.resolver';
 import { WhatsAppInboundWriter } from '../webhooks/whatsapp-inbound.writer';
 import { TicketLinkerService } from './ticket-linker.service';
@@ -336,6 +338,10 @@ describe('auto-ticket creation from a real inbound delivery', () => {
         emitter,
         queue,
         new UsageCounterService(new UsagePeriodResolver()),
+        new PlanLimitsService(
+          volumePolicyConfig(),
+          new UsageCounterService(new UsagePeriodResolver()),
+        ),
       ),
       tenantContext,
     );

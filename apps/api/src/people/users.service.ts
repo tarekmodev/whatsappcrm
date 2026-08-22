@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   type AgentAvailability,
   type CursorPage,
@@ -14,6 +15,7 @@ import {
 import { AUDIT_ACTIONS } from '../audit/audit.actions';
 import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
+import { SEATS_CHANGED_EVENT, type SeatsChangedEvent } from '../events/domain-events';
 import { Prisma } from '../generated/prisma/client';
 import { LoginThrottleService } from '../identity/login-throttle.service';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
@@ -83,6 +85,7 @@ export class UsersService {
     private readonly audit: AuditService,
     private readonly sessions: SessionRevocationService,
     private readonly loginThrottle: LoginThrottleService,
+    private readonly events: EventEmitter2,
   ) {}
 
   /**
@@ -347,6 +350,17 @@ export class UsersService {
     });
 
     await this.sessions.purgeCacheFor(tenantId, userId);
+
+    // After the commit, and emitted rather than called: the seat this released
+    // is a billing fact, and whether anyone is charged for it is a question this
+    // module must not be able to answer. TAR-37 subscribes. Removal only ever
+    // *reduces* the count, and reductions are deferred to the end of the paid
+    // period by the subscriber — so this is a durable record of the change
+    // rather than an immediate credit.
+    this.events.emit(SEATS_CHANGED_EVENT, {
+      tenantId,
+      cause: 'member_removed',
+    } satisfies SeatsChangedEvent);
 
     this.logger.log(`Removed user ${userId}`);
   }

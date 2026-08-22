@@ -144,6 +144,11 @@ const mailerProvider: Provider = {
     SessionService,
     SessionPrincipalSource,
     MAILER,
+    // TAR-37's checkout composes its return URLs against the tenant's own host
+    // through this, for the reason `absoluteUrl` states: a redirect target that
+    // came from the request is an open redirect with a payment page in front of
+    // it. One resolver, so the rule cannot be re-derived differently.
+    TenantLinkService,
   ],
 })
 export class IdentityModule {}

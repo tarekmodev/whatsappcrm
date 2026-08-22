@@ -398,6 +398,22 @@ export const OUTBOUND_EMAIL_TEMPLATES = [
   'tenant_deleted',
   /** `suspended | past_due | cancelled → active`. */
   'tenant_reactivated',
+
+  // TAR-37 — the conversation volume allowance (billing contract, volume policy).
+  /**
+   * The tenant crossed `BILLING_VOLUME_WARN_AT` of its conversation allowance.
+   * Sent **once per billing period**, whichever volume policy is configured —
+   * the warning is the part that must not depend on the policy, because it is
+   * what gives an integrator time to act before the ceiling is reached.
+   */
+  'volume_warning',
+  /**
+   * The allowance is spent. Under `warn` the sends continue and this is a
+   * notice; under `block` outbound is refused from here and this is why. Also
+   * once per period, and separate from `volume_warning` because "you are close"
+   * and "you are out, and here is what that means today" are different messages.
+   */
+  'volume_limit_reached',
 ] as const;
 
 export type OutboundEmailTemplate = (typeof OUTBOUND_EMAIL_TEMPLATES)[number];

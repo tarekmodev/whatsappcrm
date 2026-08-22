@@ -18,7 +18,9 @@ import { InviteService } from './invite.service';
 import { LoginThrottleService } from './login-throttle.service';
 import { PasswordService } from './password.service';
 import { PlanLimitExceededError } from '../entitlements/entitlements.errors';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PlanLimitsService } from '../entitlements/plan-limits.service';
+import { volumePolicyConfig } from '../entitlements/volume-policy.test-config';
 import { UsageCounterService } from '../entitlements/usage-counter.service';
 import { UsagePeriodResolver } from '../entitlements/usage-period.resolver';
 import { createSessionToken, hashSessionToken } from './session-token';
@@ -331,7 +333,8 @@ function buildService(state: FakeState): {
     // The real one. It is a pure reader over the transaction client, so the fake
     // above is all it needs — and stubbing it would make the seat-cap tests
     // below assert against a mock instead of against the counting rule.
-    new PlanLimitsService(new UsageCounterService(new UsagePeriodResolver())),
+    new PlanLimitsService(volumePolicyConfig(), new UsageCounterService(new UsagePeriodResolver())),
+    new EventEmitter2(),
   );
 
   return { invites, recorded, tenantContext };

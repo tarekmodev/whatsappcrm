@@ -4,6 +4,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AiModule } from './ai/ai.module';
 import { AssignmentModule } from './assignment/assignment.module';
 import { AuditModule } from './audit/audit.module';
+import { BillingModule } from './billing/billing.module';
 import { CannedResponsesModule } from './canned-responses/canned-responses.module';
 import { TenantContextMiddleware } from './common/tenant-context/tenant-context.middleware';
 import { TenantContextModule } from './common/tenant-context/tenant-context.module';
@@ -120,6 +121,13 @@ import { WorkflowsModule } from './workflows/workflows.module';
     // for the plan gate — both declared above it, so the ordering here matches
     // the dependency rather than only reading well.
     AiModule,
+    // Last, and after every module it reads from: `EntitlementsModule` for the
+    // counts, `TenancyModule` for the lifecycle seam dunning runs through,
+    // `WebhooksModule` for the one store-then-enqueue table, `IdentityModule`
+    // for the mailer and the host resolver. Nothing imports it back — the two
+    // paths that feed it arrive on the domain bus, which is what keeps identity,
+    // people and webhooks free of any knowledge that billing exists.
+    BillingModule,
   ],
 })
 export class AppModule implements NestModule {

@@ -229,6 +229,7 @@ describe('the session lifecycle, end to end', () => {
       audit,
       new SessionRevocationService(audit, sessions),
       throttle,
+      new EventEmitter2(),
     );
 
     await removeFixture();

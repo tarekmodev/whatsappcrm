@@ -30,7 +30,15 @@ describe('WebhookSweeperService', () => {
   it('looks for events that have been stuck for longer than the threshold', async () => {
     await sweeper.sweep(NOW);
 
-    expect(findStale).toHaveBeenCalledWith(new Date(NOW.getTime() - STUCK_AFTER_MS), 200);
+    expect(findStale).toHaveBeenCalledWith(
+      // Meta's rows only. TAR-37's billing events share this table and this
+      // durability rule but are drained by their own worker on their own queue,
+      // so a sweep that reclaimed them here would hand a billing payload to the
+      // WhatsApp processor and park every one of them.
+      'whatsapp',
+      new Date(NOW.getTime() - STUCK_AFTER_MS),
+      200,
+    );
   });
 
   /**

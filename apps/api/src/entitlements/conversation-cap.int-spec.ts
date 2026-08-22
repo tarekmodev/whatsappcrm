@@ -4,6 +4,7 @@ import { createPrismaClient } from '../prisma/prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from '../prisma/tenant-scope.extension';
 import { PlanLimitExceededError } from './entitlements.errors';
 import { PlanLimitsService } from './plan-limits.service';
+import { volumePolicyConfig } from './volume-policy.test-config';
 import { UsageCounterService } from './usage-counter.service';
 import { UsagePeriodResolver } from './usage-period.resolver';
 
@@ -38,7 +39,7 @@ describe('the conversation-volume cap', () => {
   const tenantContext = new TenantContextService();
   const periods = new UsagePeriodResolver();
   const usage = new UsageCounterService(periods);
-  const planLimits = new PlanLimitsService(usage);
+  const planLimits = new PlanLimitsService(volumePolicyConfig(), usage);
 
   let systemPrisma: PrismaClient;
   let tenantBase: PrismaClient;

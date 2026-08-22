@@ -1,6 +1,7 @@
 import type { Prisma } from '../generated/prisma/client';
 import { PlanLimitExceededError } from './entitlements.errors';
 import { PlanLimitsService } from './plan-limits.service';
+import { volumePolicyConfig } from './volume-policy.test-config';
 import { UsageCounterService } from './usage-counter.service';
 import { UsagePeriodResolver } from './usage-period.resolver';
 
@@ -88,7 +89,10 @@ function clientFor({ seatCap, members, pendingInvites }: Counts): {
 }
 
 describe('PlanLimitsService.assertSeatAvailable', () => {
-  const service = new PlanLimitsService(new UsageCounterService(new UsagePeriodResolver()));
+  const service = new PlanLimitsService(
+    volumePolicyConfig(),
+    new UsageCounterService(new UsagePeriodResolver()),
+  );
 
   it('allows a seat while the tenant is under its cap', async () => {
     const { tx } = clientFor({ seatCap: 3, members: 1, pendingInvites: 1 });

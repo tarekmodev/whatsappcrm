@@ -1,3 +1,4 @@
+import { VolumePolicySchema } from '@whatsappcrm/contracts';
 import { z } from 'zod';
 import { parsePlatformAdminCredentials } from '../common/security/platform-admin-credentials';
 
@@ -460,6 +461,101 @@ const envShape = z.object({
   WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
 
   // ---------------------------------------------------------------------------
+  // Billing (TAR-37). Polar.sh is the payment rail; nothing outside
+  // `src/billing/providers/polar/` reads a `POLAR_*` key.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Which adapter is bound to the `BILLING_PROVIDER` token.
+   *
+   * **`fake` by default, and that is the safe direction.** `FakeBillingProvider`
+   * opens no network connection and moves no money, so an environment that was
+   * never given Polar credentials runs the whole checkout → webhook → activation
+   * flow locally instead of failing at the first request. A deployment turns the
+   * real rail on deliberately, by setting this to `polar` — at which point the
+   * two credentials below stop being optional (see the refinement).
+   */
+  BILLING_PROVIDER_DRIVER: z.enum(['polar', 'fake']).default('fake'),
+
+  /**
+   * The sandbox/production switch TAR-37's acceptance criteria require to be a
+   * configuration value.
+   *
+   * Defaults to `sandbox`, and production is the only environment that sets it
+   * explicitly — the failure direction of a missing value has to be "no live
+   * charges". Polar's sandbox and production credentials are separate and not
+   * interchangeable, so a token from the wrong estate fails at Polar rather than
+   * charging the wrong customer.
+   */
+  POLAR_ENVIRONMENT: z.enum(['sandbox', 'production']).default('sandbox'),
+
+  /**
+   * Polar Organization Access Token. Optional here, on the same reasoning as
+   * `WHATSAPP_APP_SECRET`: an environment that was never given one must refuse
+   * checkout rather than stop the API booting. Absent with
+   * `BILLING_PROVIDER_DRIVER=polar` is a failed boot, because that combination
+   * is a deployment that thinks it is taking payments and cannot.
+   */
+  POLAR_ACCESS_TOKEN: z.string().min(1).optional(),
+
+  /**
+   * The Standard Webhooks signing secret for the Polar endpoint (`whsec_…`,
+   * base64 after the prefix — the SDK does the decode). Absent means every
+   * inbound billing webhook is refused, which is the fail-closed default an
+   * unauthenticated public route has to have.
+   */
+  POLAR_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+  /**
+   * Upper bound on one call to Polar. Every network call has a timeout; without
+   * one a slow provider holds a request thread and a database connection for as
+   * long as it likes. Ten seconds is Polar's own webhook timeout, and generous
+   * for a checkout create.
+   */
+  POLAR_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(10_000),
+
+  /**
+   * What happens when a tenant reaches its conversation allowance —
+   * `VolumePolicySchema`, and **the documented setting** TAR-37's acceptance
+   * criteria ask for rather than an implicit behaviour.
+   *
+   * `warn` by default, deliberately: blocking a helpdesk's replies is the most
+   * damaging thing this system can do to a tenant's *customers*, and a reseller
+   * will want a conversation before it happens. Inbound is never refused under
+   * either policy.
+   */
+  BILLING_VOLUME_POLICY: VolumePolicySchema.default('warn'),
+
+  /**
+   * The fraction of the allowance that triggers the once-per-period warning.
+   * Strictly below 1, because at 1 the warning and the ceiling would be the same
+   * event and there would be no notice to act on.
+   */
+  BILLING_VOLUME_WARN_AT: z.coerce.number().gt(0).lt(1).default(0.8),
+
+  /**
+   * How often the reconciliation job compares our subscriptions against Polar's.
+   * Nightly: a missed webhook is silent, and a wrong subscription state is not
+   * something a tenant reports quickly.
+   */
+  BILLING_RECONCILE_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .default(24 * 60 * 60 * 1_000),
+
+  /**
+   * How far a `webhook-timestamp` may be from now before the delivery is
+   * refused as a replay. Standard Webhooks signs the timestamp precisely so a
+   * captured, still-valid signature cannot be re-presented indefinitely.
+   */
+  BILLING_WEBHOOK_TOLERANCE_MS: z.coerce
+    .number()
+    .int()
+    .min(30_000)
+    .default(5 * 60 * 1_000),
+
+  // ---------------------------------------------------------------------------
   // SLA timers (TAR-26)
   // ---------------------------------------------------------------------------
 
@@ -750,6 +846,25 @@ export const envSchema = envShape.superRefine((env, ctx) => {
         'is required when NODE_ENV=production — without it the API cannot trust the host the ' +
         'web tier forwards, and no tenant resolves in a deployed environment.',
     });
+  }
+
+  // TAR-37: selecting the real rail is what makes the credentials mandatory, not
+  // `NODE_ENV`. A deployment that has not been given Polar credentials yet runs
+  // on `fake` and boots; one that says `polar` and has no token would come up
+  // healthy and fail every checkout with `upstream_unavailable`, which reads as
+  // a Polar outage rather than as a missing secret.
+  if (env.BILLING_PROVIDER_DRIVER === 'polar') {
+    for (const key of ['POLAR_ACCESS_TOKEN', 'POLAR_WEBHOOK_SECRET'] as const) {
+      if (!env[key]) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message:
+            'is required when BILLING_PROVIDER_DRIVER=polar. Leave the driver on `fake` until ' +
+            'the Polar credentials for this environment are provisioned.',
+        });
+      }
+    }
   }
 
   if (env.AUTH_STUB_ENABLED === AUTH_STUB_ON && env.NODE_ENV === 'production') {

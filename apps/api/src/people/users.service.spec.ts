@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { permissionsForRole, type SessionPrincipal, type TenantRole } from '@whatsappcrm/contracts';
 import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
@@ -225,7 +226,14 @@ function buildService(state: FakeState): {
   } as unknown as LoginThrottleService;
 
   return {
-    users: new UsersService(prisma, tenantContext, audit, sessions, loginThrottle),
+    users: new UsersService(
+      prisma,
+      tenantContext,
+      audit,
+      sessions,
+      loginThrottle,
+      new EventEmitter2(),
+    ),
     recorded,
     tenantContext,
   };

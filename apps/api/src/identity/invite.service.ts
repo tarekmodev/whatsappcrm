@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   AUTH_POLICY,
   type CursorPage,
@@ -16,6 +17,7 @@ import { AUDIT_ACTIONS } from '../audit/audit.actions';
 import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { PlanLimitsService } from '../entitlements/plan-limits.service';
+import { SEATS_CHANGED_EVENT, type SeatsChangedEvent } from '../events/domain-events';
 import { Prisma } from '../generated/prisma/client';
 import { EmailAlreadyRegisteredError } from '../people/people.errors';
 import { assertRoleAssignable } from '../people/role-assignment';
@@ -94,6 +96,7 @@ export class InviteService {
     private readonly sessions: SessionService,
     private readonly loginThrottle: LoginThrottleService,
     private readonly planLimits: PlanLimitsService,
+    private readonly events: EventEmitter2,
   ) {}
 
   /**
@@ -199,6 +202,14 @@ export class InviteService {
       return { invite: fromRawInvite(row), inserted: row.inserted, teamIds: input.teamIds };
     });
 
+    if (created.inserted) {
+      // A *new* invitation takes a seat; refreshing a live one does not — that
+      // seat was taken when the invitation was first sent and has been counted
+      // ever since. Announcing the refresh would queue a push that finds the
+      // same number and writes nothing.
+      this.announceSeatChange('invite_created');
+    }
+
     await this.deliver(created.invite, token, principal.displayName);
 
     return {
@@ -292,7 +303,7 @@ export class InviteService {
    * let a caller holding `user:invite` remove an account through the side door.
    */
   async revoke(inviteId: string): Promise<void> {
-    await this.prisma.$tenantTransaction(async (tx) => {
+    const revoked = await this.prisma.$tenantTransaction(async (tx) => {
       const invite = await tx.invite.findUnique({
         where: { id: inviteId },
         select: { id: true, email: true, acceptedAt: true, revokedAt: true },
@@ -305,7 +316,8 @@ export class InviteService {
       }
 
       if (invite.revokedAt !== null) {
-        return;
+        // Idempotent, and therefore silent: nothing moved, so no seat changed.
+        return false;
       }
 
       if (invite.acceptedAt !== null) {
@@ -324,7 +336,33 @@ export class InviteService {
         targetId: invite.id,
         metadata: { email: invite.email },
       });
+
+      return true;
     });
+
+    if (revoked) {
+      this.announceSeatChange('invite_revoked');
+    }
+  }
+
+  /**
+   * Announces that the tenant's seat count moved, **after the transaction that
+   * moved it has committed**.
+   *
+   * Emitted rather than called: whether anyone bills for a seat is not this
+   * module's question, and the module that answers it is one the layering rule
+   * forbids this one to import. `EventEmitter2.emit` is synchronous and its
+   * subscribers are dispatched without an await, so a subscriber that throws
+   * cannot fail an invitation that has already been sent.
+   *
+   * Acceptance is deliberately **not** announced: it turns a pending seat into a
+   * held one, and the total — which is what is billed — does not move.
+   */
+  private announceSeatChange(cause: SeatsChangedEvent['cause']): void {
+    this.events.emit(SEATS_CHANGED_EVENT, {
+      tenantId: this.tenantContext.requireTenantId(),
+      cause,
+    } satisfies SeatsChangedEvent);
   }
 
   /**
