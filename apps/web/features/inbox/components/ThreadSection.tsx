@@ -141,8 +141,9 @@ function ThreadUnavailable() {
     <div className={styles.thread}>
       <div className={styles.state}>
         <EmptyState
-          heading={content.inbox.threadUnavailableHeading}
-          body={content.inbox.threadUnavailableBody}
+          icon="warning"
+          title={content.inbox.threadUnavailableHeading}
+          description={content.inbox.threadUnavailableBody}
         />
       </div>
     </div>

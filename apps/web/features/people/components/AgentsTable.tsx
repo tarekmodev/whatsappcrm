@@ -112,8 +112,9 @@ export function AgentsTable({ users, teams, canEdit, canRemove, caller }: Agents
   if (users.length === 0) {
     return (
       <EmptyState
-        heading={content.people.agentsEmptyHeading}
-        body={content.people.agentsEmptyBody}
+        icon="people"
+        title={content.people.agentsEmptyHeading}
+        description={content.people.agentsEmptyBody}
       />
     );
   }

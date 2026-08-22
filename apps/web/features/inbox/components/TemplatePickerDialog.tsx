@@ -117,7 +117,7 @@ function TemplateResults({
   }
 
   if (state.status === 'failed') {
-    return <ErrorState onRetry={onRetry} body={state.message} requestId={state.requestId} />;
+    return <ErrorState onRetry={onRetry} description={state.message} requestId={state.requestId} />;
   }
 
   if (state.templates.length === 0) {
@@ -127,8 +127,9 @@ function TemplateResults({
     if (state.hasMore) {
       return (
         <EmptyState
-          heading={content.composer.templateDeepPageHeading}
-          body={content.composer.templateDeepPageBody}
+          icon="note"
+          title={content.composer.templateDeepPageHeading}
+          description={content.composer.templateDeepPageBody}
         />
       );
     }
@@ -138,13 +139,15 @@ function TemplateResults({
     // "that search matched none of the ones you have" need different next steps.
     return hasQuery ? (
       <EmptyState
-        heading={content.composer.templateNoMatchHeading}
-        body={content.composer.templateNoMatchBody}
+        icon="search"
+        title={content.composer.templateNoMatchHeading}
+        description={content.composer.templateNoMatchBody}
       />
     ) : (
       <EmptyState
-        heading={content.composer.templateEmptyHeading}
-        body={content.composer.templateEmptyBody}
+        icon="note"
+        title={content.composer.templateEmptyHeading}
+        description={content.composer.templateEmptyBody}
       />
     );
   }

@@ -101,8 +101,9 @@ export function CustomFieldsTable({ definitions, canManage }: CustomFieldsTableP
   if (definitions.length === 0) {
     return (
       <EmptyState
-        heading={content.customFields.emptyHeading}
-        body={content.customFields.emptyBody}
+        icon="settings"
+        title={content.customFields.emptyHeading}
+        description={content.customFields.emptyBody}
       />
     );
   }

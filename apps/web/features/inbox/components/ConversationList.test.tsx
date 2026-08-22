@@ -4,7 +4,7 @@ import type { ConversationResponse } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import { ConversationList, ConversationListSkeleton } from './ConversationList';
-import type { ClaimContext } from './ConversationRow';
+import type { ClaimContext, InboxListQuery } from './ConversationRow';
 
 vi.mock('@/features/inbox/inbox.actions', () => ({
   claimConversationAction: () => Promise.resolve({ status: 'success', data: {} }),
@@ -67,11 +67,13 @@ function renderList({
   claim = null,
   selectedId = null,
   query = QUERY,
+  canManageChannels = false,
 }: {
   conversations: readonly ConversationResponse[];
   claim?: ClaimContext | null;
   selectedId?: string | null;
-  query?: { scope: 'assigned' | 'unassigned' | 'all'; status: 'open' | undefined };
+  query?: InboxListQuery;
+  canManageChannels?: boolean;
 }) {
   return render(
     <ToastProvider>
@@ -82,6 +84,7 @@ function renderList({
         query={query}
         selectedId={selectedId}
         claim={claim}
+        canManageChannels={canManageChannels}
       />
     </ToastProvider>,
   );
@@ -146,11 +149,53 @@ describe('ConversationList', () => {
     expect(screen.queryByText(LIANG_ID)).not.toBeInTheDocument();
   });
 
-  it('explains an empty list rather than rendering a blank panel', () => {
-    renderList({ conversations: [], query: { scope: 'assigned', status: undefined } });
+  /**
+   * TAR-515: three answers, not one. An empty list used to say "no conversations
+   * here yet" whether nothing had ever arrived, a filter was empty, or a search
+   * had just matched nothing — and the last of those reads as a broken search.
+   */
+  it('says the workspace has no conversations only on the unfiltered view', () => {
+    renderList({
+      conversations: [],
+      query: { scope: 'all', status: undefined },
+      canManageChannels: true,
+    });
 
     expect(screen.getByText(content.inbox.emptyHeading)).toBeInTheDocument();
-    expect(screen.getByText(content.inbox.emptyBody)).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: content.inbox.emptyConnectAction }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers no way to connect a number to a principal who may not', () => {
+    renderList({ conversations: [], query: { scope: 'all', status: undefined } });
+
+    expect(screen.getByText(content.inbox.emptyHeading)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: content.inbox.emptyConnectAction })).toBeNull();
+  });
+
+  it('names the filter that is empty, and offers to widen it', () => {
+    renderList({ conversations: [], query: { scope: 'assigned', status: undefined } });
+
+    expect(
+      screen.getByText(content.inbox.filteredEmptyHeading(content.inbox.filterAssigned)),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: content.inbox.filteredEmptyAction }),
+    ).toBeInTheDocument();
+  });
+
+  it('falls back to unnamed copy for a filter combination no entry names', () => {
+    renderList({ conversations: [], query: { scope: 'unassigned', status: 'resolved' } });
+
+    expect(screen.getByText(content.inbox.filteredEmptyUnnamedHeading)).toBeInTheDocument();
+  });
+
+  it('quotes a search back and offers to clear it', () => {
+    renderList({ conversations: [], query: { scope: 'all', status: 'open', q: '+971 50' } });
+
+    expect(screen.getByText(content.search.emptyHeading('+971 50'))).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: content.search.clear })).toBeInTheDocument();
   });
 });
 

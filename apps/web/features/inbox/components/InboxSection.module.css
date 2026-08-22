@@ -1,0 +1,9 @@
+/*
+ * The list column's contract is that its child fills it (`InboxLayout.module.css`,
+ * `.list > *`). This is the next link in that chain: the stack grows to the
+ * column's height so the empty state inside it can be centred in the whole
+ * column rather than parked at the top of it.
+ */
+.sections {
+  flex: 1 0 auto;
+}
