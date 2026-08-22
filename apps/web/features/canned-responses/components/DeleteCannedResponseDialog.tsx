@@ -50,7 +50,7 @@ export function DeleteCannedResponseDialog({
   return (
     <FormDialog
       isOpen
-      title={content.cannedResponses.removeTitle}
+      title={content.cannedResponses.removeTitle(response.title)}
       submitLabel={content.cannedResponses.removeConfirm}
       submitVariant="danger"
       isPending={isPending}

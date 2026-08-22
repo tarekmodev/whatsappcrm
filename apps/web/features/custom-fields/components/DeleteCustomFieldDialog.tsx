@@ -51,7 +51,7 @@ export function DeleteCustomFieldDialog({
   return (
     <FormDialog
       isOpen
-      title={content.customFields.removeTitle}
+      title={content.customFields.removeTitle(definition.label)}
       submitLabel={content.customFields.removeConfirm}
       submitVariant="danger"
       isPending={isPending}

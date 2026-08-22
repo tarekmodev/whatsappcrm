@@ -37,7 +37,7 @@ export function RemoveAgentDialog({ user, onClose }: { user: UserResponse; onClo
   return (
     <FormDialog
       isOpen
-      title={content.people.removeAgentTitle}
+      title={content.people.removeAgentTitle(user.displayName)}
       submitLabel={content.people.removeAgentConfirm}
       submitVariant="danger"
       isPending={isPending}

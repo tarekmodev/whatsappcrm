@@ -3,13 +3,12 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import type { KnowledgeDocumentListItem } from '@whatsappcrm/contracts';
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
 import { DataTable, DataTableSkeleton, type DataTableColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { RelativeTime } from '@/components/ui/RelativeTime';
+import { RowActions } from '@/components/ui/RowActions';
 import { useToast } from '@/components/ui/ToastProvider';
-import { Cluster } from '@/components/layout/Cluster';
 import { useActionForm } from '@/lib/hooks/useActionForm';
 import { useContent } from '@/lib/content';
 import { reindexKnowledgeEntryAction } from '../chatbot.actions';
@@ -30,9 +29,10 @@ import styles from './KnowledgeDocumentsTable.module.css';
  * tooltip: the chatbot silently ignores it, so an admin who cannot see the
  * reason has an entry that looks present and is not.
  *
- * Row actions are real buttons and always visible. A hover-only action is
- * unreachable by touch and by keyboard, and this table's rows stack into cards
- * below the layout breakpoint where there is no hover at all.
+ * Row actions are real controls and always visible — never hover-only, which is
+ * unreachable by touch and by keyboard, and these rows stack into cards below the
+ * layout breakpoint where there is no hover at all. This is the one table with
+ * three of them, so it is also the one that collapses: see `KnowledgeRowActions`.
  */
 
 export interface KnowledgeDocumentsTableProps {
@@ -79,29 +79,15 @@ export function KnowledgeDocumentsTable({
         <RelativeTime isoTimestamp={document.updatedAt} label={content.chatbot.updatedAt} />
       ),
       actions: (document) => (
-        <Cluster gap="1" justify="end" className={styles.actions}>
-          <Button
-            size="sm"
-            variant="secondary"
-            aria-label={content.chatbot.editEntryAria(document.title)}
-            onClick={() => {
-              setEditing(document);
-            }}
-          >
-            {content.chatbot.editEntry}
-          </Button>
-          <ReindexButton document={document} />
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-label={content.chatbot.deleteEntryAria(document.title)}
-            onClick={() => {
-              setDeleting(document);
-            }}
-          >
-            {content.chatbot.deleteEntry}
-          </Button>
-        </Cluster>
+        <KnowledgeRowActions
+          document={document}
+          onEdit={() => {
+            setEditing(document);
+          }}
+          onDelete={() => {
+            setDeleting(document);
+          }}
+        />
       ),
     };
 
@@ -158,14 +144,27 @@ export function KnowledgeDocumentsTable({
 }
 
 /**
- * The one action that is a direct mutation rather than a dialog.
+ * This table's row actions — the one cluster in the app with three of them.
  *
- * Re-indexing is not destructive and asks nothing of the user, so a confirmation
- * would be a click for its own sake. Its own component because it needs its own
- * pending state — two rows re-indexing at once must show two spinners, not one
- * shared between them.
+ * Three peers at row level is more than a reader can rank at a glance, so the
+ * ladder in 0001 keeps only the most-used one inline and collapses the rest:
+ * `Edit` on the row, `Index again` and `Delete` behind the overflow. `RowActions`
+ * owns that rule; what belongs here is which action is the inline one.
+ *
+ * Its own component because re-indexing needs its own pending state — two rows
+ * re-indexing at once must show two spinners, not one shared between them. Its
+ * being a direct mutation rather than a dialog is also why it asks nothing first:
+ * it is not destructive, so a confirmation would be a click for its own sake.
  */
-function ReindexButton({ document }: { document: KnowledgeDocumentListItem }) {
+function KnowledgeRowActions({
+  document,
+  onEdit,
+  onDelete,
+}: {
+  document: KnowledgeDocumentListItem;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   const content = useContent();
   const { showToast } = useToast();
 
@@ -184,17 +183,33 @@ function ReindexButton({ document }: { document: KnowledgeDocumentListItem }) {
   const { submit, isPending } = useActionForm({ perform, onSuccess });
 
   return (
-    <Button
-      size="sm"
-      variant="secondary"
-      isPending={isPending}
-      aria-label={content.chatbot.reindexAria(document.title)}
-      onClick={() => {
-        submit();
-      }}
-    >
-      {content.chatbot.reindex}
-    </Button>
+    <RowActions
+      subject={document.title}
+      actions={[
+        {
+          key: 'edit',
+          label: content.chatbot.editEntry,
+          accessibleName: content.chatbot.editEntryAria(document.title),
+          onSelect: onEdit,
+        },
+        {
+          key: 'reindex',
+          label: content.chatbot.reindex,
+          accessibleName: content.chatbot.reindexAria(document.title),
+          isPending,
+          onSelect: () => {
+            submit();
+          },
+        },
+        {
+          key: 'delete',
+          label: content.chatbot.deleteEntry,
+          accessibleName: content.chatbot.deleteEntryAria(document.title),
+          isDestructive: true,
+          onSelect: onDelete,
+        },
+      ]}
+    />
   );
 }
 

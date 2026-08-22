@@ -14,7 +14,15 @@ import styles from './Button.module.css';
  * place a spinner is allowed, per the loading rules; section content uses skeletons.
  */
 
-export const BUTTON_VARIANTS = ['primary', 'secondary', 'ghost', 'danger'] as const;
+/**
+ * `danger` is the **solid** destructive control — a confirmation dialog's submit,
+ * where it is the one thing the dialog exists for. `dangerQuiet` is that same
+ * role at row weight: `--color-danger` text on a transparent ground, tinted on
+ * hover and given a danger focus ring. A table whose rows each carried a solid
+ * red button would make deletion the loudest thing on the page, which is the
+ * opposite mistake to the one it fixes — see 0001's "Row actions".
+ */
+export const BUTTON_VARIANTS = ['primary', 'secondary', 'ghost', 'danger', 'dangerQuiet'] as const;
 export const BUTTON_SIZES = ['sm', 'md'] as const;
 
 export type ButtonVariant = (typeof BUTTON_VARIANTS)[number];

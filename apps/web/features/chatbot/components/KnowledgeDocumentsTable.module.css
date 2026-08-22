@@ -20,28 +20,3 @@
   font-size: var(--font-size-caption);
   color: var(--color-danger);
 }
-
-.actions > * {
-  /* Never stretched to the cell's width: once the table stacks into cards, a
-     full-width "Delete" under a full-width "Edit" reads as two rows of one
-     action each rather than as one row of three. */
-  flex: 0 0 auto;
-}
-
-/*
- * Three row actions is more than any other table here carries, and the actions
- * column shrinks to its content — so left to `Cluster`'s default they wrap to
- * three lines and make every row three rows tall. Held on one line once the
- * table has the width to be a table, and allowed to wrap below that, where it
- * is a stacked card and wrapping is what keeps the buttons at a touch-target
- * size instead of squeezing them.
- *
- * A container query on the same 40rem boundary `DataTable` switches at, and a
- * literal for the same reason its own comment gives: a `@container` condition
- * cannot read a custom property.
- */
-@container (min-width: 40rem) {
-  .actions {
-    flex-wrap: nowrap;
-  }
-}

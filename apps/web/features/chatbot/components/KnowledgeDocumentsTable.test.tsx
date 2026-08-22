@@ -100,9 +100,46 @@ describe('KnowledgeDocumentsTable', () => {
       document({ id: '0192f010-0000-7000-8000-000000001002', title: 'Delivery times' }),
     ]);
 
+    openOverflow('Delivery times');
+
     expect(
       screen.getByRole('button', { name: content.chatbot.deleteEntryAria('Delivery times') }),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * The only cluster in the app with three actions, and the reason 0001's ladder
+ * has a rule for it: `Edit` stays on the row, `Index again` and `Delete` go
+ * behind the overflow, and the destructive one is last (TAR-709).
+ */
+describe('the row action ladder', () => {
+  const TITLE = 'Returns and refunds policy';
+
+  it('keeps only the most-used action inline', () => {
+    renderTable([document()]);
+
+    expect(
+      screen.getByRole('button', { name: content.chatbot.editEntryAria(TITLE) }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: content.chatbot.reindexAria(TITLE) }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: content.chatbot.deleteEntryAria(TITLE) }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('puts the rest in an overflow named after the entry, destructive last', () => {
+    renderTable([document()]);
+    openOverflow(TITLE);
+
+    const entries = screen
+      .getAllByRole('button')
+      .map((control) => control.getAttribute('aria-label'));
+
+    expect(entries).toContain(content.chatbot.reindexAria(TITLE));
+    expect(entries.at(-1)).toBe(content.chatbot.deleteEntryAria(TITLE));
   });
 });
 
@@ -118,6 +155,7 @@ describe('the last-indexed-entry warning', () => {
   const TITLE = 'Returns and refunds policy';
 
   function openDelete() {
+    openOverflow(TITLE);
     fireEvent.click(screen.getByRole('button', { name: content.chatbot.deleteEntryAria(TITLE) }));
   }
 
@@ -147,3 +185,8 @@ describe('the last-indexed-entry warning', () => {
     await expect(screen.findByText(content.chatbot.deleteBody(TITLE))).resolves.toBeInTheDocument();
   });
 });
+
+/** `Delete` and `Index again` live behind the row's overflow trigger. */
+function openOverflow(title: string): void {
+  fireEvent.click(screen.getByRole('button', { name: content.common.rowActions(title) }));
+}

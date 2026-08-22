@@ -52,6 +52,16 @@
   color: var(--color-on-accent);
 }
 
+/*
+ * The destructive action at row weight. Quiet — no fill, no border — but never
+ * the same thing as the `Edit` beside it, which is the state four settings
+ * tables had independently arrived at (TAR-709).
+ */
+.button[data-variant='dangerQuiet'] {
+  background: transparent;
+  color: var(--color-danger);
+}
+
 /* Hover styling only where the device actually hovers; a touch device would
    otherwise keep the hover colour stuck after a tap. */
 @media (hover: hover) {
@@ -68,6 +78,32 @@
   .button[data-variant='danger']:hover:not([aria-disabled='true']) {
     background: var(--color-danger-hover);
     border-color: var(--color-danger-hover);
+  }
+
+  .button[data-variant='dangerQuiet']:hover:not([aria-disabled='true']) {
+    background: var(--color-danger-subtle);
+  }
+}
+
+/*
+ * The one place a component overrides the global focus ring. A green ring on the
+ * control that deletes something says "action" in the accent's vocabulary; this
+ * keeps the whole control speaking danger, and it clears SC 1.4.11's 3:1 against
+ * both the surface and its own hover tint — asserted in `tokens.test.ts`.
+ *
+ * Keyboard focus also gets the hover tint, because on a keyboard there is no
+ * hover to give it.
+ */
+.button[data-variant='dangerQuiet']:focus-visible {
+  background: var(--color-danger-subtle);
+  outline-color: var(--color-danger);
+}
+
+/* Forced colours paint the ring themselves; this rule would otherwise outrank
+   the global one in `base.css`, which is lower in specificity. */
+@media (forced-colors: active) {
+  .button[data-variant='dangerQuiet']:focus-visible {
+    outline-color: Highlight;
   }
 }
 

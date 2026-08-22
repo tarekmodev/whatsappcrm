@@ -276,6 +276,14 @@ export const content = {
     notifications: 'Notifications',
     clearSearch: 'Clear search',
 
+    /**
+     * The overflow trigger on a table row (0001, TAR-709). Named after the row,
+     * not after the verb: a column of triggers all reading "More actions" tells
+     * a screen-reader user which control they are on and nothing about which
+     * row.
+     */
+    rowActions: (subject: string) => `More actions for ${subject}`,
+
     // --- The filter row (0001, TAR-516) -------------------------------------
     filters: 'Filters',
     /** The trigger's badge is a bare numeral; on its own it reads as "Filters 2". */
@@ -1358,7 +1366,12 @@ export const content = {
 
     remove: 'Delete',
     removeAria: (label: string) => `Delete ${label}`,
-    removeTitle: 'Delete custom field',
+    /**
+     * A confirmation names the thing it is about to destroy, in its title as
+     * well as in its body (0001, TAR-709). "Are you sure?" over a table of
+     * near-identical rows asks the reader to remember which one they clicked.
+     */
+    removeTitle: (label: string) => `Delete ${label}?`,
     removeBody: (label: string) =>
       `${label} disappears from every contact profile, and the values already stored against it are deleted. This cannot be undone.`,
     removeConfirm: 'Delete field',
@@ -1432,7 +1445,12 @@ export const content = {
 
     remove: 'Delete',
     removeAria: (title: string) => `Delete ${title}`,
-    removeTitle: 'Delete saved reply',
+    /**
+     * A confirmation names the thing it is about to destroy, in its title as
+     * well as in its body (0001, TAR-709). "Are you sure?" over a table of
+     * near-identical rows asks the reader to remember which one they clicked.
+     */
+    removeTitle: (title: string) => `Delete ${title}?`,
     removeBody: (title: string, shortcut: string) =>
       `${title} disappears from every agent's reply box, and ${shortcut} stops inserting anything. Messages already sent are untouched. This cannot be undone.`,
     removeConfirm: 'Delete saved reply',
@@ -1529,7 +1547,12 @@ export const content = {
 
     removeAgent: 'Remove',
     removeAgentAria: (name: string) => `Remove ${name}`,
-    removeAgentTitle: 'Remove agent',
+    /**
+     * A confirmation names the thing it is about to destroy, in its title as
+     * well as in its body (0001, TAR-709). "Are you sure?" over a table of
+     * near-identical rows asks the reader to remember which one they clicked.
+     */
+    removeAgentTitle: (name: string) => `Remove ${name} from this workspace?`,
     removeAgentBody: (name: string) =>
       `${name} loses access to this workspace immediately. Their conversations stay, but become unassigned.`,
     removeAgentConfirm: 'Remove agent',
@@ -3058,7 +3081,12 @@ export const content = {
     indexFailedLabel: 'Why it failed',
     deleteEntry: 'Delete',
     deleteEntryAria: (title: string) => `Delete ${title}`,
-    deleteTitle: 'Delete this entry?',
+    /**
+     * A confirmation names the thing it is about to destroy, in its title as
+     * well as in its body (0001, TAR-709). "Are you sure?" over a table of
+     * near-identical rows asks the reader to remember which one they clicked.
+     */
+    deleteTitle: (title: string) => `Delete “${title}”?`,
     deleteBody: (title: string) =>
       `“${title}” is removed from the knowledge base and the chatbot stops answering from it. This cannot be undone.`,
     /**

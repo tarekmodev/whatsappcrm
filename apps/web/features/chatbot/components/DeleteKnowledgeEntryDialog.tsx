@@ -51,7 +51,7 @@ export function DeleteKnowledgeEntryDialog({
   return (
     <FormDialog
       isOpen
-      title={content.chatbot.deleteTitle}
+      title={content.chatbot.deleteTitle(document.title)}
       submitLabel={content.chatbot.deleteConfirm}
       submitVariant="danger"
       isPending={isPending}

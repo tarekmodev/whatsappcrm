@@ -3,10 +3,10 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { CustomFieldDefinition } from '@whatsappcrm/contracts';
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
 import { Cluster } from '@/components/layout/Cluster';
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { RowActions } from '@/components/ui/RowActions';
 import { useContent } from '@/lib/content';
 import { customFieldColumnMeta } from './custom-field-columns';
 import {
@@ -64,31 +64,31 @@ export function CustomFieldsTable({ definitions, canManage }: CustomFieldsTableP
             ))}
           </Cluster>
         ),
-      // Real buttons, always visible: a hover-only row action is unreachable by
-      // touch and by keyboard.
+      // `RowActions` owns the weight ladder: real buttons, always visible, and
+      // the deletion in the danger role and last.
       actions: (definition) => (
-        <Cluster gap="1" justify="end" className={styles.actions}>
-          <Button
-            size="sm"
-            variant="secondary"
-            aria-label={content.customFields.editAria(definition.label)}
-            onClick={() => {
-              setEditing(definition);
-            }}
-          >
-            {content.customFields.edit}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-label={content.customFields.removeAria(definition.label)}
-            onClick={() => {
-              setRemoving(definition);
-            }}
-          >
-            {content.customFields.remove}
-          </Button>
-        </Cluster>
+        <RowActions
+          subject={definition.label}
+          actions={[
+            {
+              key: 'edit',
+              label: content.customFields.edit,
+              accessibleName: content.customFields.editAria(definition.label),
+              onSelect: () => {
+                setEditing(definition);
+              },
+            },
+            {
+              key: 'remove',
+              label: content.customFields.remove,
+              accessibleName: content.customFields.removeAria(definition.label),
+              isDestructive: true,
+              onSelect: () => {
+                setRemoving(definition);
+              },
+            },
+          ]}
+        />
       ),
     };
 
