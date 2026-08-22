@@ -219,6 +219,21 @@ describe('user lifecycle statuses', () => {
     expect(() => UserUpdateInputSchema.parse({ status: 'invited' })).toThrow();
   });
 
+  it('keeps a null cap distinguishable from an omitted one (TAR-384)', () => {
+    // `null` clears the per-agent override and returns the agent to the tenant
+    // default; omitted leaves it alone. A handler that collapsed the two would
+    // reset every cap on any other patch.
+    expect(UserUpdateInputSchema.parse({ maxConcurrentTickets: null })).toHaveProperty(
+      'maxConcurrentTickets',
+      null,
+    );
+    expect(UserUpdateInputSchema.parse({ displayName: 'Ada' })).not.toHaveProperty(
+      'maxConcurrentTickets',
+    );
+    expect(() => UserUpdateInputSchema.parse({ maxConcurrentTickets: 0 })).toThrow();
+    expect(() => UserUpdateInputSchema.parse({ maxConcurrentTickets: 1001 })).toThrow();
+  });
+
   it('strips a client-supplied role from an availability update', () => {
     // The one route with no permission attached. A body that could smuggle a
     // role into it would be the cheapest escalation in the API.
@@ -374,6 +389,7 @@ describe('lockout visibility (TAR-53)', () => {
     teamIds: [],
     occupiesSeat: true,
     lastSeenAt: null,
+    assignmentCapacity: null,
     createdAt: '2026-08-10T00:00:00.000Z',
   };
 

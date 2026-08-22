@@ -37,6 +37,7 @@ const USER: UserResponse = {
   occupiesSeat: true,
   lastSeenAt: null,
   security: null,
+  assignmentCapacity: null,
   createdAt: '2026-07-02T10:05:00.000Z',
 };
 

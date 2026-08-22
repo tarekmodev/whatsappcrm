@@ -972,6 +972,7 @@ function inviteUser({ principal, body }: RouteContext): UserResponse {
     lastSeenAt: null,
     // Lockout is not modelled in the mock transport — see `fixtures.ts`.
     security: null,
+    assignmentCapacity: null,
     createdAt: MOCK_CREATED_AT,
   };
 

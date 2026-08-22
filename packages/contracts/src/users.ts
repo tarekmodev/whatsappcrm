@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AgentCapacitySchema, MaxConcurrentTicketsSchema } from './assignment';
 import { IdSchema, TimestampSchema } from './common';
 import { CursorPageQuerySchema } from './pagination';
 import { TenantRoleSchema } from './rbac';
@@ -109,6 +110,21 @@ export const UserResponseSchema = z.object({
    * "not allowed to know".
    */
   security: UserSecurityStateSchema.nullable(),
+  /**
+   * Workload and the cap that bounds it (TAR-384, 0008 amendment 4).
+   *
+   * `null` for a caller holding neither `assignment_rule:read` nor
+   * `assignment_rule:write`. Gated in the serializer rather than by the handler,
+   * on `security`'s precedent above, so a future endpoint returning a
+   * `UserResponse` cannot leak it by forgetting to. `GET /api/v1/users` is
+   * `user:read`, which every agent holds — flat cap fields would give any agent
+   * a live readout of a named colleague's workload and how close they are to
+   * being cut off from work.
+   *
+   * The gate is `read` **or** `write`, not `read` alone: a role granted write
+   * without read would otherwise set a value and be handed `null` back.
+   */
+  assignmentCapacity: AgentCapacitySchema.nullable(),
   createdAt: TimestampSchema,
 });
 
@@ -145,6 +161,18 @@ export const UserUpdateInputSchema = z.object({
   role: TenantRoleSchema.optional(),
   teamIds: z.array(IdSchema).max(TEAM_MEMBERSHIP_LIMITS.teamsPerUser).optional(),
   status: UserWritableStatusSchema.optional(),
+  /**
+   * The per-agent concurrent-ticket cap (TAR-384, 0008 decision 4). `null`
+   * clears the override and returns the agent to the tenant default; omitted
+   * leaves it alone. The two are distinct and a handler must not collapse them.
+   *
+   * Separated at *enforcement* time exactly as `role` is: a body carrying this
+   * additionally requires `assignment_rule:write`, and a caller without it is
+   * refused rather than served with the field dropped. Not `user:update` alone,
+   * because setting a colleague's cap to 1 is deciding how much work reaches
+   * them — the same act as writing a routing rule.
+   */
+  maxConcurrentTickets: MaxConcurrentTicketsSchema.nullable().optional(),
 });
 
 /**

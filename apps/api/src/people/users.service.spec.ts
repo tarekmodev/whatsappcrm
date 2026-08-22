@@ -1,11 +1,17 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { permissionsForRole, type SessionPrincipal, type TenantRole } from '@whatsappcrm/contracts';
+import {
+  ASSIGNMENT_POLICY,
+  permissionsForRole,
+  type SessionPrincipal,
+  type TenantRole,
+} from '@whatsappcrm/contracts';
 import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { LoginThrottleService } from '../identity/login-throttle.service';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
 import { SessionRevocationService } from '../rbac/session-revocation.service';
 import {
+  CapacityChangeNotPermittedError,
   LastAdminRequiredError,
   RoleAssignmentNotPermittedError,
   RoleEscalationError,
@@ -62,6 +68,16 @@ interface FakeState {
   lockout?: { lockedUntil: Date | null; failedLoginAttempts: number };
   /** Workflows naming the target through `workflow_references` (TAR-27, 0009 delta 5). */
   workflowsNamingTarget?: readonly string[];
+  /** The target's per-agent cap. `null` — the default — means it inherits (TAR-384). */
+  maxConcurrentTickets?: number | null;
+  /**
+   * `tenant_settings.default_max_concurrent_tickets`, or `null` for a tenant
+   * with no settings row at all — the legacy case that must fall back to
+   * `ASSIGNMENT_POLICY.defaultMaxConcurrentTickets` rather than fail.
+   */
+  tenantDefaultCap?: number | null;
+  /** What the `GROUP BY assigned_user_id` aggregate finds, keyed by user id. */
+  activeTicketCounts?: Readonly<Record<string, number>>;
 }
 
 interface Recorded {
@@ -112,6 +128,7 @@ function buildService(state: FakeState): {
     lastSeenAt: null,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     ...lockout,
+    maxConcurrentTickets: state.maxConcurrentTickets ?? null,
     teamMemberships: state.memberships.map((teamId) => ({ teamId })),
   };
 
@@ -188,6 +205,28 @@ function buildService(state: FakeState): {
   const prisma = {
     // The non-transactional reads, for the paths that do not open one.
     user: { findMany: () => Promise.resolve([row]) },
+    // The two capacity reads (TAR-384). Outside any transaction on purpose —
+    // the service reads them after the write commits, and asserting they are on
+    // `prisma` rather than on `tx` is part of what this fake checks.
+    tenantSettings: {
+      findUnique: () =>
+        Promise.resolve(
+          state.tenantDefaultCap === null || state.tenantDefaultCap === undefined
+            ? null
+            : { defaultMaxConcurrentTickets: state.tenantDefaultCap },
+        ),
+    },
+    ticket: {
+      groupBy: ({ where }: { where: { assignedUserId: { in: string[] } } }) =>
+        Promise.resolve(
+          where.assignedUserId.in
+            .filter((userId) => (state.activeTicketCounts?.[userId] ?? 0) > 0)
+            .map((userId) => ({
+              assignedUserId: userId,
+              _count: { _all: state.activeTicketCounts?.[userId] ?? 0 },
+            })),
+        ),
+    },
     $tenantTransaction: (work: (client: unknown) => Promise<unknown>) => work(tx),
   } as unknown as TenantPrisma;
 
@@ -846,6 +885,189 @@ describe('UsersService — lockout visibility and unlock (TAR-59)', () => {
       await asPrincipal(tenantContext, 'admin', () => users.unlock(TARGET));
 
       expect(recorded.revokedUserIds).toEqual([]);
+    });
+  });
+});
+
+/**
+ * The per-agent cap on `PATCH /users/{id}` (TAR-384, 0008 amendment 4).
+ *
+ * Three things are asserted here and nowhere else: who may write the field, that
+ * `null` and omitted mean different things, and that the published block is
+ * gated on `assignment_rule:*` rather than on the route's own `user:update`.
+ * That last one is where the leak would be — `user:read` is held by every agent,
+ * so a flat cap field would publish a colleague's live workload to the whole
+ * tenant.
+ */
+describe('UsersService — per-agent concurrent-ticket cap (TAR-384)', () => {
+  function withCap(overrides: Partial<FakeState> = {}) {
+    return buildService({
+      target: activeAgent,
+      activeAdminIds: [CALLER, TARGET],
+      teams: [],
+      memberships: [],
+      tenantDefaultCap: 5,
+      ...overrides,
+    });
+  }
+
+  describe('who may write it', () => {
+    it('lets a supervisor set an agent cap', async () => {
+      const { users, tenantContext, recorded } = withCap();
+
+      await asPrincipal(tenantContext, 'supervisor', () =>
+        users.update(TARGET, { maxConcurrentTickets: 9 }),
+      );
+
+      expect(recorded.updates).toEqual([{ maxConcurrentTickets: 9 }]);
+    });
+
+    it('refuses an agent, who may not decide how much work reaches a colleague', async () => {
+      const { users, tenantContext, recorded } = withCap();
+
+      await expect(
+        asPrincipal(tenantContext, 'agent', () =>
+          users.update(TARGET, { maxConcurrentTickets: 9 }),
+        ),
+      ).rejects.toBeInstanceOf(CapacityChangeNotPermittedError);
+
+      // Refused, not served with the field dropped: a privilege-shaped change
+      // that appears to have succeeded is the worse of the two failures.
+      expect(recorded.updates).toEqual([]);
+    });
+
+    it('answers not_found rather than forbidden for an id that does not exist', async () => {
+      const { users, tenantContext } = withCap({ target: null });
+
+      // The permission check runs *after* the row is resolved. A 403 on an
+      // unknown id is an existence oracle.
+      await expect(
+        asPrincipal(tenantContext, 'agent', () =>
+          users.update(TARGET, { maxConcurrentTickets: 9 }),
+        ),
+      ).rejects.toBeInstanceOf(UserNotFoundError);
+    });
+
+    it('leaves the rest of the patch reachable for a caller who may not write the cap', async () => {
+      const { users, tenantContext, recorded } = withCap();
+
+      await asPrincipal(tenantContext, 'agent', () =>
+        users.update(TARGET, { displayName: 'Renamed' }),
+      );
+
+      expect(recorded.updates).toEqual([{ name: 'Renamed' }]);
+    });
+  });
+
+  describe('null clears the override; omitted leaves it alone', () => {
+    it('writes null through, so the agent returns to the tenant default', async () => {
+      const { users, tenantContext, recorded } = withCap({ maxConcurrentTickets: 9 });
+
+      const response = await asPrincipal(tenantContext, 'supervisor', () =>
+        users.update(TARGET, { maxConcurrentTickets: null }),
+      );
+
+      expect(recorded.updates).toEqual([{ maxConcurrentTickets: null }]);
+      expect(response.assignmentCapacity?.maxConcurrentTickets).toBeNull();
+      expect(response.assignmentCapacity?.effectiveMaxConcurrentTickets).toBe(5);
+    });
+
+    it('touches nothing when the field is absent from the body', async () => {
+      const { users, tenantContext, recorded } = withCap({ maxConcurrentTickets: 9 });
+
+      await asPrincipal(tenantContext, 'supervisor', () =>
+        users.update(TARGET, { status: 'suspended' }),
+      );
+
+      expect(recorded.updates).toEqual([{ status: 'suspended' }]);
+    });
+  });
+
+  describe('the audit trail', () => {
+    it('records the move, with both ends nullable', async () => {
+      const { users, tenantContext, recorded } = withCap({ maxConcurrentTickets: null });
+
+      await asPrincipal(tenantContext, 'supervisor', () =>
+        users.update(TARGET, { maxConcurrentTickets: 3 }),
+      );
+
+      expect(recorded.audits).toEqual([
+        {
+          action: 'user.capacity_changed',
+          targetType: 'user',
+          targetId: TARGET,
+          metadata: { from: null, to: 3 },
+        },
+      ]);
+    });
+
+    it('writes nothing when the number did not move', async () => {
+      const { users, tenantContext, recorded } = withCap({ maxConcurrentTickets: 3 });
+
+      await asPrincipal(tenantContext, 'supervisor', () =>
+        users.update(TARGET, { maxConcurrentTickets: 3 }),
+      );
+
+      expect(recorded.audits).toEqual([]);
+    });
+
+    it('does not log the agent out — a cap change is not a permission change', async () => {
+      const { users, tenantContext, recorded } = withCap();
+
+      await asPrincipal(tenantContext, 'supervisor', () =>
+        users.update(TARGET, { maxConcurrentTickets: 3 }),
+      );
+
+      expect(recorded.revokedUserIds).toEqual([]);
+    });
+  });
+
+  describe('who may read the workload block', () => {
+    it('shows a supervisor the cap, the effective cap and the live load', async () => {
+      const { users, tenantContext } = withCap({
+        maxConcurrentTickets: 7,
+        activeTicketCounts: { [TARGET]: 4 },
+      });
+
+      const page = await asPrincipal(tenantContext, 'supervisor', () => users.list({ limit: 20 }));
+
+      expect(page.items[0]?.assignmentCapacity).toEqual({
+        maxConcurrentTickets: 7,
+        effectiveMaxConcurrentTickets: 7,
+        activeTicketCount: 4,
+      });
+    });
+
+    it('coalesces to the tenant default when the agent has no override', async () => {
+      const { users, tenantContext } = withCap({ maxConcurrentTickets: null, tenantDefaultCap: 8 });
+
+      const page = await asPrincipal(tenantContext, 'supervisor', () => users.list({ limit: 20 }));
+
+      expect(page.items[0]?.assignmentCapacity).toEqual({
+        maxConcurrentTickets: null,
+        effectiveMaxConcurrentTickets: 8,
+        activeTicketCount: 0,
+      });
+    });
+
+    it('falls back to the built-in default for a tenant with no settings row', async () => {
+      const { users, tenantContext } = withCap({ tenantDefaultCap: null });
+
+      const page = await asPrincipal(tenantContext, 'supervisor', () => users.list({ limit: 20 }));
+
+      // The same number `RotationFallbackResolver` coalesces to, so a supervisor
+      // is shown the cap rotation will actually apply.
+      expect(page.items[0]?.assignmentCapacity?.effectiveMaxConcurrentTickets).toBe(
+        ASSIGNMENT_POLICY.defaultMaxConcurrentTickets,
+      );
+    });
+
+    it('tells an agent nothing, because every agent holds user:read', async () => {
+      const { users, tenantContext } = withCap({ maxConcurrentTickets: 7 });
+
+      const page = await asPrincipal(tenantContext, 'agent', () => users.list({ limit: 20 }));
+
+      expect(page.items[0]?.assignmentCapacity).toBeNull();
     });
   });
 });

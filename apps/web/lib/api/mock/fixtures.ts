@@ -715,6 +715,12 @@ export const MOCK_USERS: readonly MockUser[] = [
     // then every fixture reports "you are not allowed to know", which is a valid
     // `UserResponse` and keeps the console from rendering invented lockout state.
     security: null,
+    // Same shape of "not modelled yet, and `null` says so" as `security` above:
+    // TAR-756 publishes the field on `UserResponse` and TAR-757 is the story
+    // that gives the mock a cap and a live load for the cap-edit control to
+    // render. `null` is the value a caller without `assignment_rule:*` sees, so
+    // it is a valid `UserResponse` and invents nothing.
+    assignmentCapacity: null,
     createdAt: '2026-07-02T10:00:00.000Z',
   },
   {
@@ -730,6 +736,7 @@ export const MOCK_USERS: readonly MockUser[] = [
     occupiesSeat: true,
     lastSeenAt: '2026-08-10T08:55:00.000Z',
     security: null,
+    assignmentCapacity: null,
     createdAt: '2026-07-02T10:05:00.000Z',
   },
   {
@@ -745,6 +752,7 @@ export const MOCK_USERS: readonly MockUser[] = [
     occupiesSeat: true,
     lastSeenAt: '2026-08-10T07:10:00.000Z',
     security: null,
+    assignmentCapacity: null,
     createdAt: '2026-07-01T09:00:00.000Z',
   },
   {
@@ -760,6 +768,7 @@ export const MOCK_USERS: readonly MockUser[] = [
     occupiesSeat: true,
     lastSeenAt: '2026-08-08T16:20:00.000Z',
     security: null,
+    assignmentCapacity: null,
     createdAt: '2026-07-05T11:30:00.000Z',
   },
   {
@@ -775,6 +784,7 @@ export const MOCK_USERS: readonly MockUser[] = [
     occupiesSeat: false,
     lastSeenAt: null,
     security: null,
+    assignmentCapacity: null,
     createdAt: '2026-08-09T13:00:00.000Z',
   },
   {
@@ -791,6 +801,7 @@ export const MOCK_USERS: readonly MockUser[] = [
     occupiesSeat: true,
     lastSeenAt: '2026-08-10T08:00:00.000Z',
     security: null,
+    assignmentCapacity: null,
     createdAt: '2026-06-01T09:00:00.000Z',
   },
 ];
