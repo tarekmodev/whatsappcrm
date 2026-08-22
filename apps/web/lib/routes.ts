@@ -230,6 +230,15 @@ export const searchParamKeys = {
   reportFrom: 'from',
   reportTo: 'to',
   reportScope: 'scope',
+  /**
+   * The per-agent breakdown's order (TAR-519). Two parameters rather than one
+   * packed value, so a shared link reads as what it is — `?sort=resolution&dir=desc`
+   * — and each narrows against its own small enum. Both are dropped while the
+   * table is in the API's own order, which is what keeps the default view's URL
+   * to the dates it is about.
+   */
+  reportSort: 'sort',
+  reportSortDirection: 'dir',
   peopleTab: 'tab',
   peopleRole: 'role',
   peopleQuery: 'q',
@@ -431,6 +440,12 @@ export interface ReportQuery {
    * and makes a shared link look filtered when it is not.
    */
   scope?: ReportScope;
+  /**
+   * The per-agent breakdown's order. Omitted together while the table is in the
+   * API's own order; `agent-sort.ts` owns what the two values may be.
+   */
+  sort?: string;
+  sortDirection?: string;
 }
 
 export const PEOPLE_TABS = ['agents', 'teams'] as const;
@@ -499,6 +514,10 @@ function reportSearchParams(query: ReportQuery | undefined): Record<string, stri
     // `withQuery` drops an `undefined`, which is what keeps the default view's
     // URL to the two dates it is actually about.
     [searchParamKeys.reportScope]: query?.scope === 'assigned' ? 'assigned' : undefined,
+    [searchParamKeys.reportSort]: query?.sort,
+    // Only ever beside a column: a direction on its own says nothing.
+    [searchParamKeys.reportSortDirection]:
+      query?.sort === undefined ? undefined : query.sortDirection,
   };
 }
 

@@ -1,8 +1,17 @@
 .control {
   align-items: flex-start;
-  /* Keeps the hint and any failure line readable rather than letting them
-     stretch the page header across an ultrawide screen. */
-  max-inline-size: 34ch;
+  /*
+   * Keeps the hint and any failure line readable rather than letting them
+   * stretch the page header across an ultrawide screen.
+   *
+   * Clamped against the **viewport** as well, because `PageHeader`'s action slot
+   * is `flex: 0 0 auto` and cannot shrink: 34ch of caption text is 341px, which
+   * put the whole reports page into horizontal scroll at 320px. A percentage
+   * cannot fix it — it resolves against a shrink-to-fit box and behaves as
+   * `auto` — so this is measured off the viewport, the same way `MenuButton`
+   * caps its panel. Found while measuring TAR-519's own layout at that width.
+   */
+  max-inline-size: min(34ch, calc(100vw - var(--space-6)));
 }
 
 .hint {

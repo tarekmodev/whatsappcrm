@@ -248,6 +248,12 @@ One family, one variable axis, three weights from the scale — regular, medium,
 Sizes come from `--font-size-*`; the two heading sizes above body are fluid via `clamp()`
 so a heading does not need a breakpoint to stop being enormous on a phone.
 
+`--font-size-metric` is the one step above the headings, and it belongs to exactly one
+thing: the figure on a metric tile (TAR-519). A tile's job is to be scanned, so the number
+has to win against everything around it, and the largest heading size reused there made it
+the same weight as the label above it. It is fluid like the headings, and it is never a
+heading — a screen that reaches for it to make a title bigger has the wrong token.
+
 Never set a font size in a component. If a size is missing from the scale, add it to the
 scale.
 
@@ -394,6 +400,88 @@ header. There is no third.
 
 `dot` is decorative by construction and carries no accessible name — the parent supplies
 one. A dot on its own conveys state by colour alone, which this document forbids.
+
+## Data visualisation (TAR-519)
+
+### The series palette is not the brand's
+
+Every other colour role on this screen is a tenant's to replace. A chart's series are not,
+and that is the one exception in the token layer.
+
+While one series took `--color-accent`, the seeded workspace — whose brand TAR-29 resolves
+to a blue — drew `Opened` at `rgb(15, 111, 222)` and `Resolved` at `rgb(29, 78, 216)`: two
+shades of one hue, separated by a little lightness. It worked when the accent happened to
+be green, which is not the same as working. A chart whose two series cannot be told apart
+is a chart with no series at all, and no amount of tenant goodwill fixes that.
+
+| Role              | Light                        | Dark                         |
+| ----------------- | ---------------------------- | ---------------------------- |
+| `--color-chart-1` | `chart-blue-500` `#1d4ed8`   | `chart-blue-300` `#5b8ce8`   |
+| `--color-chart-2` | `chart-orange-500` `#dd6b12` | `chart-orange-300` `#fdba74` |
+
+Blue against orange, chosen twice over. It is the pair that survives every common
+colour-vision deficiency — the red/green and the blue/yellow confusions both leave it
+standing — and the two steps are separated in **lightness** as well, so the distinction
+also survives a greyscale print.
+
+Two ratios matter, and both are asserted in `apps/web/styles/tokens/tokens.test.ts`:
+
+| Measurement                       | Light  | Dark   | Floor |
+| --------------------------------- | ------ | ------ | ----- |
+| `--color-chart-1` on `surface`    | 6.70:1 | 5.41:1 | 3:1   |
+| `--color-chart-2` on `surface`    | 3.39:1 | 10.6:1 | 3:1   |
+| The two series against each other | 1.97:1 | 1.96:1 | 1.8:1 |
+
+3:1 is WCAG 2.2 SC 1.4.11 — a graphic that carries meaning against its background. The
+third row is this document's own floor, and it is the one that would have caught the bug.
+
+Series one is the deeper of the two in **both** themes, so a reader who learns the chart in
+one does not relearn it in the other.
+
+### Colour is never the only carrier
+
+Three at once, and colour is the first of the three to fail:
+
+- The **token**, from the table above.
+- The **shape** — a square swatch for series one, a circle for series two, repeated in the
+  bars' own corner radius. It survives a greyscale print, a projector and forced-colours
+  mode, none of which keep the hue.
+- The **word**, in the legend and in each column's accessible name.
+
+### What a chart owes a reader
+
+- A **labelled value axis**: three to five gridlines at hairline `--color-border`, on
+  values a person reads without arithmetic (`chart-scale.ts` picks them). A bar measured
+  against nothing is a decoration.
+- **Dated columns** at the interval the range is read in — weekly over a month, monthly
+  over a quarter — not the two endpoints.
+- **A per-day readout** on hover _and_ on focus, with the hovered column's neighbours dimmed
+  at `--duration-fast`.
+- **Keyboard reach**: one tab stop for the chart, arrow keys between the days, and each
+  day's figures as its own accessible name. The readout is `aria-hidden` — a screen reader
+  gets the numbers from the thing the user is on, once.
+- **Zero is drawn.** A day with nothing in it gets a neutral baseline tick, never a gap: an
+  empty stretch reads as missing data, which is the opposite of a quiet week.
+- **Entry motion** grows the bars from the baseline at `--duration-medium` /
+  `--easing-enter`, staggered by `--duration-stagger` per column and capped at
+  `MAX_STAGGERED_COLUMNS`. Reduced motion collapses both in the token layer, so no
+  component branches on the preference.
+
+### Figures in a table
+
+A column of numbers a reader compares by eye lines up on its last digit: `DataTable`'s
+`isNumeric` gives a column inline-end alignment and tabular numerals, once, so no table
+remembers to do it itself. It applies only when the table is a table — in the stacked card
+layout a value sits under its own label and has no column to line up with.
+
+**Absence is quiet.** An unmeasured duration renders `—` for the eye with the words behind
+it for a screen reader (`MeasuredDuration`). "No data" repeated down two columns read as six
+problems where it is six blanks. The one place it keeps the words is a metric tile's hero
+figure, where the absence _is_ the answer to the question the tile asks.
+
+**A sortable column is a link**, and the order lives in the URL — so a sorted table survives
+a refresh and can be sent to somebody. `aria-sort` reports what is true now; the link's
+accessible name says what pressing it will do.
 
 ## Structural patterns
 
@@ -712,6 +800,7 @@ space:
 | An icon                 | `Icon`                                          |
 | A person's initial      | `Avatar`                                        |
 | A popup of actions      | `MenuButton`                                    |
+| Explaining a figure     | `InfoPopover` — never prose under the number    |
 | Loading, empty, error   | `Skeleton`, `EmptyState`, `ErrorState`          |
 | A link off-app          | `TextLink isExternal`                           |
 

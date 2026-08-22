@@ -1,7 +1,9 @@
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { SkeletonLine } from '@/components/ui/Skeleton';
 import { content } from '@/content/en';
-import { SERIES_SKELETON_BARS } from '@/features/reports/constants';
+import { SERIES_SKELETON_BARS, SERIES_SKELETON_GRIDLINES } from '@/features/reports/constants';
+import { ChartLegend } from './ChartLegend';
+import { ChartValueAxis } from './ChartValueAxis';
 import styles from './DailyVolumeChart.module.css';
 
 /**
@@ -10,46 +12,58 @@ import styles from './DailyVolumeChart.module.css';
  *
  * A file of its own, and that is the point: it is imported eagerly by the lazy
  * boundary, so anything it pulled in would land in the route's own bundle. It
- * shares `DailyVolumeChart.module.css` rather than the chart component — the
- * classes are the contract, so the track height, the column widths and the
- * legend cannot drift between the two.
+ * shares `DailyVolumeChart.module.css`, its legend and its value axis with the
+ * chart itself — the classes and those two components are the contract, so the
+ * gutter, the track height, the column widths and the legend cannot drift.
  *
- * The legend is the **real** legend: it renders from the content layer, so there
- * is nothing about it to wait for, and drawing a shimmer over two words already
- * in the bundle would be slower and emptier. Only the bars are unknown.
+ * The legend and the axis label are the **real** ones: they render from the
+ * content layer, so there is nothing about them to wait for, and drawing a
+ * shimmer over two words already in the bundle would be slower and emptier. Only
+ * the figures are unknown.
  */
 export function DailyVolumeChartSkeleton() {
   return (
     <div className={styles.chart}>
       <LoadingAnnouncement label={content.reports.seriesLoading} />
-      <p className={styles.legend} aria-hidden="true">
-        <span className={styles.legendItem}>
-          <span className={styles.swatch} data-series="created" />
-          {content.reports.seriesCreatedLegend}
-        </span>
-        <span className={styles.legendItem}>
-          <span className={styles.swatch} data-series="resolved" />
-          {content.reports.seriesResolvedLegend}
-        </span>
-      </p>
-      <div className={styles.scroller}>
-        <ul className={styles.days} aria-hidden="true">
-          {Array.from({ length: SERIES_SKELETON_BARS }, (_unused, index) => (
-            <li key={index} className={styles.day}>
-              <SkeletonLine
-                width="100%"
-                height={PLACEHOLDER_HEIGHTS[index % PLACEHOLDER_HEIGHTS.length]}
-              />
-            </li>
-          ))}
-        </ul>
+      <div aria-hidden="true">
+        <ChartLegend />
       </div>
-      {/* Empty, but present: the axis line is a row of the chart's height, and a
-          placeholder without it would be a row short and shift on arrival. */}
-      <p className={styles.axis} aria-hidden="true">
-        <SkeletonLine width="4rem" />
-        <SkeletonLine width="4rem" />
-      </p>
+
+      <div className={styles.plot}>
+        <ChartValueAxis
+          axisLabel={content.reports.seriesValueAxisLabel}
+          lines={Array.from({ length: SERIES_SKELETON_GRIDLINES }, (_unused, index) => ({
+            id: String(index),
+            fraction: index / (SERIES_SKELETON_GRIDLINES - 1),
+            label: <SkeletonLine width="2ch" />,
+          }))}
+        />
+
+        <div className={styles.scroller}>
+          <ul className={styles.days} aria-hidden="true">
+            {Array.from({ length: SERIES_SKELETON_BARS }, (_unused, index) => (
+              <li key={index} className={styles.day}>
+                <span className={styles.dayTarget}>
+                  <SkeletonLine
+                    width="100%"
+                    height={PLACEHOLDER_HEIGHTS[index % PLACEHOLDER_HEIGHTS.length]}
+                  />
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          {/* Empty, but present: the day axis is a row of the chart's height, and
+              a placeholder without it would be a row short and shift on arrival. */}
+          <ul className={styles.dayAxis} aria-hidden="true">
+            <li className={styles.dayAxisCell}>
+              <span className={styles.dayAxisLabel} data-anchor="start">
+                <SkeletonLine width="4rem" />
+              </span>
+            </li>
+          </ul>
+        </div>
+      </div>
     </div>
   );
 }

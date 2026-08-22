@@ -3237,6 +3237,18 @@ export const content = {
      * was answered instantly" are different facts.
      */
     noMeasurement: 'No data',
+    /**
+     * The same fact for the eye rather than for a screen reader. "No data"
+     * repeated down two columns of a table reads as six problems where it is six
+     * blanks; the words stay, visually hidden beside this (TAR-519).
+     */
+    noMeasurementMark: '—',
+    /**
+     * Names the info affordance beside a metric's label. It says what activating
+     * it will do rather than repeating the metric's name, so a screen-reader user
+     * moving through five tiles hears five distinct controls.
+     */
+    metricInfoLabel: (metric: string) => `${metric}: how it is measured`,
 
     // --- Per-agent breakdown ------------------------------------------------
     agentsHeading: 'By agent',
@@ -3254,6 +3266,14 @@ export const content = {
      * that predates the attribution columns, or a resolution with no actor. It is
      * rendered rather than hidden, so the table adds up to the totals above it.
      */
+    /**
+     * The sortable columns' controls. A header that sorts is a link, so the order
+     * lands in the URL and a supervisor can send "sorted by slowest first" rather
+     * than describe it — and the label says which way activating it will sort,
+     * because `aria-sort` reports the current state and not the next one.
+     */
+    sortAscending: (column: string) => `Sort by ${column}, lowest first`,
+    sortDescending: (column: string) => `Sort by ${column}, highest first`,
     unattributed: 'Not recorded',
     unattributedHint: 'Work whose agent was never recorded.',
     inactiveAgent: 'No longer active',
@@ -3276,6 +3296,21 @@ export const content = {
       `${date}: ${String(created)} opened, ${String(resolved)} resolved`,
     seriesEmptyHeading: 'No tickets in this range',
     seriesEmptyBody: 'Nothing was opened or resolved between these dates.',
+    /**
+     * What the y-axis counts. Said once beside the gridlines rather than on every
+     * tick, which would put "tickets" on the chart four times.
+     */
+    seriesValueAxisLabel: 'Tickets',
+    /**
+     * Read out when the chart takes focus, so a keyboard user is told the days
+     * are reachable rather than discovering it. Visually hidden: a sighted user
+     * has the columns in front of them.
+     */
+    seriesKeyboardHint: 'Use the left and right arrow keys to move between days.',
+    /** The third figure the contract carries per day, shown on the day's readout. */
+    seriesResponseLabel: 'First response (median)',
+    seriesDayLabelWithResponse: (date: string, created: number, resolved: number, median: string) =>
+      `${date}: ${String(created)} opened, ${String(resolved)} resolved, median first response ${median}`,
 
     // --- Taking the report away (TAR-431) -----------------------------------
     exportAction: 'Export CSV',

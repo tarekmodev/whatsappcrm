@@ -16,6 +16,7 @@ import {
   DashboardSections,
   DashboardSectionsSkeleton,
 } from '@/features/reports/components/DashboardSections';
+import { parseAgentSort } from '@/features/reports/agent-sort';
 import { parseReportParams, todayInUtc } from '@/features/reports/report-params';
 
 /**
@@ -62,6 +63,13 @@ export default async function ReportsPage({
     },
     today,
   );
+  // The breakdown's order only. Kept out of `query` deliberately: that value is
+  // what the metrics request and the export URL are built from, and neither has
+  // an order to be given.
+  const sort = parseAgentSort(
+    firstSearchParam(params[searchParamKeys.reportSort]),
+    firstSearchParam(params[searchParamKeys.reportSortDirection]),
+  );
   const isScopeNarrowed = isReportScopeNarrowed(session.checker);
 
   return (
@@ -75,17 +83,25 @@ export default async function ReportsPage({
           action={<ExportReportButton params={query} />}
         />
 
-        <ReportRangeFilters params={query} today={today} />
+        <ReportRangeFilters params={query} today={today} sort={sort} />
 
         <SectionErrorBoundary>
           {/* Keyed on the applied query so changing the range shows the skeleton
               again rather than leaving the previous range's figures on screen
-              under a new heading. */}
+              under a new heading. The order is not in the key: re-sorting the
+              rows already on screen is not a new fetch, and blanking them to a
+              skeleton for it would be a page that flinches. */}
           <Suspense
             key={`${query.from}:${query.to}:${query.scope}`}
-            fallback={<DashboardSectionsSkeleton isScopeNarrowed={isScopeNarrowed} />}
+            fallback={
+              <DashboardSectionsSkeleton
+                params={query}
+                isScopeNarrowed={isScopeNarrowed}
+                sort={sort}
+              />
+            }
           >
-            <DashboardSections params={query} isScopeNarrowed={isScopeNarrowed} />
+            <DashboardSections params={query} isScopeNarrowed={isScopeNarrowed} sort={sort} />
           </Suspense>
         </SectionErrorBoundary>
       </Stack>

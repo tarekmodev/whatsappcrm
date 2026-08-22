@@ -1,0 +1,13 @@
+/*
+ * The explanation inside the popover. Everything about the trigger and the panel
+ * is `MenuButton`'s `icon` variant — kept there rather than overridden from here,
+ * so the rules that win are decided by source order inside one file instead of
+ * by which module the bundler happened to emit last.
+ */
+
+.body {
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+  max-inline-size: var(--measure-body);
+}

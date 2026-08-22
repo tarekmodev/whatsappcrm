@@ -51,8 +51,11 @@ export type MenuAlignment = (typeof MENU_ALIGNMENTS)[number];
  * a surface — the top bar, a table row. `control` is a filter or a picker
  * standing on its own in a row of inputs, and matches `TextInput` exactly so the
  * two cannot sit side by side looking like different products (TAR-516).
+ * `icon` is a mark beside a label rather than a control at all — the info
+ * affordance on a metric tile (TAR-519), whose panel holds a sentence rather
+ * than a list of entries and is widened to match.
  */
-export const MENU_TRIGGER_VARIANTS = ['bare', 'control'] as const;
+export const MENU_TRIGGER_VARIANTS = ['bare', 'control', 'icon'] as const;
 export type MenuTriggerVariant = (typeof MENU_TRIGGER_VARIANTS)[number];
 
 /** What the panel's contents can do to the menu around them. */
@@ -75,7 +78,11 @@ export interface MenuButtonProps {
   children: ReactNode | ((api: MenuPanelApi) => ReactNode);
   /** Which edge the panel is aligned to. `end` for a trigger near the inline end. */
   align?: MenuAlignment;
-  /** `control` gives the trigger `TextInput`'s box; `bare` leaves it transparent. */
+  /**
+   * `control` gives the trigger `TextInput`'s box, `bare` leaves it transparent,
+   * `icon` shrinks it to a glyph. It also sizes the panel: an `icon` trigger's
+   * panel holds prose, not a column of entries.
+   */
   variant?: MenuTriggerVariant;
   className?: string;
   triggerClassName?: string;
@@ -234,6 +241,7 @@ export function MenuButton({
           ref={panelRef}
           className={cx(styles.panel, panelClassName)}
           data-align={align}
+          data-variant={variant}
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget)) {
               setIsOpen(false);

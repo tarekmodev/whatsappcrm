@@ -60,6 +60,47 @@
   }
 }
 
+/*
+ * The trigger as a mark beside a label — the info affordance on a metric tile,
+ * where a 44px control would be the largest thing in a card whose job is to make
+ * the *number* the largest thing (TAR-519).
+ *
+ * The glyph is icon-sized; the target is a centred pseudo-element at the full
+ * 44px, so pointer and touch get the whole area WCAG asks for without the layout
+ * reserving it.
+ */
+.trigger[data-variant='icon'] {
+  position: relative;
+  flex: 0 0 auto;
+  justify-content: center;
+  min-block-size: var(--size-icon-md);
+  inline-size: var(--size-icon-md);
+  padding-inline: 0;
+  border-radius: var(--radius-pill);
+  color: var(--color-on-surface-muted);
+}
+
+.trigger[data-variant='icon']::after {
+  content: '';
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  translate: -50% -50%;
+  inline-size: var(--size-touch-target);
+  block-size: var(--size-touch-target);
+}
+
+.trigger[data-variant='icon'][aria-expanded='true'] {
+  border-color: transparent;
+  color: var(--color-on-surface);
+}
+
+@media (hover: hover) {
+  .trigger[data-variant='icon']:hover {
+    color: var(--color-on-surface);
+  }
+}
+
 .panel {
   position: absolute;
   inset-block-start: calc(100% + var(--space-1));
@@ -84,6 +125,15 @@
   border: var(--border-hairline) solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-overlay);
+}
+
+/*
+ * A panel holding a sentence rather than a column of entries. `--size-menu` is a
+ * label-plus-a-count width, and a methodology note in it breaks into six lines.
+ */
+.panel[data-variant='icon'] {
+  min-inline-size: var(--size-pane-side);
+  padding: var(--space-3);
 }
 
 .panel[data-align='start'] {

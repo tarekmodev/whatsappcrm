@@ -9,6 +9,7 @@ import { FilterPills, type FilterPillItem } from '@/components/ui/FilterPills';
 import { useContent, type Content } from '@/lib/content';
 import { routes } from '@/lib/routes';
 import { RANGE_PRESET_DAYS } from '@/features/reports/constants';
+import type { AgentSort } from '@/features/reports/agent-sort';
 import { isUsableRange, presetRange, type ReportParams } from '@/features/reports/report-params';
 
 /**
@@ -36,9 +37,15 @@ export interface ReportRangeFiltersProps {
   params: ReportParams;
   /** The server's calendar day, so nothing here reads the clock during render. */
   today: string;
+  /**
+   * The breakdown's order, carried through rather than read here: changing the
+   * range or the scope must not silently re-order the table underneath, which is
+   * what dropping it from these links would do.
+   */
+  sort?: AgentSort;
 }
 
-export function ReportRangeFilters({ params, today }: ReportRangeFiltersProps) {
+export function ReportRangeFilters({ params, today, sort }: ReportRangeFiltersProps) {
   const content = useContent();
   const router = useRouter();
 
@@ -51,13 +58,23 @@ export function ReportRangeFilters({ params, today }: ReportRangeFiltersProps) {
         max={today}
         validate={(range) => rangeError(range, content)}
         onChange={(range) => {
-          router.push(routes.reports({ ...range, scope: params.scope }), { scroll: false });
+          router.push(routes.reports({ ...range, scope: params.scope, ...sortQuery(sort) }), {
+            scroll: false,
+          });
         }}
       />
 
-      <FilterPills label={content.reports.scopeFilterLabel} items={scopeItems(params, content)} />
+      <FilterPills
+        label={content.reports.scopeFilterLabel}
+        items={scopeItems(params, sort, content)}
+      />
     </FilterBar>
   );
+}
+
+/** The applied order as the two query parameters `routes.reports` spells it in. */
+function sortQuery(sort: AgentSort | undefined): { sort?: string; sortDirection?: string } {
+  return sort === undefined ? {} : { sort: sort.column, sortDirection: sort.direction };
 }
 
 /**
@@ -101,18 +118,24 @@ function presets(today: string, content: Content): DateRangePreset[] {
  * `report:read_all` rather than refusing it, so hiding the pill would remove a
  * view that works — and the notice above the table says what was narrowed.
  */
-function scopeItems(params: ReportParams, content: Content): FilterPillItem[] {
+function scopeItems(
+  params: ReportParams,
+  sort: AgentSort | undefined,
+  content: Content,
+): FilterPillItem[] {
+  const range = { from: params.from, to: params.to, ...sortQuery(sort) };
+
   return [
     {
       id: 'scope-all',
       label: content.reports.scopeAll,
-      href: routes.reports({ from: params.from, to: params.to, scope: 'all' }),
+      href: routes.reports({ ...range, scope: 'all' }),
       isCurrent: params.scope === 'all',
     },
     {
       id: 'scope-assigned',
       label: content.reports.scopeAssigned,
-      href: routes.reports({ from: params.from, to: params.to, scope: 'assigned' }),
+      href: routes.reports({ ...range, scope: 'assigned' }),
       isCurrent: params.scope === 'assigned',
     },
   ];

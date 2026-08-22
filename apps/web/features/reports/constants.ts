@@ -40,3 +40,24 @@ export const AGENT_ROWS_SKELETON_COUNT = 4;
 
 /** Bars the daily-volume skeleton draws, matching the default range's length. */
 export const SERIES_SKELETON_BARS = DEFAULT_RANGE_DAYS;
+
+/**
+ * How many of a chart's columns take a staggered entry before the rest come in
+ * together.
+ *
+ * Twenty at `--duration-stagger` is about a quarter of a second of ripple, which
+ * reads as the chart drawing itself. Uncapped, a ninety-day range would take a
+ * second and a half to finish arriving, and a reader would be watching an
+ * animation rather than a report.
+ */
+export const MAX_STAGGERED_COLUMNS = 20;
+
+/**
+ * Gridlines the daily-volume skeleton draws, evenly spaced.
+ *
+ * The real axis picks between three and five from the data (`chart-scale.ts`).
+ * Five is the placeholder because a gridline is a hairline: being one line out
+ * costs nothing in layout, and drawing the fuller grid keeps the plotting area
+ * looking like a chart rather than like an empty box.
+ */
+export const SERIES_SKELETON_GRIDLINES = 5;

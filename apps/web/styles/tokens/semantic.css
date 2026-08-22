@@ -70,6 +70,14 @@
   --color-info-subtle: var(--palette-blue-100);
   --color-on-info-subtle: var(--palette-blue-500);
 
+  /* --- Chart series ------------------------------------------------------- */
+  /*
+   * A chart's series are the one colour role a tenant does **not** own. See the
+   * primitive family for why: while `--color-accent` carried one of them, a
+   * blue-branded workspace drew both series in the same hue.
+   */
+  --color-chart-1: var(--palette-chart-blue-500);
+  --color-chart-2: var(--palette-chart-orange-500);
   /* --- The console frame -------------------------------------------------- */
   /*
    * The navigation rail is a dark region in both themes — that is the point of
@@ -165,6 +173,13 @@
   --color-on-info-subtle: var(--palette-blue-100);
 
   /*
+   * The lighter pair, keeping the same relationship the light theme has: series
+   * one is the deeper of the two in both themes, so a reader who has learned the
+   * chart in one does not have to relearn it in the other.
+   */
+  --color-chart-1: var(--palette-chart-blue-300);
+  --color-chart-2: var(--palette-chart-orange-300);
+  /*
    * Dark theme drops the navy for the neutral scale: navy against a near-black
    * canvas reads as a colour cast rather than as a distinct region, and the
    * separation the rail needs comes from its border instead.
@@ -249,6 +264,8 @@
   --font-size-heading-sm: var(--scale-font-size-lg);
   --font-size-heading-md: var(--scale-font-size-xl);
   --font-size-heading-lg: var(--scale-font-size-2xl);
+  /* The figure on a metric tile, and nothing else. Never a heading. */
+  --font-size-metric: var(--scale-font-size-3xl);
   --line-height-heading: var(--scale-line-height-tight);
   --line-height-tight: var(--scale-line-height-snug);
   --line-height-body: var(--scale-line-height-normal);
@@ -269,6 +286,8 @@
   --duration-fast: var(--scale-duration-fast);
   --duration-medium: var(--scale-duration-medium);
   --duration-slow: var(--scale-duration-slow);
+  /* Between one chart column's entry animation and the next. */
+  --duration-stagger: var(--scale-duration-stagger);
   --easing-standard: var(--scale-easing-standard);
   --easing-enter: var(--scale-easing-decelerate);
 
@@ -302,6 +321,8 @@
      narrowest one day may get before the chart scrolls instead of squeezing. */
   --size-chart-track: var(--scale-size-chart-track);
   --size-chart-column: var(--scale-size-chart-column);
+  /* The gutter its y-axis labels stand in, beside that track. */
+  --size-chart-gutter: var(--scale-size-chart-gutter);
   --size-media-thumb: var(--scale-size-media-sm);
   --size-media-inline: var(--scale-size-media-md);
   --size-media-player: var(--scale-size-player);
@@ -351,5 +372,8 @@
     --duration-fast: 1ms;
     --duration-medium: 1ms;
     --duration-slow: 1ms;
+    /* A stagger is not a duration to shorten — it is one to remove, so a chart
+       draws every column at once rather than in a fast ripple. */
+    --duration-stagger: 0ms;
   }
 }

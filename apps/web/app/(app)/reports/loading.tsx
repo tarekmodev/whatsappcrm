@@ -23,13 +23,17 @@ import { defaultRange, todayInUtc } from '@/features/reports/report-params';
  */
 export default function ReportsLoading() {
   const today = todayInUtc(new Date());
+  const params = { ...defaultRange(today), scope: 'all' } as const;
 
   return (
     <PageShell>
       <Stack gap="5">
         <PageHeader title={content.reports.title} subtitle={content.reports.subtitle} />
-        <ReportRangeFilters params={{ ...defaultRange(today), scope: 'all' }} today={today} />
-        <DashboardSectionsSkeleton />
+        <ReportRangeFilters params={params} today={today} />
+        {/* No `sort` for the same reason as the range above: this file receives
+            no search parameters, so the breakdown's placeholder shows the API's
+            own order — which is also what an unsorted arrival gets. */}
+        <DashboardSectionsSkeleton params={params} isScopeNarrowed={false} />
       </Stack>
     </PageShell>
   );

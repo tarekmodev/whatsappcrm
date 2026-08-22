@@ -1,11 +1,16 @@
 'use client';
 
-import type { CSSProperties } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { DailyPoint } from '@whatsappcrm/contracts';
 import { VisuallyHidden } from '@/components/layout/VisuallyHidden';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useContent } from '@/lib/content';
-import { formatReportDayLabel } from '@/features/reports/presentation';
+import { barFraction, chartScale, dayLabelIndexes } from '@/features/reports/chart-scale';
+import { MAX_STAGGERED_COLUMNS } from '@/features/reports/constants';
+import { formatCount, formatReportDayLabel } from '@/features/reports/presentation';
+import { ChartDayReadout, dayAccessibleLabel } from './ChartDayReadout';
+import { ChartLegend } from './ChartLegend';
+import { ChartValueAxis } from './ChartValueAxis';
 import styles from './DailyVolumeChart.module.css';
 
 /**
@@ -13,24 +18,62 @@ import styles from './DailyVolumeChart.module.css';
  * `<DailyVolumeChart series={response.series} />`.
  *
  * It answers the one question the five headline figures cannot: *when* in the
- * range the work arrived and whether it was cleared as it did. Two totals that
+ * range the work arrived, and whether it was cleared as it did. Two totals that
  * match can hide a week of nothing followed by a weekend of everything.
  *
- * **No charting library.** Two bars in a grid is something CSS does natively, and
- * the smallest chart dependency in this ecosystem would cost more JavaScript than
- * the rest of this route put together.
+ * **No charting library.** Two bars in a grid, a few absolutely positioned rules
+ * and a panel is something CSS does natively, and the smallest chart dependency
+ * in this ecosystem would cost more JavaScript than the rest of this route put
+ * together. What TAR-519 added — a labelled value axis, dated columns, a per-day
+ * readout and arrow-key navigation — is what a library would have been bought
+ * for, and none of it needed one.
  *
- * It is a client component for one reason — it is lazily imported, and
- * `next/dynamic` in a client boundary can only load client components — and for
- * none of the usual ones: it has no state, no effects and no handlers.
- *
- * Accessibility is not the tooltip. Every day carries its own figures as text
- * for a screen reader, the scroller is focusable so a keyboard can reach the days
- * that are off-screen, and the two series are told apart by a labelled legend
- * rather than by colour.
+ * **Accessibility is not the readout.** Every day is a focusable graphic whose
+ * accessible name is its own figures, so a screen reader gets the same numbers
+ * the panel shows; the arrow keys move between them, one Tab stop for the whole
+ * chart; and the two series are told apart by shape and by a labelled legend as
+ * well as by colour, which is the part that fails first.
  */
 export function DailyVolumeChart({ series }: { series: readonly DailyPoint[] }) {
   const content = useContent();
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  // Which day owns the chart's single tab stop. Separate from `activeIndex` on
+  // purpose: hovering a column shows its figures without moving the tab stop out
+  // from under a keyboard user.
+  const [focusIndex, setFocusIndex] = useState(0);
+  const dayRefs = useRef<(HTMLElement | null)[]>([]);
+  const readoutRef = useRef<HTMLDivElement>(null);
+  const plotRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Puts the readout over the active column. Written straight onto the node as a
+   * custom property rather than held in state, for the reason `MenuButton`
+   * documents: it is measured geometry, so a render round trip would show the
+   * panel in the wrong place first.
+   *
+   * A physical offset, not a logical one — it comes from the element's own box,
+   * so it is already correct under `dir="rtl"` with no side to mirror.
+   */
+  const positionReadout = useCallback(() => {
+    const readout = readoutRef.current;
+    const plot = plotRef.current;
+    const column = activeIndex === null ? null : dayRefs.current[activeIndex];
+
+    if (readout === null || plot === null || column == null) {
+      return;
+    }
+
+    const columnBox = column.getBoundingClientRect();
+    const plotBox = plot.getBoundingClientRect();
+
+    readout.style.setProperty(
+      '--readout-x',
+      `${String(Math.round(columnBox.left + columnBox.width / 2 - plotBox.left))}px`,
+    );
+  }, [activeIndex]);
+
+  useLayoutEffect(positionReadout, [positionReadout]);
+
   const peak = Math.max(0, ...series.map((point) => Math.max(point.created, point.resolved)));
 
   if (peak === 0) {
@@ -43,72 +86,169 @@ export function DailyVolumeChart({ series }: { series: readonly DailyPoint[] }) 
     );
   }
 
-  const first = series.at(0);
-  const last = series.at(-1);
+  const scale = chartScale(peak);
+  const labelledDays = new Set(dayLabelIndexes(series.length));
+  const activePoint = activeIndex === null ? undefined : series[activeIndex];
+
+  function moveFocus(from: number, delta: number): void {
+    const next = Math.min(series.length - 1, Math.max(0, from + delta));
+
+    setFocusIndex(next);
+    setActiveIndex(next);
+    dayRefs.current[next]?.focus();
+  }
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLUListElement>): void {
+    const moves: Record<string, number | undefined> = {
+      ArrowRight: 1,
+      ArrowLeft: -1,
+      // A range is read from its start, so Home and End are its first and last
+      // day rather than the ends of whatever is currently scrolled into view.
+      Home: -series.length,
+      End: series.length,
+    };
+    const delta = moves[event.key];
+
+    if (delta === undefined) {
+      return;
+    }
+
+    event.preventDefault();
+    moveFocus(focusIndex, delta);
+  }
 
   return (
     <div className={styles.chart}>
-      <p className={styles.legend}>
-        <span className={styles.legendItem}>
-          <span aria-hidden="true" className={styles.swatch} data-series="created" />
-          {content.reports.seriesCreatedLegend}
-        </span>
-        <span className={styles.legendItem}>
-          <span aria-hidden="true" className={styles.swatch} data-series="resolved" />
-          {content.reports.seriesResolvedLegend}
-        </span>
-      </p>
+      <ChartLegend />
+      {/* Said before the columns rather than after them, so a screen-reader user
+          is told the days are reachable before they reach the first one. */}
+      <VisuallyHidden as="p">{content.reports.seriesKeyboardHint}</VisuallyHidden>
 
-      {/* Focusable so the days past the right-hand edge are reachable without a
-          pointer; labelled so it is not an unnamed tab stop. */}
-      <div
-        className={styles.scroller}
-        tabIndex={0}
-        role="group"
-        aria-label={content.reports.seriesHeading}
-      >
-        <ul className={styles.days}>
-          {series.map((point) => (
-            <li key={point.date} className={styles.day}>
-              <VisuallyHidden>
-                {content.reports.seriesDayLabel(
-                  formatReportDayLabel(point.date, content),
-                  point.created,
-                  point.resolved,
-                )}
-              </VisuallyHidden>
-              <Bar value={point.created} peak={peak} series="created" />
-              <Bar value={point.resolved} peak={peak} series="resolved" />
-            </li>
-          ))}
-        </ul>
+      <div className={styles.plot} ref={plotRef}>
+        <ChartValueAxis
+          axisLabel={content.reports.seriesValueAxisLabel}
+          lines={scale.ticks.map((value) => ({
+            id: String(value),
+            fraction: barFraction(value, scale.max),
+            label: formatCount(value, content),
+          }))}
+        />
+
+        {activePoint === undefined ? null : (
+          <div className={styles.readoutAnchor} ref={readoutRef}>
+            <ChartDayReadout point={activePoint} />
+          </div>
+        )}
+
+        <div className={styles.scroller} onScroll={positionReadout}>
+          <ul
+            className={styles.days}
+            aria-label={content.reports.seriesHeading}
+            onKeyDown={onKeyDown}
+            onMouseLeave={() => {
+              setActiveIndex(null);
+            }}
+          >
+            {series.map((point, index) => (
+              <li
+                key={point.date}
+                className={styles.day}
+                data-active={indexState(index, activeIndex)}
+              >
+                <span
+                  ref={(node) => {
+                    dayRefs.current[index] = node;
+                  }}
+                  className={styles.dayTarget}
+                  role="img"
+                  aria-label={dayAccessibleLabel(point)}
+                  tabIndex={index === focusIndex ? 0 : -1}
+                  onFocus={() => {
+                    setFocusIndex(index);
+                    setActiveIndex(index);
+                  }}
+                  onBlur={() => {
+                    setActiveIndex(null);
+                  }}
+                  onMouseEnter={() => {
+                    setActiveIndex(index);
+                  }}
+                >
+                  <Bar value={point.created} max={scale.max} series="created" columnIndex={index} />
+                  <Bar
+                    value={point.resolved}
+                    max={scale.max}
+                    series="resolved"
+                    columnIndex={index}
+                  />
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <ul className={styles.dayAxis} aria-hidden="true">
+            {series.map((point, index) => (
+              <li key={point.date} className={styles.dayAxisCell}>
+                {labelledDays.has(index) ? (
+                  <span
+                    className={styles.dayAxisLabel}
+                    data-anchor={anchorFor(index, series.length)}
+                  >
+                    {formatReportDayLabel(point.date, content)}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
-
-      {/* The range's ends rather than a label under every bar: ninety labels do
-          not fit a phone, and the figures a reader needs are in the table. */}
-      <p className={styles.axis}>
-        <span>{first === undefined ? null : formatReportDayLabel(first.date, content)}</span>
-        <span>{last === undefined ? null : formatReportDayLabel(last.date, content)}</span>
-      </p>
     </div>
   );
+}
+
+/** `'true'` on the active column, `'false'` on the ones it dims, nothing at rest. */
+function indexState(index: number, activeIndex: number | null): 'true' | 'false' | undefined {
+  if (activeIndex === null) {
+    return undefined;
+  }
+
+  return index === activeIndex ? 'true' : 'false';
+}
+
+/**
+ * A label under the first or last column would hang off the plotting area, so
+ * those two hug their edge instead of centring on their column.
+ */
+function anchorFor(index: number, length: number): 'start' | 'end' | undefined {
+  if (index === 0) {
+    return 'start';
+  }
+
+  return index === length - 1 ? 'end' : undefined;
 }
 
 /**
  * One series' bar for one day.
  *
- * A zero keeps its slot and draws nothing. Omitting the element instead would let
- * the other bar take the whole column, so a day with two openings and no
- * resolutions would look twice as busy as a day with two of each.
+ * A zero keeps its slot and draws a **baseline tick** rather than nothing: an
+ * empty stretch across a quiet week read as missing data, which is the opposite
+ * of what it means. The tick is a neutral rule, not a very short bar, so it
+ * cannot be mistaken for a day with one ticket on it.
+ *
+ * `--bar-fill` and `--bar-column` are the two things a component may set inline:
+ * both are per-instance measurements of the data, and the rules that consume
+ * them live in the module file.
  */
 function Bar({
   value,
-  peak,
+  max,
   series,
+  columnIndex,
 }: {
   value: number;
-  peak: number;
+  max: number;
   series: 'created' | 'resolved';
+  columnIndex: number;
 }) {
   return (
     <span
@@ -116,7 +256,14 @@ function Bar({
       className={styles.bar}
       data-series={series}
       data-empty={value === 0 ? 'true' : undefined}
-      style={{ '--bar-fill': value / peak } as CSSProperties}
+      style={
+        {
+          '--bar-fill': barFraction(value, max),
+          // Capped, so a quarter's worth of columns does not turn a 200ms entry
+          // into a second and a half of rippling.
+          '--bar-column': Math.min(columnIndex, MAX_STAGGERED_COLUMNS),
+        } as CSSProperties
+      }
     />
   );
 }

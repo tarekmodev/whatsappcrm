@@ -135,6 +135,66 @@ describe('the hierarchy survives a tenant brand', () => {
 });
 
 /**
+ * TAR-519's chart series, and the three properties a two-series chart needs.
+ *
+ * The bug this replaces was the same class as TAR-514's: one series was taking
+ * `--color-accent`, so a workspace whose brand resolved to blue drew `Opened` and
+ * `Resolved` as two shades of one hue. A chart whose series cannot be told apart
+ * is a chart with no series at all.
+ *
+ * The fix is a fixed palette, and these assertions are what keeps it fixed —
+ * particularly the last one, which fails the moment somebody aliases a series
+ * back to a role a tenant owns.
+ */
+describe('the chart series', () => {
+  /** WCAG 2.2 SC 1.4.11: a graphic that carries meaning against its background. */
+  const GRAPHIC_CONTRAST = 3;
+  /**
+   * How far apart the two series must sit in *lightness*, over and above their
+   * hue difference. A colour-blind reader, a greyscale print and a projector all
+   * lose the hue; none of them loses this.
+   */
+  const SERIES_SEPARATION = 1.8;
+
+  describe.each(THEMES)('%s theme', (theme) => {
+    it.each(['--color-chart-1', '--color-chart-2'])('draws %s clear of the surface', (role) => {
+      expect(
+        contrastRatio(token(theme, role), token(theme, '--color-surface')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    it('separates the two series by lightness, not only by hue', () => {
+      expect(
+        contrastRatio(token(theme, '--color-chart-1'), token(theme, '--color-chart-2')),
+      ).toBeGreaterThanOrEqual(SERIES_SEPARATION);
+    });
+
+    it.each(['--color-chart-1', '--color-chart-2'])('keeps %s off the accent', (role) => {
+      // Not a contrast assertion: the point is that the series is not the role a
+      // tenant replaces. A brand that happens to land on this blue is fine — the
+      // chart draws no accent — but a series *aliased* to the accent is the bug.
+      expect(token(theme, role)).not.toBe(token(theme, '--color-accent'));
+    });
+  });
+
+  it('is not a role a tenant brand can move', () => {
+    const branded = brandCssVariables(
+      {
+        productName: 'Test',
+        primaryColor: '#0f6fde',
+        accentColor: '#0f6fde',
+        supportEmail: null,
+        logo: null,
+        favicon: null,
+      },
+      'light',
+    );
+
+    expect(Object.keys(branded).filter((name) => name.startsWith('--color-chart'))).toEqual([]);
+  });
+});
+
+/**
  * One role's value in one theme. Throws rather than returning `undefined`: a
  * role this file asks for and the token layer does not declare is the failure
  * these tests exist to catch, and it should not arrive as `NaN` in a ratio.
