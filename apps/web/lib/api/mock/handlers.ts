@@ -4265,7 +4265,12 @@ function updateKnowledgeDocument({
     ...document,
     title: title ?? document.title,
     content: content ?? document.content,
-    sourceUrl: sourceUrl ?? document.sourceUrl,
+    // `=== undefined`, not `??`: `sourceUrl` is nullable *and* optional, so
+    // `null` is a value the caller meant — "there is no source URL any more" —
+    // and `null ?? document.sourceUrl` would silently collapse it back into
+    // "leave it alone". `language` below is optional but not nullable, so
+    // absence is the only absence it can see and `??` is right for it.
+    sourceUrl: sourceUrl === undefined ? document.sourceUrl : sourceUrl,
     language: language ?? document.language,
     status: isReindexed ? 'pending' : document.status,
     chunkCount: isReindexed ? 0 : document.chunkCount,

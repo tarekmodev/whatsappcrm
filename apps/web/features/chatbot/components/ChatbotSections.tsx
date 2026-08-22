@@ -68,7 +68,15 @@ export async function ChatbotSections({ checker }: { checker: PermissionChecker 
         </Stack>
       </SectionCard>
 
-      <KnowledgeBaseSection documents={documents} hasMore={hasMoreDocuments} canWrite={canWrite} />
+      <KnowledgeBaseSection
+        documents={documents}
+        hasMore={hasMoreDocuments}
+        // From the same read as the readiness panel above, so "the only entry
+        // the chatbot can answer from" and "it answers from N entries" are one
+        // number rather than two that can disagree.
+        indexedEntryCount={config.readiness.indexedDocumentCount}
+        canWrite={canWrite}
+      />
     </Stack>
   );
 }

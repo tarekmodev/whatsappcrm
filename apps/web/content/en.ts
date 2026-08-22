@@ -2494,6 +2494,13 @@ export const content = {
     modelHint:
       'A faster model costs less per reply and is less careful about what it does not know.',
     modelDefaultOption: (name: string) => `Use the recommended model (${name})`,
+    /**
+     * The empty choice when the API published no recommended model — a state
+     * that should not happen. Its own string rather than the entry editor's
+     * "Not set": these two read the same today and are not the same sentence,
+     * and one of them will need to change without the other.
+     */
+    modelDefaultUnavailable: 'No recommended model',
     /** Rendered from the prices the API publishes — never from copy. */
     modelPrice: (input: string, output: string) =>
       `${input} in · ${output} out, per million tokens`,
@@ -2504,6 +2511,13 @@ export const content = {
     maxTurnsLabel: 'Replies before handing over',
     maxTurnsHint:
       'The most the chatbot answers in one conversation before a person takes it, however confident it is.',
+    /**
+     * Says what a valid answer looks like rather than what was wrong with this
+     * one. An emptied number field and a half-typed one are the same value to
+     * the browser, so one message has to serve both.
+     */
+    maxTurnsInvalidError: (min: number, max: number) =>
+      `Enter a whole number between ${min} and ${max}`,
     systemPromptLabel: 'How the chatbot should sound',
     systemPromptHint:
       'Tone and house rules. It never overrides the knowledge base — the chatbot answers only from what you have written there.',
@@ -2539,7 +2553,7 @@ export const content = {
     /**
      * Said rather than paged. The list is keyset-paginated and a second page is
      * a real feature; until it exists, naming how many are shown is honest, and
-     * a pager that could not page would not be.
+     * a pager that could not page would not be. TAR-613 is the follow-up.
      */
     knowledgeShowingFirst: (count: number) =>
       `Showing the ${count} most recent entries. The chatbot searches every entry, not only these.`,
