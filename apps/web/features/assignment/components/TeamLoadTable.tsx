@@ -30,8 +30,9 @@ export function TeamLoadTable({ rows }: { rows: readonly TeamLoadRow[] }) {
   if (rows.length === 0) {
     return (
       <EmptyState
-        heading={content.assignment.teamLoadEmptyHeading}
-        body={content.assignment.teamLoadEmptyBody}
+        icon="people"
+        title={content.assignment.teamLoadEmptyHeading}
+        description={content.assignment.teamLoadEmptyBody}
       />
     );
   }

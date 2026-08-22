@@ -123,7 +123,27 @@
 }
 
 .list {
+  display: flex;
+  flex-direction: column;
   padding: var(--space-3);
+}
+
+/*
+ * The same contract `.thread > *` has, and for the same reason: the list arrives
+ * wrapped in its error boundary's own `div`, so a percentage height inside it
+ * resolves against `auto` and stops at the content. An empty list then hugged
+ * the top of a column three times its height while the thread column beside it
+ * centred its own — two states of one workspace disagreeing about where the
+ * middle is (TAR-515).
+ *
+ * `1 0 auto`: it fills the column when the content is shorter, and is never
+ * squeezed below its content when a full page of rows makes the column scroll.
+ */
+.list > * {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-block-size: 0;
 }
 
 .context {

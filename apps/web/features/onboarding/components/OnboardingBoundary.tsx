@@ -24,8 +24,8 @@ export function OnboardingBoundary({ children }: { children: ReactNode }) {
     <SectionErrorBoundary
       fallback={(retry) => (
         <ErrorState
-          heading={content.onboarding.unavailableHeading}
-          body={content.onboarding.unavailableBody}
+          title={content.onboarding.unavailableHeading}
+          description={content.onboarding.unavailableBody}
           onRetry={retry}
         />
       )}

@@ -432,6 +432,91 @@ and 0002's endpoint table has no `POST /tickets` for that reason. The inbox's co
 panel therefore _reports_ the link rather than offering to make one. If a screen ever
 needs a "create a ticket from this" affordance, the endpoint comes first.
 
+## Every state (TAR-515)
+
+A screen is not the happy path plus some fallbacks. Empty is the first thing a new
+workspace sees, loading is what every screen is for its first few hundred milliseconds,
+and error is the only one the reader did not ask for. All three are designed here, so a
+new screen inherits them instead of inventing a third grey box.
+
+### The anatomy
+
+`EmptyState` and `ErrorState` are two spellings of one layout, `StateLayout`:
+
+| Part        | Rule                                                                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The frame   | **None.** No border, no dashed outline, no sunken slab. It sits on its container's surface                                                         |
+| Position    | Centred in the container's **full available height** (`min-block-size: 100%`, which collapses where there is none)                                 |
+| Icon        | `Icon size="lg"` (`--size-icon-lg`) in `--color-on-surface-subtle`, inside a `--radius-pill` `--color-surface-sunken` disc of `--size-state-plate` |
+| Title       | `--font-size-heading-sm` / `--font-weight-strong`                                                                                                  |
+| Description | `--font-size-body-sm` / `--color-on-surface-muted`, capped at `--measure-body`, two lines of copy at most                                          |
+| Action      | A real `Button` or `TextLink`, in the tab order. Never a styled div                                                                                |
+| Entrance    | Opacity, `--duration-fast`, `--easing-enter`                                                                                                       |
+
+A dashed placeholder box is a wireframe artifact: it reads as "a component belongs here
+and has not been built yet". The disc is what carries the weight the border used to, and
+it is the one legitimate use of `--color-on-surface-subtle` — decoration at 2.6:1, never
+text. The icon is `aria-hidden`; the title carries the meaning.
+
+`tone="quiet"` drops the disc for a region that is **instructional rather than empty** —
+the thread column before a conversation is picked. Icon, one line, no action. Nothing is
+wrong there, and drawing an ordinary resting position like a state the reader landed in
+overstates it.
+
+### Every empty state names the next step
+
+An empty state without an action is a dead end. Omit `action` only where there genuinely
+is no next step, and then ask whether `tone="quiet"` is the honest spelling.
+
+**Zero results is not the same state as never had any.** A filter that matched nothing
+says what was filtered and offers to widen it; a search that matched nothing quotes the
+term back and offers to clear it; an account with no data at all says so and offers to set
+it up. Sharing one string between them is what makes a working search look broken. Every
+list that can be filtered branches on it — see `ConversationList`, which has all three.
+
+An action a role cannot perform is not offered: the inbox's "Connect a WhatsApp number"
+appears only for a principal holding `channel:manage`.
+
+### Loading
+
+- Lists and tables: shape-matched skeletons (`DataTableSkeleton`, `ConversationRowSkeleton`).
+  Never the word "Loading" as body text — it belongs in `LoadingAnnouncement`, which is
+  visually hidden and is the one polite announcement the region makes.
+- Cards and panels: skeleton blocks matching the card's real layout, never a centred spinner.
+- `Spinner` is correct **only inside a control the reader just pressed**.
+- Shimmer runs at `--duration-slow`; the token layer flattens it to a static tint under
+  `prefers-reduced-motion`, so no component branches on the preference.
+
+### Error, and partial data
+
+- **Every recoverable error offers a retry.** One without is a claim that retrying cannot
+  help; `ContactUnavailable` and `ThreadUnavailable` are that claim made deliberately,
+  which is why they are empty states with a way back rather than error states.
+- **Section-scoped, not page-scoped.** Every independently-failing part of a composed
+  screen is wrapped in `SectionErrorBoundary` (`LazyBoundary` brings its own), so one
+  broken widget never blanks a page. Where several sections come out of **one** fetch, as
+  the dashboard's three do, the read's boundary belongs at the page and the render's
+  boundary still belongs per section.
+- `ErrorState` is `role="alert"`. It has replaced the content the reader asked for, and a
+  retry on offer does not change that — so it interrupts. It is also why the politeness is
+  not derived from `onRetry`: `Spinner` is already a `role="status"`, and a failed section
+  competing with every pending button for one announcement helps nobody.
+- **Partial data is the polite half of that rule**, and it is not an error state: the data
+  that loaded stays on screen and an inline `Notice` above it says what is missing, with a
+  retry where there is something to retry. `MessageList`'s "older messages" notice is the
+  instance — it says the stream starts where the fetch did, and offers nothing because
+  paging further back has no endpoint yet.
+- A chunk that 404s after a deploy is handled separately by `SectionErrorBoundary`: a
+  reload, not a retry that can never succeed.
+
+### Motion
+
+Empty, loading and error content fades in over `--duration-fast`. The skeleton-to-content
+swap is the incoming half of a cross-fade rather than a true one — React unmounts the
+Suspense fallback the moment the content is ready, so keeping both on screen to dissolve
+between them would mean drawing the section twice. Under `prefers-reduced-motion` the
+token layer takes the durations to 1ms and `StateLayout` drops the animation outright.
+
 ## What a new screen inherits
 
 Compose these and the screen matches this document without you specifying a colour or a
@@ -452,6 +537,7 @@ space:
 | A person's initial      | `Avatar`                                        |
 | A popup of actions      | `MenuButton`                                    |
 | Loading, empty, error   | `Skeleton`, `EmptyState`, `ErrorState`          |
+| A link off-app          | `TextLink isExternal`                           |
 
 If a screen needs something not on that list, add it to `components/ui/` with a usage
 comment and add a row here. A one-off in a feature folder that a second feature then

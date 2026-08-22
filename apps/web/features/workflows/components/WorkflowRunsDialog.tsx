@@ -80,7 +80,7 @@ export function WorkflowRunsDialog({
         {state.status === 'loading' ? <WorkflowRunListSkeleton /> : null}
         {state.status === 'failed' ? (
           <ErrorState
-            body={state.message}
+            description={state.message}
             onRetry={() => {
               void load();
             }}
