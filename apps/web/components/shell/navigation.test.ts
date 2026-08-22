@@ -57,6 +57,19 @@ describe('navigation visibility by role', () => {
    * the contract's table gives to admin alone. A supervisor never sees a link to
    * a page whose only action the API would refuse.
    */
+  /**
+   * TAR-575: the saved-reply library is gated on `canned_response:write`, which
+   * 0004 grants supervisor-and-above — not on `canned_response:read`, which
+   * every agent holds so the composer can expand a shortcut. An agent reads the
+   * library from the reply box; an entry to a screen whose every button the API
+   * would refuse is worse than no entry.
+   */
+  it('gives the saved-reply library to the roles that may write one', () => {
+    expect(navIdsFor('admin')).toContain('settings-saved-replies');
+    expect(navIdsFor('supervisor')).toContain('settings-saved-replies');
+    expect(navIdsFor('agent')).not.toContain('settings-saved-replies');
+  });
+
   it('keeps the WhatsApp connection surface to the role that may connect one', () => {
     expect(navIdsFor('admin')).toContain('settings-whatsapp');
     expect(navIdsFor('supervisor')).not.toContain('settings-whatsapp');

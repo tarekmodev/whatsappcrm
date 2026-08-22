@@ -71,6 +71,20 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     requiresAny: ['tenant:settings'],
   },
   {
+    id: 'settings-saved-replies',
+    label: content.nav.savedReplies,
+    href: routes.settingsSavedReplies(),
+    icon: 'note',
+    /**
+     * `canned_response:write` — the permission the three mutating endpoints
+     * require (0011), which 0004 grants supervisor-and-above. Deliberately not
+     * `canned_response:read`, which every agent holds so the composer can expand
+     * a shortcut: an agent reads the library from the reply box, and an entry to
+     * a screen whose every button the API refuses is worse than no entry.
+     */
+    requiresAny: ['canned_response:write'],
+  },
+  {
     id: 'settings-people',
     label: content.nav.people,
     href: routes.settingsPeople(),
