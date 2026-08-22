@@ -915,8 +915,15 @@ silently removes the gate, so update the protection rule in the same change.
 
 ### Landing a pull request
 
-Do not merge by hand, and do not wait to be asked for a rebase. Once the pull request is
-ready, hand it to auto-merge and stop watching it:
+Do not merge by hand, and do not wait to be asked for a rebase. A pull request opened from
+an `agent/` branch against `main` opts itself into auto-merge as soon as it is ready for
+review — `.github/workflows/pr-enable-automerge.yml` does it, so there is nothing to
+remember. Open the pull request, mark it ready, and stop watching it.
+
+That used to be each agent's own job, and it did not hold: when TAR-446 was investigated,
+all 12 open pull requests had `autoMerge=false`, so the sweep below skipped every one of
+them and the rebase loop carried on. If you ever need to arm it by hand — a branch outside
+`agent/`, or a run where the workflow warned — it is still one command:
 
 ```bash
 gh pr merge --auto --squash
