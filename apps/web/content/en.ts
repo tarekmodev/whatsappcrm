@@ -1793,6 +1793,8 @@ export const content = {
       reference_removed: 'Something this workflow points at was removed, so it was switched off.',
       reference_missing:
         'Something this workflow points at went missing while it was running, so it was switched off.',
+      reference_suspended:
+        'Someone this workflow points at was suspended, so it was switched off. Reinstate them or pick a replacement.',
     } satisfies Record<WorkflowBrokenReason, string>,
 
     runStatuses: {

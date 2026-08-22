@@ -1106,6 +1106,15 @@ decision 5): the delivery record that survives an offline supervisor, the read m
 cannot rewrite what a supervisor was told they missed. `acknowledged_at` is set by the
 acknowledge endpoint; first write wins.
 
+**Three read surfaces, one table.** `GET /api/v1/notifications` (TAR-596) is the generalised
+inbox and spreads `type IN ('sla_breach', 'workflow_notify', 'workflow_broken')`;
+`GET /api/v1/sla-alerts` and `GET /api/v1/escalation-alerts` are the single-type views over
+the same rows, each spreading its own shared `where` fragment — `SLA_BREACH_ONLY`,
+`ESCALATION_ONLY` and `PUBLISHED_NOTIFICATION_TYPES_ONLY`. All four acknowledge endpoints
+write the same `acknowledged_at` with the same first-write-wins predicate, which is what makes
+one unread count possible. `escalation` is deliberately outside the generalised list: it is
+the one type whose response carries fields `NotificationResponse` has no home for.
+
 **The rename was pre-authorised in writing.** 0006 decision 5 rejected a generic
 notifications table and said what should happen when the second type arrived: "generalising
 it is a rename and a `type` column". TAR-27's `notify` action is that second type, so
@@ -1446,7 +1455,7 @@ definitions — stays text or JSON.
 | `sla_timer_state`                           | `running`, `met`, `breached`, `cancelled`, `paused`                                                                                                                                                       |
 | `workflow_run_status`                       | `pending`, `running`, `succeeded`, `failed`, `skipped` — `skipped` added by TAR-394; it is exactly `WORKFLOW_RUN_STATUSES` in `packages/contracts`                                                        |
 | `workflow_trigger_type`                     | `ticket_created`, `ticket_status_changed`, `ticket_assigned`, `ticket_sla_breached`, `ticket_unresolved_for` — `WORKFLOW_TRIGGER_TYPES` verbatim                                                          |
-| `workflow_broken_reason`                    | `reference_removed`, `reference_missing` — why a workflow was auto-deactivated, and what blocks re-enabling it                                                                                            |
+| `workflow_broken_reason`                    | `reference_removed`, `reference_missing`, `reference_suspended` — why a workflow was auto-deactivated, and what blocks re-enabling it                                                                     |
 | `workflow_failure_reason`                   | `reference_missing`, `transition_refused`, `ticket_gone`, `run_budget_exceeded`, `internal_error`                                                                                                         |
 | `notification_type`                         | `sla_breach`, `workflow_notify`, `workflow_broken` — `sla_breach` is the column default, so a writer that forgets it fails the CHECK rather than inventing a category                                     |
 | `knowledge_document_status`                 | `pending`, `indexed`, `failed`                                                                                                                                                                            |
@@ -1503,6 +1512,7 @@ Applied in this order. Every directory carries a hand-written `down.sql` beside 
 | `20260816140000_workflow_rule_schema`                                     | `workflows.name` to `citext` plus `position`, `trigger_type`, `broken_reason` and the evaluation index; the `workflow_runs` claim columns, its unique dedupe key and two CHECKs; adds `workflow_references` and `ticket_tags` and the 45th and 46th policies; `tickets_active_created_at_idx`                                                                                                                                                                   | TAR-394 |
 | `20260816150000_notification_type_escalation`                             | `ALTER TYPE notification_type ADD VALUE 'escalation'`, alone in its own migration                                                                                                                                                                                                                                                                                                                                                                               | TAR-468 |
 | `20260816160000_ticket_escalation_notifications`                          | `ticket_events (tenant_id, id)` UNIQUE; `notifications.ticket_event_id` with its composite FK, its unique and `notifications_escalation_columns`. No new table, no new policy, no `ALTER TABLE tickets`, no backfill. The UNIQUE is the one statement that scales — `ticket_events` is populated and append-only, so the migration asserts its size and refuses above 250 000 rows with the `CONCURRENTLY` statement to run instead                             | TAR-468 |
+| `20260822120000_workflow_broken_reason_suspended`                         | `ALTER TYPE workflow_broken_reason ADD VALUE 'reference_suspended'`, alone in its own migration                                                                                                                                                                                                                                                                                                                                                                 | TAR-596 |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's

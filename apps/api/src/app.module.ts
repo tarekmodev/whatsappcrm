@@ -14,6 +14,7 @@ import { validateEnv } from './config/env';
 import { HealthModule } from './health/health.module';
 import { IdentityModule } from './identity/identity.module';
 import { MediaModule } from './media/media.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { RequestLoggingMiddleware } from './observability/request-logging.middleware';
 import { PeopleModule } from './people/people.module';
@@ -111,6 +112,10 @@ import { WorkflowsModule } from './workflows/workflows.module';
     // status, priority and assignment through the one implementation of those
     // writes.
     WorkflowsModule,
+    // The generalised inbox over the rows the two L4 modules above write
+    // (0009 decision 7). Declared after them because that is what it reads, not
+    // because it imports them — it imports nothing, and nothing imports it.
+    NotificationsModule,
     // Imports `ConversationsModule` for the send path and `EntitlementsModule`
     // for the plan gate — both declared above it, so the ordering here matches
     // the dependency rather than only reading well.

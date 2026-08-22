@@ -1,0 +1,46 @@
+-- `workflow_broken_reason` gains `reference_suspended` (TAR-596).
+--
+-- One statement in a directory of its own, for the reason
+-- `20260816150000_notification_type_escalation` states at length: **PostgreSQL
+-- refuses to _use_ an enum label in the transaction that added it**, and Prisma
+-- runs each migration file in one transaction. Nothing in this release writes
+-- the label from SQL, but keeping the label alone is what makes it safe for a
+-- later migration to.
+--
+-- ---------------------------------------------------------------------------
+-- Why a third label rather than reusing `reference_removed`
+-- ---------------------------------------------------------------------------
+--
+-- Suspending a user leaves every workflow naming them armed against an actor the
+-- executor will not use: `REFERENCEABLE_USER` is `status = 'active'`, so the
+-- first ticket that reaches such a workflow fails `reference_missing` and
+-- auto-deactivates it. `users.service.ts` disarms on the removal path only, so
+-- the suspension case was found by a ticket rather than by the admin who caused
+-- it.
+--
+-- The disarm now happens in the status-change transaction, and it needs a reason
+-- of its own: `reference_removed` renders as "something this workflow points at
+-- was removed", which is false for a suspended account and points the admin at
+-- the wrong repair. A suspension is reversible; a removal is not.
+--
+-- ---------------------------------------------------------------------------
+-- Impact and risk
+-- ---------------------------------------------------------------------------
+--
+--   Duration     Microseconds. One row in `pg_enum`.
+--   Locks        A brief lock on the type itself. No table is read, written or
+--                rewritten — adding a label does not touch rows.
+--   Blocking     Nil in practice. Nothing can hold a conflicting lock on a type.
+--   Data loss    None. Purely additive; no existing row changes.
+--   Rollback     `down.sql` beside this file, which deliberately leaves the
+--                label in place — read its header for why.
+--
+-- `IF NOT EXISTS` matches every other `ADD VALUE` in this directory: the bare
+-- form errors on a label that is already there, so a replay by hand — or a
+-- re-apply after the rollback below — would fail on a database that is already
+-- correct.
+
+SET LOCAL lock_timeout = '3s';
+
+-- AlterEnum
+ALTER TYPE "workflow_broken_reason" ADD VALUE IF NOT EXISTS 'reference_suspended';
