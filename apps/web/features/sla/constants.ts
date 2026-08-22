@@ -15,6 +15,16 @@ export const SLA_ALERTS_PAGE_SIZE = 20;
 export const SLA_ALERTS_SKELETON_COUNT = 3;
 
 /**
+ * How many policies the settings screen reads (TAR-390).
+ *
+ * One page, and a generous one: a tenant has a catch-all plus at most one row
+ * per priority, so twenty-five is already several times the reachable maximum.
+ * The screen still reports `nextCursor` rather than assuming that — a list that
+ * silently stops is a list that lies.
+ */
+export const SLA_POLICIES_PAGE_SIZE = 25;
+
+/**
  * How often a running countdown re-phrases itself, in milliseconds.
  *
  * Matched to ADR 0006's `SLA_SWEEP_INTERVAL_MS` on purpose: the sweep is what

@@ -1586,6 +1586,43 @@ side is documented for its two readers in
 [Set up the chatbot and its knowledge base](docs/guides/set-up-the-chatbot.md) and
 [Work with the chatbot in the inbox](docs/guides/work-with-the-chatbot-in-the-inbox.md).
 
+### Response deadlines: the screen edits one row, and says what an edit does not do
+
+`/settings/sla` (TAR-390) is where a supervisor reads and changes the SLA window their
+workspace measures new tickets against. Same two-gate shape as Workspace above: `sla:read`
+reaches the figures, `sla:write` is what changes them, and the nav entry names both. Both are
+supervisor-and-above in `ROLE_PERMISSIONS`, so an agent never sees the entry — TAR-22's third
+criterion at the navigation layer, asserted in `components/shell/navigation.test.ts`.
+
+The screen edits **the catch-all policy** — the `priority: null` row every ticket falls back
+to — and nothing else. `SlaPolicyUpdateInputSchema` accepts no `priority` and the resource has
+no `POST` or `DELETE`, so per-priority policies are listed read-only under _Priority
+overrides_ rather than offered as controls, and `businessHoursOnly` (modelled, not
+implemented) has no control at all. Turning deadlines off is `isActive: false`, which leaves
+the row running timers point at intact.
+
+**The card says an edit reaches future tickets only, above the form rather than inside it.** A
+running timer carries the `due_at` written when it started, so shortening the window cannot
+retroactively breach yesterday's tickets — and the notice is outside the form because it is
+equally true for the read-only variant, which is exactly the reader with the least context.
+
+A principal with `sla:read` and not `sla:write` gets `SlaWindowDetails`, a `DetailList` of the
+same facts, rather than a form of disabled inputs: `disabled` reads as "not right now" instead
+of "never for you", and a disabled control is skipped by keyboard navigation, so its value
+becomes unreadable to anyone tabbing through. `WorkspaceProfileDetails` made the same call.
+
+One shared util came out of this page: `lib/format/duration.ts` (`formatMinutes`), which
+phrases a minute count as the largest whole unit it divides into — 240 reads "4 hours". It
+moved here out of `features/workflows/presentation.ts` when this screen became its second
+caller, so a workflow's "unresolved for 4 hours" and an SLA window of 240 minutes cannot read
+differently. It is **not** `features/reports`' similarly-named `formatDuration`, which takes
+seconds and renders the compact "2h 14m" a metric tile wants.
+
+The endpoint surface, what an edit does to a running timer and the console control-to-field
+mapping are in [the SLA timers reference](docs/reference/sla-timers.md); the steps a
+supervisor follows are in
+[Watch tickets that miss their deadline](docs/guides/track-overdue-tickets.md).
+
 ### Interim state: mock API and stubbed role
 
 Two flags in `.env.example` exist because TAR-82 was built ahead of its dependencies. Real

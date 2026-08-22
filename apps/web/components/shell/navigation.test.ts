@@ -104,6 +104,24 @@ describe('navigation visibility by role', () => {
     expect(navIdsFor('agent')).not.toContain('settings-chatbot');
   });
 
+  /**
+   * TAR-390: the response-window screen follows `sla:read` / `sla:write`, which
+   * 0004 grants supervisor-and-above — the story's own user is a supervisor, and
+   * an agent holds neither. Asserted against `checkerForRole` rather than a
+   * hardcoded pair of roles, so a change to `rbac.ts` shows up here.
+   */
+  it('shows the response-deadline settings to exactly the roles that hold an SLA permission', () => {
+    for (const role of TENANT_ROLES) {
+      const checker = checkerForRole(role);
+      const expected = checker.canAny(['sla:read', 'sla:write']);
+
+      expect(navIdsFor(role).includes('settings-sla')).toBe(expected);
+    }
+
+    expect(navIdsFor('supervisor')).toContain('settings-sla');
+    expect(navIdsFor('agent')).not.toContain('settings-sla');
+  });
+
   it('gives an admin every entry', () => {
     const ids = navIdsFor('admin');
 
