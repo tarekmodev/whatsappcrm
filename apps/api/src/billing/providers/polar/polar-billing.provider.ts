@@ -1,16 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Polar } from '@polar-sh/sdk';
+import { SDKValidationError } from '@polar-sh/sdk/models/errors/sdkvalidationerror.js';
 import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks.js';
 import type {
   BillingEvent,
   BillingProvider,
   HostedSession,
+  ParsedWebhookEvent,
   WebhookSubject,
 } from '@whatsappcrm/contracts';
 import { describeFailure } from '../../../common/describe-failure';
 import { BillingProviderUnavailableError } from '../../billing.errors';
 import {
+  asSubscription,
   fromSubscription,
   readProviderCustomerId,
   readProviderProductId,
@@ -248,6 +251,12 @@ export class PolarBillingProvider implements BillingProvider {
    * Returns `false` rather than throwing, so the controller owns the response.
    * An absent secret is a refusal, not a bypass: an environment that was never
    * given one must not accept unsigned payloads.
+   *
+   * ⚠️ `validateEvent` does two things, and only the first is this method's
+   * question: it verifies the signature and then parses the body against the
+   * event schemas pinned in this SDK version. A failure of the second is an
+   * authentic delivery this SDK cannot type, and it is accepted — see the catch
+   * below for why rethrowing it was a liability rather than a safeguard.
    */
   verifyWebhookSignature(
     rawBody: Uint8Array,
@@ -287,6 +296,26 @@ export class PolarBillingProvider implements BillingProvider {
         return false;
       }
 
+      if (error instanceof SDKValidationError) {
+        // **Verified, then rejected by the SDK's own model of the event.**
+        // `validateEvent` checks the signature and *then* parses the body
+        // against the schemas pinned in this SDK version, so this branch is
+        // reached only after the bytes have been proved authentic — a Polar
+        // event type newer than the pinned SDK, or a field it does not model
+        // yet, lands here.
+        //
+        // Accepting it is the whole point: rethrowing made an authentic
+        // delivery a 500, and ten non-2xx responses in a row disable the
+        // endpoint at Polar. The payload is stored instead, and our own mapper
+        // decides whether it is an event, ignorable, or unreadable and parked.
+        this.logger.warn(
+          `Billing webhook verified but not typed by the pinned Polar SDK: ${describeFailure(error)}. ` +
+            'Stored for the mapper to decide; upgrade @polar-sh/sdk if this persists.',
+        );
+
+        return true;
+      }
+
       throw error;
     }
   }
@@ -302,19 +331,30 @@ export class PolarBillingProvider implements BillingProvider {
     };
   }
 
+  /**
+   * The stored payload in our vocabulary, or why it is not.
+   *
+   * An envelope with no `type` is `unreadable` rather than `ignored`: every
+   * Polar delivery carries one, so a payload without it is a row that needs
+   * looking at, not a subscription we did not ask for.
+   */
   parseWebhookEvent(
     payload: unknown,
     headers: Record<string, string | undefined>,
     tenantId: string,
-  ): BillingEvent | null {
+  ): ParsedWebhookEvent {
     const providerEventId = headers[WEBHOOK_ID_HEADER];
     const envelope = payload as { type?: unknown; data?: unknown };
 
-    if (providerEventId === undefined || typeof envelope.type !== 'string') {
-      return null;
+    if (providerEventId === undefined) {
+      return { outcome: 'unreadable', detail: `no ${WEBHOOK_ID_HEADER} to key the event on` };
     }
 
-    const event = toBillingEvent({
+    if (typeof envelope.type !== 'string') {
+      return { outcome: 'unreadable', detail: 'payload carries no event type' };
+    }
+
+    const parsed = toBillingEvent({
       envelope: {
         type: envelope.type,
         data: envelope.data,
@@ -325,9 +365,17 @@ export class PolarBillingProvider implements BillingProvider {
       receivedAt: new Date(),
     });
 
-    return event === null
-      ? null
-      : { ...event, providerProductId: readProviderProductId(envelope.data) ?? undefined };
+    if (parsed.outcome !== 'event') {
+      return parsed;
+    }
+
+    return {
+      outcome: 'event',
+      event: {
+        ...parsed.event,
+        providerProductId: readProviderProductId(envelope.data) ?? undefined,
+      },
+    };
   }
 
   /**
@@ -375,7 +423,13 @@ export class PolarBillingProvider implements BillingProvider {
       limit: 10,
     });
 
-    const items = (page.result?.items ?? []) as unknown as PolarSubscriptionShape[];
+    // Normalised through the mapper's reader rather than cast: the SDK's own
+    // camelCase shape is only one of the two spellings that reader accepts, and
+    // going through it is what keeps a read comparable with what a webhook for
+    // the same subscription would have written (TAR-663).
+    const items = (page.result?.items ?? [])
+      .map((item) => asSubscription(item))
+      .filter((item): item is PolarSubscriptionShape => item !== null);
 
     if (items.length === 0) {
       return null;
@@ -404,7 +458,7 @@ export class PolarBillingProvider implements BillingProvider {
    * from the nightly job rather than from Polar.
    */
   private asEvent(
-    subscription: PolarSubscriptionShape,
+    subscription: unknown,
     tenantId: string,
     providerEventId: string,
   ): BillingEvent | null {
@@ -424,7 +478,7 @@ export class PolarBillingProvider implements BillingProvider {
       // lifecycle is concerned: it is what moves a tenant whose webhook was
       // missed out of `past_due`.
       type: event.status === 'active' ? 'subscription.activated' : event.type,
-      providerProductId: subscription.productId ?? undefined,
+      providerProductId: readProviderProductId(subscription) ?? undefined,
     };
   }
 
@@ -456,11 +510,17 @@ export class PolarBillingProvider implements BillingProvider {
   }
 }
 
-/** Newest-first ordering key. A subscription with no start date sorts oldest. */
+/** Newest-first ordering key. A subscription with no readable start sorts oldest. */
 function startedAtOf(subscription: PolarSubscriptionShape): number {
-  const startedAt = (subscription as { startedAt?: Date | null }).startedAt;
+  const { startedAt } = subscription;
 
-  return startedAt instanceof Date ? startedAt.getTime() : 0;
+  if (startedAt === null) {
+    return 0;
+  }
+
+  const parsed = startedAt instanceof Date ? startedAt : new Date(startedAt);
+
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }
 
 /**

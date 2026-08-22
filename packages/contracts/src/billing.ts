@@ -355,6 +355,34 @@ export interface WebhookSubject {
   providerCustomerId: string | null;
 }
 
+/**
+ * What an adapter made of a verified payload — **three outcomes, not two**.
+ *
+ * The distinction is the whole point of the type. `ignored` and `unreadable`
+ * both mean "no event came out of this", and collapsing them into one `null`
+ * cost TAR-663 every real Polar subscription webhook: the receiver recorded each
+ * unreadable payload as `processed`, so a tenant that paid was never activated
+ * and nothing anywhere said so.
+ *
+ *   * `event` — translated; apply it.
+ *   * `ignored` — verified, understood, and deliberately not acted on. An event
+ *     type this integration does not subscribe to, or a one-off purchase that is
+ *     not a subscription. Recorded as processed, because parking these would
+ *     bury the rows that matter under noise.
+ *   * `unreadable` — the adapter could not make sense of a payload it *should*
+ *     have understood. Parked with the raw payload intact so it can be diagnosed
+ *     and replayed, never marked processed and never retried: no number of
+ *     attempts changes a shape.
+ *
+ * `detail` is operator-facing and lands in `webhook_events.last_error`, so it
+ * names the event type and the field that was missing rather than saying "parse
+ * failed".
+ */
+export type ParsedWebhookEvent =
+  | { outcome: 'event'; event: BillingEvent }
+  | { outcome: 'ignored' }
+  | { outcome: 'unreadable'; detail: string };
+
 export interface BillingProvider {
   /**
    * Starts a subscription. Returns the hosted checkout page to redirect to.
@@ -411,8 +439,9 @@ export interface BillingProvider {
   readWebhookSubject(payload: unknown): WebhookSubject;
 
   /**
-   * Translates a verified provider payload into our vocabulary, or `null` to
-   * ignore it.
+   * Translates a verified provider payload into our vocabulary, or says why it
+   * did not: see `ParsedWebhookEvent` for what the receiver does with each
+   * outcome.
    *
    * Takes the headers as well as the body because under Standard Webhooks — the
    * spec Polar signs with — **the event id is a header** (`webhook-id`), not a
@@ -429,7 +458,7 @@ export interface BillingProvider {
     payload: unknown,
     headers: Record<string, string | undefined>,
     tenantId: string,
-  ): BillingEvent | null;
+  ): ParsedWebhookEvent;
 
   /**
    * Resolves a completed checkout into the plan and seats the tenant actually
