@@ -4,7 +4,6 @@ import type { UsageCounterService } from '../entitlements/usage-counter.service'
 import type { TenantLinkService } from '../identity/mailer/tenant-link.service';
 import type { Prisma } from '../generated/prisma/client';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
-import type { TenantLifecycleService } from '../tenancy/lifecycle/tenant-lifecycle.service';
 import { CheckoutService } from './checkout.service';
 import {
   BillingProviderUnavailableError,
@@ -12,7 +11,6 @@ import {
   PlanDowngradeBlockedError,
   PlanNotFoundError,
 } from './billing.errors';
-import type { SubscriptionSyncService } from './subscription-sync.service';
 
 const TENANT = '0192f0ff-0000-7000-8000-0000000000a1';
 const ORIGIN = 'https://acme.app.localhost';
@@ -75,8 +73,6 @@ function serviceWith(fixture: Fixture) {
       current: jest.fn().mockResolvedValue({ value: fixture.conversations ?? 100 }),
     } as unknown as UsageCounterService,
     { absoluteUrl } as unknown as TenantLinkService,
-    { apply: jest.fn() } as unknown as SubscriptionSyncService,
-    { applyBillingEvent: jest.fn() } as unknown as TenantLifecycleService,
   );
 
   return { service, createCheckout, createPortalSession, absoluteUrl };

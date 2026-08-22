@@ -433,13 +433,15 @@ export interface BillingProvider {
 
   /**
    * Resolves a completed checkout into the plan and seats the tenant actually
-   * bought. Called on return from the hosted page so the console reflects the
-   * new plan immediately rather than waiting on a webhook that may be seconds
-   * behind — the redirect lands before the delivery does.
+   * bought, or `null` while the session is still open.
    *
-   * Returns `null` while the session is still open. Not a substitute for the
-   * webhook: this is the fast path, the webhook is the authoritative one, and
-   * both are made safe to apply by `subscriptions.last_event_at`.
+   * ⚠️ **No caller today.** It was the fast path for the console on return from
+   * the hosted page; TAR-619 chose the webhook plus a refresh instead, and
+   * TAR-651 removed `POST /billing/checkout/complete`, the only route that
+   * reached it. The port method and its two adapter implementations are kept
+   * because removing a published port method is a contract decision rather than
+   * an API-surface one — retiring it is TAR-651's stated follow-up, and nothing
+   * else needs to change if it goes.
    */
   resolveCheckout(input: { tenantId: string; checkoutId: string }): Promise<BillingEvent | null>;
 

@@ -6,7 +6,6 @@ import {
   HttpCode,
   HttpStatus,
   Post,
-  Query,
   UseFilters,
 } from '@nestjs/common';
 import {
@@ -19,7 +18,6 @@ import {
   type PortalRequest,
   type UsageSummaryResponse,
 } from '@whatsappcrm/contracts';
-import { z } from 'zod';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { ApiException } from '../common/errors/api.exception';
 import { IdempotencyService } from '../common/idempotency/idempotency.service';
@@ -36,16 +34,6 @@ const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
 
 /** Namespaces the idempotency hash, so one key cannot replay across two endpoints. */
 const CHECKOUT_OPERATION = 'billing.checkout';
-
-/**
- * The provider's checkout id, handed back on the redirect. Bounded and opaque —
- * it is only ever passed to the adapter, never interpreted here.
- */
-const CheckoutReturnQuerySchema = z.object({
-  checkoutId: z.string().min(1).max(200),
-});
-
-type CheckoutReturnQuery = z.infer<typeof CheckoutReturnQuerySchema>;
 
 /**
  * The tenant's billing surface (TAR-37, ADR 0002's endpoint table plus
@@ -180,52 +168,6 @@ export class BillingController {
   ): Promise<HostedSession> {
     return await this.checkout
       .createPortalSession(this.tenantContext.requireTenantId(), input)
-      .catch((error: unknown) => translateBillingFailure(error));
-  }
-
-  /**
-   * `POST /api/v1/billing/checkout/complete` — applies a checkout the browser
-   * has just returned from, so the console reflects the purchase immediately.
-   *
-   * **The fast path, not the authoritative one.** The webhook is authoritative,
-   * and both are safe to apply in either order because
-   * `subscriptions.last_event_at` drops whichever carries the older provider
-   * timestamp. The redirect usually lands before the delivery does, and without
-   * this the tenant would pay and then watch an unchanged plan panel for as long
-   * as delivery took.
-   *
-   * No idempotency key: the operation is already idempotent by construction, and
-   * a caller may repeat it by refreshing.
-   *
-   * ⚠️ **Nothing calls this yet.** TAR-619 shipped the return page against
-   * `?checkout=succeeded` plus a link back, deliberately preferring the webhook
-   * and a manual refresh to a client-side poll — so the console never sends a
-   * checkout id. The route exists because `BillingProvider.resolveCheckout` is
-   * part of the published port and this is the only thing that exercises it: the
-   * contract's stated intent is that the console reflects the purchase on return
-   * rather than seconds later, and adopting it is one line in
-   * `billing.actions.ts`. If the Architect confirms the webhook-only return is
-   * the intended shape, this route and `resolveCheckout` should both go — that
-   * is a contract decision, not one to make quietly here.
-   */
-  @Post('checkout/complete')
-  @RequirePermission('billing:manage')
-  @AvailableWhileSuspended()
-  @HttpCode(HttpStatus.OK)
-  async completeCheckout(
-    @Query(new ZodValidationPipe(CheckoutReturnQuerySchema)) query: CheckoutReturnQuery,
-  ): Promise<BillingSummaryResponse> {
-    const tenantId = this.tenantContext.requireTenantId();
-
-    await this.checkout
-      .applyCompletedCheckout(tenantId, query.checkoutId)
-      .catch((error: unknown) => translateBillingFailure(error));
-
-    // Re-read rather than assembling a response from the write: the summary
-    // carries the plan, the entitlements and live usage, and the console must
-    // never render a plan panel from a half-populated object.
-    return await this.reader
-      .summary(tenantId)
       .catch((error: unknown) => translateBillingFailure(error));
   }
 }
