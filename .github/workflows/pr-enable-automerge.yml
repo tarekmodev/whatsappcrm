@@ -16,7 +16,25 @@ name: Enable auto-merge on agent pull requests
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    # `synchronize` is here for one specific failure, found on #198 (TAR-516).
+    #
+    # GitHub does not start `pull_request` workflows for a pull request it
+    # cannot build a merge ref for, and it cannot build one while the branch
+    # conflicts with the base. So a pull request that opens CONFLICTING never
+    # gets an `opened` run — this workflow included — and the arm is simply
+    # lost. Resolving the conflict is a force-push, and a force-push delivers
+    # only `synchronize`. With `synchronize` absent from this list, the two
+    # events composed into a dead end: a conflicting agent pull request could
+    # never re-arm itself by being fixed, which is precisely the case the
+    # workflow exists to serve. #198 sat MERGEABLE, CLEAN and fully green with
+    # `autoMergeRequest: null` and no way back into the pipeline.
+    #
+    # The obvious objection to `synchronize` is that it re-arms a pull request
+    # whose author deliberately turned auto-merge OFF, on their very next push.
+    # That objection is right, and the step below answers it rather than
+    # accepting it: on `synchronize` it arms only a pull request that has never
+    # been armed at all. See the comment on that check.
+    types: [opened, reopened, ready_for_review, synchronize]
     branches: [main]
 
 permissions:
@@ -50,6 +68,7 @@ jobs:
           GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          ACTION: ${{ github.event.action }}
         run: |
           set -uo pipefail
 
@@ -57,6 +76,34 @@ jobs:
             echo "::warning::AUTOMERGE_TOKEN is not set — #$PR was not opted into auto-merge."
             echo "\`AUTOMERGE_TOKEN\` is not set, so #$PR was not opted in." >> "$GITHUB_STEP_SUMMARY"
             exit 0
+          fi
+
+          # A push is not consent. `opened` / `reopened` / `ready_for_review` are
+          # all moments where arming is the author's evident intent; a push in
+          # the middle of a pull request's life is not, so `synchronize` is
+          # treated purely as a recovery path for the lost `opened` arm above.
+          #
+          # The distinguishing fact is in the timeline: if this pull request has
+          # EVER been armed, then it is unarmed now because somebody turned it
+          # off on purpose, and that decision is theirs to keep. Only a pull
+          # request that has never been armed at all is the case where the
+          # `opened` delivery went missing.
+          #
+          # GitHub names the timeline event after the merge method, so all three
+          # spellings have to be matched, not just `auto_merge_enabled`.
+          if [ "${ACTION:-}" = "synchronize" ]; then
+            if ! events=$(gh api "repos/$REPO/issues/$PR/timeline?per_page=100" \
+                            --paginate --jq '.[].event' 2>&1); then
+              echo "::warning::could not read the timeline for #$PR, so it was not armed on this push: $events"
+              exit 0
+            fi
+
+            if grep -qE '^auto_(merge|squash|rebase)_enabled$' <<<"$events"; then
+              echo "#$PR has been armed before — leaving its current setting alone."
+              exit 0
+            fi
+
+            echo "#$PR has never been armed; recovering the arm its \`opened\` event never got."
           fi
 
           if out=$(gh pr merge "$PR" --repo "$REPO" --auto --squash 2>&1); then

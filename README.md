@@ -969,6 +969,22 @@ rebase loop was already paying for, minus the waiting.
 A branch that genuinely conflicts with `main` is reported in the run summary and left
 alone; no API call can resolve that, so its owner has to.
 
+Resolving that conflict is also what re-arms the pull request, and for a while it did not.
+GitHub does not start `pull_request` workflows for a pull request whose merge ref it cannot
+build, and it cannot build one while the branch conflicts — so a pull request that opens
+`CONFLICTING` never gets an `opened` run, and never gets armed. Fixing the conflict is a
+force-push, which delivers only `synchronize`. Until TAR-516 that event was not in
+`pr-enable-automerge.yml`'s trigger list, so the two composed into a dead end: a conflicting
+agent pull request could never re-arm itself by being fixed, which is exactly the case the
+workflow exists for. #198 sat `MERGEABLE`, `CLEAN` and fully green with no auto-merge and no
+way back into the pipeline.
+
+`synchronize` is in that list now, with one restriction: on a push it arms only a pull
+request the timeline shows has **never** been armed. A pull request that was armed and is
+not armed now is one somebody turned off deliberately, and pushing to it is not a request to
+turn it back on. So the recovery works without taking that decision away from you — and if
+you do want a pull request to stop auto-merging, `gh pr merge --disable-auto` still holds.
+
 Lint runs `typescript-eslint`'s type-aware rules, which has two consequences worth
 knowing. Every linted TypeScript file needs a `tsconfig` that covers it — a new `.ts`
 file outside one fails lint with a parsing error rather than being silently skipped. And
