@@ -167,6 +167,14 @@
   --scale-size-touch-target: 2.75rem; /* 44px — the WCAG 2.2 target minimum. */
   --scale-size-control-sm: 2rem;
   --scale-size-control-md: 2.5rem;
+  /*
+   * A queue row: an avatar beside two lines of text, scanned rather than read.
+   * 64px is what fits a `--size-control-sm` avatar and two `body-sm` lines
+   * inside `--space-3` of block padding, and it is the height at which a
+   * conversation column of ordinary laptop height shows a dozen rows instead of
+   * half a dozen cards (TAR-517).
+   */
+  --scale-size-row-md: 4rem;
   /* Comfortable measure for a single-column form on its own page. */
   --scale-size-container-sm: 26rem;
   --scale-size-container-md: 48rem;

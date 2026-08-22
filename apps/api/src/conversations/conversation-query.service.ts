@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type {
   ConversationListQuery,
   ConversationResponse,
+  ConversationSort,
   CursorPage,
 } from '@whatsappcrm/contracts';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
@@ -40,12 +41,17 @@ import { inboxScopeFilter } from './inbox-scope';
  *
  * ## The list is the hottest query in the product
  *
- * It sorts `(last_message_at DESC, id DESC)` and pages by keyset, served by the
- * three indexes TAR-80 added: the tenant-wide
+ * It sorts `(last_message_at, id)` and pages by keyset, served by the three
+ * indexes TAR-80 added: the tenant-wide
  * `(tenant_id, status, last_message_at DESC, id DESC)` when the principal holds
  * `conversation:read_all`, and the two scope indexes carrying the same sort key
  * otherwise. `take: limit + 1` decides whether there is another page, so no
  * request pays for a `count(*)` over a table that is appended to continuously.
+ *
+ * `sort` (TAR-517) flips that one direction and nothing else. A btree scans
+ * backwards at the same cost, so `oldest` is served by the same three indexes —
+ * no migration, no second index — and the keyset predicate mirrors with it,
+ * which `timestamp-keyset.ts` already supports for the thread's export order.
  *
  * ## What each row costs
  *
@@ -80,6 +86,7 @@ export class ConversationQueryService {
     }
 
     const scope = inboxScopeFilter(query.scope, principal);
+    const direction = SORT_DIRECTIONS[query.sort];
 
     const rows = await this.prisma.conversation.findMany({
       where: {
@@ -90,9 +97,9 @@ export class ConversationQueryService {
         ...(query.assignedTeamId === undefined ? {} : { assignedTeamId: query.assignedTeamId }),
         ...(query.q === undefined ? {} : { contact: contactSearch(query.q) }),
         ...(scope === null ? {} : { AND: [scope] }),
-        ...(cursor.outcome === 'cursor' ? resumeFrom(cursor.cursor) : {}),
+        ...(cursor.outcome === 'cursor' ? resumeFrom(cursor.cursor, direction) : {}),
       },
-      orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ lastMessageAt: direction }, { id: direction }],
       take: query.limit + 1,
       select: CONVERSATION_PROJECTION,
     });
@@ -184,14 +191,32 @@ export class ConversationQueryService {
 }
 
 /**
- * "Strictly after the cursor row in `(last_message_at DESC, id DESC)`", in the
- * shape 0002 rules: an inclusive bound on the leading column, which the index
- * serves as a start condition, minus the part of that timestamp's tie group
- * already returned. `timestamp-keyset.ts` holds the reasoning and the two other
- * lists that share it.
+ * The requested order as the direction the query and its keyset both take.
+ * A record rather than a ternary so a third sort cannot be added to the
+ * contract without this failing to compile.
  */
-function resumeFrom(cursor: TimestampCursor): Prisma.ConversationWhereInput {
-  const { bound, exclude } = resumeAfter(cursor, 'desc');
+const SORT_DIRECTIONS: Record<ConversationSort, 'asc' | 'desc'> = {
+  newest: 'desc',
+  oldest: 'asc',
+};
+
+/**
+ * "Strictly after the cursor row in `(last_message_at, id)`", in the shape 0002
+ * rules: an inclusive bound on the leading column, which the index serves as a
+ * start condition, minus the part of that timestamp's tie group already
+ * returned. `timestamp-keyset.ts` holds the reasoning and the two other lists
+ * that share it.
+ *
+ * `direction` must be the one the `orderBy` uses. A cursor read in the opposite
+ * direction returns the rows *before* the boundary rather than after it, which
+ * is a page that silently repeats itself — hence one parameter feeding both,
+ * rather than a literal here and another in the query.
+ */
+function resumeFrom(
+  cursor: TimestampCursor,
+  direction: 'asc' | 'desc',
+): Prisma.ConversationWhereInput {
+  const { bound, exclude } = resumeAfter(cursor, direction);
 
   return { lastMessageAt: bound, NOT: { lastMessageAt: cursor.at, ...exclude } };
 }

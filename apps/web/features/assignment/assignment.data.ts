@@ -1,6 +1,11 @@
 import 'server-only';
 
-import type { ConversationResponse, TeamResponse, UserResponse } from '@whatsappcrm/contracts';
+import {
+  CONVERSATION_SORT_DEFAULT,
+  type ConversationResponse,
+  type TeamResponse,
+  type UserResponse,
+} from '@whatsappcrm/contracts';
 import { listConversations } from '@/lib/api/conversations';
 import { listTeams } from '@/lib/api/teams';
 import { listUsers } from '@/lib/api/users';
@@ -38,8 +43,18 @@ export async function loadAssignmentReport(): Promise<AssignmentReport> {
   const [users, teams, conversations, unassigned] = await Promise.all([
     listUsers({ limit: AGENTS_PAGE_SIZE }),
     listTeams(),
-    listConversations({ scope: 'all', limit: CONVERSATIONS_PAGE_SIZE }),
-    listConversations({ scope: 'unassigned', limit: CONVERSATIONS_PAGE_SIZE }),
+    // The default order. This page counts and lists the shared pool rather than
+    // triaging it, so there is nothing here for an agent to re-order.
+    listConversations({
+      scope: 'all',
+      sort: CONVERSATION_SORT_DEFAULT,
+      limit: CONVERSATIONS_PAGE_SIZE,
+    }),
+    listConversations({
+      scope: 'unassigned',
+      sort: CONVERSATION_SORT_DEFAULT,
+      limit: CONVERSATIONS_PAGE_SIZE,
+    }),
   ]);
 
   return {

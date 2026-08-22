@@ -39,9 +39,24 @@ export interface ClaimButtonProps {
   contactName: string;
   hold: ConversationHold;
   size?: 'sm' | 'md';
+  /**
+   * The loudest this control may be. A thread header's claim is that screen's
+   * primary action and takes the accent; a list row's is capped at `quiet`,
+   * because a solid accent button repeated down a column outnumbers — and
+   * out-shouts — the one action the screen is actually about (0001, TAR-517).
+   *
+   * It only ever caps: releasing and taking over are `secondary` either way.
+   */
+  emphasis?: 'accent' | 'quiet';
 }
 
-export function ClaimButton({ conversationId, contactName, hold, size = 'md' }: ClaimButtonProps) {
+export function ClaimButton({
+  conversationId,
+  contactName,
+  hold,
+  size = 'md',
+  emphasis = 'accent',
+}: ClaimButtonProps) {
   if (hold.state === 'theirs') {
     return (
       <TakeOverControl
@@ -59,6 +74,7 @@ export function ClaimButton({ conversationId, contactName, hold, size = 'md' }: 
       contactName={contactName}
       isMine={hold.state === 'mine'}
       size={size}
+      emphasis={emphasis}
     />
   );
 }
@@ -74,11 +90,13 @@ function ClaimOrReleaseControl({
   contactName,
   isMine,
   size,
+  emphasis,
 }: {
   conversationId: string;
   contactName: string;
   isMine: boolean;
   size: 'sm' | 'md';
+  emphasis: 'accent' | 'quiet';
 }) {
   const content = useContent();
   const { showToast } = useToast();
@@ -101,7 +119,7 @@ function ClaimOrReleaseControl({
   return (
     <Stack gap="2">
       <Button
-        variant={isMine ? 'secondary' : 'primary'}
+        variant={isMine || emphasis === 'quiet' ? 'secondary' : 'primary'}
         size={size}
         isPending={isPending}
         // The contact's name is in the accessible name, not only in the row

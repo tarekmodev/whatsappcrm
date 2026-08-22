@@ -2,6 +2,7 @@ import type {
   AgentAvailability,
   AiReadinessBlocker,
   ConversationBotState,
+  ConversationSort,
   ConversationStatus,
   CustomFieldType,
   DomainVerificationFailureReason,
@@ -331,6 +332,12 @@ export const content = {
      * invisibly and is what a screen reader hears after the number.
      */
     unreadUnit: 'unread',
+    /**
+     * The same fact as a phrase rather than a chip, for the row link's own
+     * accessible name — the dot and the count circle are visual, and a row whose
+     * name did not carry them would report unread state in colour alone.
+     */
+    unreadSummary: (count: number) => `${String(count)} unread`,
     assignedTo: (name: string) => `Assigned to ${name}`,
     /**
      * Somebody holds this thread and the console could not resolve who — the
@@ -349,6 +356,34 @@ export const content = {
     // --- Opening a thread from the list ------------------------------------
     openConversation: (name: string) => `Open the conversation with ${name}`,
     unclaimed: 'Unclaimed',
+    /**
+     * The row's overflow trigger. Named per conversation for the same reason
+     * `claimAria` is: a column of buttons all called "More" tells a
+     * screen-reader user nothing about which thread they are about to act on.
+     */
+    rowActions: (name: string) => `More actions for the conversation with ${name}`,
+
+    // --- The list column's own header (TAR-517) -----------------------------
+    /**
+     * How many rows are on screen — not a tenant total. The list read is built
+     * without a `count(*)`, so the honest number is the page's, and a page with
+     * another behind it says so with `conversationCountAtLeast` rather than
+     * claiming to be the whole queue.
+     */
+    conversationCount: (count: number) =>
+      count === 1 ? '1 conversation' : `${String(count)} conversations`,
+    conversationCountAtLeast: (count: number) => `${String(count)}+ conversations`,
+    sortLabel: 'Sort conversations',
+    /**
+     * Both read the same column, `last_message_at`. "Newest first" is triage;
+     * "Oldest first" is draining a queue, which is what an agent working the
+     * shared pool is doing. There is no third entry — see `CONVERSATION_SORTS`
+     * for why "longest waiting" is not one yet.
+     */
+    sorts: {
+      newest: 'Newest first',
+      oldest: 'Oldest first',
+    } satisfies Record<ConversationSort, string>,
 
     // --- The chatbot, in the inbox (TAR-28) --------------------------------
     /**

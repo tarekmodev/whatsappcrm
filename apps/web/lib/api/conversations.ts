@@ -30,7 +30,11 @@ const CONVERSATIONS_PATH = '/v1/conversations';
 export async function listConversations(
   query: ConversationListQuery,
 ): Promise<CursorPage<ConversationResponse>> {
-  const params = new URLSearchParams({ scope: query.scope, limit: String(query.limit) });
+  const params = new URLSearchParams({
+    scope: query.scope,
+    limit: String(query.limit),
+    sort: query.sort,
+  });
 
   if (query.status !== undefined) {
     params.set('status', query.status);

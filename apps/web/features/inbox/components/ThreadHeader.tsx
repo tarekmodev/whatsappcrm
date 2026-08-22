@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import type { ConversationResponse } from '@whatsappcrm/contracts';
+import type { ConversationResponse, ConversationSort } from '@whatsappcrm/contracts';
 import { Notice } from '@/components/ui/Notice';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { SkeletonCircle, SkeletonLine } from '@/components/ui/Skeleton';
@@ -38,6 +38,8 @@ export interface ThreadQuery {
   status: ConversationStatusFilter | undefined;
   /** The search that produced the list, so the back link returns to it. */
   q?: string;
+  /** The order the list was in, so the back link returns to that too. */
+  sort: ConversationSort;
 }
 
 export interface ThreadHeaderProps {

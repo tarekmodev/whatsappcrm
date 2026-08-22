@@ -75,6 +75,29 @@ export const ConversationResponseSchema = z.object({
 });
 
 /**
+ * How the inbox orders a page — both values on `last_message_at` (TAR-517).
+ *
+ * Two, not the three the design sketched. `newest` is triage — what has just
+ * arrived — and `oldest` is the queue's other honest reading: the thread nobody
+ * has touched for longest, which is what an agent draining a shared pool wants
+ * first. A third "longest waiting" would have to be measured from the customer's
+ * own unanswered message, and no column on `conversations` carries that instant;
+ * deriving it from `created_at` would be a control whose label lies. It ships
+ * when the read behind it does.
+ *
+ * Both directions are served by the same indexes TAR-80 added — a btree scans
+ * backwards for free — so `oldest` costs no migration and no second index.
+ */
+export const CONVERSATION_SORTS = ['newest', 'oldest'] as const;
+export const ConversationSortSchema = z.enum(CONVERSATION_SORTS);
+
+/**
+ * What the list does when nobody asks. Exported so the console can leave the
+ * default out of the URL rather than writing `?sort=newest` on every link.
+ */
+export const CONVERSATION_SORT_DEFAULT = 'newest' satisfies ConversationSort;
+
+/**
  * The inbox list. `assigned` is an agent's default view. A caller without
  * `conversation:read_all` may not widen `scope`, and the API silently narrows
  * rather than erroring — a supervisor's shared URL should still render for an
@@ -86,6 +109,7 @@ export const ConversationListQuerySchema = CursorPageQuerySchema.extend({
   assignedUserId: IdSchema.optional(),
   assignedTeamId: IdSchema.optional(),
   q: z.string().min(1).max(120).optional(),
+  sort: ConversationSortSchema.default(CONVERSATION_SORT_DEFAULT),
 });
 
 export const ConversationAssignInputSchema = z
@@ -123,6 +147,7 @@ export const InternalNoteCreateInputSchema = z.object({
 
 export type ConversationStatus = z.infer<typeof ConversationStatusSchema>;
 export type ConversationBotState = (typeof CONVERSATION_BOT_STATES)[number];
+export type ConversationSort = (typeof CONVERSATION_SORTS)[number];
 export type ConversationResponse = z.infer<typeof ConversationResponseSchema>;
 export type ConversationListQuery = z.infer<typeof ConversationListQuerySchema>;
 export type ConversationAssignInput = z.infer<typeof ConversationAssignInputSchema>;

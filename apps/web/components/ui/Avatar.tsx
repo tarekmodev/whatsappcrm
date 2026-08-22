@@ -14,7 +14,14 @@ import styles from './Avatar.module.css';
  * promise the data layer cannot keep.
  */
 
-export const AVATAR_SIZES = ['sm', 'md'] as const;
+/**
+ * `xs` is the mark inside a dense row — the assignee on a conversation row,
+ * where the circle is metadata beside a timestamp rather than the row's own
+ * identity. `sm` is that identity (the contact leading a row), `md` a detail
+ * header. Anything smaller than `xs` loses the initial, which is the only thing
+ * an avatar with no image has to say.
+ */
+export const AVATAR_SIZES = ['xs', 'sm', 'md'] as const;
 export type AvatarSize = (typeof AVATAR_SIZES)[number];
 
 export const AVATAR_TONES = ['accent', 'neutral'] as const;

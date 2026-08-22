@@ -18,6 +18,16 @@ import { loadDirectory, type Directory } from '@/features/inbox/directory.data';
 
 export interface InboxData extends Directory {
   conversations: readonly ConversationResponse[];
+  /**
+   * There is a page after this one, so the column header says "25+" rather than
+   * claiming a total it was never given.
+   *
+   * Derived from the cursor rather than from a count: the list read is
+   * deliberately built without a `count(*)` over a table that is appended to
+   * continuously (`conversation-query.service.ts`), and `take: limit + 1` is the
+   * only "is there more" this endpoint answers.
+   */
+  hasMore: boolean;
 }
 
 export interface InboxQuery {
@@ -25,6 +35,8 @@ export interface InboxQuery {
   status?: ConversationListQuery['status'];
   /** The top bar's search term. Filters within the scope, never across it. */
   q?: ConversationListQuery['q'];
+  /** The order the agent picked in the column header, from the URL. */
+  sort: ConversationListQuery['sort'];
 }
 
 export async function loadInbox(query: InboxQuery): Promise<InboxData> {
@@ -33,10 +45,15 @@ export async function loadInbox(query: InboxQuery): Promise<InboxData> {
       scope: query.scope,
       status: query.status,
       q: query.q,
+      sort: query.sort,
       limit: CONVERSATIONS_PAGE_SIZE,
     }),
     loadDirectory(),
   ]);
 
-  return { conversations: conversations.items, ...directory };
+  return {
+    conversations: conversations.items,
+    hasMore: conversations.nextCursor !== null,
+    ...directory,
+  };
 }

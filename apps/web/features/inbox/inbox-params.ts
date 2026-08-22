@@ -1,4 +1,9 @@
-import { ConversationListQuerySchema, IdSchema } from '@whatsappcrm/contracts';
+import {
+  CONVERSATION_SORT_DEFAULT,
+  ConversationListQuerySchema,
+  IdSchema,
+  type ConversationSort,
+} from '@whatsappcrm/contracts';
 import type { ConversationStatusFilter, InboxScope } from '@/lib/routes';
 
 /**
@@ -20,6 +25,8 @@ export interface InboxParams {
   conversationId: string | null;
   /** The search term, or `undefined` for an unfiltered list. */
   q: string | undefined;
+  /** The list column's order. Always resolved — the schema carries the default. */
+  sort: ConversationSort;
 }
 
 export function parseInboxParams(raw: {
@@ -27,13 +34,27 @@ export function parseInboxParams(raw: {
   status: string | undefined;
   conversationId: string | undefined;
   q: string | undefined;
+  sort: string | undefined;
 }): InboxParams {
   return {
     scope: parseScope(raw.scope),
     status: parseStatus(raw.status),
     conversationId: parseConversationId(raw.conversationId),
     q: parseQuery(raw.q),
+    sort: parseSort(raw.sort),
   };
+}
+
+/**
+ * The order the column is in. Never `undefined`: the contract's own default is
+ * what an unparameterised arrival gets, so the control always has a value to
+ * show and the list always has one to send. A hand-edited `?sort=alphabetical`
+ * falls back to it rather than reaching the API as a malformed query.
+ */
+function parseSort(value: string | undefined): ConversationSort {
+  const parsed = ConversationListQuerySchema.shape.sort.safeParse(value);
+
+  return parsed.success ? parsed.data : CONVERSATION_SORT_DEFAULT;
 }
 
 /**

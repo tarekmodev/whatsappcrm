@@ -14,6 +14,14 @@
   --color-surface-raised: var(--palette-white);
   --color-surface-sunken: var(--palette-slate-100);
   --color-surface-hover: var(--palette-slate-100);
+  /*
+   * Hover for something sitting on `surface-sunken` rather than on `surface` —
+   * the inbox's conversation rows, which have no surface of their own and take
+   * the column's. `--color-surface-hover` cannot serve them: in this theme it
+   * *is* `surface-sunken`, so a hovered row was exactly the colour it already
+   * was, and a row with no action gave no feedback at all (TAR-517).
+   */
+  --color-surface-sunken-hover: var(--palette-slate-200);
   --color-surface-selected: var(--palette-green-100);
   --color-on-surface: var(--palette-slate-900);
   --color-on-surface-muted: var(--palette-slate-500);
@@ -108,6 +116,9 @@
   --color-surface-raised: var(--palette-slate-800);
   --color-surface-sunken: var(--palette-slate-950);
   --color-surface-hover: var(--palette-slate-800);
+  /* One step off the near-black column, the way the light theme's is one step
+     off its grey. The direction differs because the two surfaces do. */
+  --color-surface-sunken-hover: var(--palette-slate-800);
   --color-surface-selected: var(--palette-slate-700);
   --color-on-surface: var(--palette-slate-100);
   --color-on-surface-muted: var(--palette-slate-400);
@@ -238,6 +249,8 @@
   --size-touch-target: var(--scale-size-touch-target);
   --size-control-sm: var(--scale-size-control-sm);
   --size-control-md: var(--scale-size-control-md);
+  /* One row of a scanned queue — the inbox's conversation list (TAR-517). */
+  --size-row-list: var(--scale-size-row-md);
   --size-container-sm: var(--scale-size-container-sm);
   --size-container-md: var(--scale-size-container-md);
   --size-container-lg: var(--scale-size-container-lg);

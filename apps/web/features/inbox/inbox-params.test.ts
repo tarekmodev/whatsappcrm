@@ -8,7 +8,13 @@ import { parseInboxParams } from './inbox-params';
  */
 describe('parseInboxParams', () => {
   const CONVERSATION_ID = '0192f004-0000-7000-8000-000000000401';
-  const NOTHING = { scope: undefined, status: undefined, conversationId: undefined, q: undefined };
+  const NOTHING = {
+    scope: undefined,
+    status: undefined,
+    conversationId: undefined,
+    q: undefined,
+    sort: undefined,
+  };
 
   it('reads a complete inbox URL', () => {
     expect(
@@ -17,12 +23,14 @@ describe('parseInboxParams', () => {
         status: 'pending',
         conversationId: CONVERSATION_ID,
         q: 'invoice',
+        sort: 'oldest',
       }),
     ).toEqual({
       scope: 'unassigned',
       status: 'pending',
       conversationId: CONVERSATION_ID,
       q: 'invoice',
+      sort: 'oldest',
     });
   });
 
@@ -32,6 +40,7 @@ describe('parseInboxParams', () => {
       status: undefined,
       conversationId: null,
       q: undefined,
+      sort: 'newest',
     });
   });
 
@@ -41,6 +50,7 @@ describe('parseInboxParams', () => {
       status: undefined,
       conversationId: null,
       q: undefined,
+      sort: 'newest',
     });
   });
 
@@ -63,5 +73,14 @@ describe('parseInboxParams', () => {
     // 120 characters is the schema's cap; a longer one is answered 422, and the
     // unfiltered list is a better answer than an error card.
     expect(parseInboxParams({ ...NOTHING, q: 'a'.repeat(121) })).toMatchObject({ q: undefined });
+  });
+
+  it('falls back to the default order rather than one the API cannot serve', () => {
+    // The sort control always has a value to show and the list always has one to
+    // send, so a hand-edited `?sort=alphabetical` is the default view — never an
+    // undefined the column header would have to branch on.
+    expect(parseInboxParams({ ...NOTHING, sort: 'alphabetical' })).toMatchObject({
+      sort: 'newest',
+    });
   });
 });

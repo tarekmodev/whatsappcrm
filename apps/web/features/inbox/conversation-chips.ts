@@ -100,6 +100,31 @@ export function conversationChips(
 }
 
 /**
+ * What a row's link is called (TAR-517): the contact, then everything the row
+ * says about them in something other than words.
+ *
+ * At 64px a row carries its unread state as a count circle and its selection as
+ * an accent bar — both of which are shape and colour and nothing else. 0001
+ * forbids colour as the sole carrier, so the same facts travel in the link's own
+ * accessible name: "Open the conversation with Fatima Al-Zahra, 2 unread, Bot
+ * handed over".
+ *
+ * Composed from the chips the row actually rendered rather than recomputed, so
+ * the name cannot claim a status the row is not showing.
+ */
+export function conversationRowName(
+  contactName: string,
+  chips: readonly ConversationChip[],
+  unreadCount: number,
+): string {
+  return [
+    content.inbox.openConversation(contactName),
+    ...(unreadCount > 0 ? [content.inbox.unreadSummary(unreadCount)] : []),
+    ...chips.map((chip) => chip.label),
+  ].join(', ');
+}
+
+/**
  * The bot's chip when the conversation is in `at`, so a single bot state can be
  * offered at three different ranks without the tone or the label being restated
  * at each one. `off` is excluded by the type: it is the state `bot-state.ts`

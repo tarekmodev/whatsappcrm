@@ -1,9 +1,22 @@
 /*
  * The list column's contract is that its child fills it (`InboxLayout.module.css`,
- * `.list > *`). This is the next link in that chain: the stack grows to the
- * column's height so the empty state inside it can be centred in the whole
+ * `.list > *`). This is the next link in that chain: the column grows to the
+ * region's height so the empty state inside it can be centred in the whole
  * column rather than parked at the top of it.
  */
-.sections {
+.column {
+  display: flex;
   flex: 1 0 auto;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+/*
+ * The only padded thing in this column. The rows run to its edges since TAR-517
+ * and pad themselves; this is prose about the whole list, so it keeps the
+ * margins a paragraph needs.
+ */
+.notice {
+  flex: 0 0 auto;
+  padding: var(--space-3);
 }
