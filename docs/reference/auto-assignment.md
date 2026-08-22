@@ -195,8 +195,9 @@ to move together.
 | Tenant    | `tenant_settings.default_max_concurrent_tickets`  | Nothing yet — see below |
 | Per agent | `users.max_concurrent_tickets` (`NULL` = inherit) | Nothing yet — see below |
 
-⚠️ **No endpoint writes either column today.** 0008 specifies
-`GET`/`PATCH /api/v1/assignment-settings` and `maxConcurrentTickets` on
+⚠️ **No endpoint writes either column today.**
+[`0008-assignment-rotation-and-workload.md`](../architecture/0008-assignment-rotation-and-workload.md)
+specifies `GET`/`PATCH /api/v1/assignment-settings` and `maxConcurrentTickets` on
 `PATCH /api/v1/users/{id}`, both behind `assignment_rule:write` rather than `user:update` —
 setting a colleague's cap is deciding how much work reaches them, which is the same act as
 writing a routing rule. Neither is built, and no acceptance criterion in TAR-23 asked for
@@ -204,10 +205,13 @@ them. Until they exist every tenant runs on the column default of 5, which is a 
 system. The columns and their constraints are described in
 [the data model reference](data-model.md).
 
-> **TODO(author):** the cap-editing surface has no story id. 0008 records it under
-> "Specified, and required by no acceptance criterion" and names no owner, so there is
-> nothing for this page to point a reader at. Whoever picks it up should file it and link it
-> here.
+**The surface now has an owner: TAR-384**, whose API contract is settled and keeps the split
+above — `/assignment-settings` stays a tenant-scoped singleton, and the per-agent cap is still
+written through `PATCH /api/v1/users/{id}`. It adds an agent's own read-only view and a
+permission-gated capacity field on the people list, neither of which 0008 specifies. Nothing of
+it is merged, so this page still describes a system with no cap-editing surface. It will
+document the endpoints and the supervisor's cap-edit control against the shipped code rather
+than against the contract.
 
 ## When nobody is eligible
 
