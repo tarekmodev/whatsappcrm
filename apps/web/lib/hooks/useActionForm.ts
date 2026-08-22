@@ -41,6 +41,14 @@ export interface UseActionForm {
   /** Form-level failure, rendered above the actions. Field errors are separate. */
   formError: string | null;
   requestId: string | null;
+  /**
+   * The API's code for that failure, or `null`.
+   *
+   * For offering a *different affordance* to a specific refusal — an upgrade
+   * link when a seat cap is hit — never for choosing the message, which the
+   * action has already chosen. Most callers ignore it.
+   */
+  errorCode: string | null;
   clearError: () => void;
 }
 
@@ -48,6 +56,7 @@ export function useActionForm<T>({ perform, onSuccess }: UseActionFormOptions<T>
   const [isPending, setIsPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   // A ref, not the state value: two clicks in the same tick would both read
   // `isPending === false`.
   const inFlightRef = useRef(false);
@@ -61,6 +70,7 @@ export function useActionForm<T>({ perform, onSuccess }: UseActionFormOptions<T>
     setIsPending(true);
     setFormError(null);
     setRequestId(null);
+    setErrorCode(null);
 
     void perform()
       .then((result) => {
@@ -73,6 +83,7 @@ export function useActionForm<T>({ perform, onSuccess }: UseActionFormOptions<T>
         // retype anything.
         setFormError(result.message);
         setRequestId(result.requestId);
+        setErrorCode(result.code ?? null);
       })
       .catch((error: unknown) => {
         // Reaches here only if the action itself failed to run — a network drop or
@@ -91,7 +102,8 @@ export function useActionForm<T>({ perform, onSuccess }: UseActionFormOptions<T>
   const clearError = useCallback(() => {
     setFormError(null);
     setRequestId(null);
+    setErrorCode(null);
   }, []);
 
-  return { submit, isPending, formError, requestId, clearError };
+  return { submit, isPending, formError, requestId, errorCode, clearError };
 }

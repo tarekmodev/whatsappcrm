@@ -127,6 +127,10 @@ function toErrorResult<T>(error: unknown, label: string): ActionResult<T> {
         ? error.message
         : content.form.genericSubmitError,
       requestId: error.requestId,
+      // Carried whatever the message became. A caller that offers a different
+      // affordance for a specific refusal — the seat cap's upgrade link — has to
+      // branch on the code rather than on server-owned copy.
+      code: error.code,
     };
   }
 
