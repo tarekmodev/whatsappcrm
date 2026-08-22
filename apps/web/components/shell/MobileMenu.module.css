@@ -2,8 +2,17 @@
   display: contents;
 }
 
+/*
+ * Icon only, and named by its `aria-label` rather than a caption: the caption used
+ * to sit under the hamburger and across the wordmark beside it at 390px
+ * (TAR-522). Square at the touch minimum, so it matches the trailing controls
+ * across the bar instead of being the one wide button on the row.
+ */
 .trigger {
-  gap: var(--space-2);
+  flex: 0 0 auto;
+  justify-content: center;
+  inline-size: var(--size-touch-target);
+  padding-inline: 0;
 }
 
 .scrim {
@@ -13,9 +22,11 @@
   background: var(--color-scrim);
   opacity: 0;
   visibility: hidden;
+  /* The scrim fades faster than the panel travels, so the screen behind is
+     already dimmed as the drawer arrives rather than catching up with it. */
   transition:
-    opacity var(--duration-medium) var(--easing-standard),
-    visibility var(--duration-medium) var(--easing-standard);
+    opacity var(--duration-fast) var(--easing-standard),
+    visibility var(--duration-fast) var(--easing-standard);
 }
 
 .scrim[data-open='true'] {
@@ -40,8 +51,9 @@
   background: var(--color-surface);
   border-inline-end: var(--border-hairline) solid var(--color-border);
   box-shadow: var(--shadow-modal);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  /* The navigation inside scrolls, not the panel: that is what keeps the account
+     block at the foot rather than fifteen links below it (TAR-522). */
+  overflow: hidden;
   /* Logical translation, so the drawer slides in from the inline start in RTL too. */
   translate: -100% 0;
   transition: translate var(--duration-medium) var(--easing-enter);
@@ -56,18 +68,26 @@
   translate: 0 0;
 }
 
-.nav {
+/* The lockup heads the drawer the way it heads the rail — this is the rail, at
+   this width, and below 30rem it is the only place the workspace is named. */
+.brand {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
+  flex: 0 0 auto;
+  /* It is a link home, so it is a tap like any other. */
+  min-block-size: var(--size-touch-target);
+  min-inline-size: 0;
 }
 
-.heading {
-  color: var(--color-on-surface-muted);
-  font-size: var(--font-size-caption);
-  font-weight: var(--font-weight-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+/* The one scrolling region in the drawer, so a workspace with a long settings
+   list scrolls its links rather than pushing sign-out off the panel. */
+.nav {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-block-size: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .subgroup {
@@ -84,11 +104,14 @@
   font-weight: var(--font-weight-medium);
 }
 
+/* The account block, at the foot of the drawer whatever the navigation above it
+   is doing: the theme and sign out live here as well as behind the bar's avatar,
+   and a control you have to scroll a nav list to find is one you cannot rely on. */
 .extras {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: var(--space-3);
-  margin-block-start: auto;
   padding-block-start: var(--space-4);
   border-block-start: var(--border-hairline) solid var(--color-border);
 }

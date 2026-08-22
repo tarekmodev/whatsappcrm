@@ -13,7 +13,7 @@ import styles from './MobileMenu.module.css';
 
 /**
  * The small-screen navigation drawer. Usage:
- * `<MobileMenu items={items}>{extraControls}</MobileMenu>`.
+ * `<MobileMenu items={items} brand={<BrandLockup …/>}>{extraControls}</MobileMenu>`.
  *
  * Driven by the same `NavItem[]` as the rail — there is no second copy of the
  * nav markup, which is what keeps the two from drifting. Below the layout
@@ -24,13 +24,28 @@ import styles from './MobileMenu.module.css';
  * open, Escape to close, background scroll lock, close on backdrop click, and
  * close on route change.
  *
+ * The trigger is icon-only and named by `aria-label` (TAR-522). It used to carry
+ * a visible caption under the hamburger, which at 390px sat across the wordmark
+ * beside it and read as a layout bug — an icon-only control needs an accessible
+ * name, not a caption.
+ *
+ * The drawer heads its navigation with the wordmark because it *is* the rail at
+ * this width, and the rail's own head is the lockup. Below 30rem the bar has no
+ * room for one, so this is where the workspace is named.
+ *
  * The trigger is part of the app shell and is therefore never lazy loaded.
  */
 export function MobileMenu({
   items,
+  brand,
   children,
 }: {
   items: readonly NavItem[];
+  /**
+   * The product lockup, rendered by the server layout so this client component
+   * pulls none of the branding into its own bundle.
+   */
+  brand?: ReactNode;
   /** Controls that belong in the drawer below the links (theme, role stub). */
   children?: ReactNode;
 }) {
@@ -93,12 +108,12 @@ export function MobileMenu({
         className={styles.trigger}
         aria-expanded={isOpen}
         aria-controls={panelId}
+        aria-label={isOpen ? content.nav.closeMenu : content.nav.openMenu}
         onClick={() => {
           setIsOpen((current) => !current);
         }}
       >
         <Icon name={isOpen ? 'close' : 'menu'} />
-        {isOpen ? content.nav.closeMenu : content.nav.openMenu}
       </Button>
 
       {/* Rendered but inert when closed, so the panel can transition rather than
@@ -121,8 +136,9 @@ export function MobileMenu({
         // transition.
         inert={!isOpen}
       >
+        {brand === undefined ? null : <div className={styles.brand}>{brand}</div>}
+
         <nav aria-label={content.nav.primaryLabel} className={styles.nav}>
-          <p className={styles.heading}>{content.nav.menuHeading}</p>
           <NavLinkList items={items} />
           {items.map((item) =>
             item.children === undefined || item.children.length === 0 ? null : (

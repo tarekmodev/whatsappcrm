@@ -1,3 +1,77 @@
+/*
+ * Two shapes, one control. Below the layout breakpoint the search is a trigger
+ * the width of an icon and the field is out of flow above the bar; from 48rem up
+ * the trigger is gone and the field is simply in the row (TAR-522).
+ */
+.root {
+  display: flex;
+  align-items: center;
+  min-inline-size: 0;
+}
+
+.trigger {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  /* WCAG 2.2 target minimum, and the same box the bell and the quick-create
+     occupy — the four trailing controls are one row of equal taps. */
+  inline-size: var(--size-touch-target);
+  block-size: var(--size-touch-target);
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface-muted);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .trigger:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}
+
+/*
+ * A collapsed trigger with a search applied is the one way this control can lie
+ * by omission, so it carries a mark. Colour is not the only carrier: the
+ * trigger's accessible name says the term.
+ */
+.applied {
+  position: absolute;
+  inset-block-start: var(--space-2);
+  inset-inline-end: var(--space-2);
+  inline-size: var(--size-marker-dot);
+  block-size: var(--size-marker-dot);
+  background: var(--color-accent);
+  border-radius: var(--radius-pill);
+}
+
+/*
+ * The expanded field, over the bar rather than under it. Out of flow, so the row
+ * behind it keeps its height and the bar never grows a second line; the bar is
+ * `position: sticky` and therefore the containing block this resolves against.
+ */
+.panel {
+  display: none;
+}
+
+.root[data-expanded='true'] .panel {
+  position: absolute;
+  inset-block: 0;
+  inset-inline: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-inline: clamp(var(--space-3), 4vw, var(--space-6));
+  padding-block-start: env(safe-area-inset-top);
+  background: var(--color-bar);
+}
+
 .form {
   display: flex;
   flex: 1 1 auto;
@@ -78,5 +152,37 @@
   .clear:hover {
     background: var(--color-surface-hover);
     color: var(--color-on-surface);
+  }
+}
+
+/* Puts the field away. Only exists where the field can be put away — from 48rem
+   up there is no collapsed state for it to return to. */
+.close {
+  composes: trigger;
+}
+
+@media (min-width: 48rem) {
+  .root {
+    flex: 1 1 auto;
+  }
+
+  .trigger,
+  .close {
+    display: none;
+  }
+
+  /*
+   * Pinned open, whatever `isExpanded` says. The state still flips here — Escape
+   * in the field sets it — and this is what makes that inert rather than a field
+   * that vanishes under the caret.
+   */
+  .panel,
+  .root[data-expanded='true'] .panel {
+    position: static;
+    display: flex;
+    flex: 1 1 auto;
+    min-inline-size: 0;
+    padding: 0;
+    background: none;
   }
 }

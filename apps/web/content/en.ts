@@ -84,7 +84,6 @@ export const content = {
     settingsLabel: 'Settings sections',
     openMenu: 'Open menu',
     closeMenu: 'Close menu',
-    menuHeading: 'Menu',
     collapseNav: 'Collapse navigation',
     expandNav: 'Expand navigation',
     inbox: 'Inbox',
@@ -124,9 +123,17 @@ export const content = {
   /** The top bar's workspace search. It searches conversations, and says so. */
   search: {
     label: 'Search conversations',
+    /**
+     * The collapsed trigger below the layout breakpoint, once a term is applied:
+     * the field is behind an icon there, so the icon has to say what is behind
+     * it rather than leaving an active search silent.
+     */
+    labelWithTerm: (term: string) => `Search conversations, showing “${term}”`,
     placeholder: 'Search conversations',
     submit: 'Search',
     clear: 'Clear search',
+    /** Puts the field away again; the term it submitted stays in the URL. */
+    close: 'Close search',
     resultsFor: (term: string) => `Conversations matching “${term}”`,
     /** Quotes the term back, so a search that matched nothing cannot be mistaken
         for a filter that is empty or a list that has never had anything in it. */

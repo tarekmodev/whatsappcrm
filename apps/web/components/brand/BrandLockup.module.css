@@ -1,0 +1,21 @@
+.lockup {
+  display: flex;
+  align-items: center;
+  min-inline-size: 0;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-strong);
+  text-decoration: none;
+}
+
+/*
+ * A tenant may be called anything. The wordmark truncates rather than pushing
+ * the controls beside it off a 320px bar — the lockup is chrome, and chrome is
+ * what gives way first.
+ */
+.name {
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

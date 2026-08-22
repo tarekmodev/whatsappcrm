@@ -6,10 +6,15 @@
 }
 
 .text {
-  /* Below the layout breakpoint the avatar carries the identity on its own —
-     the name and role would push the utilities off a 320px bar. */
-  display: none;
+  display: block;
   min-inline-size: 0;
+}
+
+/* Compact: the top bar's trigger below the layout breakpoint, where the avatar
+   carries the identity on its own — a name and a role would push the search, the
+   bell and the quick-create off a 320px row. The drawer is not compact. */
+.identity[data-compact='true'] .text {
+  display: none;
 }
 
 .name {
@@ -32,7 +37,7 @@
 }
 
 @media (min-width: 48rem) {
-  .text {
+  .identity[data-compact='true'] .text {
     display: block;
   }
 }

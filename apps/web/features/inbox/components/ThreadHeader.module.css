@@ -1,11 +1,32 @@
+/*
+ * The leading control of the identity row, not a line above it (TAR-522): a
+ * chevron pointing back the way the reader came, with the destination named
+ * beside it.
+ *
+ * `flex: 0 1 auto` with the label clipped rather than `flex: 0 0 auto`, because
+ * this shares a 390px row with an avatar, a contact name and a phone number.
+ * Where the row is tight the label gives way before the name does; the link's
+ * `aria-label` carries the full sentence either way.
+ */
 .back {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
-  align-self: flex-start;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  /* The chevron is 20px; a finger needs 44, and the row is already that tall. */
   min-block-size: var(--size-touch-target);
   color: var(--color-accent);
   font-size: var(--font-size-body-sm);
   font-weight: var(--font-weight-medium);
+  text-decoration: none;
+}
+
+.backLabel {
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /*

@@ -19,6 +19,12 @@ import styles from './PrincipalMenu.module.css';
  *
  * The controls arrive as `children` already rendered by the server layout, so
  * this file pulls none of them into its own bundle.
+ *
+ * It is in the bar at **every** width (TAR-522). Below the layout breakpoint the
+ * trigger is the avatar alone — `isCompact` drops the name and the role, and the
+ * chevron goes with them — but it never disappears: it is the only route to sign
+ * out and to the theme, and a bar that drops that at a width sends the reader
+ * hunting for a control that is not there.
  */
 export function PrincipalMenu({
   principal,
@@ -36,7 +42,7 @@ export function PrincipalMenu({
       triggerClassName={styles.trigger}
       label={
         <>
-          <PrincipalIdentity principal={principal} />
+          <PrincipalIdentity principal={principal} isCompact />
           <Icon name="chevronDown" size="sm" className={styles.chevron} />
         </>
       }

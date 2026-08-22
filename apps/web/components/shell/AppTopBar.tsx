@@ -1,8 +1,6 @@
 import { Suspense, type ReactNode } from 'react';
-import Link from 'next/link';
 import type { SessionPrincipal, TenantBranding } from '@whatsappcrm/contracts';
-import { routes } from '@/lib/routes';
-import { BrandLogo } from '@/components/brand/BrandLogo';
+import { BrandLockup } from '@/components/brand/BrandLockup';
 import { MobileMenu } from './MobileMenu';
 import { PrincipalIdentity } from './PrincipalIdentity';
 import { PrincipalMenu } from './PrincipalMenu';
@@ -21,8 +19,22 @@ import styles from './AppTopBar.module.css';
  * same `NavItem[]` the rail does — the drawer is the rail at small widths, not a
  * second copy of the navigation.
  *
- * The wordmark here is the small-screen one: above the layout breakpoint the
- * rail carries it, and repeating it in the bar would say the same thing twice.
+ * ## One row, at every width (TAR-522)
+ *
+ * The bar does not wrap. Below 48rem it is the drawer trigger and the wordmark,
+ * then the search icon, the bell, the quick-create and the account avatar — one
+ * `--size-bar` row rather than the three it used to stack, which cost 161px of
+ * an 844px screen before the page had said anything.
+ *
+ * Two things pay for that. The search is a trigger that expands the field *over*
+ * the bar instead of taking a line of its own (`TopBarSearch`), and the wordmark
+ * stands down below 30rem, where the controls need the whole row — the drawer
+ * heads its navigation with the same lockup, so the workspace is still named.
+ *
+ * The account avatar is the one thing that never stands down: it is the only way
+ * to sign out or change the theme, and a bar that drops it at a width sends the
+ * reader looking for a control that is not there. Above the breakpoint the rail
+ * carries the wordmark and the avatar grows its name and role beside it.
  *
  * ## What is not in this bar
  *
@@ -62,28 +74,26 @@ export function AppTopBar({
   return (
     <header className={styles.bar}>
       <div className={styles.start}>
-        <MobileMenu items={items}>
+        <MobileMenu items={items} brand={<BrandLockup branding={branding} />}>
           {/* The drawer shows the identity flat above the same controls: it has
               the room the bar does not, and a menu inside a drawer is a second
-              layer for nothing. */}
+              layer for nothing. The bar's avatar reaches the same actions; this
+              is the copy that is already open when you went looking. */}
           <PrincipalIdentity principal={principal} />
           {utilities}
         </MobileMenu>
-        <Link href={routes.inbox()} className={styles.brand} aria-label={branding.productName}>
-          {branding.logo === null ? branding.productName : <BrandLogo branding={branding} />}
-        </Link>
+        <BrandLockup branding={branding} className={styles.brand} />
       </div>
 
       {/*
-        A sibling of the two groups rather than a child of either, so it can drop
-        to its own line below the layout breakpoint — where the drawer trigger,
-        the wordmark and the quick-create leave it about 30px of a 320px screen —
-        and sit between them above it. `order` in the module file does both.
+        A sibling of the two groups rather than a child of either, because what
+        it occupies changes with width: a trigger the size of an icon below the
+        layout breakpoint, and the field itself above it.
 
         `useSearchParams` reads a value only the request knows, so the field is a
         suspense boundary of its own: without one it would opt every route below
-        this layout out of static rendering. The fallback is the same pill at the
-        same size, so the bar does not shift.
+        this layout out of static rendering. The fallback is the same trigger and
+        the same pill at the same size, so the bar does not shift.
       */}
       <div className={styles.search}>
         <Suspense fallback={<TopBarSearchSkeleton />}>
