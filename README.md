@@ -87,6 +87,7 @@ the one that produced it.
 | [Assignment rules API](docs/reference/assignment-rules-api.md)                               | Routing-rule CRUD, the condition grammar, and how a new ticket is routed           |
 | [Auto-assignment](docs/reference/auto-assignment.md)                                         | Rotation, eligibility, workload caps, and the flagged-ticket fallback              |
 | [SLA timers and supervisor alerts](docs/reference/sla-timers.md)                             | Response windows, breach detection, who is alerted, and the two endpoints          |
+| [Workflow automation API](docs/reference/workflows-api.md)                                   | Workflow CRUD, the trigger/condition/action grammar, and how a run is claimed      |
 | [Reporting dashboard and export](docs/reference/reporting-api.md)                            | The four metrics, the date range, scope and attribution, and export parity         |
 | [Branding and custom domains API](docs/reference/branding-domains-api.md)                    | The white-label surface: branding, hostnames, DNS verification, the operator queue |
 | [Canned responses API](docs/reference/canned-responses-api.md)                               | The quick-reply library: CRUD, the shortcut grammar, the picker, the relay         |
@@ -102,6 +103,7 @@ the one that produced it.
 | [Hand a ticket on, or ask a supervisor](docs/guides/hand-over-or-escalate-a-ticket.md)       | For agents reassigning a ticket or escalating one, and reading the history         |
 | [Answer common questions with saved replies](docs/guides/use-saved-replies.md)               | For agents inserting a saved reply in the composer by typing a shortcut            |
 | [Set up your workspace](docs/guides/set-up-your-workspace.md)                                | For a new admin: the setup checklist, seats, and what suspension means             |
+| [Automate what happens to a ticket](docs/guides/automate-tickets-with-workflows.md)          | For supervisors building trigger → condition → action workflows in the console     |
 | [Documentation style guide](docs/STYLE.md)                                                   | How to write the above                                                             |
 | [Changelog](CHANGELOG.md)                                                                    | What has landed so far                                                             |
 | [ADR 0002 — observability and environments](docs/adr/0002-observability-and-environments.md) | Logging, error tracking, the three environments, backups                           |
@@ -1223,6 +1225,25 @@ own half — eligibility, the selection order, the workload caps and the three d
 — is [the auto-assignment reference](docs/reference/auto-assignment.md). The supervisor's
 versions are [Route new tickets to the right team](docs/guides/route-new-tickets-with-rules.md)
 and [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md).
+
+### Workflows: the same list shape, and every match runs
+
+`/settings/workflows` (TAR-396) renders the tenant's workflows as an ordered rule list, and
+it deliberately does **not** reuse the routing-rule copy. A routing rule decides where a
+conversation goes and the first match wins; a workflow writes to a ticket that already
+exists, and **every** matching workflow runs. Sharing the vocabulary would flatten a
+difference a supervisor has to understand, so `content.workflows` is its own block in
+`apps/web/content/en.ts`.
+
+The builder's option lists come from `GET /api/v1/workflow-catalog` rather than from a
+transcribed constant, so the console cannot offer an action the API would refuse. The
+taxonomy behind the pickers — tags, teams, agents — is read live on every render and never
+cached beside the workflow: a definition stores ids only, and the response resolves names at
+read time, so renaming a team needs no republish and a deleted one renders as visibly broken.
+
+The endpoints, the grammar and the exactly-once claim are in
+[the workflow automation API reference](docs/reference/workflows-api.md); the supervisor's
+version is [Automate what happens to a ticket](docs/guides/automate-tickets-with-workflows.md).
 
 ### Onboarding: the checklist describes the workspace, it is not a to-do list
 
