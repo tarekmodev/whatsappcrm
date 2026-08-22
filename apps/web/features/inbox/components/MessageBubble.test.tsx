@@ -70,7 +70,10 @@ describe('MessageBubble', () => {
     expect(screen.getByText(content.messageStatuses.read)).toBeInTheDocument();
   });
 
-  it('says a message the bot sent was sent automatically', () => {
+  it('names the chatbot rather than automation in general', () => {
+    // `origin` is the narrower answer, and the only one that says *which* system
+    // replied: a workflow (TAR-27) also sends with no sender, and an agent
+    // deciding whether to take a thread over needs to know which it was.
     render(
       <MessageBubble
         message={{
@@ -79,6 +82,24 @@ describe('MessageBubble', () => {
           body: 'Hi!',
           sentByAutomation: true,
           origin: 'bot',
+        }}
+        senderName={null}
+      />,
+    );
+
+    expect(screen.getByText(content.thread.sentByBot)).toBeInTheDocument();
+    expect(screen.queryByText(content.thread.sentByAutomation)).not.toBeInTheDocument();
+  });
+
+  it('says a non-chatbot automated send was sent automatically', () => {
+    render(
+      <MessageBubble
+        message={{
+          ...BASE,
+          direction: 'outbound',
+          body: 'Your ticket was closed.',
+          sentByAutomation: true,
+          origin: 'system',
         }}
         senderName={null}
       />,
@@ -109,7 +130,7 @@ describe('MessageBubble', () => {
     expect(screen.queryByText(content.thread.sentByAutomation)).not.toBeInTheDocument();
   });
 
-  it('trusts sentByAutomation over a name that happens to resolve', () => {
+  it('trusts the origin over a name that happens to resolve', () => {
     render(
       <MessageBubble
         message={{
@@ -124,7 +145,7 @@ describe('MessageBubble', () => {
       />,
     );
 
-    expect(screen.getByText(content.thread.sentByAutomation)).toBeInTheDocument();
+    expect(screen.getByText(content.thread.sentByBot)).toBeInTheDocument();
     expect(screen.queryByText(content.thread.sentBy('Amina Haddad'))).not.toBeInTheDocument();
   });
 
