@@ -622,11 +622,25 @@ enum BillingInterval {
   @@map("billing_interval")
 }
 
+/// Exactly `SUBSCRIPTION_STATUSES` in `packages/contracts/src/billing.ts` — no
+/// more and no less, so a `BillingEvent.status` can be written to
+/// `subscriptions.status` without a translation table in between.
+///
+/// `canceled` carries **one** `l`, matching the published contract rather than
+/// `TenantStatus.cancelled`. The two spellings are deliberate and are not the
+/// same fact: this enum is the *provider's* subscription state, mapped by the
+/// adapter; `TenantStatus` is *our* lifecycle state. `BILLING_EVENT_TARGETS` in
+/// `tenant-lifecycle.service.ts` already translates one to the other explicitly,
+/// and decision 5 of the billing contract turns on them being distinguishable —
+/// a Polar `subscription.canceled` must **not** move the tenant to `cancelled`.
+///
+/// The label was `cancelled` until `20260822130000_billing_polar_provider_ids`,
+/// which renamed it; nothing had written the column yet.
 enum SubscriptionStatus {
   trialing
   active
   past_due
-  cancelled
+  canceled
   incomplete
 
   @@map("subscription_status")
@@ -3302,10 +3316,30 @@ model Plan {
   priceMinorUnits Int             @map("price_minor_units")
   currency        String          @default("USD") @db.Char(3)
   interval        BillingInterval @default(month)
-  /// Feature flags and quotas the `FeatureGuard` reads. JSONB so adding an
-  /// entitlement is a data change, not a migration.
+  /// `PlanEntitlementsSchema`: `{ features: PlanFeature[], limits: { seats,
+  /// conversationsPerPeriod, whatsappNumbers, teams, knowledgeDocuments } }` —
+  /// the **same shape** as `tenant_entitlements.entitlements`, and that is the
+  /// point. Decision 4 of the billing contract copies this value into that
+  /// column on activation, so a shape the destination refuses is an activation
+  /// that aborts mid-transaction. `plans_entitlements_shape` asserts it here,
+  /// at the write, mirroring `tenant_entitlements_shape`.
+  ///
+  /// Until `20260822130000_billing_polar_provider_ids` this column held a flat
+  /// `{ seats, conversationsPerPeriod }`, which matched neither the destination
+  /// nor `PlanEntitlementsSchema`. That migration reshapes it.
+  ///
+  /// JSONB so adding an entitlement is a data change, not a migration. **A null
+  /// limit means unlimited** — deliberately not `-1` or a sentinel maximum.
   entitlements    Json
   isActive        Boolean         @default(true) @map("is_active")
+  /// The provider's **product** id. Polar's `POST /v1/checkouts/` takes
+  /// `products: uuid[]`, so this — not `provider_price_id` — is what the adapter
+  /// sends. Null until the Polar organisation's product ids are seeded; the
+  /// checkout route answers `upstream_unavailable` for a plan with no product id
+  /// rather than calling Polar with a null.
+  providerProductId String?       @map("provider_product_id")
+  /// Retained and unused by the Polar adapter — a second provider may key on a
+  /// price rather than a product.
   providerPriceId String?         @map("provider_price_id")
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -3328,6 +3362,36 @@ model Subscription {
   currentPeriodStart     DateTime?          @map("current_period_start") @db.Timestamptz(3)
   currentPeriodEnd       DateTime?          @map("current_period_end") @db.Timestamptz(3)
   cancelAtPeriodEnd      Boolean            @default(false) @map("cancel_at_period_end")
+
+  /// When a requested cancellation actually takes effect. Set alongside
+  /// `cancel_at_period_end` from the provider's "cancellation requested" event,
+  /// cleared when it is withdrawn.
+  ///
+  /// A cancellation *request* is not a cancellation: the tenant has paid through
+  /// this date and stays fully serviceable until it. This column is what the
+  /// console renders its "closing on {date}" banner from, and it is why a
+  /// requested cancellation writes no lifecycle transition at all.
+  cancelsAt              DateTime?          @map("cancels_at") @db.Timestamptz(3)
+
+  /// When the provider first reported this subscription past due, for support
+  /// and reporting. **Not the dunning clock** — the timer the lifecycle sweeper
+  /// reads is `tenants.grace_period_ends_at`, and duplicating a deadline in two
+  /// columns is how the two drift apart.
+  pastDueSince           DateTime?          @map("past_due_since") @db.Timestamptz(3)
+
+  /// The provider timestamp of the last webhook that wrote this row.
+  ///
+  /// The out-of-order defence, and it is load-bearing: providers retry with
+  /// backoff and do not guarantee ordering, so a retried `past_due` can land
+  /// after a fresh `active` and walk the tenant backwards into dunning it has
+  /// already left. An event older than this value updates neither `subscriptions`
+  /// nor `tenant_entitlements` and is marked processed; it is still recorded in
+  /// `webhook_events` for forensics.
+  ///
+  /// Distinct from `updated_at`, which is *our* write time and would compare two
+  /// different clocks.
+  lastEventAt            DateTime?          @map("last_event_at") @db.Timestamptz(3)
+
   createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 

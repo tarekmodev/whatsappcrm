@@ -164,8 +164,29 @@ export const LIFECYCLE_POLICY = Object.freeze({
    * A card retry cycle. A provider retries a failed charge over roughly this
    * window, so suspending sooner suspends tenants whose payment was going to
    * succeed anyway.
+   *
+   * **21, not 14, and the number is Polar's rather than a guess** (TAR-37
+   * billing contract, decision 6). Polar retries a failed renewal on days 2, 7,
+   * 14 and 21 from first failure. At 14 this timer fired one week early and
+   * suspended tenants whose day-21 retry would have succeeded — locking an admin
+   * out of the console on the exact day they were about to be charged, and
+   * leaving them unable to reach billing to fix it.
+   *
+   * The organisation's Polar benefit-revocation grace period is configured to 21
+   * to match, so the two clocks agree. With them aligned, Polar's
+   * `subscription.revoked` should arrive before this timer ever fires: the sweep
+   * is now the fallback for a missed webhook rather than the normal route to
+   * `suspended`.
+   *
+   * Shortening Polar's grace instead was rejected — its *retry schedule* is
+   * fixed at day 2/7/14/21 regardless of the grace setting, so that would only
+   * have shortened benefit revocation, not the collection attempts.
+   *
+   * Safe to change in place: these are lengths, not instants, so the new value
+   * applies to timers not yet written and does not move a deadline already
+   * stamped on a tenant.
    */
-  pastDueGraceDays: 14,
+  pastDueGraceDays: 21,
   /** An accidental or regretted cancellation is discovered within a week. */
   cancelledGraceDays: 7,
   /**
