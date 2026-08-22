@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { AUTH_POLICY, type InvitePreviewResponse } from '@whatsappcrm/contracts';
+import type { InvitePreviewResponse } from '@whatsappcrm/contracts';
 import { Field } from '@/components/ui/Field';
 import { TextInput } from '@/components/ui/TextInput';
 import { TextLink } from '@/components/ui/TextLink';
@@ -73,6 +73,7 @@ export function InviteAcceptForm({
   return (
     <AuthForm
       submitLabel={content.auth.inviteSubmit}
+      pendingLabel={content.auth.invitePending}
       isPending={isPending}
       formError={formError}
       requestId={requestId}
@@ -113,7 +114,7 @@ export function InviteAcceptForm({
 
       <PasswordField
         label={content.auth.invitePasswordLabel}
-        hint={content.auth.passwordHint(AUTH_POLICY.passwordMinLength)}
+        hasRequirements
         autoComplete="new-password"
         value={password}
         error={passwordErrors.password}

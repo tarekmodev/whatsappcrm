@@ -1,0 +1,15 @@
+/*
+ * Wraps rather than scrolls: at 320px with the text scaled to 200% the support
+ * link and the theme control do not fit on one line, and a footer that pushes the
+ * page sideways is worse than a footer on two lines.
+ */
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  padding-block-start: var(--space-5);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}

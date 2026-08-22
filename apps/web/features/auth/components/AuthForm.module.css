@@ -8,6 +8,24 @@
   max-inline-size: var(--size-container-sm);
 }
 
+/*
+ * A grouping element, not a visual one: everything a `<fieldset>` draws by
+ * default is reset, and `min-inline-size` with it — a fieldset's initial
+ * `min-width: min-content` refuses to shrink below its widest field, which is
+ * what puts a form into horizontal scroll at 320px.
+ */
+.fields {
+  min-inline-size: 0;
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+
+.legend {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
 .footer {
   display: flex;
   flex-wrap: wrap;

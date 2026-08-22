@@ -1326,7 +1326,7 @@ step says so and offers the skip rather than pointing at a route that would 404.
 | Group        | Layout renders                                                  | Session              |
 | ------------ | --------------------------------------------------------------- | -------------------- |
 | `app/(app)`  | Skip link, then `AppShell` — the rail, the top bar and `<main>` | Required — see below |
-| `app/(auth)` | A centred card column with the wordmark and `<main>`            | None at all          |
+| `app/(auth)` | A split: the form panel with `<main>`, and the brand panel      | None at all          |
 
 The split exists because password recovery is reachable by somebody who cannot sign in. A
 root layout that resolved the principal would answer 401 to a visitor following a reset
@@ -1334,6 +1334,15 @@ link out of their inbox, so the root layout does the document, the theme and the
 system, and each group brings its own shell. `features/auth/components/AuthCard` is the
 frame every signed-out screen sits in; login and invite-accept (TAR-60) drop into it
 unchanged.
+
+The signed-out shell is a **split layout** (TAR-521): a form panel on the leading side —
+lockup band, `<main>`, and a footer carrying the support link and the theme control — with
+`AuthBrandPanel` filling the rest on the rail colour. Below 64rem the brand panel goes and
+the band takes that colour instead. Both halves read the same `readBranding()` value the
+rest of the page does, so a white-labelled workspace needs no component change; the panel
+itself is `aria-hidden`, because `BrandLockup` beside the form is the accessible spelling
+of the product's name. What the panel looks like and why is in
+[the visual design language](docs/design/0001-visual-design-language.md).
 
 The reset link is `/reset-password#token=…` — the token travels in the **fragment**, which
 browsers never send to a server, so it stays out of access logs, proxies and `Referer`

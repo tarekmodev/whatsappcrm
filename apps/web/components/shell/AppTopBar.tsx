@@ -1,5 +1,7 @@
 import { Suspense, type ReactNode } from 'react';
+import Link from 'next/link';
 import type { SessionPrincipal, TenantBranding } from '@whatsappcrm/contracts';
+import { routes } from '@/lib/routes';
 import { BrandLockup } from '@/components/brand/BrandLockup';
 import { MobileMenu } from './MobileMenu';
 import { PrincipalIdentity } from './PrincipalIdentity';
@@ -74,7 +76,18 @@ export function AppTopBar({
   return (
     <header className={styles.bar}>
       <div className={styles.start}>
-        <MobileMenu items={items} brand={<BrandLockup branding={branding} />}>
+        <MobileMenu
+          items={items}
+          brand={
+            <Link
+              href={routes.inbox()}
+              className={styles.drawerBrand}
+              aria-label={branding.productName}
+            >
+              <BrandLockup branding={branding} />
+            </Link>
+          }
+        >
           {/* The drawer shows the identity flat above the same controls: it has
               the room the bar does not, and a menu inside a drawer is a second
               layer for nothing. The bar's avatar reaches the same actions; this
@@ -82,7 +95,9 @@ export function AppTopBar({
           <PrincipalIdentity principal={principal} />
           {utilities}
         </MobileMenu>
-        <BrandLockup branding={branding} className={styles.brand} />
+        <Link href={routes.inbox()} className={styles.brand} aria-label={branding.productName}>
+          <BrandLockup branding={branding} />
+        </Link>
       </div>
 
       {/*

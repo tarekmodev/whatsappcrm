@@ -623,6 +623,36 @@ Three screens had independently invented one. It is `FilterBar`, and it obeys fi
   `--size-menu`. Dates are `DateRangeField`, never `<input type="date">`: the browser's
   own calendar glyph and its own `18/07/2026` disagree with every other date on screen.
 
+### The signed-out screens (TAR-521)
+
+Sign-in, invite-accept and password-reset share one frame, and it is the only screen in
+the product some people ever see. It is a **split**: a form panel on the leading side and
+a brand panel filling the rest.
+
+- **Form panel** — `--color-surface`, full height, exactly as wide as the form column
+  plus its gutters. It holds three landmarks and nothing else: the lockup band, `<main>`
+  with the screen's single `<h1>`, and a footer carrying the support link and the theme
+  control. The form is centred in what is left over, with the void above it capped at
+  `--size-band` so a tall screen does not leave it floating.
+- **Brand panel** — `--color-rail`, the navy that frames the console when somebody is
+  signed in, carrying the product name at display size, one line of positioning, and a
+  motif of a disc, a ring and a rounded square. The ring is the only thing drawn in
+  `--color-brand-decor`; the motif is in flow below the copy, never behind it, because
+  that colour is the tenant's and no contrast guarantee can be made about it. The panel
+  is `aria-hidden`: the lockup beside the form is the accessible spelling of the name,
+  and announcing the workspace twice before the heading is worse than announcing it once.
+- **Below 64rem** the brand panel is gone and the lockup band takes the rail colour — the
+  same brand at a width with no room for a second panel.
+
+There is **no card**. The panel is the surface, and a white box drawn on a white panel is
+the outline of a frame this screen used to be missing.
+
+Every password input carries a reveal control at its trailing edge whose accessible name
+says what pressing it will do next, and every password being _set_ carries the policy as
+a live checklist rather than as a sentence to remember. The required `*` has a legend.
+While a form submits, its fields are disabled and the block submit button says which flow
+is in flight.
+
 ### Detail views
 
 A contact, a ticket, a conversation:
@@ -882,28 +912,30 @@ token layer takes the durations to 1ms and `StateLayout` drops the animation out
 Compose these and the screen matches this document without you specifying a colour or a
 space:
 
-| You need                | Use                                             |
-| ----------------------- | ----------------------------------------------- |
-| The frame               | Nothing — `app/(app)/layout.tsx` already has it |
-| Page gutter and rhythm  | `PageShell`, then `Stack`                       |
-| A full-height workspace | `PageShell variant="fill"`                      |
-| The page title          | `PageHeader`                                    |
-| A section               | `SectionCard`                                   |
-| A table                 | `DataTable` + `DataTableSkeleton`               |
-| Tabs                    | `Tabs`                                          |
-| A filter row            | `FilterBar`                                     |
-| Filter pills            | `FilterPills`                                   |
-| A search filter         | `SearchField`                                   |
-| A single choice         | `Select` (`variant="filter"` above a list)      |
-| A date range            | `DateRangeField`                                |
-| Collapsed filters       | `FilterMenu` + `ActiveFilterChips`              |
-| A status chip or count  | `Badge` — see "Status vocabulary" for how many  |
-| An icon                 | `Icon`                                          |
-| A person's initial      | `Avatar`                                        |
-| A popup of actions      | `MenuButton`                                    |
-| Explaining a figure     | `InfoPopover` — never prose under the number    |
-| Loading, empty, error   | `Skeleton`, `EmptyState`, `ErrorState`          |
-| A link off-app          | `TextLink isExternal`                           |
+| You need                | Use                                                |
+| ----------------------- | -------------------------------------------------- |
+| The frame               | Nothing — `app/(app)/layout.tsx` already has it    |
+| Page gutter and rhythm  | `PageShell`, then `Stack`                          |
+| A full-height workspace | `PageShell variant="fill"`                         |
+| The page title          | `PageHeader`                                       |
+| A section               | `SectionCard`                                      |
+| A table                 | `DataTable` + `DataTableSkeleton`                  |
+| Tabs                    | `Tabs`                                             |
+| A filter row            | `FilterBar`                                        |
+| Filter pills            | `FilterPills`                                      |
+| A search filter         | `SearchField`                                      |
+| A single choice         | `Select` (`variant="filter"` above a list)         |
+| A date range            | `DateRangeField`                                   |
+| Collapsed filters       | `FilterMenu` + `ActiveFilterChips`                 |
+| A status chip or count  | `Badge` — see "Status vocabulary" for how many     |
+| The product's identity  | `BrandLockup` — mark plus wordmark, logo-aware     |
+| A link that acts        | `ButtonLink` — a navigation with a button's weight |
+| An icon                 | `Icon`                                             |
+| A person's initial      | `Avatar`                                           |
+| A popup of actions      | `MenuButton`                                       |
+| Explaining a figure     | `InfoPopover` — never prose under the number       |
+| Loading, empty, error   | `Skeleton`, `EmptyState`, `ErrorState`             |
+| A link off-app          | `TextLink isExternal`                              |
 
 If a screen needs something not on that list, add it to `components/ui/` with a usage
 comment and add a row here. A one-off in a feature folder that a second feature then

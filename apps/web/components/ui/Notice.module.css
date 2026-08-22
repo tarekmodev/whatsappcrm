@@ -18,6 +18,12 @@
   color: var(--color-on-warning-subtle);
 }
 
+.notice[data-tone='danger'] {
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger);
+  color: var(--color-on-danger-subtle);
+}
+
 /*
  * Guidance rather than a banner: the tone survives in the leading marker, and
  * the fill goes.
@@ -48,4 +54,8 @@
 
 .notice[data-variant='quiet'][data-tone='warning'] {
   border-inline-start-color: var(--color-warning);
+}
+
+.notice[data-variant='quiet'][data-tone='danger'] {
+  border-inline-start-color: var(--color-danger);
 }

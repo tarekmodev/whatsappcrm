@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { InvitePreviewResponse } from '@whatsappcrm/contracts';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { TextLink } from '@/components/ui/TextLink';
+import { ButtonLink } from '@/components/ui/ButtonLink';
 import { useContent } from '@/lib/content';
 import { routes } from '@/lib/routes';
 import { AuthCard } from './AuthCard';
@@ -37,9 +37,15 @@ export function InviteAcceptSection() {
   if (token.status === 'missing') {
     return (
       <AuthOutcomeCard
+        icon="warning"
+        tone="danger"
         title={content.auth.inviteUnusableHeading}
         body={content.auth.inviteIncompleteBody}
-        actions={<TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>}
+        action={
+          <ButtonLink href={routes.login()} variant="primary" isBlock>
+            {content.auth.backToSignIn}
+          </ButtonLink>
+        }
       />
     );
   }
@@ -101,9 +107,15 @@ function InviteAcceptFields({ token }: { token: string }) {
   if (state.status === 'dead-link') {
     return (
       <AuthOutcomeCard
+        icon="warning"
+        tone="danger"
         title={content.auth.inviteUnusableHeading}
         body={content.auth.inviteDeadLinkBody}
-        actions={<TextLink href={routes.login()}>{content.auth.backToSignIn}</TextLink>}
+        action={
+          <ButtonLink href={routes.login()} variant="primary" isBlock>
+            {content.auth.backToSignIn}
+          </ButtonLink>
+        }
       />
     );
   }

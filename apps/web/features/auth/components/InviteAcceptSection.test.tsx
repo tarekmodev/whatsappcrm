@@ -182,6 +182,21 @@ describe('InviteAcceptSection', () => {
     ).toBeInTheDocument();
   });
 
+  it('says it is creating the account, and disables what it is creating it from', async () => {
+    transport.lookupInvite.mockResolvedValue(PREVIEW);
+    transport.acceptInvite.mockReturnValue(new Promise(() => {}));
+    renderSection();
+    await waitForForm();
+
+    fillAndSubmit();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: content.auth.invitePending })).toBeInTheDocument();
+    });
+    expect(fieldByLabel(content.auth.inviteDisplayNameLabel)).toBeDisabled();
+    expect(fieldByLabel(content.auth.invitePasswordLabel)).toBeDisabled();
+  });
+
   it('catches a mistyped confirmation, which the contract has no field for', async () => {
     transport.lookupInvite.mockResolvedValue(PREVIEW);
     renderSection();

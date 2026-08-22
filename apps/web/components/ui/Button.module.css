@@ -77,6 +77,15 @@
   opacity: 0.6;
 }
 
+/* A row, so a button that pairs an icon with a word spaces the two the way the
+   button spaces anything else rather than relying on a stray text node. */
+.label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
 .label[data-pending='true'] {
   /* Keeps the button's width while the spinner is shown, so nothing shifts. */
   visibility: hidden;

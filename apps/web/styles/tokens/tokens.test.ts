@@ -88,6 +88,48 @@ describe('token contrast', () => {
 });
 
 /**
+ * The rail's text pairs (TAR-521).
+ *
+ * 0001 publishes them in its contrast table and nothing enforced them, which was
+ * survivable while the rail carried only navigation labels. The signed-out brand
+ * panel is drawn in the same roles and carries a product name, a line of
+ * positioning and — below 64rem — the lockup on the band above the form, so the
+ * pairs are now on the first screen anybody sees.
+ *
+ * `--color-rail-hover` is in the surface list because the brand panel's motif is
+ * drawn in it: a decorative shape is allowed to sit behind text, but only if the
+ * text on it still clears AA.
+ */
+describe('text on the rail', () => {
+  /*
+   * The pairs that actually occur, rather than the cross product.
+   *
+   * `--color-on-rail-muted` is deliberately measured against the rail alone: 0001
+   * declares it for secondary text *on the rail* — a section heading, a count
+   * beside a label — and it is 3.60:1 on `rail-selected`, which is a combination
+   * nothing renders. Asserting it would be inventing a requirement and then
+   * moving a token to satisfy it.
+   */
+  const PAIRS = [
+    ['--color-on-rail', '--color-rail'],
+    ['--color-on-rail', '--color-rail-hover'],
+    ['--color-on-rail', '--color-rail-selected'],
+    ['--color-on-rail-strong', '--color-rail'],
+    ['--color-on-rail-strong', '--color-rail-hover'],
+    ['--color-on-rail-strong', '--color-rail-selected'],
+    ['--color-on-rail-muted', '--color-rail'],
+  ];
+
+  describe.each(THEMES)('%s theme', (theme) => {
+    it.each(PAIRS)('%s clears AA on %s', (text, surface) => {
+      expect(contrastRatio(token(theme, text), token(theme, surface))).toBeGreaterThanOrEqual(
+        AA_TEXT_CONTRAST,
+      );
+    });
+  });
+});
+
+/**
  * TAR-29 lets a tenant replace the accent, and TAR-514's re-verification found
  * the seeded workspace resolving it to a blue — the same hue as the `info` chip.
  * A fix that separated chips from *green* would have re-broken on that tenant, so
