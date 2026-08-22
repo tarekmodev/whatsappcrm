@@ -5,6 +5,7 @@ import type {
   ParsedWebhookEvent,
   WebhookSubject,
 } from '@whatsappcrm/contracts';
+import type { ErrorContext, ErrorTrackingService } from '../observability/error-tracking.service';
 import type { SystemPrisma } from '../prisma/prisma.tokens';
 import type { TenantLifecycleService } from '../tenancy/lifecycle/tenant-lifecycle.service';
 import type { WebhookEventsRepository } from '../webhooks/webhook-events.repository';
@@ -54,6 +55,7 @@ function processorWith(options: Harness) {
       tenantId: TENANT,
       providerSubscriptionId: null,
       providerCustomerId: null,
+      eventType: 'subscription.active',
     },
   );
   const parseWebhookEvent = jest
@@ -71,6 +73,16 @@ function processorWith(options: Harness) {
   const findUnique = options.findUnique ?? jest.fn().mockResolvedValue(null);
   const findFirst = options.findFirst ?? jest.fn().mockResolvedValue(null);
 
+  // Recorded into a typed list rather than asserted on the mock: a park alert is
+  // three separate claims — the grouping message, the filter tags and the triage
+  // context — and reading them out of a typed record keeps each assertion its own
+  // sentence instead of one nested matcher.
+  const alerts: { message: string; tags: ErrorContext['tags']; extra: ErrorContext['extra'] }[] =
+    [];
+  const captureMessage = jest.fn((message: string, context: ErrorContext) => {
+    alerts.push({ message, tags: context.tags, extra: context.extra });
+  });
+
   const processor = new BillingEventProcessor(
     { getOrThrow: () => 5 } as unknown as ConfigService,
     { readWebhookSubject, parseWebhookEvent } as unknown as BillingProvider,
@@ -84,6 +96,7 @@ function processorWith(options: Harness) {
     { apply } as unknown as SubscriptionSyncService,
     { enqueue: enqueueSeats } as unknown as SeatSyncService,
     { applyBillingEvent } as unknown as TenantLifecycleService,
+    { captureMessage } as unknown as ErrorTrackingService,
   );
 
   return {
@@ -97,6 +110,8 @@ function processorWith(options: Harness) {
     parseWebhookEvent,
     findUnique,
     findFirst,
+    captureMessage,
+    alerts,
   };
 }
 
@@ -138,6 +153,7 @@ describe('BillingEventProcessor', () => {
           tenantId: null,
           providerSubscriptionId: 'sub_abc',
           providerCustomerId: null,
+          eventType: 'subscription.active',
         },
         findUnique: jest.fn().mockResolvedValue({ tenantId: TENANT }),
       });
@@ -157,6 +173,7 @@ describe('BillingEventProcessor', () => {
           tenantId: null,
           providerSubscriptionId: null,
           providerCustomerId: 'cus_abc',
+          eventType: 'subscription.active',
         },
         findFirst: jest.fn().mockResolvedValue({ tenantId: TENANT }),
       });
@@ -174,12 +191,17 @@ describe('BillingEventProcessor', () => {
      */
     it('parks an event whose tenant cannot be established', async () => {
       const { processor, markFailed, apply } = processorWith({
-        subject: { tenantId: null, providerSubscriptionId: null, providerCustomerId: null },
+        subject: {
+          tenantId: null,
+          providerSubscriptionId: null,
+          providerCustomerId: null,
+          eventType: 'subscription.active',
+        },
       });
 
       await processor.process(ROW_ID);
 
-      expect(markFailed).toHaveBeenCalledWith(ROW_ID, 'unresolved_tenant');
+      expect(markFailed).toHaveBeenCalledWith(ROW_ID, 'unresolved_tenant', null);
       expect(apply).not.toHaveBeenCalled();
     });
   });
@@ -323,7 +345,153 @@ describe('BillingEventProcessor', () => {
 
       await processor.process(ROW_ID);
 
-      expect(markFailed).toHaveBeenCalledWith(ROW_ID, expect.any(String));
+      expect(markFailed).toHaveBeenCalledWith(
+        ROW_ID,
+        expect.stringContaining('attempts_exhausted'),
+        TENANT,
+      );
+    });
+  });
+
+  /**
+   * TAR-668. A parked row nobody queries is only marginally better than a
+   * dropped one: TAR-663 stopped billing webhooks vanishing silently, and this
+   * is what stops the parked rows sitting unread until a paying tenant
+   * complains.
+   */
+  describe('alerting on a parked row', () => {
+    it('alerts with enough context to triage without opening the database', async () => {
+      const { processor, alerts } = processorWith({
+        claimed: { id: ROW_ID, providerEventId: 'msg_polar_1', payload: {}, attempts: 1 },
+        parsed: { outcome: 'unreadable', detail: 'subscription.active carries no readable id' },
+      });
+
+      await processor.process(ROW_ID);
+
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]?.message).toBe('Billing webhook parked: unrecognised_payload');
+      expect(alerts[0]?.tags).toEqual({
+        provider: 'billing',
+        reason: 'unrecognised_payload',
+        tenantId: TENANT,
+      });
+      expect(alerts[0]?.extra).toMatchObject({
+        webhookEventId: ROW_ID,
+        providerEventId: 'msg_polar_1',
+        eventType: 'subscription.active',
+      });
+      expect(alerts[0]?.extra.lastError).toEqual(
+        expect.stringContaining('subscription.active carries no readable id'),
+      );
+    });
+
+    /**
+     * A billing payload carries a customer's name, email and address. The row
+     * keeps it for whoever is authorised to read it; the third-party tracker
+     * does not get a copy.
+     */
+    it('never sends the payload to the tracker', async () => {
+      const { processor, alerts } = processorWith({
+        claimed: {
+          id: ROW_ID,
+          providerEventId: 'msg_polar_1',
+          payload: { data: { customer: { email: 'someone@example.com' } } },
+          attempts: 1,
+        },
+        parsed: { outcome: 'unreadable', detail: 'no readable id' },
+      });
+
+      await processor.process(ROW_ID);
+
+      expect(JSON.stringify(alerts)).not.toContain('someone@example.com');
+    });
+
+    /**
+     * The message is the tracker's grouping key, so it carries the reason token
+     * and nothing variable. Forty parks for the same cause have to be one issue
+     * to fix, not forty to read.
+     */
+    it('groups by the reason token, keeping the detail out of the message', async () => {
+      const { processor, alerts } = processorWith({
+        outcome: { result: 'unresolved_plan', detail: 'no plan carries prod_x' },
+      });
+
+      await processor.process(ROW_ID);
+
+      expect(alerts[0]?.message).toBe('Billing webhook parked: unresolved_plan');
+      expect(alerts[0]?.extra.lastError).toEqual(expect.stringContaining('no plan carries prod_x'));
+    });
+
+    /** The branch with no tenant to name is still the one most worth alerting on. */
+    it('alerts even when the tenant is what could not be established', async () => {
+      const { processor, alerts } = processorWith({
+        subject: {
+          tenantId: null,
+          providerSubscriptionId: null,
+          providerCustomerId: null,
+          eventType: 'subscription.active',
+        },
+      });
+
+      await processor.process(ROW_ID);
+
+      expect(alerts[0]?.message).toBe('Billing webhook parked: unresolved_tenant');
+      expect(alerts[0]?.tags.tenantId).toBe('unresolved');
+      expect(alerts[0]?.extra.eventType).toBe('subscription.active');
+    });
+
+    it('alerts once the retry budget is spent, naming the tenant it belonged to', async () => {
+      const { processor, apply, alerts } = processorWith({
+        claimed: { id: ROW_ID, providerEventId: 'msg_1', payload: {}, attempts: 5 },
+      });
+
+      apply.mockRejectedValue(new Error('connection reset'));
+
+      await processor.process(ROW_ID);
+
+      expect(alerts[0]?.message).toBe('Billing webhook parked: attempts_exhausted');
+      expect(alerts[0]?.tags.tenantId).toBe(TENANT);
+      // The message, not `describe-failure`'s error class: "attempts_exhausted:
+      // Error" is a row nobody can act on.
+      expect(alerts[0]?.extra.lastError).toBe('attempts_exhausted: connection reset');
+    });
+
+    /**
+     * The row is the durable record; the alert is a notification about it. A
+     * tracker outage must not leave a webhook unparked and re-claimable.
+     */
+    it('writes the row before it raises the alert', async () => {
+      const { processor, markFailed, captureMessage } = processorWith({
+        parsed: { outcome: 'unreadable', detail: 'no readable id' },
+      });
+
+      await processor.process(ROW_ID);
+
+      // `?? 0` keeps this type-safe without weakening it: a call that never
+      // happened compares 0 against 0 and fails the assertion.
+      expect(captureMessage.mock.invocationCallOrder[0] ?? 0).toBeGreaterThan(
+        markFailed.mock.invocationCallOrder[0] ?? 0,
+      );
+    });
+
+    /**
+     * An event we did not subscribe to is not a failure, and a transient fault
+     * with attempts left is not one yet. Alerting on either is how an alert
+     * channel gets muted.
+     */
+    it('stays silent for an event that was not parked', async () => {
+      const ignored = processorWith({ parsed: { outcome: 'ignored' } });
+
+      await ignored.processor.process(ROW_ID);
+
+      expect(ignored.captureMessage).not.toHaveBeenCalled();
+
+      const retrying = processorWith({});
+
+      retrying.apply.mockRejectedValue(new Error('connection reset'));
+
+      await expect(retrying.processor.process(ROW_ID)).rejects.toThrow('connection reset');
+      expect(retrying.captureMessage).not.toHaveBeenCalled();
     });
   });
 

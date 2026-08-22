@@ -29,11 +29,14 @@ Turning the real rail on is deliberate, and it is four things:
 
 None of the four exists yet. They are outstanding from Tarek, with no fixed date.
 
-> ⚠️ **Do not flip the driver yet, even once the credentials arrive.** TAR-663 is open: with
-> `BILLING_PROVIDER_DRIVER=polar`, a real Polar subscription webhook parses to nothing and is
-> marked processed anyway, so a tenant that completes checkout is never activated and no
-> parked row records that it happened. The bug is invisible on the `fake` driver, which is
-> why it survived review. Connect the credentials, verify TAR-663 is fixed, then flip.
+> ⚠️ **TAR-663 is fixed, and has never been exercised against a real estate.** It was the bug
+> where a real Polar subscription webhook parsed to nothing, was marked processed anyway, and
+> left a tenant that completed checkout unactivated with no parked row recording it. Unreadable
+> deliveries now park as `failed` and raise an alert (TAR-668). It was invisible on the `fake`
+> driver, which is why it survived review — so when the credentials arrive, flip a **sandbox**
+> environment first and walk [Verifying a connection](#verifying-a-connection) end to end
+> before any production estate. Check `SENTRY_DSN` is set in that environment while you are
+> there: without it a park is a log line and nothing else.
 
 ## The credentials, exactly
 
@@ -161,9 +164,54 @@ Polar emails the organisation's members when it does. Re-enable it in the dashbo
 correcting the secret; the deliveries missed while it was disabled are recovered by the
 nightly reconciliation rather than by replaying them.
 
-If step 3 shows `200` but step 4 shows nothing, that is TAR-663 — a parse failure recorded as
-success. Check the API log for the billing worker; a payload the adapter could not read
-leaves no parked row to find.
+If step 3 shows `200` but step 4 shows nothing, the delivery was **parked** rather than
+applied — see below. Before TAR-663 this was the silent case: an unreadable payload was
+recorded as success and left nothing to find. It now parks, and parking now alerts.
+
+## When a billing webhook is parked
+
+A delivery the worker cannot apply is written to `webhook_events` with `status = 'failed'`,
+its raw payload kept, and **an alert is raised in Sentry** at error level (TAR-668) — the same
+channel a 5xx reaches, so it needs no separate subscription. The tenant that paid is not
+activated until the row is dealt with, so this is a page-worthy state, not a backlog item.
+
+The alert's title is `Billing webhook parked: <reason>`, which is also how Sentry groups them —
+forty parks for one cause are one issue. It is tagged `provider`, `reason` and `tenantId`
+(`unresolved` when that is the failure), and carries `webhookEventId`, `providerEventId`,
+`eventType`, `lastError` and the replay statement. That is everything triage needs; you should
+not have to open the database to decide what happened. **The payload is deliberately not in
+the alert** — it carries the customer's name, email and address, and the row keeps it.
+
+| `reason`               | What it means                                          | The fix                                                                                              |
+| ---------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `unresolved_tenant`    | Nothing on the payload names a tenant we know          | Usually a subscription created before we stamped checkout metadata. Match it by hand, then replay    |
+| `unrecognised_payload` | A subscribed event whose shape the adapter cannot read | A mapping gap. `lastError` names the event type and the missing field — fix the mapper, ship, replay |
+| `unresolved_plan`      | No plan carries the product id the event names         | Seed `plans.provider_product_id`, then replay                                                        |
+| `attempts_exhausted`   | A transient fault that never settled                   | `lastError` is the last error's own message. Fix the dependency, then replay                         |
+
+**Replaying is one statement**, and the alert carries it with the id filled in. A parked row
+is deliberately not re-claimable, so resetting the status is the whole procedure — the sweeper
+picks it up on its next pass:
+
+```sql
+UPDATE webhook_events
+   SET status = 'received', attempts = 0, last_error = NULL
+ WHERE id = '<webhookEventId>' AND status = 'failed';
+```
+
+To see everything currently parked, and how many of each:
+
+```sql
+SELECT last_error, count(*)
+  FROM webhook_events
+ WHERE provider = 'billing' AND status = 'failed'
+ GROUP BY 1 ORDER BY 2 DESC;
+```
+
+**Without `SENTRY_DSN` there is no alert** — the SDK is never started, and the park is only a
+log line. That is the deliberate local and CI behaviour ([ADR 0002](../adr/0002-observability-and-environments.md)),
+and it is also the one thing to check before flipping `BILLING_PROVIDER_DRIVER` to `polar` in
+a real environment: an environment taking payments with no DSN parks silently.
 
 ## Switching an environment from sandbox to production
 
