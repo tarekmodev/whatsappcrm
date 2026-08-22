@@ -4,6 +4,13 @@ import { useEffect, useState } from 'react';
 import styles from './RelativeTime.module.css';
 
 /**
+ * How far out a relative phrase stays useful. A month is where "in 29 days"
+ * stops being something a reader can picture and a date starts being the shorter
+ * answer; it is also comfortably past every real deadline this product sets.
+ */
+export const RELATIVE_TIME_MAX_DAYS = 30;
+
+/**
  * A timestamp rendered as "3 hours ago". Usage:
  * `<RelativeTime isoTimestamp={conversation.lastMessageAt} label="Last activity" />`.
  *
@@ -13,6 +20,14 @@ import styles from './RelativeTime.module.css';
  * not to suppress the warning.
  *
  * `Intl.RelativeTimeFormat` does the phrasing, so no locale is hand-rolled.
+ *
+ * **Relative phrasing has an upper bound.** Past
+ * `RELATIVE_TIME_MAX_DAYS` the component falls back to the absolute date, because
+ * "in 26,430 days" is arithmetic rather than an answer — a reader converts it
+ * back into a year before it means anything. The ticket queue is where that
+ * showed up (TAR-520): an SLA deadline far enough out to be a sentinel rendered
+ * as a five-figure day count. The rule lives here rather than at that call site
+ * so every surface in the console inherits it.
  */
 export function RelativeTime({
   isoTimestamp,
@@ -78,6 +93,17 @@ function formatAbsolute(isoTimestamp: string): string {
 }
 
 /**
+ * The far-future/far-past fallback, in the reader's own locale and timezone.
+ *
+ * Safe to be locale-dependent where `formatAbsolute` is not: this one is only
+ * ever reached from `formatRelative`, which runs after mount. The time of day is
+ * dropped — at more than a month out the date is the whole of the answer.
+ */
+function formatAbsoluteDate(isoTimestamp: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(isoTimestamp));
+}
+
+/**
  * Picks the unit from the *distance* to now, not the signed difference, so a
  * future timestamp — an invitation's expiry, say — reads "in 6 days" rather than
  * "in 619,918 seconds". `Intl.RelativeTimeFormat` already handles the direction
@@ -98,6 +124,11 @@ function formatRelative(isoTimestamp: string): string {
 
   if (distanceSeconds < SECONDS_PER_DAY) {
     return formatter.format(-Math.round(elapsedSeconds / SECONDS_PER_HOUR), 'hour');
+  }
+
+  // Beyond the bound the count stops being readable — see RELATIVE_TIME_MAX_DAYS.
+  if (distanceSeconds > SECONDS_PER_DAY * RELATIVE_TIME_MAX_DAYS) {
+    return formatAbsoluteDate(isoTimestamp);
   }
 
   return formatter.format(-Math.round(elapsedSeconds / SECONDS_PER_DAY), 'day');

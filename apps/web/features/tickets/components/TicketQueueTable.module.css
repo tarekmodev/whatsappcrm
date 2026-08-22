@@ -6,16 +6,32 @@
 .link {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: var(--space-1);
   color: inherit;
   text-decoration: none;
-  /* The whole cell is the target, so the tap area clears 44px on a phone. */
-  padding-block: var(--space-1);
+  /*
+   * The whole cell is the target. The minimum is stated rather than left to the
+   * two lines inside it, because `DataTable`'s density pass (TAR-520) trimmed the
+   * cell's block padding and a subject short enough to fit one line must still
+   * clear 44px. There is no block padding on top of it: the minimum is the
+   * target, and padding around it only made the row taller again.
+   */
+  min-block-size: var(--size-touch-target);
 }
 
 .link:hover .subject,
 .link:focus-visible .subject {
   text-decoration: underline;
+}
+
+/*
+ * Inset, so the ring stays inside the cell. The global focus style offsets
+ * outwards, which at the queue's row density (TAR-520) put the ring under the
+ * hairline of the row above and clipped its top edge.
+ */
+.link:focus-visible {
+  outline-offset: calc(var(--focus-ring-offset) * -1);
 }
 
 .subject {
@@ -25,14 +41,43 @@
   overflow-wrap: anywhere;
 }
 
+/*
+ * An auto-created ticket has no subject. The stand-in is muted and regular
+ * weight, so a column of them does not read as a column of titles — the
+ * reference underneath is the real name of those rows.
+ */
+.subject[data-placeholder='true'] {
+  color: var(--color-on-surface-muted);
+  font-weight: var(--font-weight-regular);
+}
+
 .reference {
   color: var(--color-on-surface-muted);
   font-size: var(--font-size-caption);
 }
 
+/*
+ * A held ticket is a *who*, so the name arrives with a face — the same treatment
+ * the conversation row gives the same fact (0001, "Status vocabulary"). An
+ * unheld one is plain muted text: there is nobody for the circle to stand for.
+ */
 .assignee {
   color: var(--color-on-surface-muted);
   overflow-wrap: anywhere;
+}
+
+.assignee[data-held='true'] {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  color: var(--color-on-surface);
+}
+
+/* Only so the name can shrink inside the flex row; the wrapping rules above are
+   inherited. */
+.assigneeName {
+  min-inline-size: 0;
 }
 
 /*

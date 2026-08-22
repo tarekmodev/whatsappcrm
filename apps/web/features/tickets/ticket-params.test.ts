@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseTicketId, parseTicketQueueParams } from './ticket-params';
+import { isTicketQueueFiltered, parseTicketId, parseTicketQueueParams } from './ticket-params';
 
 /**
  * The queue's URL is untrusted input. A hand-edited or truncated one has to land
@@ -71,6 +71,26 @@ describe('parseTicketQueueParams', () => {
         overdue: 'false',
       }).isOverdueOnly,
     ).toBe(false);
+  });
+});
+
+describe('isTicketQueueFiltered', () => {
+  const DEFAULT_VIEW = parseTicketQueueParams({
+    scope: undefined,
+    status: undefined,
+    priority: undefined,
+    overdue: undefined,
+  });
+
+  it('is false for the view an unparameterised arrival lands on', () => {
+    expect(isTicketQueueFiltered(DEFAULT_VIEW)).toBe(false);
+  });
+
+  it('is true for every narrowing the bar can apply', () => {
+    expect(isTicketQueueFiltered({ ...DEFAULT_VIEW, scope: 'all' })).toBe(true);
+    expect(isTicketQueueFiltered({ ...DEFAULT_VIEW, status: 'closed' })).toBe(true);
+    expect(isTicketQueueFiltered({ ...DEFAULT_VIEW, priority: 'high' })).toBe(true);
+    expect(isTicketQueueFiltered({ ...DEFAULT_VIEW, isOverdueOnly: true })).toBe(true);
   });
 });
 

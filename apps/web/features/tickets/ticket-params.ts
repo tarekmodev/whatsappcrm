@@ -22,6 +22,23 @@ export interface TicketQueueParams {
   isOverdueOnly: boolean;
 }
 
+/**
+ * Anything beyond the default view — the active queue, assigned to me.
+ *
+ * Here rather than in a component because two different answers hang off it and
+ * they must not drift: "nothing matches this filter" versus "no tickets yet" is
+ * the queue's empty state, and telling somebody tickets will appear here when
+ * they have just filtered to `closed` reads as a broken filter.
+ */
+export function isTicketQueueFiltered(params: TicketQueueParams): boolean {
+  return (
+    params.status !== undefined ||
+    params.priority !== undefined ||
+    params.scope !== 'assigned' ||
+    params.isOverdueOnly
+  );
+}
+
 export function parseTicketQueueParams(raw: {
   scope: string | undefined;
   status: string | undefined;

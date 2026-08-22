@@ -23,15 +23,28 @@ import styles from './SlaIndicator.module.css';
  * renders muted copy rather than an empty cell, because a stacked table row on a
  * phone repeats its column header beside the value and a blank one reads as
  * missing data.
+ *
+ * `isEmphasised={false}` keeps the word and drops the pill, for a queue row where
+ * the priority and the status already spent the chip budget
+ * (`features/tickets/ticket-chips.ts`, TAR-520). A breach is never the mark that
+ * loses, so this never quietens `Overdue`.
  */
-export function SlaIndicator({ indicator }: { indicator: SlaIndicatorModel | null }) {
+export function SlaIndicator({
+  indicator,
+  isEmphasised = true,
+}: {
+  indicator: SlaIndicatorModel | null;
+  isEmphasised?: boolean;
+}) {
   if (indicator === null) {
     return <span className={styles.none}>{content.sla.notApplicable}</span>;
   }
 
   return (
     <span className={styles.indicator} data-state={indicator.state}>
-      <Badge tone={indicator.tone}>{indicator.label}</Badge>
+      <Badge tone={indicator.tone} variant={isEmphasised ? 'subtle' : 'quiet'}>
+        {indicator.label}
+      </Badge>
       <RelativeTime
         isoTimestamp={indicator.dueAt}
         label={indicator.deadlineLabel}
