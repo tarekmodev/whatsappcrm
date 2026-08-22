@@ -511,12 +511,12 @@ Creates a document. Answers `201` with `status: 'pending'`.
 
 **Idempotency.** No header. A replay creates a second document.
 
-| Parameter   | In   | Type   | Required | Default | Notes                                                          |
-| ----------- | ---- | ------ | -------- | ------- | -------------------------------------------------------------- |
-| `title`     | body | string | yes      | —       | 1–200 characters                                               |
-| `content`   | body | string | yes      | —       | 1 character to 256 KiB of UTF-8. Blank line = chunk boundary   |
-| `sourceUrl` | body | string | no       | `null`  | A full URL, ≤ 2048 characters                                  |
-| `language`  | body | string | no       | `null`  | BCP 47. Stored for the console; **not** consulted by retrieval |
+| Parameter   | In   | Type   | Required | Default | Notes                                                           |
+| ----------- | ---- | ------ | -------- | ------- | --------------------------------------------------------------- |
+| `title`     | body | string | yes      | —       | 1–200 characters                                                |
+| `content`   | body | string | yes      | —       | 1 character to 256 KiB of UTF-8. Blank line = chunk boundary    |
+| `sourceUrl` | body | string | no       | `null`  | A full URL, ≤ 2048 characters. Nullable on `PATCH`, to clear it |
+| `language`  | body | string | no       | `null`  | BCP 47. Stored for the console; **not** consulted by retrieval  |
 
 ```bash
 curl -X POST https://acme.app.example.com/api/v1/knowledge-documents \
@@ -574,6 +574,11 @@ Parameters are the create's, all optional. Sending `content` sets `status` back 
 and clears `indexError`: the chunks on disk describe content that no longer exists, and
 leaving the row `indexed` would let the chatbot cite the old text against the new document
 until the job ran.
+
+`sourceUrl` is the one parameter that accepts more than the create's: it is **nullable here**,
+and `"sourceUrl": null` clears a stored link. Omitting the key leaves it alone, which is what
+every other field's absence means — so without the null there was no way to say "there is no
+source URL any more", and a console that cleared the field saved no change at all.
 
 | Status | Code                  | Cause                                                |
 | ------ | --------------------- | ---------------------------------------------------- |

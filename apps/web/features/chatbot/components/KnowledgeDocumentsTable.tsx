@@ -21,7 +21,7 @@ import styles from './KnowledgeDocumentsTable.module.css';
 
 /**
  * The knowledge base, as a table. Usage:
- * `<KnowledgeDocumentsTable documents={documents} canWrite />`.
+ * `<KnowledgeDocumentsTable documents={documents} indexedEntryCount={count} canWrite />`.
  *
  * A client component because the row actions open dialogs; the data is fetched
  * on the server and passed in, so no client-side waterfall is introduced.
@@ -37,10 +37,19 @@ import styles from './KnowledgeDocumentsTable.module.css';
 
 export interface KnowledgeDocumentsTableProps {
   documents: readonly KnowledgeDocumentListItem[];
+  /**
+   * How many indexed entries the **tenant** holds, from the readiness the API
+   * publishes — not how many of them this page happens to show.
+   */
+  indexedEntryCount: number;
   canWrite: boolean;
 }
 
-export function KnowledgeDocumentsTable({ documents, canWrite }: KnowledgeDocumentsTableProps) {
+export function KnowledgeDocumentsTable({
+  documents,
+  indexedEntryCount,
+  canWrite,
+}: KnowledgeDocumentsTableProps) {
   const content = useContent();
   const [editing, setEditing] = useState<KnowledgeDocumentListItem | null>(null);
   const [deleting, setDeleting] = useState<KnowledgeDocumentListItem | null>(null);
@@ -137,7 +146,7 @@ export function KnowledgeDocumentsTable({ documents, canWrite }: KnowledgeDocume
           document={deleting}
           // Whether this is the last thing the chatbot can answer from, which
           // changes the warning: deleting it switches automated replies off.
-          isLastIndexedEntry={isLastIndexedEntry(documents, deleting)}
+          isLastIndexedEntry={isLastIndexedEntry(indexedEntryCount, deleting)}
           onClose={() => {
             setDeleting(null);
           }}
@@ -196,16 +205,19 @@ function ReindexButton({ document }: { document: KnowledgeDocumentListItem }) {
  * base of three failed documents is an empty one as far as the bot is concerned,
  * and warning about the last *row* rather than the last *usable* row would tell
  * an admin the opposite of the truth.
+ *
+ * Counted **over the tenant** rather than over the rows on screen. This table
+ * shows one page, so a page holding a single indexed entry says nothing about
+ * how many the tenant has — and the warning it drives is the one that claims
+ * automated replies are about to stop. `readiness.indexedDocumentCount` is the
+ * same number the readiness panel above renders, read in the same server pass as
+ * this list, so the two cannot disagree with each other.
  */
 function isLastIndexedEntry(
-  documents: readonly KnowledgeDocumentListItem[],
+  indexedEntryCount: number,
   candidate: KnowledgeDocumentListItem,
 ): boolean {
-  if (candidate.status !== 'indexed') {
-    return false;
-  }
-
-  return documents.filter((document) => document.status === 'indexed').length === 1;
+  return candidate.status === 'indexed' && indexedEntryCount === 1;
 }
 
 /**

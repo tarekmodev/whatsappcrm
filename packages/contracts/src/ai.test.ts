@@ -12,6 +12,7 @@ import {
   botInboundJobId,
   compositeConfidence,
   retrievalConfidence,
+  withinKnowledgeContentCap,
 } from './ai';
 
 /**
@@ -159,5 +160,44 @@ describe('the knowledge document content cap', () => {
     expect(
       UpdateKnowledgeDocumentInputSchema.safeParse({ content: 'a'.repeat(cap + 1) }).success,
     ).toBe(false);
+  });
+});
+
+describe('withinKnowledgeContentCap', () => {
+  const cap = KNOWLEDGE_DOCUMENT_LIMITS.contentBytes;
+
+  // Exported so the console can answer the same question before spending a
+  // round trip. These cases are the schema's own, asserted against the
+  // predicate directly — the console calls this, not `safeParse`.
+  it('accepts a document at exactly the published size and refuses one byte more', () => {
+    expect(withinKnowledgeContentCap('a'.repeat(cap))).toBe(true);
+    expect(withinKnowledgeContentCap('a'.repeat(cap + 1))).toBe(false);
+  });
+
+  it('counts UTF-8 bytes, so Arabic inside the code-unit count is still over the cap', () => {
+    const arabic = 'ن'.repeat(cap / 2 + 1);
+
+    expect(arabic.length).toBeLessThan(cap);
+    expect(withinKnowledgeContentCap(arabic)).toBe(false);
+  });
+});
+
+describe('UpdateKnowledgeDocumentInputSchema', () => {
+  it('accepts a null source URL, which is how the console clears one', () => {
+    // An omitted key means "leave it alone", so clearing the field had to have
+    // a spelling of its own or a cleared URL saved as no change at all.
+    expect(UpdateKnowledgeDocumentInputSchema.safeParse({ sourceUrl: null }).success).toBe(true);
+  });
+
+  it('still refuses a source URL that is not a URL', () => {
+    expect(UpdateKnowledgeDocumentInputSchema.safeParse({ sourceUrl: 'not a url' }).success).toBe(
+      false,
+    );
+  });
+
+  it('leaves the field absent when it is not sent', () => {
+    expect(UpdateKnowledgeDocumentInputSchema.parse({ title: 'Refunds' })).toEqual({
+      title: 'Refunds',
+    });
   });
 });
