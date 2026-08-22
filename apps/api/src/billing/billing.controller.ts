@@ -195,7 +195,18 @@ export class BillingController {
    * as delivery took.
    *
    * No idempotency key: the operation is already idempotent by construction, and
-   * the console calls it on a page load it may repeat by refreshing.
+   * a caller may repeat it by refreshing.
+   *
+   * ⚠️ **Nothing calls this yet.** TAR-619 shipped the return page against
+   * `?checkout=succeeded` plus a link back, deliberately preferring the webhook
+   * and a manual refresh to a client-side poll — so the console never sends a
+   * checkout id. The route exists because `BillingProvider.resolveCheckout` is
+   * part of the published port and this is the only thing that exercises it: the
+   * contract's stated intent is that the console reflects the purchase on return
+   * rather than seconds later, and adopting it is one line in
+   * `billing.actions.ts`. If the Architect confirms the webhook-only return is
+   * the intended shape, this route and `resolveCheckout` should both go — that
+   * is a contract decision, not one to make quietly here.
    */
   @Post('checkout/complete')
   @RequirePermission('billing:manage')
