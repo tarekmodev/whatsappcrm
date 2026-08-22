@@ -1740,6 +1740,31 @@ sla_timer_id, recipient_user_id)` is the second layer; only the first is load-be
 
 ### Fixed
 
+- **A workflow whose broken reference has come back can be turned on again from the console**
+  (TAR-597) — `WorkflowCard` read `brokenReason` as a latch: once the API had set it, Enable
+  stayed disabled whatever the workflow's references actually said. TAR-399's ruling on ADR
+  0009 decision 6 had already settled the opposite — the field is derived state, the arming
+  gate is reference resolution alone, and the column is "safe to render and safe to ignore as
+  a gate" — and the API was changed to match. The console was not, so it disagreed with the
+  endpoint it was guarding and refused a request the API would have accepted.
+  It needs nobody to edit the workflow. `present()` returns the stored column rather than
+  deriving it, and only a _write_ rewrites it, so an agent removed and then re-invited — which
+  reactivates the same row and the same id (ADR 0005) — leaves `brokenReason` standing over
+  references that all resolve, and the card never offered a way back. It now asks the same
+  question the API asks, and the warning notice follows: a reason with nothing unresolved
+  behind it no longer renders "it points at that no longer exists" with an empty list in the
+  middle of it. The cost is that the reason text disappears one step earlier than before —
+  a supervisor who has replaced the missing target loses the sentence saying why the workflow
+  was switched off, which is the trade the ruling already made on the API side.
+  ⚠️ Deriving `brokenReason` in `present()` is the API-side half and is not in this change;
+  until it lands the field can still read stale in the response, which now costs a stale field
+  in the payload rather than a workflow nobody can turn on.
+
+- `add_ticket_tag`'s tag picker keeps a tag id that no longer resolves listed, labelled the way
+  the card labels it, instead of rendering blank over an id the form still carries and sends
+  back on save — the rule the tag conditions' checkboxes already followed, now one shared
+  `tagOptions` serving both. Defensive: nothing deletes a tag today. (TAR-597)
+
 - **Detaching a tenant's primary custom domain no longer leaves invite and password-reset
   links pointing at it** (TAR-534) — `AdminDomainsService.deactivate()` cleared
   `activated_at` and left `is_primary` exactly where it was, so the state TAR-420 blocks on
