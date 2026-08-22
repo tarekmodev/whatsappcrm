@@ -1,0 +1,55 @@
+/*
+ * One bar, one baseline. The controls sit on a surface with a hairline rather
+ * than loose on the canvas, which is what stops three list views each inventing
+ * their own spacing between a search box and a pill strip.
+ */
+
+.bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  inline-size: 100%;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  /*
+   * `end`, not `center`: a control with a visible label above it is taller than
+   * one without, and the row is on one baseline only if they are aligned by the
+   * bottom of the control rather than by the middle of the group.
+   */
+  align-items: flex-end;
+  gap: var(--space-3);
+  min-inline-size: 0;
+}
+
+/* Pushes everything after it — the apply/reset affordances — to the far edge. */
+.trailing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-inline-start: auto;
+}
+
+/*
+ * Below the layout breakpoint the row is a column: three controls at 320px do
+ * not share a line, and wrapping them leaves one orphan beside a gap. 48rem is
+ * the literal the rest of the app uses (`DataTable`, `AppShell`) because a
+ * custom property cannot be read inside a media query.
+ */
+@media (max-width: 47.999rem) {
+  .row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .trailing {
+    margin-inline-start: 0;
+  }
+}

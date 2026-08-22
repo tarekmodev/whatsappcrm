@@ -367,8 +367,7 @@ one. A dot on its own conveys state by colour alone, which this document forbids
 Contacts, Tickets, and the agents table today:
 
 1. `PageHeader` — the `<h1>` and the one primary action.
-2. A filter row: `FilterPills` for the two or three mutually exclusive scopes, and a
-   `Field`-wrapped search or select for anything with more options than that.
+2. A filter row — `FilterBar`, and the rules below.
 3. `DataTable` inside a `SectionCard`.
 4. Row actions **inline in the last column**, as real buttons or links. Never hover-only:
    a touch device has no hover, and a keyboard user has no way to reveal one.
@@ -376,6 +375,31 @@ Contacts, Tickets, and the agents table today:
 Every filter lives in the URL, never in component state. A refresh, a copied link and the
 back button must reproduce the same list. Below 48rem `DataTable` re-flows each row into a
 stacked card with its column headers repeated per cell — the same markup, no second table.
+
+#### The filter row (TAR-516)
+
+Three screens had independently invented one. It is `FilterBar`, and it obeys five rules:
+
+- Filters sit in **one row on one baseline**, inside a `--color-surface` bar with a
+  hairline — not floating on the canvas as separate groups. Below 48rem the row becomes a
+  column; three controls do not share a line at 320px.
+- **A group label above a control is only used when the control's own value does not say
+  what it filters.** `Scope` over pills reading "Assigned to me / Unassigned / All
+  tickets" is redundant. Where a select would otherwise need one, name its empty option
+  for the group instead — "All roles", not "All".
+- **More than two filter groups:** the primary scope stays visible as `FilterPills`, the
+  rest collapse into one `FilterMenu` — a "Filters" trigger with a count badge — and an
+  `ActiveFilterChips` strip sits beneath the bar naming each one that is on, each chip
+  individually clearable. The ticket queue is the case this exists for: four groups and
+  seventeen pills across four labelled rows pushed the queue itself below the fold.
+- **Search fields** are `SearchField`: capped at `--size-container-sm`, a leading search
+  icon, a label that is present even when it is only for screen readers, and a clear (×)
+  affordance once there is something to clear.
+- **No browser-default control chrome.** A native `<select>` keeps its element and its
+  keyboard model but loses the platform's painting of it — `Select` gives it
+  `TextInput`'s box and this app's chevron, and `variant="filter"` caps it at
+  `--size-menu`. Dates are `DateRangeField`, never `<input type="date">`: the browser's
+  own calendar glyph and its own `18/07/2026` disagree with every other date on screen.
 
 ### Detail views
 
@@ -531,7 +555,12 @@ space:
 | A section               | `SectionCard`                                   |
 | A table                 | `DataTable` + `DataTableSkeleton`               |
 | Tabs                    | `Tabs`                                          |
+| A filter row            | `FilterBar`                                     |
 | Filter pills            | `FilterPills`                                   |
+| A search filter         | `SearchField`                                   |
+| A single choice         | `Select` (`variant="filter"` above a list)      |
+| A date range            | `DateRangeField`                                |
+| Collapsed filters       | `FilterMenu` + `ActiveFilterChips`              |
 | A status chip or count  | `Badge` — see "Status vocabulary" for how many  |
 | An icon                 | `Icon`                                          |
 | A person's initial      | `Avatar`                                        |

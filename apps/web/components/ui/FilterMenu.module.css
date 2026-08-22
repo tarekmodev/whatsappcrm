@@ -1,0 +1,16 @@
+/*
+ * Wider than a list of links: what goes in here is two or three pill strips,
+ * and at `--size-menu` every strip wraps to one pill per line.
+ */
+.panel {
+  /* Never wider than the screen: a `min` above `MenuButton`'s viewport cap wins
+     and takes the page into horizontal scroll at 320px. */
+  min-inline-size: min(var(--size-pane-side), calc(100vw - var(--space-6)));
+  padding: var(--space-4);
+}
+
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}

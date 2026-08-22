@@ -38,10 +38,28 @@
   line-height: var(--line-height-body);
 }
 
+/*
+ * The native element with the browser's painting of it removed (TAR-516): its
+ * own arrow, its own border radius, and on Safari its own height. Everything
+ * that makes it a select — the keyboard model, type-ahead, the platform picker
+ * on a phone — is untouched; `Select` draws the chevron back with this app's
+ * `Icon`, and reserves the room for it here.
+ */
 .select {
-  /* Room for the platform's own disclosure arrow, which is deliberately left
-     native — a custom one is one more thing to get wrong in forced-colors mode. */
-  padding-inline-end: var(--space-6);
+  appearance: none;
+  /* The chevron's own width plus the gutter it sits in, on both sides of it. */
+  padding-inline-end: calc(var(--size-icon-sm) + var(--space-3) * 2);
+  cursor: pointer;
+}
+
+.select:disabled {
+  cursor: not-allowed;
+}
+
+@media (hover: hover) {
+  .select:not(:disabled):hover {
+    background: var(--color-surface-hover);
+  }
 }
 
 .file {

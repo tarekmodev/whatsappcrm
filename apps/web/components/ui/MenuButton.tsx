@@ -46,16 +46,41 @@ import styles from './MenuButton.module.css';
 export const MENU_ALIGNMENTS = ['start', 'end'] as const;
 export type MenuAlignment = (typeof MENU_ALIGNMENTS)[number];
 
+/**
+ * How the trigger is painted. `bare` is a control inside a bar that already has
+ * a surface — the top bar, a table row. `control` is a filter or a picker
+ * standing on its own in a row of inputs, and matches `TextInput` exactly so the
+ * two cannot sit side by side looking like different products (TAR-516).
+ */
+export const MENU_TRIGGER_VARIANTS = ['bare', 'control'] as const;
+export type MenuTriggerVariant = (typeof MENU_TRIGGER_VARIANTS)[number];
+
+/** What the panel's contents can do to the menu around them. */
+export interface MenuPanelApi {
+  /** Dismisses the panel and returns focus to the trigger. */
+  close: () => void;
+}
+
 export interface MenuButtonProps {
   /** The trigger's content. Pair an icon-only trigger with `accessibleName`. */
   label: ReactNode;
   /** Names the trigger when `label` carries no text — an icon on its own. */
   accessibleName?: string;
-  children: ReactNode;
+  /**
+   * The panel's contents. A function receives `close`, for a panel whose own
+   * controls finish the interaction — an Apply button, a preset that commits.
+   * Without it every such panel would need its own copy of the focus-restoring
+   * dismissal this component already owns.
+   */
+  children: ReactNode | ((api: MenuPanelApi) => ReactNode);
   /** Which edge the panel is aligned to. `end` for a trigger near the inline end. */
   align?: MenuAlignment;
+  /** `control` gives the trigger `TextInput`'s box; `bare` leaves it transparent. */
+  variant?: MenuTriggerVariant;
   className?: string;
   triggerClassName?: string;
+  /** Widens or re-pads the panel; the popover's placement stays this component's. */
+  panelClassName?: string;
 }
 
 export function MenuButton({
@@ -63,8 +88,10 @@ export function MenuButton({
   accessibleName,
   children,
   align = 'end',
+  variant = 'bare',
   className,
   triggerClassName,
+  panelClassName,
 }: MenuButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const panelId = useId();
@@ -72,6 +99,10 @@ export function MenuButton({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const pathname = usePathname();
+
+  const closePanel = useCallback(() => {
+    setIsOpen(false);
+  }, []);
 
   // Focus into the panel on open, back to the trigger on close — a keyboard user
   // who opens a panel and is left outside it has no way in but Tab.
@@ -180,6 +211,7 @@ export function MenuButton({
         ref={triggerRef}
         type="button"
         className={cx(styles.trigger, triggerClassName)}
+        data-variant={variant}
         aria-expanded={isOpen}
         aria-controls={panelId}
         aria-label={accessibleName}
@@ -200,7 +232,7 @@ export function MenuButton({
         <div
           id={panelId}
           ref={panelRef}
-          className={styles.panel}
+          className={cx(styles.panel, panelClassName)}
           data-align={align}
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget)) {
@@ -208,7 +240,7 @@ export function MenuButton({
             }
           }}
         >
-          {children}
+          {typeof children === 'function' ? children({ close: closePanel }) : children}
         </div>
       ) : (
         // `aria-controls` must name an element that exists, so the closed state

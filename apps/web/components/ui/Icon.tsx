@@ -64,10 +64,12 @@ const ICON_PATHS = {
     'M12 17.5h.01',
   ],
   /**
-   * A narrowing, for the empty state of a list a filter has emptied. Three lines
-   * that taper, deliberately unlike `menu`'s three equal ones — the two never
-   * appear together, but a set in which "filter" and "menu" are the same shape
-   * is a set with one glyph too few.
+   * A narrowing: the empty state of a list a filter has emptied (TAR-515), and
+   * the trigger that collapses a filter row's secondary groups (TAR-516). Three
+   * lines that taper, deliberately unlike `menu`'s three equal ones — below
+   * 48rem the mobile-menu trigger and a queue's "Filters" trigger are on screen
+   * together, so a set in which the two were the same shape would be a set with
+   * one glyph too few.
    */
   filter: ['M4 6h16', 'M7 12h10', 'M10 18h4'],
   /** A custom domain (TAR-29): a hostname, not a link and not a padlock. */
@@ -114,6 +116,18 @@ const ICON_PATHS = {
     'M7 14h3',
   ],
   plus: ['M12 5v14', 'M5 12h14'],
+  /** Confirms the chosen entry in a listbox or a menu; never a status tick. */
+  check: ['m5 12.5 4.5 4.5L19 8'],
+  /**
+   * A date control's affordance. Deliberately not `reports` — that shape is a
+   * bar chart, and a month grid is a header row over a page, not a measurement.
+   */
+  calendar: [
+    'M4 7a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z',
+    'M4 10h16',
+    'M8 4v4',
+    'M16 4v4',
+  ],
   /** Opens a menu below its trigger; never mirrored, unlike the chevrons below. */
   chevronDown: ['m6 9 6 6 6-6'],
   /** Points along the reading direction; mirrored under `dir="rtl"`. */

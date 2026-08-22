@@ -1,0 +1,21 @@
+.trigger {
+  /*
+   * Wide enough for two long dates and a chevron without the label re-wrapping
+   * as the range changes; a trigger that changes width when you use it reads as
+   * the row shifting rather than as the value updating.
+   */
+  min-inline-size: var(--size-menu);
+  gap: var(--space-2);
+}
+
+.value {
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.panel {
+  padding: var(--space-4);
+}

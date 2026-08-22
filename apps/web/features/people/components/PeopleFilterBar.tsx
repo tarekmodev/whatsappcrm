@@ -3,15 +3,14 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { TENANT_ROLES, type TenantRole } from '@whatsappcrm/contracts';
-import { Cluster } from '@/components/layout/Cluster';
 import { Field } from '@/components/ui/Field';
+import { FilterBar } from '@/components/ui/FilterBar';
+import { SearchField } from '@/components/ui/SearchField';
 import { Select } from '@/components/ui/Select';
-import { TextInput } from '@/components/ui/TextInput';
 import { useContent } from '@/lib/content';
 import { useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
 import { routes, searchParamKeys } from '@/lib/routes';
 import { roleOptions } from '../presentation';
-import styles from './PeopleFilterBar.module.css';
 
 /**
  * Role and free-text filters for the agents list. Usage:
@@ -20,6 +19,10 @@ import styles from './PeopleFilterBar.module.css';
  * Both filters live in the URL, not in component state, so a refresh, a copied
  * link and the back button all reproduce the same view. The text box is debounced
  * so typing does not push a history entry per keystroke.
+ *
+ * Two groups, so both stay visible: 0001's filter row only collapses the
+ * secondary ones behind a menu past that. Neither carries a visible label —
+ * "All roles" says what the select filters, and the search box has an icon.
  */
 
 const ALL_ROLES_VALUE = '';
@@ -59,50 +62,38 @@ export function PeopleFilterBar() {
   }, [debouncedQuery, queryParam, roleParam, router]);
 
   return (
-    <Cluster gap="3" align="start" className={styles.bar}>
-      <div className={styles.search}>
-        <Field label={content.people.searchAgentsLabel} isLabelHidden>
-          {({ controlId }) => (
-            <TextInput
-              id={controlId}
-              type="search"
-              name="q"
-              autoComplete="off"
-              placeholder={content.people.searchAgentsPlaceholder}
-              value={draftQuery}
-              onChange={(event) => {
-                setDraftQuery(event.target.value);
-              }}
-            />
-          )}
-        </Field>
-      </div>
-      <div className={styles.role}>
-        <Field label={content.people.filterRoleLabel} isLabelHidden>
-          {({ controlId }) => (
-            <Select
-              id={controlId}
-              name="role"
-              value={roleParam}
-              options={[
-                { value: ALL_ROLES_VALUE, label: content.common.all },
-                ...roleOptions(TENANT_ROLES),
-              ]}
-              onChange={(event) => {
-                const nextRole = event.target.value as TenantRole | typeof ALL_ROLES_VALUE;
+    <FilterBar label={content.people.filtersLabel}>
+      <SearchField
+        label={content.people.searchAgentsLabel}
+        placeholder={content.people.searchAgentsPlaceholder}
+        value={draftQuery}
+        onChange={setDraftQuery}
+      />
+      <Field label={content.people.filterRoleLabel} isLabelHidden>
+        {({ controlId }) => (
+          <Select
+            id={controlId}
+            name="role"
+            variant="filter"
+            value={roleParam}
+            options={[
+              { value: ALL_ROLES_VALUE, label: content.people.filterRoleAll },
+              ...roleOptions(TENANT_ROLES),
+            ]}
+            onChange={(event) => {
+              const nextRole = event.target.value as TenantRole | typeof ALL_ROLES_VALUE;
 
-                router.replace(
-                  routes.settingsPeople({
-                    role: nextRole === ALL_ROLES_VALUE ? undefined : nextRole,
-                    q: queryParam === '' ? undefined : queryParam,
-                  }),
-                  { scroll: false },
-                );
-              }}
-            />
-          )}
-        </Field>
-      </div>
-    </Cluster>
+              router.replace(
+                routes.settingsPeople({
+                  role: nextRole === ALL_ROLES_VALUE ? undefined : nextRole,
+                  q: queryParam === '' ? undefined : queryParam,
+                }),
+                { scroll: false },
+              );
+            }}
+          />
+        )}
+      </Field>
+    </FilterBar>
   );
 }
