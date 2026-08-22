@@ -13,7 +13,9 @@ import {
   MOCK_MESSAGES,
   MOCK_MESSAGE_TEMPLATES,
   MOCK_ONBOARDING_CHECKLISTS,
+  MOCK_PLANS,
   MOCK_SLA_ALERTS,
+  MOCK_SUBSCRIPTIONS,
   MOCK_TAGS,
   MOCK_TEAMS,
   MOCK_TENANTS,
@@ -47,7 +49,7 @@ import {
   type MockWorkflow,
   type MockWorkflowRun,
 } from '@/lib/api/mock/fixtures';
-import type { TenantResponse } from '@whatsappcrm/contracts';
+import type { Plan, Subscription, TenantResponse } from '@whatsappcrm/contracts';
 
 /**
  * Mutable in-memory state behind the mock transport, so an invite or a team
@@ -122,6 +124,30 @@ interface MockState {
    * only an *identical* request and refuses a key reused with a different body.
    */
   sentByIdempotencyKey: Map<string, { payload: string; message: MockMessage }>;
+  /**
+   * The plan catalogue, keyed by `key` rather than by id — every piece of plan
+   * logic in the contract branches on `planKey`, never on a surrogate or a
+   * provider id, and keying the map the same way is what stops a handler
+   * reaching for the wrong one.
+   *
+   * Platform-wide and *not* tenant-scoped, unlike almost everything else here:
+   * `plans` is catalogue data, and the tenant's position in it is computed per
+   * request from live usage rather than stored.
+   */
+  plans: Map<string, Plan>;
+  /** Keyed by row id and scoped by `tenantId`, like every other resource map. */
+  subscriptions: Map<string, Subscription>;
+  /**
+   * `Idempotency-Key` → the checkout the key was spent on, and the request body
+   * it was spent with.
+   *
+   * The same mechanism `sentByIdempotencyKey` gives the composer, for the same
+   * reason and with a higher stake: a checkout is a `POST` that can start a
+   * subscription, so a transport that happily opened two would let exactly the
+   * bug the header exists to prevent through review. A key replayed with a
+   * *different* body is `idempotency_key_reused`, per the contract.
+   */
+  checkoutsByIdempotencyKey: Map<string, { payload: string; url: string; expiresAt: string }>;
   /** Monotonic counter for fabricated ids — never `Math.random()`, which would break resume. */
   nextId: number;
 }
@@ -213,6 +239,23 @@ function seed(): MockState {
     ),
     tenantDomains: new Map(MOCK_TENANT_DOMAINS.map((domain) => [domain.id, domain])),
     sentByIdempotencyKey: new Map(),
+    plans: new Map(
+      MOCK_PLANS.map((plan) => [
+        plan.key,
+        {
+          ...plan,
+          pricePerSeat: { ...plan.pricePerSeat },
+          entitlements: {
+            features: [...plan.entitlements.features],
+            limits: { ...plan.entitlements.limits },
+          },
+        },
+      ]),
+    ),
+    subscriptions: new Map(
+      MOCK_SUBSCRIPTIONS.map((subscription) => [subscription.id, { ...subscription }]),
+    ),
+    checkoutsByIdempotencyKey: new Map(),
     nextId: 1,
   };
 }

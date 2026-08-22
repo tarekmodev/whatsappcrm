@@ -57,6 +57,20 @@ const SETTINGS_CHILDREN: readonly NavItem[] = [
     requiresAny: ['tenant:settings', 'branding:write'],
   },
   {
+    id: 'settings-billing',
+    label: content.nav.billing,
+    href: routes.settingsBilling(),
+    icon: 'billing',
+    /**
+     * Either permission, on the same rule as Workspace above: `billing:read`
+     * reaches the plans and the usage, `billing:manage` is what starts a
+     * checkout or opens the portal. Both are tenant-admin permissions today, so
+     * the union changes nothing now — it is what stops a custom role that holds
+     * only the read from being sent to a 403 for a page it can use half of.
+     */
+    requiresAny: ['billing:read', 'billing:manage'],
+  },
+  {
     id: 'settings-custom-fields',
     label: content.nav.customFields,
     href: routes.settingsCustomFields(),
