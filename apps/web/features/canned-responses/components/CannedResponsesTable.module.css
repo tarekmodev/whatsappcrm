@@ -26,9 +26,3 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
-
-.actions {
-  /* Keeps the pair on one line until the table stacks, where the cell is full
-     width and they wrap naturally. */
-  flex-wrap: wrap;
-}

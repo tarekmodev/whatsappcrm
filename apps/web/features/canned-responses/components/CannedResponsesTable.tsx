@@ -2,10 +2,9 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import type { CannedResponseResponse } from '@whatsappcrm/contracts';
-import { Button } from '@/components/ui/Button';
-import { Cluster } from '@/components/layout/Cluster';
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { RowActions } from '@/components/ui/RowActions';
 import { VisuallyHidden } from '@/components/layout/VisuallyHidden';
 import { useContent } from '@/lib/content';
 import { CANNED_RESPONSE_PREVIEW_LENGTH } from '../constants';
@@ -58,31 +57,31 @@ export function CannedResponsesTable({ responses, canManage }: CannedResponsesTa
           </>
         );
       },
-      // Real buttons, always visible: a hover-only row action is unreachable by
-      // touch and by keyboard.
+      // `RowActions` owns the weight ladder: real buttons, always visible, and
+      // the deletion in the danger role and last.
       actions: (response) => (
-        <Cluster gap="1" justify="end" className={styles.actions}>
-          <Button
-            size="sm"
-            variant="secondary"
-            aria-label={content.cannedResponses.editAria(response.title)}
-            onClick={() => {
-              setEditing(response);
-            }}
-          >
-            {content.cannedResponses.edit}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-label={content.cannedResponses.removeAria(response.title)}
-            onClick={() => {
-              setRemoving(response);
-            }}
-          >
-            {content.cannedResponses.remove}
-          </Button>
-        </Cluster>
+        <RowActions
+          subject={response.title}
+          actions={[
+            {
+              key: 'edit',
+              label: content.cannedResponses.edit,
+              accessibleName: content.cannedResponses.editAria(response.title),
+              onSelect: () => {
+                setEditing(response);
+              },
+            },
+            {
+              key: 'remove',
+              label: content.cannedResponses.remove,
+              accessibleName: content.cannedResponses.removeAria(response.title),
+              isDestructive: true,
+              onSelect: () => {
+                setRemoving(response);
+              },
+            },
+          ]}
+        />
       ),
     };
 

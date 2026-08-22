@@ -88,6 +88,46 @@ describe('token contrast', () => {
 });
 
 /**
+ * The quiet destructive control (TAR-709).
+ *
+ * `Button`'s `dangerQuiet` variant is `--color-danger` text on a transparent
+ * ground, tinted with `--color-danger-subtle` on hover and on focus, and ringed
+ * in `--color-danger`. Three pairs, and none of them is the chip pair already
+ * asserted above: the text is the *solid* danger role on a plain surface, which
+ * nothing measured before this variant existed.
+ *
+ * The ring's floor is 3:1 rather than 4.5:1 — WCAG 2.2 SC 1.4.11 — and it is
+ * measured against both grounds it can land on, because focus applies the hover
+ * tint (a keyboard has no hover to give it).
+ */
+describe('the quiet destructive control', () => {
+  /** WCAG 2.2 SC 1.4.11, for the focus ring rather than for text. */
+  const GRAPHIC_CONTRAST = 3;
+
+  describe.each(THEMES)('%s theme', (theme) => {
+    it.each(['--color-surface', '--color-danger-subtle'])('reads on %s', (ground) => {
+      expect(
+        contrastRatio(token(theme, '--color-danger'), token(theme, ground)),
+      ).toBeGreaterThanOrEqual(AA_TEXT_CONTRAST);
+    });
+
+    it('rings the control clear of the surface it sits on', () => {
+      expect(
+        contrastRatio(token(theme, '--color-danger'), token(theme, '--color-surface')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    it('keeps the hover tint quieter than the accent, so a row of them does not shout', () => {
+      const surface = token(theme, '--color-surface');
+
+      expect(contrastRatio(token(theme, '--color-danger-subtle'), surface)).toBeLessThan(
+        contrastRatio(token(theme, '--color-accent'), surface),
+      );
+    });
+  });
+});
+
+/**
  * The rail's text pairs (TAR-521).
  *
  * 0001 publishes them in its contrast table and nothing enforced them, which was

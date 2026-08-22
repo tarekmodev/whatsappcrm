@@ -1,0 +1,91 @@
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+/*
+ * Never stretched to the cell's width: once `DataTable` stacks each row into a
+ * card, a full-width control per action reads as several rows of one action
+ * each rather than as one row's actions.
+ */
+.actions > * {
+  flex: 0 0 auto;
+}
+
+/*
+ * The destructive control is held off the one beside it, so the action a user
+ * reaches for most is not adjacent to the one that cannot be undone. The row's
+ * own gap is already `--space-1`; this is the rest of the way to `--space-3`.
+ *
+ * Invisible once the row wraps: a lone control on the second line is pushed to
+ * the inline end by `justify-content`, which absorbs the margin.
+ */
+.destructive {
+  margin-inline-start: calc(var(--space-3) - var(--space-1));
+}
+
+/*
+ * Held on one line once the table has the width to be a table, and allowed to
+ * wrap below that, where the row is a stacked card and wrapping is what keeps
+ * the controls at a touch-target size instead of squeezing them.
+ *
+ * A container query on the same 40rem boundary `DataTable` stacks at, and a
+ * literal for the same reason its own comment gives: a `@container` condition
+ * cannot read a custom property.
+ */
+@container (min-width: 40rem) {
+  .actions {
+    flex-wrap: nowrap;
+  }
+}
+
+.overflowTrigger {
+  flex: 0 0 auto;
+  justify-content: center;
+  inline-size: var(--size-touch-target);
+  color: var(--color-on-surface-muted);
+}
+
+.menuList {
+  composes: menuList from './MenuButton.module.css';
+}
+
+.menuItem {
+  composes: menuItem from './MenuButton.module.css';
+}
+
+/*
+ * The destructive entry sits under a rule, so it is not the next thing down from
+ * the routine one. Colour is never the only carrier here either: it is last, it
+ * is separated, and its label is the verb.
+ */
+.separated {
+  margin-block-start: var(--space-1);
+  padding-block-start: var(--space-1);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}
+
+.menuItem[data-tone='danger'] {
+  color: var(--color-danger);
+}
+
+@media (hover: hover) {
+  .menuItem[data-tone='danger']:hover {
+    background: var(--color-danger-subtle);
+  }
+}
+
+/* The same ring the inline destructive control gets — see `Button.module.css`
+   for why this is the one place the global focus colour is overridden. */
+.menuItem[data-tone='danger']:focus-visible {
+  background: var(--color-danger-subtle);
+  outline-color: var(--color-danger);
+}
+
+@media (forced-colors: active) {
+  .menuItem[data-tone='danger']:focus-visible {
+    outline-color: Highlight;
+  }
+}

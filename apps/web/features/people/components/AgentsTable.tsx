@@ -3,11 +3,10 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { TeamResponse, UserResponse } from '@whatsappcrm/contracts';
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
-import { Cluster } from '@/components/layout/Cluster';
 import { DataTable, DataTableSkeleton, type DataTableColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
+import { RowActions } from '@/components/ui/RowActions';
 import { useContent } from '@/lib/content';
 import { AgentIdentity } from './AgentIdentity';
 import { TeamNameList } from './TeamNameList';
@@ -16,7 +15,6 @@ import type { PeopleCaller } from '../role-assignment';
 import { AGENTS_PAGE_SIZE } from '../constants';
 import { AVAILABILITY_TONES, ROLE_TONES, USER_STATUS_TONES } from '../presentation';
 import { LazyEditAgentDialog, LazyRemoveAgentDialog } from './agent-dialogs.lazy';
-import styles from './AgentsTable.module.css';
 
 /**
  * The agents list. Usage:
@@ -71,35 +69,40 @@ export function AgentsTable({ users, teams, canEdit, canRemove, caller }: Agents
           {content.availability[user.availability]}
         </Badge>
       ),
-      // Real buttons, always visible: a hover-only row action is unreachable by
-      // touch and by keyboard.
+      // `RowActions` owns the weight ladder: real buttons, always visible, and
+      // the removal in the danger role and last. A permission the caller does
+      // not hold contributes no action rather than a disabled one.
       actions: (user) => (
-        <Cluster gap="1" justify="end" className={styles.actions}>
-          {canEdit ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              aria-label={content.people.editAgentAria(user.displayName)}
-              onClick={() => {
-                setEditing(user);
-              }}
-            >
-              {content.people.editAgent}
-            </Button>
-          ) : null}
-          {canRemove ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-label={content.people.removeAgentAria(user.displayName)}
-              onClick={() => {
-                setRemoving(user);
-              }}
-            >
-              {content.people.removeAgent}
-            </Button>
-          ) : null}
-        </Cluster>
+        <RowActions
+          subject={user.displayName}
+          actions={[
+            ...(canEdit
+              ? [
+                  {
+                    key: 'edit',
+                    label: content.people.editAgent,
+                    accessibleName: content.people.editAgentAria(user.displayName),
+                    onSelect: () => {
+                      setEditing(user);
+                    },
+                  },
+                ]
+              : []),
+            ...(canRemove
+              ? [
+                  {
+                    key: 'remove',
+                    label: content.people.removeAgent,
+                    accessibleName: content.people.removeAgentAria(user.displayName),
+                    isDestructive: true,
+                    onSelect: () => {
+                      setRemoving(user);
+                    },
+                  },
+                ]
+              : []),
+          ]}
+        />
       ),
     };
 

@@ -564,7 +564,8 @@ Contacts, Tickets, and the agents table today:
 3. A queue header — the count and the order, and the rules below.
 4. `DataTable` inside a `SectionCard`.
 5. Row actions **inline in the last column**, as real buttons or links. Never hover-only:
-   a touch device has no hover, and a keyboard user has no way to reveal one.
+   a touch device has no hover, and a keyboard user has no way to reveal one. Their weight
+   and order are the rules below.
 
 **A list with nothing to create has no header action, and that is finished rather than
 unfinished.** Tickets are never opened by an agent pressing a button ("Ticket status"
@@ -575,6 +576,68 @@ only action is an export gains nothing by promoting the export.
 Every filter lives in the URL, never in component state. A refresh, a copied link and the
 back button must reproduce the same list. Below 48rem `DataTable` re-flows each row into a
 stacked card with its column headers repeated per cell — the same markup, no second table.
+
+#### Row actions (TAR-709)
+
+Four settings tables — People, the chatbot's knowledge base, Custom fields and Saved
+replies — had independently arrived at the same answer, and it was the wrong one: `Edit`
+as an outlined button, and the **irreversible** action beside it a bare text button in
+ordinary body colour. The most dangerous control in the row was also the quietest. It was
+consistent, so it was a real pattern; it was just backwards. `RowActions` is the rule, and
+no table writes its own cluster.
+
+**The weight ladder.** A row has one loudest control and it is never the destructive one:
+
+| Action                   | Treatment                                             |
+| ------------------------ | ----------------------------------------------------- |
+| The routine one (`Edit`) | `Button variant="secondary"` — outlined, on the row   |
+| Anything else routine    | The overflow menu, ordinary weight                    |
+| The destructive one      | `Button variant="dangerQuiet"` — danger text, no fill |
+
+`dangerQuiet` is `--color-danger` on a transparent ground, `--color-danger-subtle` under
+hover and focus, and the one place in the app a component overrides the global focus ring —
+green says "action" in the accent's vocabulary, and this control is not that. `danger`
+proper, the solid fill, stays where it belongs: on a confirmation dialog's submit, which is
+the one thing that dialog exists for. A table of solid red buttons is the same mistake
+inverted.
+
+**Two versus three.** Two actions render inline. **Three or more** keep the single
+most-used one inline and move the rest — destructive included — into an overflow
+`MenuButton`. Three peers at row level is three things competing for one glance with
+nothing to say which is routine; the knowledge base is the case this exists for, and it is
+`Edit` on the row with `Index again` and `Delete` behind the overflow. Inside the menu the
+destructive entry takes `--color-danger` text and sits below a separator.
+
+**Position carries the danger as much as the colour does.** The destructive action is
+always **last**, held off its neighbour by `--space-3` so it is not adjacent to the control
+a user reaches for most, and it is never the row's first tab stop. Colour is the third
+carrier, after position and after the verb in the label — which is what keeps the meaning
+in forced-colors mode and for a reader who cannot see red.
+
+**Every irreversible action confirms first**, through `FormDialog`, and the confirmation
+**names its subject** — "Remove Priya Raman from this workspace?", never "Are you sure?",
+which over a table of near-identical rows asks the reader to remember which one they
+clicked. The confirm button repeats the verb (`Remove agent`, `Delete field`) and carries
+`submitVariant="danger"`. Where an action is recoverable, prefer an undo toast and say so
+in the copy; none of these four are.
+
+**Accessibility.** Each control's accessible name is the verb **and the subject** —
+"Delete Delivery times", not "Delete" — because four rows of identical "Delete" is a table
+nobody can use without sight of it, and the overflow trigger is named the same way. When
+the row disappears, focus moves to the next surviving row, or to the `<main>` landmark if
+the table is now empty: that is the app's ruled fallback anchor and `Modal` restores to the
+same one, whereas the section heading above the table is not focusable and giving it a
+`tabindex` would be a second convention for one job.
+
+The measured pairs, asserted in `apps/web/styles/tokens/tokens.test.ts` alongside the chip
+ones:
+
+| Pair                                                     | Ratio  | Floor |
+| -------------------------------------------------------- | ------ | ----- |
+| `red-500` on `white` (destructive label, light)          | 6.54:1 | 4.5   |
+| `red-500` on `red-100` (its hover and focus tint, light) | 5.38:1 | 4.5   |
+| `red-300` on `slate-900` (destructive label, dark)       | 9.28:1 | 4.5   |
+| `red-300` on `red-900` (its hover and focus tint, dark)  | 6.41:1 | 4.5   |
 
 #### The queue header (TAR-520)
 
@@ -924,6 +987,7 @@ space:
 | The page title          | `PageHeader`                                       |
 | A section               | `SectionCard`                                      |
 | A table                 | `DataTable` + `DataTableSkeleton`                  |
+| A row's actions         | `RowActions` — see "Row actions" for the ladder    |
 | Tabs                    | `Tabs`                                             |
 | A filter row            | `FilterBar`                                        |
 | Filter pills            | `FilterPills`                                      |
