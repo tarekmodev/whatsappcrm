@@ -84,6 +84,16 @@ export const routes = {
    */
   settingsCustomFields: () => '/settings/custom-fields',
   /**
+   * The tenant's shared canned-response library (TAR-31, TAR-575).
+   *
+   * `saved-replies`, not `canned-responses`. `docs/STYLE.md` fixes *canned
+   * response* as the word in code and *saved reply* as the console's word on
+   * screen, and this path is read by a customer — the same reasoning that makes
+   * `settingsWorkspace` `/settings/workspace` rather than `/settings/tenant`.
+   * The API route it writes to keeps the contract's spelling.
+   */
+  settingsSavedReplies: () => '/settings/saved-replies',
+  /**
    * The automation builder (TAR-27). Its own settings section rather than a
    * fourth panel on Assignment: a routing rule decides where a *conversation*
    * goes, while a workflow writes to a *ticket* — and the Assignment page is
