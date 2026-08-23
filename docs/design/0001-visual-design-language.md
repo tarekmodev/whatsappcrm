@@ -856,7 +856,7 @@ unused area in the product.
   belongs to the second section and every one after it (`.section + .section`), so a form
   of one group draws no rule and a form of three never ends on one.
 - **The layout reaches the fields through context, not props.** A `Field` two components
-  deep — `ModelChoiceField`, `ConfidenceField` — still belongs to the form's layout, and a
+  deep — `ModelChoiceField`, `ConfidenceBand` — still belongs to the form's layout, and a
   prop threaded through each of them is a prop one of them will be missing.
 - **A save failure is inline, above the action** (`FormError`), never a toast: a message
   that slides away takes the reason with it while the reader is still looking at the fields
@@ -923,6 +923,51 @@ WCAG 2.2 SC 1.4.11's 3:1 and asserted in `apps/web/styles/tokens/tokens.test.ts`
 The slider's rail is `--color-surface-sunken` rather than `--color-border-strong` for the
 fourth row: a border-weight rail left the knob's ring at 2.15:1 in the dark theme, which is
 the whole reason this table exists.
+
+#### Ordered stages: a rail and a ladder (TAR-813)
+
+Some settings are not a set of fields, they are a **sequence the product walks**, and the
+reader's real question is where it stops. The chatbot is the first: every inbound message
+passes four gates in a fixed order, and the old form showed seven unrelated-looking
+controls and left the order to be inferred.
+
+One vocabulary, drawn twice, so a screen never says "these happen in order" two ways:
+
+- **A rail** for stages across a page — a `--size-stage-marker` disc holding a
+  `--size-marker-dot` dot, a `--font-size-body-sm` label, a `--font-size-caption` line
+  saying what the stage is currently set to, and a `--border-hairline` connector to the
+  next. Horizontal at `48rem` and up, a vertical ladder below it.
+- **A ladder** for rules inside one card — the same marker and connector in a gutter beside
+  `SettingsForm`'s two columns, one rung per rule.
+
+The rules that make it a diagram rather than decoration:
+
+- **The connector carries the state, not just the dot.** Every connector before the first
+  blocking stage is `--color-accent`; from that stage on they drop to `--color-border`, so
+  the flow visibly stops where it actually stops. A stage past the block draws an inert
+  marker — three green dots after an amber one would say the opposite of what is happening.
+- **Colour is never the only carrier.** Each stage prints its condition in words, and the
+  link's accessible name is the label, the value line _and_ whether the flow stops there.
+  The markers are `aria-hidden`; under `forced-colors` they keep an outline so the sequence
+  is still a sequence.
+- **No ordinal numbers.** Numbers imply a wizard somebody steps through. This is a state
+  diagram of a path the product walks on its own.
+- **Nothing is editable about the shape.** The stages come from an architecture decision,
+  not from data: there is no add, no reorder and no connect gesture. A surface that needs
+  those is a graph editor and a different story — do not grow one out of this.
+- **A stage links to the card that sets it**, and moves focus to that card's heading.
+  `SectionCard` puts `tabindex="-1"` on the heading of any card with an `id` for this; the
+  focus call is deferred a task, because a fragment navigation resets focus to the body as
+  part of the link's own default action.
+
+A rule that is real and **not configurable** stays on the ladder with a quieter marker and
+a `StaticFieldValue` saying there is nothing to set. Leaving it out is tidier and wrong: it
+is still a reason the sequence stops, and the reader debugging that has to be able to see
+it.
+
+Both composites live in `features/chatbot/components/` while the chatbot is their only
+consumer. The second surface that needs ordered stages promotes them to `components/ui/`
+rather than copying them.
 
 ### Detail views
 
@@ -1252,7 +1297,8 @@ space:
 | A settings form           | `SettingsForm` — see "Settings forms"                                                   |
 | An on/off setting         | `Switch` — never a checkbox for a live setting                                          |
 | A multi-select tick       | `Checkbox`, or `CheckboxGroup` for a whole set                                          |
-| A value in a range        | `Slider`                                                                                |
+| A value in a range        | `Slider` — `trackSlot` to repaint the rail, `layout="block"` for a promoted readout     |
+| Stages that run in order  | A rail or a ladder — see "Ordered stages"                                               |
 | A date range              | `DateRangeField`                                                                        |
 | Collapsed filters         | `FilterMenu` + `ActiveFilterChips`                                                      |
 | A status chip or count    | `Badge` — see "Status vocabulary" for how many                                          |

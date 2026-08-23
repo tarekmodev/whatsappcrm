@@ -1566,9 +1566,12 @@ prompt is assembled and no request is made, so a hallucinated answer is impossib
 product's visible behaviour is that the chatbot says nothing at all.
 
 Silence and a broken feature look identical, which is why `GET /api/v1/ai/config` publishes
-a `readiness` breakdown rather than a bare toggle, and why `BotReadinessPanel` is the first
-thing on the page. It lists **every** failing clause, not the first: an admin who clears one
-of four and still gets silence has learned nothing. `aiReadiness` in the mock transport
+a `readiness` breakdown rather than a bare toggle, and why `ChatbotPipelineSection` is the
+first thing on the page. It shows **every** failing clause, not the first: an admin who
+clears one of four and still gets silence has learned nothing. Since TAR-813 the clauses are
+not a bullet list — each is a stage on a rail that mirrors the order ADR 0010 checks them
+in, so the flow visibly stops at the gate that is closed and the reader is one click from
+the setting that opens it. `aiReadiness` in the mock transport
 derives the answer from the plan and the stored documents on every read for the same reason —
 a cached `ready: true` would be the console claiming replies that cannot happen.
 

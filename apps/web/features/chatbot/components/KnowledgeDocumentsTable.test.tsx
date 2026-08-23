@@ -4,6 +4,7 @@ import type { KnowledgeDocumentListItem } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { routes } from '@/lib/routes';
 import { ToastProvider } from '@/components/ui/ToastProvider';
+import type { KnowledgeListParams } from '../knowledge-params';
 import { KnowledgeDocumentsTable } from './KnowledgeDocumentsTable';
 
 /*
@@ -49,9 +50,13 @@ function renderTable(
   documents: readonly KnowledgeDocumentListItem[],
   {
     canWrite = true,
-    isFiltered = false,
+    filters = { q: undefined, status: undefined },
     indexedEntryCount = documents.filter((entry) => entry.status === 'indexed').length,
-  }: { canWrite?: boolean; isFiltered?: boolean; indexedEntryCount?: number } = {},
+  }: {
+    canWrite?: boolean;
+    filters?: KnowledgeListParams;
+    indexedEntryCount?: number;
+  } = {},
 ) {
   return render(
     <ToastProvider>
@@ -59,7 +64,7 @@ function renderTable(
         documents={documents}
         indexedEntryCount={indexedEntryCount}
         canWrite={canWrite}
-        isFiltered={isFiltered}
+        filters={filters}
       />
     </ToastProvider>,
   );
@@ -83,22 +88,38 @@ describe('KnowledgeDocumentsTable', () => {
     expect(screen.getByText(content.chatbot.knowledgeEmptyBody)).toBeInTheDocument();
   });
 
-  it('tells a filter that matched nothing apart from an empty knowledge base', () => {
+  it('quotes back the search term that matched nothing', () => {
     // TAR-613: the same blank table means two different things, and only one of
-    // them is fixed by clearing a filter. Sharing one string between them is
-    // what makes a working search look broken.
-    renderTable([], { isFiltered: true });
+    // them is fixed by clearing a filter. TAR-813 splits the filtered half in
+    // two again — a term that matched nothing and a status nothing is in are not
+    // the same fact and do not have the same way out.
+    renderTable([], { filters: { q: 'refunds', status: undefined } });
 
-    expect(screen.getByText(content.chatbot.knowledgeFilteredEmptyHeading)).toBeInTheDocument();
-    expect(screen.getByText(content.chatbot.knowledgeFilteredEmptyBody)).toBeInTheDocument();
+    expect(
+      screen.getByText(content.chatbot.knowledgeSearchEmptyHeading('refunds')),
+    ).toBeInTheDocument();
     expect(screen.queryByText(content.chatbot.knowledgeEmptyHeading)).not.toBeInTheDocument();
   });
 
-  it('offers the filtered empty state a way back to the whole knowledge base', () => {
-    renderTable([], { isFiltered: true });
+  it('keeps the status filter when it offers to clear the search', () => {
+    // Clearing a search is asking to stop searching, not asking to see
+    // everything — dropping the status too would undo a filter nobody touched.
+    renderTable([], { filters: { q: 'refunds', status: 'failed' } });
 
     expect(
-      screen.getByRole('link', { name: content.chatbot.knowledgeClearFilters }),
+      screen.getByRole('link', { name: content.chatbot.knowledgeClearSearch }),
+    ).toHaveAttribute('href', routes.settingsChatbot({ status: 'failed' }));
+  });
+
+  it('names the status nothing is in, and says whether that is good news', () => {
+    renderTable([], { filters: { q: undefined, status: 'failed' } });
+
+    expect(
+      screen.getByText(content.chatbot.knowledgeStatusEmptyHeadings.failed),
+    ).toBeInTheDocument();
+    expect(screen.getByText(content.chatbot.knowledgeStatusEmptyBodies.failed)).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: content.chatbot.knowledgeShowAllSources }),
     ).toHaveAttribute('href', routes.settingsChatbot());
   });
 
