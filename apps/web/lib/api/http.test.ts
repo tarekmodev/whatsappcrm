@@ -5,6 +5,8 @@ import { ApiRequestError, apiRequest } from './http';
 
 // The mock transport is chosen by `webEnv.useMockApi`, which is false under
 // `vitest` unless the flag is set — so these cases exercise the HTTP branch.
+// It is also false in `.env.example` since TAR-830, but Vitest loads no env file
+// either way, so this comment is about the default and not about that file.
 
 const TENANT_HOST = 'northwind.app.localhost:3000';
 const EDGE_SECRET = 'shared-edge-secret';

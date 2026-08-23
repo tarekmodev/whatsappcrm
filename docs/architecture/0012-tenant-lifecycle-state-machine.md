@@ -227,8 +227,10 @@ rather than the engine.
 - `applyBillingEvent` — the seam TAR-37 produces events for.
 
 The console renders `TenantLifecycleResponse` and the onboarding checklist against the mock
-transport (`NEXT_PUBLIC_USE_MOCK_API`), which is what TAR-407 and TAR-409 were scoped to do. See
-[the lifecycle reference](../reference/tenant-lifecycle.md#the-console-reads-a-mock-today).
+transport (`NEXT_PUBLIC_USE_MOCK_API`), which is what TAR-407 and TAR-409 were scoped to do.
+`GET /tenant/lifecycle` has since landed and the onboarding checklist has not; see
+[the lifecycle reference](../reference/tenant-lifecycle.md#one-of-the-two-screens-still-reads-a-mock)
+for which screen still needs the flag.
 
 ## Where to read next
 
