@@ -126,6 +126,7 @@ import {
   type TenantLifecycleResponse,
   type TenantPublicResponse,
   type TenantResponse,
+  type TenantUpdateInput,
   type TicketEscalationResponse,
   type TicketEvent,
   type TicketListQuery,
@@ -2387,6 +2388,18 @@ function changePassword({ body }: RouteContext): null {
 }
 
 // --- Onboarding checklist (TAR-407) ----------------------------------------
+//
+// Still here, deliberately, now that `/onboarding` reads the real endpoint
+// (TAR-835). The mock is a transport, not a per-feature fake: removing these two
+// routes would make this the one screen that breaks with
+// `NEXT_PUBLIC_USE_MOCK_API=true`, which is the mode for working on the console
+// with no API and no database at all.
+//
+// What TAR-835 did do is close the three gaps TAR-832 recorded between the
+// fixtures and the real API, so a reviewer cannot see behaviour here that the
+// deployed endpoint will not produce: `set_branding` now completes from a
+// branding write, `reopen` on a completed step is a no-op, and an unknown step
+// id was already a 404.
 
 /**
  * `GET /v1/tenant/onboarding` — the caller's own checklist.
@@ -2430,12 +2443,21 @@ function updateOnboardingStep({
     throw notFound();
   }
 
-  if (parsed.data.intent === 'skip' && step.status === 'completed') {
-    throw refused(
-      'conflict',
-      'That step is already done, so there is nothing to skip.',
-      HTTP_CONFLICT,
-    );
+  if (step.status === 'completed') {
+    if (parsed.data.intent === 'skip') {
+      throw refused(
+        'conflict',
+        'That step is already done, so there is nothing to skip.',
+        HTTP_CONFLICT,
+      );
+    }
+
+    // `reopen` on a completed step is a 200 no-op rather than a reset, because
+    // completion is derived from what the tenant actually did and there is
+    // nothing here to un-derive: putting the step back would claim the number is
+    // no longer connected. TAR-832 decision 3, and the reason this branch exists
+    // rather than falling through to the write below.
+    return toOnboardingResponse(checklist);
   }
 
   writeOnboardingStep(checklist, stepId, {
@@ -2736,8 +2758,32 @@ function updateTenant({ principal, body }: RouteContext): TenantResponse {
   };
 
   mockState().tenants.set(tenant.id, updated);
+  completeBrandingOnboardingStep(principal, parsed.data.branding);
 
   return asTenantResponse(principal, updated);
+}
+
+/**
+ * Onboarding's "set your branding" is done because the tenant actually edited
+ * branding, never because a checklist was ticked — the same rule the invite and
+ * connect handlers follow.
+ *
+ * A write of nothing but `null` does not count. The real API derives this step
+ * from a `tenant_branding` row holding at least one non-null value (TAR-832
+ * decision 2), so clearing the one value a tenant had set is not an edit that
+ * finishes the step.
+ */
+function completeBrandingOnboardingStep(
+  principal: SessionPrincipal,
+  branding: TenantUpdateInput['branding'],
+): void {
+  const edited = Object.values(branding ?? {}).some(
+    (value) => value !== null && value !== undefined,
+  );
+
+  if (edited) {
+    completeOnboardingStep(principal.tenantId, 'set_branding');
+  }
 }
 
 /**
@@ -3288,6 +3334,10 @@ function putBrandingAsset({ principal, params, body }: RouteContext): TenantBran
   };
 
   mockState().tenants.set(tenant.id, { ...tenant, branding });
+  // A logo is one of the six fields the real API reads for "set your branding"
+  // (TAR-832 decision 2), so uploading one finishes the step exactly as saving a
+  // colour does.
+  completeOnboardingStep(principal.tenantId, 'set_branding');
 
   return branding;
 }
