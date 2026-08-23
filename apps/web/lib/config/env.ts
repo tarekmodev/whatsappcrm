@@ -36,9 +36,13 @@ export interface WebEnv {
   readonly trustedProxySecret: string | null;
   /**
    * Serves every API call from the in-memory fixture layer instead of HTTP.
-   * TAR-82 ships with this on so the UI can be built and reviewed before
-   * TAR-81's endpoints land; turning it off is the entire "wire to the real
-   * endpoints" step.
+   * TAR-82 built the console against it before TAR-81's endpoints landed; they
+   * have, so this is off in `.env.example` as well as here and survives as the
+   * way to work on the console with no API running (TAR-830).
+   *
+   * It is not a silent mode: `components/env/MockModeBadge.tsx` marks every
+   * screen while it is on, because the fixtures reuse the seed dataset's names
+   * and ids and are otherwise indistinguishable from the real thing.
    */
   readonly useMockApi: boolean;
   /**

@@ -4300,9 +4300,15 @@ export const content = {
     requirementUnmet: 'Not met',
   },
 
+  /**
+   * The standing marker a fixture-backed console wears (TAR-830). `label` is the
+   * badge itself; `description` is the sentence beside it that only a screen
+   * reader hears, because "Mock data" names the state without saying that it
+   * covers every request on the screen.
+   */
   mockNotice: {
-    heading: 'Mock data',
-    body: 'The console is reading fixtures. Point NEXT_PUBLIC_USE_MOCK_API at the real API once TAR-81 ships.',
+    label: 'Mock data',
+    description: 'Every request on this screen is answered from local fixtures, not by the API.',
   },
 } as const;
 
