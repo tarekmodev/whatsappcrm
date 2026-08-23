@@ -75,8 +75,7 @@ export function CapacityNotice({
                 ? content.assignment.capacityNoticeCountFiltered
                 : content.assignment.capacityNoticeCount(atCapacityCount)}
             </span>{' '}
-            {/* The reader who cannot act still gets the fact above, and a
-                sentence saying why the remedy is not on offer to them. */}
+            {/* The fact above holds for every reader; one sentence per remedy. */}
             <span>{remedyCopy[remedy.kind]}</span>
           </span>
 
