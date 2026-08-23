@@ -162,6 +162,22 @@
   --scale-font-family-sans:
     var(--font-sans, ui-sans-serif), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
     sans-serif;
+  /*
+   * The Arabic face, and the second family in this file. Figtree has no Arabic
+   * glyphs at all, so a console rendered under `lang="ar"` would fall through to
+   * whatever the operating system happens to ship — three different faces on
+   * three different machines, which is the one thing a token layer exists to
+   * stop. Loaded the same way as the sans (`app/layout.tsx`) and read only by
+   * the `[lang|='ar']` branch in `semantic.css`; nothing else may reference it.
+   *
+   * The Latin fallbacks stay in the stack after it, because Arabic copy carries
+   * Latin runs — a phone number, a product name, an email address — and IBM Plex
+   * Sans Arabic's own Latin is the family's, so the two agree rather than
+   * clashing at a word boundary.
+   */
+  --scale-font-family-arabic:
+    var(--font-arabic, ui-sans-serif), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Tahoma,
+    sans-serif;
   --scale-font-family-mono: ui-monospace, SFMono-Regular, 'Cascadia Mono', monospace;
 
   /* --- Radii -------------------------------------------------------------- */
