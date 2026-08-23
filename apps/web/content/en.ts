@@ -27,6 +27,8 @@ import type {
   WhatsAppAccountStatus,
   WhatsAppBusinessVerificationStatus,
   WhatsAppQualityRating,
+  WhatsAppRegistrationFailureReason,
+  WhatsAppRegistrationStatus,
   WorkflowActionOutcome,
   WorkflowActionType,
   WorkflowAssignmentState,
@@ -41,6 +43,7 @@ import type {
   WorkflowTaxonomyKind,
   WorkflowTriggerType,
 } from '@whatsappcrm/contracts';
+import type { StepperStatus } from '@/components/ui/Stepper';
 import type { FileSizeUnit } from '@/lib/format/file-size';
 
 /**
@@ -2477,6 +2480,8 @@ export const content = {
     columnVerifiedName: 'Verified name',
     columnQuality: 'Quality rating',
     columnNumberStatus: 'Status',
+    /** Whether Meta will let this number send — the row's most actionable mark. */
+    columnRegistration: 'Sending',
     wabaIdLabel: 'Meta business account ID',
     unnamedAccount: 'WhatsApp Business Account',
     noVerifiedName: 'Not set yet',
@@ -2487,7 +2492,7 @@ export const content = {
      * API use can receive here but cannot send.
      */
     registrationNotice:
-      'A number that has never been registered for the WhatsApp Cloud API can receive messages here but cannot send yet. Contact support to finish registering it.',
+      'A number that Meta has not registered can receive messages here but cannot send yet. Step 3 of the setup above registers it — nothing else is needed from you.',
 
     verificationStatuses: {
       not_verified: 'Not verified',
@@ -2577,6 +2582,182 @@ export const content = {
         heading: 'We could not complete the connection',
         body: 'Something went wrong on the way to Meta. Start the connection again.',
       },
+    },
+
+    /**
+     * The connect wizard (TAR-814).
+     *
+     * Connecting is four acts, not one: Meta hands back a business account, the
+     * account holds numbers, a number cannot **send** until Meta registers it,
+     * and a number nobody has messaged has never proved it can receive. The copy
+     * here is written so each of those reads as a job with an outcome rather than
+     * as a footnote under a success message.
+     *
+     * Second person throughout, like the onboarding checklist: this talks to an
+     * admin about their own workspace.
+     */
+    wizard: {
+      heading: 'Connect your WhatsApp number',
+      description:
+        'Four steps, in order. You can leave this page at any point — where you got to is remembered on this device.',
+
+      /** The meter's accessible name; the visible count sits beside it. */
+      progressLabel: 'WhatsApp setup progress',
+      progressCount: (resolved: number, total: number) => `${resolved} of ${total} done`,
+
+      /**
+       * The chip on every step. Words, always — the marker's colour reinforces
+       * these and never replaces them.
+       */
+      statuses: {
+        done: 'Done',
+        current: 'To do now',
+        /** Not "blocked": nothing is wrong, the step in front of it just has to happen first. */
+        upcoming: 'Later',
+        error: 'Needs attention',
+      } satisfies Record<StepperStatus, string>,
+
+      /**
+       * Said as soon as a connection is restored rather than made. It is the last
+       * answer the API gave and not a fact re-checked on arrival — there is no
+       * tenant-facing read that could re-check it — and a wizard that quietly
+       * presented remembered state as current state would be the wrong kind of
+       * confident.
+       */
+      restoredNotice:
+        'Picking up where you left off. This is what Meta last told us — if something has changed since, run the step again to find out.',
+
+      completeHeading: 'Your number is live',
+      completeBody:
+        'Messages to this number arrive in the inbox, and your team can reply from there. Nothing else on this page needs doing.',
+      goToInbox: 'Open the inbox',
+      /** Starting over: a second WABA, or the same one after something changed at Meta. */
+      startAgain: 'Connect a different account',
+
+      steps: {
+        connect_account: {
+          title: 'Connect your business account',
+          upcoming: 'Sign in to Meta and approve the connection.',
+          current: 'Sign in to Meta and approve the connection.',
+          /**
+           * What the button says it is doing while it is pending. The default
+           * is the form layer's 'Saving…', which is wrong twice over here:
+           * nothing is being saved, and the wait is Meta's — either their
+           * script arriving or their window being open — not ours.
+           */
+          pendingLabel: 'Waiting for Meta',
+          /** Names what was connected, so a restored wizard is checkable at a glance. */
+          done: (name: string) => `Connected to ${name}.`,
+        },
+        select_number: {
+          title: 'Choose the number to send from',
+          upcoming: 'Pick which of the account’s numbers this workspace uses.',
+          current:
+            'This business account has more than one number. Pick the one this workspace sends from — you can connect the others later.',
+          done: (number: string) => `Sending from ${number}.`,
+          /** The field label on the picker; the step's title is a heading, not a label. */
+          fieldLabel: 'Number',
+          fieldHint: 'Every reply your team sends leaves from this number.',
+          /** The unchosen row. A picker that opens on a value nobody picked reads as a decision already taken. */
+          fieldPlaceholder: 'Choose a number',
+          /** A WABA with nothing attached can neither send nor receive. */
+          noNumbersHeading: 'That account has no numbers on it',
+          noNumbersBody:
+            'A WhatsApp Business Account with no phone number cannot send or receive anything. Add a number in Meta Business Manager, then connect the account again.',
+          unusableHeading: 'Meta reports a problem with that number',
+          unusableBody:
+            'Meta cannot use this number right now. Check it in Meta Business Manager, then connect the account again.',
+        },
+        register_number: {
+          title: 'Register the number for sending',
+          upcoming: 'Meta has to register a number before it can send.',
+          current:
+            'A number Meta has not registered can receive messages here but cannot send a single one. This registers it — it takes a moment and needs nothing from you.',
+          done: 'Registered with Meta. This number can send.',
+          action: 'Register for sending',
+          retryAction: 'Try again',
+          /** After a refusal that only re-connecting can clear. */
+          reconnectAction: 'Connect the account again',
+          pendingHeading: 'Registration is still going',
+          pendingBody:
+            'Meta has an attempt in flight for this number. Give it a minute, then check again.',
+          checkAction: 'Check again',
+        },
+        test_send: {
+          title: 'Send a test message',
+          upcoming: 'Prove the round trip before your team relies on it.',
+          /**
+           * The direction is Meta's rule, not a limitation of this console, and
+           * saying so is what stops it reading as a missing feature: WhatsApp
+           * only lets a business open a conversation with a template Meta has
+           * approved, and a new account has none.
+           */
+          current: (number: string) =>
+            `From your own phone, send a WhatsApp message to ${number}. WhatsApp only lets a business start a conversation with a template Meta has approved, so the first message has to come to you — and one that arrives proves the whole path.`,
+          done: 'A message reached this number and landed in the inbox.',
+          action: 'Check for it',
+          /** While the check is watching. Announced from the button, not a second live region. */
+          pendingLabel: 'Watching the inbox',
+          /** The check ran its course and saw nothing. Not a failure of the connection. */
+          notSeenHeading: 'Nothing has arrived yet',
+          notSeenBody:
+            'No message reached this number while we watched. Send one from WhatsApp on your phone, then check again — delivery can take a few seconds.',
+          replyHint:
+            'Reply to it from the inbox to confirm sending works too. You have 24 hours from their message.',
+        },
+      },
+
+      registrationStatuses: {
+        unregistered: 'Cannot send yet',
+        pending: 'Registering',
+        registered: 'Can send',
+        failed: 'Registration failed',
+      } satisfies Record<WhatsAppRegistrationStatus, string>,
+
+      /**
+       * One entry per published `WhatsAppRegistrationFailureReason`. Distinct
+       * copy per key for the reason the taxonomy exists: "registration failed"
+       * throws away the one thing that tells somebody whether to wait, to reset a
+       * PIN, or to connect the account again.
+       *
+       * Whether a key offers a retry, and which one, is
+       * `isRegistrationFailureRetryable` and `isRegistrationFailureReconnectable`
+       * — copy stays copy.
+       */
+      registrationFailures: {
+        already_registered: {
+          heading: 'This number is already registered',
+          body: 'Meta reports the number as registered somewhere else. If it cannot send from here, contact support — there is nothing left to do on this page.',
+        },
+        pin_rejected: {
+          heading: 'Meta refused the PIN',
+          body: 'This number has a two-step verification PIN that this workspace does not hold. Turn two-step verification off for the number in Meta Business Manager, then register it again.',
+        },
+        credential_rejected: {
+          heading: 'Meta no longer accepts this connection',
+          body: 'The access Meta granted has expired or been withdrawn. Connect the business account again to get fresh access — registering will not work until you do.',
+        },
+        rate_limited: {
+          heading: 'Meta is limiting requests right now',
+          body: 'Too many requests reached Meta just now. Wait a few minutes, then try again.',
+        },
+        upstream_unavailable: {
+          heading: 'Meta is not responding',
+          body: 'Meta could not be reached. Try again shortly — nothing about the number has changed.',
+        },
+        rejected: {
+          heading: 'Meta refused the registration',
+          body: 'Meta turned the registration down without a reason we can act on. Try again, and contact support if it keeps happening.',
+        },
+      } satisfies Record<WhatsAppRegistrationFailureReason, { heading: string; body: string }>,
+
+      /**
+       * A request that never reached the API — a dropped network, a chunk that
+       * would not load. Distinct from anything the API said, because there is no
+       * server message to show and no correlation id to quote.
+       */
+      requestFailedHeading: 'That request could not be sent',
+      requestFailedBody: 'Check your connection and try again.',
     },
   },
 
