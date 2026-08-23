@@ -387,6 +387,32 @@
 }
 
 /*
+ * --- The Arabic branch (TAR-801) -----------------------------------------
+ *
+ * The third thing that re-declares roles, after the two themes: a language.
+ * Same rule as a theme — it moves **values**, never which roles exist, and no
+ * component branches on it. A screen written against `--font-family-body` is
+ * already Arabic-ready; one that reached for `--scale-font-family-sans` is not,
+ * which is the layering rule doing its job rather than a new one.
+ *
+ * `[lang|='ar']` rather than `[lang='ar']`, so `ar-SA` and `ar-EG` get the face
+ * too — a locale tag with a region is what a real Accept-Language sends, and a
+ * branch that only matched the bare tag would silently drop back to a system
+ * font for most Arabic readers.
+ *
+ * Equal specificity to the `:root` block above and later in the file, which is
+ * what makes it win. Keep it last of the selector blocks for that reason.
+ *
+ * **Scope.** Typography only. `dir`, the logical-property sweep and the mirrored
+ * shimmer are TAR-806's, and the document still renders `lang="en" dir="ltr"`
+ * (`app/layout.tsx`), so nothing matches this yet — it is the token half landing
+ * first so TAR-806 flips a language, not a stylesheet.
+ */
+[lang|='ar'] {
+  --font-family-body: var(--scale-font-family-arabic);
+}
+
+/*
  * Reduced motion is a token concern, not a component one: every transition in
  * the app reads these, so honouring the preference happens in one place.
  */

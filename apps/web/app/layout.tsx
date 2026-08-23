@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { Figtree } from 'next/font/google';
+import { Figtree, IBM_Plex_Sans_Arabic } from 'next/font/google';
 import { content } from '@/content/en';
+import { cx } from '@/lib/cx';
 import { readTheme } from '@/lib/theme/read-theme';
 import { readBranding } from '@/lib/branding/read-branding';
 import { brandStyleSheet } from '@/lib/branding/brand-style';
@@ -78,11 +79,43 @@ const bodyFont = Figtree({
   variable: '--font-sans',
 });
 
+/**
+ * The Arabic face (TAR-801). Figtree carries no Arabic glyphs, so without this
+ * an Arabic console falls through to whatever face the operating system happens
+ * to have — the one typographic decision a token layer must not leave to a
+ * machine. `[lang|='ar']` in `semantic.css` is the only thing that reads it.
+ *
+ * Not a variable font, so the three weights the type scale actually uses are
+ * named rather than an axis requested.
+ *
+ * `preload: false` deliberately. This is the root layout, so a preloaded face is
+ * a `<link rel="preload">` and a real download on **every** route — and the
+ * document still renders `lang="en"` (below), so today that download would be
+ * for a face nothing draws with. It stays off until TAR-806 resolves the locale
+ * per request; that story turns it on for the Arabic branch, and the `swap`
+ * fallback covers the gap in the meantime.
+ */
+const arabicFont = IBM_Plex_Sans_Arabic({
+  subsets: ['arabic', 'latin'],
+  weight: ['400', '500', '600'],
+  display: 'swap',
+  preload: false,
+  variable: '--font-arabic',
+});
+
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const [theme, branding] = await Promise.all([readTheme(), readBranding()]);
 
   return (
-    <html lang="en" dir="ltr" data-theme={theme} className={bodyFont.variable}>
+    // `lang`/`dir` are still fixed: resolving them per request is TAR-806's, and
+    // the token layer's Arabic branch (`semantic.css`) is already waiting for the
+    // day this reads `lang="ar" dir="rtl"`.
+    <html
+      lang="en"
+      dir="ltr"
+      data-theme={theme}
+      className={cx(bodyFont.variable, arabicFont.variable)}
+    >
       <body>
         {/*
           React hoists this into `<head>`. `precedence` is what makes the hoist
