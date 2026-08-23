@@ -203,12 +203,13 @@ Your workspace has no active agent accounts to offer. Invite an agent, or activa
 account, on the **People** page. This is the same situation as **No agents to route to**, seen
 from inside the dialog.
 
-**The note says "This console cannot read agent limits right now, so there is no limit to
-change from here."**
-Either the workspace could not be asked for its limits just now, or it has no agent whose limit
-this console can read. Nothing is wrong with the flagged tickets themselves — assign them by
-hand as usual. If it persists, check on the **People** page that your workspace has active
-agent accounts.
+**The notice above the list says "This console cannot read agent limits right now, so there is
+no limit to change from here."**
+Either this console could not read the workspace's limits just now, or the workspace has no
+active agent whose limit it can read. No button to change a limit is offered while this shows,
+because there is no limit on screen to change. Nothing is wrong with the flagged tickets
+themselves — assign them by hand as usual. If it persists, check on the **People** page that
+your workspace has active agent accounts.
 
 **Tickets keep arriving in this list every morning.**
 Either your agents' limits are too low for the volume you receive, or too few of them mark

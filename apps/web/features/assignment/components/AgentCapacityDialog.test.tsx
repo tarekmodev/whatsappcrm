@@ -317,15 +317,24 @@ describe('AgentCapacityDialog', () => {
     expect(onClose).not.toHaveBeenCalled();
     // Nothing is cleared, so a reload-and-retry costs no retyping.
     expect(limitField()).toHaveValue(4);
+
+    // And a new number does not release it: neither refusal is about the value,
+    // so re-enabling the submit here would only buy a second identical failure.
+    typeLimit('6');
+
+    expect(screen.getByText(copy)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: content.assignment.raiseLimitSubmit }),
+    ).toBeDisabled();
   });
 
   /**
-   * A refusal is about the agent it was made for. `useActionForm` only clears on
-   * the next submit and these two codes disable the submit, so without an explicit
-   * clear the dialog goes on insisting an agent is gone after the supervisor has
-   * already picked somebody else — a dead end whose only exit is a reload.
+   * `not_found` is about the agent it was made for. `useActionForm` only clears on
+   * the next submit and the code disables the submit, so without an explicit clear
+   * the dialog goes on insisting an agent is gone after the supervisor has already
+   * picked somebody else — a dead end whose only exit is a reload.
    */
-  it('lets the supervisor out of a blocking refusal by picking another agent', async () => {
+  it('lets the supervisor out of a missing-agent refusal by picking another agent', async () => {
     renderDialog();
 
     updateAgentCapacityAction.mockResolvedValue({
@@ -348,6 +357,40 @@ describe('AgentCapacityDialog', () => {
 
     expect(screen.queryByText(content.assignment.raiseLimitNotFound)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: content.assignment.raiseLimitSubmit })).toBeEnabled();
+  });
+
+  /**
+   * The pair to the one above, and the reason the clear is not unconditional:
+   * `forbidden` is about the session, not the agent. No name in the picker carries
+   * the permission back, so releasing the submit here would only buy the supervisor
+   * a second 403 — the copy tells them to reload, and the dialog has to keep
+   * meaning it.
+   */
+  it('keeps a permission refusal in place across an agent change', async () => {
+    renderDialog();
+
+    updateAgentCapacityAction.mockResolvedValue({
+      status: 'error',
+      message: 'Changing an agent’s ticket limit requires the assignment_rule:write permission.',
+      requestId: 'req-6',
+      code: 'forbidden',
+    });
+
+    typeLimit('4');
+    submit();
+
+    await waitFor(() => {
+      expect(screen.getByText(content.assignment.raiseLimitForbidden)).toBeInTheDocument();
+    });
+
+    fireEvent.change(fieldByLabel(content.assignment.raiseLimitAgentLabel), {
+      target: { value: LIANG_ID },
+    });
+
+    expect(screen.getByText(content.assignment.raiseLimitForbidden)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: content.assignment.raiseLimitSubmit }),
+    ).toBeDisabled();
   });
 
   /**
