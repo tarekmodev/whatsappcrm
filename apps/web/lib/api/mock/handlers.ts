@@ -3,6 +3,7 @@ import 'server-only';
 import {
   AI_CONFIG_DEFAULTS,
   AI_MODEL_CATALOG,
+  ASSIGNMENT_POLICY,
   AssignmentRuleCreateInputSchema,
   AssignmentRuleReorderInputSchema,
   AssignmentRuleUpdateInputSchema,
@@ -77,11 +78,13 @@ import {
   ticketAssignRequiresReason,
   whatsAppSignupFailureDetails,
   workflowCatalog,
+  type AgentCapacity,
   type AiConfigResponse,
   type AiReadiness,
   type AiReadinessBlocker,
   type ApiError,
   type AssignmentRuleListResponse,
+  type AssignmentSettingsResponse,
   type BillingSummaryResponse,
   type HostedSession,
   type Plan,
@@ -301,6 +304,14 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/v1/teams/${UUID_SEGMENT}$`),
     permission: 'team:write',
     handle: updateTeam,
+  },
+  {
+    // Whole path segments, so this can never be read as an `assignment-rules`
+    // route however the two are ordered here.
+    method: 'GET',
+    pattern: /^\/v1\/assignment-settings$/,
+    permission: 'assignment_rule:read',
+    handle: readAssignmentSettings,
   },
   {
     method: 'GET',
@@ -920,7 +931,7 @@ function listUsers({ principal, query }: RouteContext): CursorPage<UserResponse>
     )
     .sort(byDisplayName)
     .slice(0, limit)
-    .map(toUserResponse);
+    .map((user) => toUserResponse(user, principal));
 
   return { items, nextCursor: null };
 }
@@ -972,7 +983,6 @@ function inviteUser({ principal, body }: RouteContext): UserResponse {
     lastSeenAt: null,
     // Lockout is not modelled in the mock transport — see `fixtures.ts`.
     security: null,
-    assignmentCapacity: null,
     createdAt: MOCK_CREATED_AT,
   };
 
@@ -982,7 +992,7 @@ function inviteUser({ principal, body }: RouteContext): UserResponse {
   // because a checklist was ticked. See `completeOnboardingStep`.
   completeOnboardingStep(principal.tenantId, 'invite_agents');
 
-  return toUserResponse(created);
+  return toUserResponse(created, principal);
 }
 
 function updateUser({ principal, params, body }: RouteContext): UserResponse {
@@ -993,7 +1003,7 @@ function updateUser({ principal, params, body }: RouteContext): UserResponse {
     throw validationFailed();
   }
 
-  const { displayName, role, teamIds, status } = parsed.data;
+  const { displayName, role, teamIds, status, maxConcurrentTickets } = parsed.data;
 
   // The three role-assignment invariants, mirroring the API's `assertMayChangeRole`.
   // `user:update` alone does not carry the right to assign a role.
@@ -1011,6 +1021,25 @@ function updateUser({ principal, params, body }: RouteContext): UserResponse {
     }
   }
 
+  // The cap is separated at *enforcement* time exactly as `role` is above, and
+  // refused rather than dropped: deciding how much work reaches a colleague is
+  // the same act as writing a routing rule, so `user:update` alone does not buy
+  // it (ADR 0008 decision 4). A privilege-shaped change that appears to succeed
+  // is worse than a refusal.
+  //
+  // After the row is resolved, never before: a 403 on an id that does not exist
+  // is an existence oracle, so an unknown id is `not_found` whatever the caller
+  // holds.
+  if (
+    maxConcurrentTickets !== undefined &&
+    !roleHasPermission(principal.role, 'assignment_rule:write')
+  ) {
+    throw refused(
+      'forbidden',
+      'Changing an agent’s ticket limit requires the assignment_rule:write permission.',
+    );
+  }
+
   const teams = teamIds === undefined ? null : assertTeamsInTenant(principal, teamIds);
 
   const updated: MockUser = {
@@ -1019,6 +1048,13 @@ function updateUser({ principal, params, body }: RouteContext): UserResponse {
     role: role ?? user.role,
     status: status ?? user.status,
     teamIds: teamIds === undefined ? user.teamIds : [...teamIds],
+    // `null` clears the override and returns them to the workspace default;
+    // omitted leaves it alone. Collapsing the two would make "use the default"
+    // unreachable from any client.
+    maxConcurrentTickets:
+      maxConcurrentTickets === undefined
+        ? (user.maxConcurrentTickets ?? null)
+        : maxConcurrentTickets,
   };
 
   mockState().users.set(updated.id, updated);
@@ -1027,7 +1063,7 @@ function updateUser({ principal, params, body }: RouteContext): UserResponse {
     syncTeamMembership(updated.id, teams);
   }
 
-  return toUserResponse(updated);
+  return toUserResponse(updated, principal);
 }
 
 /**
@@ -1324,6 +1360,23 @@ function shortcutTaken(shortcut: string): ApiRequestError {
 
 function listAssignmentRules({ principal }: RouteContext): AssignmentRuleListResponse {
   return assignmentRuleList(principal);
+}
+
+/**
+ * `GET /v1/assignment-settings` — the workspace default cap (TAR-384).
+ *
+ * A tenant with no row answers with `ASSIGNMENT_POLICY`'s built-in fallback and a
+ * null timestamp rather than a 404: the tenant has a working effective default,
+ * and 404 would say otherwise.
+ */
+function readAssignmentSettings({ principal }: RouteContext): AssignmentSettingsResponse {
+  const settings = mockState().assignmentSettings.get(principal.tenantId);
+
+  return {
+    defaultMaxConcurrentTickets:
+      settings?.defaultMaxConcurrentTickets ?? ASSIGNMENT_POLICY.defaultMaxConcurrentTickets,
+    updatedAt: settings?.updatedAt ?? null,
+  };
 }
 
 /**
@@ -5724,8 +5777,56 @@ function stripTenant<T extends TenantScoped>(record: T): Omit<T, 'tenantId'> {
   return rest;
 }
 
-function toUserResponse(user: MockUser): UserResponse {
-  return stripTenant(user);
+/**
+ * The people serializer, and the one gate that must not be forgotten (TAR-384).
+ *
+ * `assignmentCapacity` is `null` for a caller holding neither
+ * `assignment_rule:read` nor `assignment_rule:write` — **read *or* write**, not
+ * read alone, so a future role granted write without read cannot set a value and
+ * be handed `null` back. It is decided here rather than in each handler for the
+ * reason the API decides it in its serializer: `GET /v1/users` is `user:read`,
+ * which every agent holds, and a leak would give any agent a live readout of a
+ * named colleague's workload and how close they are to being cut off from work.
+ *
+ * The two derived fields are computed per request rather than stored — see
+ * `MockUser`.
+ */
+function toUserResponse(user: MockUser, principal: SessionPrincipal): UserResponse {
+  const { maxConcurrentTickets = null, ...rest } = user;
+
+  return {
+    ...stripTenant(rest),
+    assignmentCapacity: mayReadCapacity(principal)
+      ? agentCapacity(user, maxConcurrentTickets)
+      : null,
+  };
+}
+
+function mayReadCapacity(principal: SessionPrincipal): boolean {
+  return (
+    roleHasPermission(principal.role, 'assignment_rule:read') ||
+    roleHasPermission(principal.role, 'assignment_rule:write')
+  );
+}
+
+function agentCapacity(user: MockUser, maxConcurrentTickets: number | null): AgentCapacity {
+  const workspaceDefault =
+    mockState().assignmentSettings.get(user.tenantId)?.defaultMaxConcurrentTickets ??
+    ASSIGNMENT_POLICY.defaultMaxConcurrentTickets;
+
+  return {
+    maxConcurrentTickets,
+    effectiveMaxConcurrentTickets: maxConcurrentTickets ?? workspaceDefault,
+    // The count rotation compares against the cap: assigned, and still active.
+    // Counted from the ticket map rather than stored beside the user, so a
+    // resolution taken in the console moves it on the next read.
+    activeTicketCount: [...mockState().tickets.values()].filter(
+      (ticket) =>
+        ticket.tenantId === user.tenantId &&
+        ticket.assignedUserId === user.id &&
+        TICKET_ACTIVE_STATUSES.includes(ticket.status),
+    ).length,
+  };
 }
 
 function toTeamResponse(team: MockTeam): TeamResponse {

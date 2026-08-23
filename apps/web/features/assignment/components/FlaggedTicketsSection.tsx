@@ -2,6 +2,7 @@ import { Stack } from '@/components/layout/Stack';
 import { FilterPills } from '@/components/ui/FilterPills';
 import { SectionCard } from '@/components/ui/SectionCard';
 import { content } from '@/content/en';
+import { loadAgentCapacity } from '../capacity.data';
 import { loadFlaggedTickets, type FlaggedTicketsFilters } from '../flagged-tickets.data';
 import { deferredReasonFilters } from '../flagged-filters';
 import { flaggedQueueSummary } from '../flagged-summary';
@@ -21,12 +22,21 @@ import { FlaggedTicketsTableSkeleton } from './FlaggedTicketsTable.Skeleton';
 export async function FlaggedTicketsSection({
   filters,
   canAssign,
+  canEditCapacity,
 }: {
   filters: FlaggedTicketsFilters;
   /** From the caller's `ticket:assign` check. The action asserts it again. */
   canAssign: boolean;
+  /** From the caller's `assignment_rule:write` check. The action asserts it again. */
+  canEditCapacity: boolean;
 }) {
-  const { tickets, hasMore, assignableUsers, teams } = await loadFlaggedTickets(filters);
+  // In parallel, not in sequence: the queue and the agents' limits are two
+  // independent reads, and awaiting one before starting the other would add a
+  // round trip to the section's time to first byte for nothing.
+  const [{ tickets, hasMore, assignableUsers, teams }, capacity] = await Promise.all([
+    loadFlaggedTickets(filters),
+    loadAgentCapacity(canEditCapacity),
+  ]);
   const rows = toFlaggedTicketRows(tickets, teams);
   const summary = flaggedQueueSummary(rows.length, hasMore, content);
 
@@ -55,6 +65,7 @@ export async function FlaggedTicketsSection({
           rows={rows}
           assignableUsers={assignableUsers}
           canAssign={canAssign}
+          capacity={capacity}
           isFiltered={filters.deferredReason !== undefined}
         />
       </Stack>
@@ -70,7 +81,11 @@ export async function FlaggedTicketsSection({
  * changes on arrival is worse than one that appears, and the reserved line keeps
  * the strip below it in place either way.
  */
-export function FlaggedTicketsSectionSkeleton({ canAssign = true }: { canAssign?: boolean }) {
+export function FlaggedTicketsSectionSkeleton({
+  hasRowActions = true,
+}: {
+  hasRowActions?: boolean;
+}) {
   return (
     <SectionCard
       id="flagged"
@@ -83,7 +98,7 @@ export function FlaggedTicketsSectionSkeleton({ canAssign = true }: { canAssign?
           label={content.assignment.reasonFilterLabel}
           items={deferredReasonFilters(content, undefined)}
         />
-        <FlaggedTicketsTableSkeleton canAssign={canAssign} />
+        <FlaggedTicketsTableSkeleton hasRowActions={hasRowActions} />
       </Stack>
     </SectionCard>
   );
