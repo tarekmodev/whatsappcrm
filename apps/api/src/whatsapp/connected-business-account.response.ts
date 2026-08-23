@@ -1,5 +1,6 @@
 import type { ConnectedWhatsAppBusinessAccountResponse } from '@whatsappcrm/contracts';
 import type { ConnectBusinessAccountResult } from './business-account-connection.service';
+import { toWhatsAppRegistrationFailureReason } from './registration-failure-reason';
 
 /**
  * The one mapping from a connected WABA onto the published response.
@@ -33,6 +34,16 @@ export function toConnectedBusinessAccountResponse({
       verifiedName: account.verifiedName,
       qualityRating: account.qualityRating,
       status: account.status,
+      // Whether the number may send, carried on the connect response so the
+      // first attempt's outcome reaches the console without a second call
+      // (TAR-170). The PIN is not here, and this field-by-field shape is what
+      // keeps that checkable.
+      registrationStatus: account.registrationStatus,
+      registrationFailureReason: toWhatsAppRegistrationFailureReason(
+        account.registrationFailureReason,
+      ),
+      registeredAt: account.registeredAt?.toISOString() ?? null,
+      registrationAttemptedAt: account.registrationAttemptedAt?.toISOString() ?? null,
       createdAt: account.createdAt.toISOString(),
       updatedAt: account.updatedAt.toISOString(),
     })),

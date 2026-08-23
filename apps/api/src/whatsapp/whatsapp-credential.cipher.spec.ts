@@ -1,5 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
-import { WhatsAppAccessTokenCipher } from './access-token.cipher';
+import { WhatsAppCredentialCipher } from './whatsapp-credential.cipher';
 import {
   WhatsAppEncryptionUnavailableError,
   WhatsAppTokenUndecryptableError,
@@ -20,15 +20,20 @@ const WABA_ID = '102290129340398';
 const OTHER_WABA_ID = '987654321098765';
 const TOKEN = 'EAAG...a-meta-access-token-shaped-string';
 
-function cipherWith(key: string | undefined): WhatsAppAccessTokenCipher {
+/** Two numbers under the same business account, and a PIN whose zeros matter. */
+const PHONE_NUMBER_ID = '15550001111';
+const OTHER_PHONE_NUMBER_ID = '15550002222';
+const PIN = '000042';
+
+function cipherWith(key: string | undefined): WhatsAppCredentialCipher {
   const config = {
     get: (name: string) => (name === 'WHATSAPP_TOKEN_ENCRYPTION_KEY' ? key : undefined),
   } as unknown as ConfigService;
 
-  return new WhatsAppAccessTokenCipher(config);
+  return new WhatsAppCredentialCipher(config);
 }
 
-describe('WhatsAppAccessTokenCipher', () => {
+describe('WhatsAppCredentialCipher', () => {
   const cipher = cipherWith(KEY);
 
   it('round-trips a token', () => {
@@ -51,6 +56,28 @@ describe('WhatsAppAccessTokenCipher', () => {
     const payload = cipher.encrypt(TOKEN, WABA_ID);
 
     expect(() => cipher.decrypt(payload, OTHER_WABA_ID)).toThrow(WhatsAppTokenUndecryptableError);
+  });
+
+  it('round-trips a registration PIN under the same construction as the token', () => {
+    // The parity TAR-170 asks for, asserted rather than inspected: one cipher,
+    // one key, one payload format, and a PIN whose leading zeros survive.
+    const payload = cipher.encrypt(PIN, PHONE_NUMBER_ID);
+
+    expect(payload.startsWith('v1.')).toBe(true);
+    expect(payload).not.toContain(PIN);
+    expect(cipher.decrypt(payload, PHONE_NUMBER_ID)).toBe(PIN);
+  });
+
+  it('refuses a PIN moved between two numbers of the same business account', () => {
+    // Why the binding is per row rather than per WABA: two numbers under one
+    // business account are registered independently and hold different PINs, so
+    // a ciphertext copied between them must fail exactly as one copied between
+    // tenants does.
+    const payload = cipher.encrypt(PIN, PHONE_NUMBER_ID);
+
+    expect(() => cipher.decrypt(payload, OTHER_PHONE_NUMBER_ID)).toThrow(
+      WhatsAppTokenUndecryptableError,
+    );
   });
 
   it('refuses a payload encrypted under a different key', () => {

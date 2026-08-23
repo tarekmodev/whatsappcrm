@@ -1,7 +1,7 @@
 import type { ConfigService } from '@nestjs/config';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { PrismaClient } from '../generated/prisma/client';
-import { WhatsAppAccessTokenCipher } from '../whatsapp/access-token.cipher';
+import { WhatsAppCredentialCipher } from '../whatsapp/whatsapp-credential.cipher';
 import { WhatsAppTokenUndecryptableError } from '../whatsapp/whatsapp.errors';
 import { createPrismaClient } from './prisma-client.factory';
 import { withTenantScope, type TenantPrisma } from './tenant-scope.extension';
@@ -22,7 +22,7 @@ import { withTenantScope, type TenantPrisma } from './tenant-scope.extension';
  *   * **The PIN round-trips through the access token's own cipher.** The
  *     acceptance criterion is explicitly "verified by a test, not just code
  *     inspection": the value has to survive a `text` column and come back out of
- *     `WhatsAppAccessTokenCipher.decrypt` byte for byte, with the leading zeros
+ *     `WhatsAppCredentialCipher.decrypt` byte for byte, with the leading zeros
  *     a `000042` PIN depends on.
  *   * **The new columns are inside tenant isolation.**
  *     `registration_pin_encrypted` is a credential of the same class as
@@ -65,12 +65,12 @@ const KEY = Buffer.alloc(32, 7).toString('base64');
 
 const REQUEST_ID = 'tar767-int-spec';
 
-function cipherWithFixtureKey(): WhatsAppAccessTokenCipher {
+function cipherWithFixtureKey(): WhatsAppCredentialCipher {
   const config = {
     get: (name: string) => (name === 'WHATSAPP_TOKEN_ENCRYPTION_KEY' ? KEY : undefined),
   } as unknown as ConfigService;
 
-  return new WhatsAppAccessTokenCipher(config);
+  return new WhatsAppCredentialCipher(config);
 }
 
 describe('the WhatsApp number registration schema', () => {
