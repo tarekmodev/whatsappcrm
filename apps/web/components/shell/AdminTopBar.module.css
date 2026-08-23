@@ -1,0 +1,41 @@
+/*
+ * The operator bar is the console bar with three controls removed, so it takes
+ * the console bar's rules rather than restating them. `composes` is the sanctioned
+ * form of that: the element carries both class names, so every media query and
+ * safe-area rule declared against the source class still applies here, and a
+ * change to the bar's height or its sticky behaviour lands on both.
+ *
+ * What it does not take is `.search` — the operator console has nothing to
+ * search, and the slot's `flex: 1 1 auto` above 48rem is what puts the utilities
+ * at the trailing edge. `.spacer` below does that job instead, with nothing in it.
+ */
+
+.bar {
+  composes: bar from './AppTopBar.module.css';
+}
+
+.start {
+  composes: start from './AppTopBar.module.css';
+}
+
+.end {
+  composes: end from './AppTopBar.module.css';
+}
+
+.brand {
+  composes: brand from './AppTopBar.module.css';
+}
+
+.drawerBrand {
+  composes: drawerBrand from './AppTopBar.module.css';
+}
+
+/*
+ * Takes the slack between the two groups above 48rem, where the console's search
+ * field takes it. Below that the leading group already grows, so this is inert —
+ * it draws nothing and names nothing at any width.
+ */
+.spacer {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}

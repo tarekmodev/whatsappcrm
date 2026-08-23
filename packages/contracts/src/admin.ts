@@ -245,6 +245,14 @@ export const AdminPendingDomainListResponseSchema = z.object({
  */
 export const ADMIN_DOMAIN_QUERY_STATUSES = ['verified', 'live'] as const;
 
+/**
+ * The two halves as a type, so a caller can hold one without reaching into
+ * `AdminDomainQuery['status']` — which is the *parsed* shape and carries the
+ * default, and so says nothing about a value that has not been through the
+ * schema yet.
+ */
+export type AdminDomainStatus = (typeof ADMIN_DOMAIN_QUERY_STATUSES)[number];
+
 export const AdminDomainQuerySchema = z.object({
   status: z.enum(ADMIN_DOMAIN_QUERY_STATUSES).default('verified'),
 });

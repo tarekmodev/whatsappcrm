@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { Button } from './Button';
 import { FormError } from './FormError';
 import { Modal } from './Modal';
@@ -60,6 +60,18 @@ export function FormDialog({
   isSubmitDisabled = false,
 }: FormDialogProps) {
   const content = useContent();
+  /*
+   * The submit button lives in the modal footer, outside the `<form>`, so it is
+   * associated by `form=` — and the id has to be **per instance**.
+   *
+   * A screen routinely *renders* several `FormDialog`s and opens one: `isOpen` is
+   * a prop, not a mount, so every dialog on the screen is in the document at
+   * once. A fixed id therefore appeared several times, and `form=` resolves to
+   * the *first* element carrying it — so every dialog's submit button drove the
+   * first dialog's form. The platform-admin tenant screen is where that surfaced
+   * (TAR-804): pressing Reactivate submitted the Suspend dialog instead.
+   */
+  const formId = useId();
 
   return (
     <Modal
@@ -74,7 +86,7 @@ export function FormDialog({
           </Button>
           <Button
             type="submit"
-            form={FORM_ID}
+            form={formId}
             variant={submitVariant}
             isBlock
             isPending={isPending}
@@ -86,7 +98,7 @@ export function FormDialog({
       }
     >
       <form
-        id={FORM_ID}
+        id={formId}
         noValidate
         onSubmit={(event) => {
           // Validation is the contract's, and the submit is a server action.
@@ -102,12 +114,6 @@ export function FormDialog({
     </Modal>
   );
 }
-
-/**
- * The submit button lives in the modal footer, outside the form element, so it is
- * associated by `form=`. A fixed id is safe because only one dialog is ever open.
- */
-const FORM_ID = 'form-dialog';
 
 function NOOP(): void {
   // Dismissal is blocked mid-submit: closing would abandon a request already sent.

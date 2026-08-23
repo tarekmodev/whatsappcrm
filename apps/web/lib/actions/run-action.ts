@@ -85,7 +85,7 @@ export async function runAction<Input, Output>({
 
     return { status: 'success', data };
   } catch (error) {
-    return toErrorResult(error, label);
+    return toActionErrorResult(error, label);
   }
 }
 
@@ -106,8 +106,26 @@ export class ActionRefusedError extends Error {
  * Maps a failure onto copy the user can act on. The API's own `message` is shown
  * only for a refusal the user can do something about; anything else falls back to
  * the generic line, because an internal message is not user-facing text.
+ *
+ * Exported for `run-admin-action.ts`, which has the same three-line contract to
+ * honour — rethrow a framework navigation, show an actionable refusal, log
+ * everything else — behind a different gate. Two copies of this mapping is how
+ * one of them ends up swallowing a `redirect`.
  */
-function toErrorResult<T>(error: unknown, label: string): ActionResult<T> {
+export function toActionErrorResult<T>(
+  error: unknown,
+  label: string,
+  /**
+   * Codes whose API message this caller shows verbatim **in addition** to the
+   * shared set below. Empty for every tenant surface: the list is the same for
+   * all of them, and a per-caller exception is how one screen starts showing a
+   * sentence written for somebody else.
+   *
+   * The platform-operator console passes some, because its reader is the person
+   * who runs the platform rather than a customer — see `run-admin-action.ts`.
+   */
+  extraActionableCodes: ReadonlySet<string> = EMPTY_CODES,
+): ActionResult<T> {
   // First, and before anything else looks at it: the session guard answers a lost
   // session with a `redirect`, which Next implements by throwing. Caught and
   // mapped to a message, that navigation would be swallowed and the user would sit
@@ -123,9 +141,10 @@ function toErrorResult<T>(error: unknown, label: string): ActionResult<T> {
   if (error instanceof ApiRequestError) {
     return {
       status: 'error',
-      message: ACTIONABLE_ERROR_CODES.has(error.code)
-        ? error.message
-        : content.form.genericSubmitError,
+      message:
+        ACTIONABLE_ERROR_CODES.has(error.code) || extraActionableCodes.has(error.code)
+          ? error.message
+          : content.form.genericSubmitError,
       requestId: error.requestId,
       // Carried whatever the message became. A caller that offers a different
       // affordance for a specific refusal — the seat cap's upgrade link — has to
@@ -159,6 +178,9 @@ function toErrorResult<T>(error: unknown, label: string): ActionResult<T> {
  * for, and leave a supervisor re-pressing Enable on a workflow that names a tag
  * somebody deleted last week.
  */
+/** Shared, so the default argument allocates nothing per call. */
+const EMPTY_CODES: ReadonlySet<string> = new Set<string>();
+
 const ACTIONABLE_ERROR_CODES = new Set([
   'conflict',
   'validation_failed',

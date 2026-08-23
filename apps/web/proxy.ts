@@ -8,6 +8,11 @@ import {
 import { webEnv } from '@/lib/config/env';
 import { routes } from '@/lib/routes';
 import { REQUEST_PATH_HEADER, isPublicPath } from '@/lib/session/session-paths';
+import {
+  PLATFORM_ADMIN_COOKIE_NAME,
+  isAdminPath,
+  isAdminPublicPath,
+} from '@/lib/admin/admin-paths';
 
 /**
  * The route guard's first half: an **optimistic** check that turns a visitor with
@@ -57,6 +62,30 @@ export function proxy(request: NextRequest): NextResponse {
     request: { headers: withRequestPath(request.headers, `${pathname}${search}`) },
   });
 
+  /*
+   * The platform-operator console, before the tenant guard below and never
+   * falling through to it (TAR-804).
+   *
+   * Two credentials exist in this app and they authenticate different things: a
+   * tenant session identifies a *user inside one tenant*, and
+   * `PLATFORM_ADMIN_TOKEN` identifies nobody at all — it is the platform's own
+   * control plane, which has to work before the first tenant exists. Letting
+   * `/admin` reach the tenant guard would send an operator to a tenant's sign-in
+   * screen to solve a problem signing in cannot solve, and a *signed-in* tenant
+   * user straight through to the operator console's shell.
+   *
+   * `enableRoleStub` is deliberately not honoured here either. It is TAR-35's
+   * interim switch for demonstrating the three tenant roles, and no stub of a
+   * tenant role stands in for a platform credential.
+   */
+  if (isAdminPath(pathname)) {
+    return isAdminPublicPath(pathname) || hasPlatformAdminCookie(request)
+      ? response
+      : NextResponse.redirect(
+          new URL(routes.adminSignIn({ redirectTo: `${pathname}${search}` }), request.nextUrl),
+        );
+  }
+
   if (isPublicPath(pathname) || hasSessionCookie(request) || webEnv.enableRoleStub) {
     return response;
   }
@@ -78,6 +107,18 @@ function hasSessionCookie(request: NextRequest): boolean {
   return [SESSION_COOKIE_NAME_SECURE, SESSION_COOKIE_NAME].some((name) =>
     request.cookies.has(name),
   );
+}
+
+/**
+ * One spelling, unlike the session cookie's two: this console sets the cookie
+ * itself, so there is no server-side flag it cannot read to guess the name from.
+ *
+ * Presence only, on the same reasoning as the session check above — the proxy
+ * runs on every request including prefetches, and the authoritative check is the
+ * one `lib/api/admin.ts` makes when it calls the API with the value.
+ */
+function hasPlatformAdminCookie(request: NextRequest): boolean {
+  return request.cookies.has(PLATFORM_ADMIN_COOKIE_NAME);
 }
 
 /**

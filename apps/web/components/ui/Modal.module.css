@@ -75,9 +75,27 @@
   background: var(--color-surface);
 }
 
-/* From tablet up the sheet becomes a centred dialog. */
+/*
+ * From tablet up the sheet becomes a centred dialog.
+ *
+ * `[open]`, and that is load-bearing rather than tidy (TAR-804). A `<dialog>` is
+ * `display: none` by the UA stylesheet until it is opened, and an author `display`
+ * on the bare element beats that — so an unqualified `display: grid` here left
+ * every *closed* dialog rendered: `opacity: 0`, `position: absolute` from the same
+ * UA rule, and the height of the viewport. Invisible, out of flow, and still
+ * hit-testing, so it sat over whatever followed it and swallowed the clicks.
+ *
+ * These dialogs are rendered unconditionally beside the control that opens them —
+ * `<FormDialog isOpen={false}>` is the shape every caller uses — so the thing
+ * covered is usually the button next to it. On the platform-admin tenant screen
+ * two of them landed exactly on Suspend and Reactivate, and neither could be
+ * pressed at all.
+ *
+ * Qualifying it also makes the exit transition below work as written: `display`
+ * with `allow-discrete` animates *between* two values, and there was only ever one.
+ */
 @media (min-width: 40rem) {
-  .dialog {
+  .dialog[open] {
     display: grid;
     place-items: center;
     padding: var(--space-5);
