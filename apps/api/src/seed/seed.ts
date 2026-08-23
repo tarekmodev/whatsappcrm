@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { ConfigService } from '@nestjs/config';
+import { DEFAULT_WEB_ORIGIN } from '../config/env.schema';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import type { Prisma, PrismaClient } from '../generated/prisma/client';
 import { mediaObjectKey } from '../media/media-object-key';
@@ -213,7 +214,10 @@ async function main(): Promise<void> {
 
     await verify(tenantPrisma, tenantContext, dataset, tenantIds);
     // `WEB_ORIGIN` so the addresses below are ones you can paste — see `report`.
-    report(summaries, config.get<string>('WEB_ORIGIN') ?? '');
+    // `??` rather than trusting the schema default, and `get` rather than
+    // `getOrThrow`, for the reason `RealtimeTicketService` gives: this
+    // `ConfigService` answers from `process.env`, which has not been through Zod.
+    report(summaries, config.get<string>('WEB_ORIGIN') ?? DEFAULT_WEB_ORIGIN);
   } finally {
     await Promise.all([systemPrisma.$disconnect(), tenantBase.$disconnect()]);
   }
@@ -586,17 +590,21 @@ function report(summaries: readonly SeededTenantSummary[], webOrigin: string): v
  *
  * Same `try`/`catch` shape as `describeTarget` above, and for the same reason: a
  * seed that has written every row must not die in its closing summary over a
- * variable it only prints with. The fallback is the portless address this
- * printed before, which `.env.example` sets `WEB_ORIGIN` precisely to avoid.
+ * variable it only prints with. It falls back to the schema's own default rather
+ * than to the portless address, because a broken `.env` is not a reason to print
+ * the dead link this exists to replace.
  */
 function consoleUrl(hostname: string, webOrigin: string): string {
-  try {
-    const origin = new URL(webOrigin);
+  let origin: URL;
 
-    return `${origin.protocol}//${hostname}${origin.port === '' ? '' : `:${origin.port}`}`;
+  try {
+    origin = new URL(webOrigin);
   } catch {
-    return `http://${hostname}`;
+    // Cannot throw in turn: it is a literal, and the schema parses it as a URL.
+    origin = new URL(DEFAULT_WEB_ORIGIN);
   }
+
+  return `${origin.protocol}//${hostname}${origin.port === '' ? '' : `:${origin.port}`}`;
 }
 
 /** Every noun in the summary is regular, so one `s` is the whole rule. */
