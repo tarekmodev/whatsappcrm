@@ -85,6 +85,7 @@ the one that produced it.
 | [Tickets API](docs/reference/tickets-api.md)                                                 | The queue, the status/priority write, handoff and escalation, the event log        |
 | [Contacts, tags and custom fields API](docs/reference/contacts-api.md)                       | The CRM core: the directory, the tag taxonomy, and admin CRUD on definitions       |
 | [Assignment rules API](docs/reference/assignment-rules-api.md)                               | Routing-rule CRUD, the condition grammar, and how a new ticket is routed           |
+| [Assignment settings API](docs/reference/assignment-settings-api.md)                         | Agent concurrent-ticket limits: the workspace default, the per-agent override      |
 | [Auto-assignment](docs/reference/auto-assignment.md)                                         | Rotation, eligibility, workload caps, and the flagged-ticket fallback              |
 | [SLA timers and supervisor alerts](docs/reference/sla-timers.md)                             | Response windows, breach detection, who is alerted, and the two endpoints          |
 | [Workflow automation API](docs/reference/workflows-api.md)                                   | Workflow CRUD, the trigger/condition/action grammar, and how a run is claimed      |

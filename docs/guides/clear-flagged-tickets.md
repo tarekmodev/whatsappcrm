@@ -28,8 +28,9 @@ Auto-assignment looks for an agent who is **all four** of these:
 - They have set themselves to **Available** — not away or offline.
 - They have used the workspace in the last 15 minutes. Somebody who set themselves available
   on Monday and closed their laptop does not count.
-- They are under their ticket limit. Every agent may hold 5 active tickets at once unless
-  that has been changed.
+- They are under their ticket limit. Every agent may hold 5 active tickets at once until
+  somebody changes it, either for that agent or for the whole workspace — see
+  [Raise an agent's ticket limit](#raise-an-agents-ticket-limit).
 
 If a routing rule sent the ticket to a team, only that team's members are considered. If no
 rule matched, everyone in the workspace with the agent role is considered — supervisors are
@@ -74,8 +75,10 @@ filter.
 
 Every agent who could take this ticket is already holding as many as they are allowed.
 
-This one usually fixes itself as your team closes work. Act on it if the wait is getting
-long: assign the ticket to somebody anyway, or ask an agent to close what they have finished.
+This one usually fixes itself as your team closes work. If the wait is getting long you have
+three moves: assign the ticket to somebody anyway, ask an agent to close what they have
+finished, or [raise an agent's ticket limit](#raise-an-agents-ticket-limit) so more work reaches
+them in future.
 
 ### Nobody available
 
@@ -121,6 +124,45 @@ so is picking yourself.
 **Auto-assignment will not move the ticket again** once you have assigned it. Your decision
 is final as far as the workspace is concerned; you can still reassign it yourself later.
 
+## Raise an agent's ticket limit
+
+Every agent has a **ticket limit** — the most active tickets auto-assignment will give them at
+once. When a ticket is flagged **Everyone at capacity**, that limit is what stood in the way.
+You can change it from the flagged list without leaving the page.
+
+**Before you start:** you are a supervisor or an admin. Agents cannot change any limit,
+including their own — if you do not see the control, that is why.
+
+1. On a ticket flagged **Everyone at capacity**, select **Agent limits**. The **Agent ticket
+   limits** dialog opens. The control is offered only on that reason, because a higher limit
+   answers nothing when the problem is that nobody is available.
+2. Under **Agent**, choose the person whose limit you want to change. Agents already at their
+   limit are listed first, and each name shows what they are holding now against the limit that
+   applies to them — for example **Liang Wei — 5 of 5**.
+3. Read **Holding now**. It tells you the agent's current load and whether their limit is one
+   set for them or the workspace default they inherit.
+4. Under **Ticket limit**, type the new number. It must be a whole number between 1 and 1000.
+   To hand the agent back to the workspace default instead, select **Use the workspace default
+   of 5** — the number in that label is your workspace's own default, not always 5.
+5. Select **Save limit**.
+
+A message confirms the new limit — for example **Liang Wei can now hold 8 tickets at a time**.
+
+**The flagged ticket in front of you does not move.** A higher limit frees that agent for the
+_next_ ticket auto-assignment routes; nothing re-routes a ticket that has already been flagged.
+Assign the one on screen when you are ready.
+
+**The change applies everywhere, not just to this ticket.** You are changing that agent's limit
+across the whole workspace, and it takes effect on the very next ticket the workspace routes —
+there is nothing to save elsewhere and nothing to restart.
+
+**Lowering a limit takes no ticket away from anybody.** An agent already holding more than the
+new number keeps all of them; they simply stop receiving new ones until they are back under it.
+The dialog warns you before you save.
+
+**The agent list holds one page.** In a workspace with many agents you may not see everyone. The
+hint under **Agent** says so when that happens.
+
 ## Things worth knowing
 
 **A flagged ticket is never retried automatically.** If an agent frees up a minute after a
@@ -152,12 +194,9 @@ from inside the dialog.
 **Tickets keep arriving in this list every morning.**
 Either your agents' limits are too low for the volume you receive, or too few of them mark
 themselves available early. The reason column tells you which: **Everyone at capacity** points
-at the limits, **Nobody available** points at the start of the working day.
-
-> **TODO(author):** the concurrent-ticket limit is 5 per agent and there is no console screen
-> for changing it — no endpoint writes that setting yet. Until one ships, a supervisor reading
-> this cannot act on a capacity problem except by assigning tickets by hand. Whoever builds
-> that surface should replace this note with the steps.
+at the limits, **Nobody available** points at the start of the working day. For the first,
+[raise the limits of the agents who keep filling up](#raise-an-agents-ticket-limit); for the
+second, ask your team to set themselves **Available** when they start.
 
 **A ticket is unassigned but is not in this list.**
 Not every unassigned ticket is flagged. This list holds only the ones auto-assignment tried
