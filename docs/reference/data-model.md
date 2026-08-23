@@ -44,7 +44,7 @@ Six rules hold across every model. A change that breaks one needs a reason in re
 
 ## Tenancy classification
 
-50 models. **45 are tenant-scoped**: they carry a non-null `tenant_id`, have
+50 models. **46 are tenant-scoped**: they carry a non-null `tenant_id`, have
 `ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Six are
 not, each deliberately:
 
@@ -222,6 +222,46 @@ tenant routes correctly with nothing configured, is bounded 1–1000 by
 `users.max_concurrent_tickets`. Five is defensible rather than measured — ADR 0008
 decision 4 says so, and names `ASSIGNMENT_POLICY` as the constant that has to agree with
 it.
+
+#### `tenant_onboarding_steps`
+
+Which onboarding steps a tenant has chosen to put off. **Skips only** — a step is
+`completed` because the tenant actually has a connected WABA, an invite or edited
+branding, derived on every read (TAR-832 decision 1), so there is no status column here.
+A row's absence means "not skipped", which for a step whose fact is not yet true renders
+as `pending`.
+
+- **Unique:** `(tenant_id, step_id)`
+- **Indexes:** none beyond that unique key — see below
+- **Owned by:** TAR-833, against TAR-832's contract
+
+Storing only the skip is what keeps `OnboardingStepSchema.completedAt`'s promise that it
+is _"cleared if the underlying fact goes away"_: a tenant that disconnects its WABA sees
+the step return to `pending` with no reverse hook in `whatsapp/`, `identity/` or
+`tenancy/branding/`. It is also why the migration is create-only — every tenant
+provisioned before it gets a correct checklist on first load, with nothing to backfill.
+
+`step_id` is `text`, not an enum type, and carries no `CHECK`. `OnboardingStepIdSchema`
+enforces the domain at the request boundary, where an unknown id has to produce a 404
+anyway, and a database-side constraint would make adding a fourth step a deploy-ordering
+hazard — the API shipping the new id ahead of the migration.
+
+The unique key is the table's **only** index, and doubles as the concurrency guarantee:
+two tabs skipping the same step race into one upsert rather than two rows. Both access
+patterns are `(tenant_id)` and `(tenant_id, step_id)`, and a btree leading with
+`tenant_id` serves both, so a separate `(tenant_id)` index would be a strict prefix paid
+for on every write. There is no index on `(tenant_id, skipped_by_user_id)` either, unlike
+`invites`: the whole table is bounded at three rows per tenant, so the referential check
+on a user delete reads a page or two whatever the tenant count.
+
+`skipped_by_user_id` is a `NO ACTION` composite key into `users`, which is why
+`PURGE_ORDER` lists this table in the identity block **ahead of `users`** rather than
+down with the other tenant configuration. Its cascade from `tenants` never fires during a
+hard delete — the `tenants` row is retained as the slug tombstone.
+
+No `audit_logs` row is written for a skip or a reopen (TAR-832 decision 5): deferring a
+setup prompt has no security or billing consequence and is reversible by the same click.
+`skipped_by_user_id` and `updated_at` answer "who put this off" if support asks.
 
 #### `lifecycle_events`
 

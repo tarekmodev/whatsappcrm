@@ -98,7 +98,14 @@ export const PURGE_ORDER: readonly string[] = [
   'whatsapp_business_accounts',
 
   // Identity. `audit_logs` before `users`: it holds a foreign key into them.
+  //
+  // `tenant_onboarding_steps` is here rather than down with the other tenant
+  // configuration for the same reason: `skipped_by_user_id` is a `NO ACTION`
+  // composite key into `users`, so a surviving skip row refuses that delete with
+  // SQLSTATE 23503. Its own cascade from `tenants` never fires during a purge —
+  // the `tenants` row is retained as the slug tombstone.
   'audit_logs',
+  'tenant_onboarding_steps',
   'sessions',
   'password_reset_tokens',
   'invites',
