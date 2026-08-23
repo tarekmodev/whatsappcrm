@@ -51,6 +51,20 @@ export function CapacityNotice({
     return null;
   }
 
+  /*
+   * One sentence per remedy, keyed rather than nested ternaries: each absence has
+   * its own reason and none of the three may borrow another's. A record indexed by
+   * the union makes a fourth `kind` a type error here rather than a silent fall
+   * through to the permitted copy.
+   */
+  const remedyCopy: Record<CapacityRemedy['kind'], string> = {
+    edit: content.assignment.capacityNoticeConsequence,
+    // Per 0001 the button is omitted rather than disabled, so the copy names who can act.
+    denied: content.assignment.capacityNoticeAskSupervisor,
+    // Permitted, but there is nothing to change from here — and no refresh to promise.
+    unavailable: content.assignment.capacityNoticeUnavailable,
+  };
+
   return (
     <>
       <Notice tone="warning" variant="quiet">
@@ -62,12 +76,8 @@ export function CapacityNotice({
                 : content.assignment.capacityNoticeCount(atCapacityCount)}
             </span>{' '}
             {/* The reader who cannot act still gets the fact above, and a
-                sentence naming who can — never a disabled button, per 0001. */}
-            <span>
-              {remedy.kind === 'denied'
-                ? content.assignment.capacityNoticeAskSupervisor
-                : content.assignment.capacityNoticeConsequence}
-            </span>
+                sentence saying why the remedy is not on offer to them. */}
+            <span>{remedyCopy[remedy.kind]}</span>
           </span>
 
           {remedy.kind === 'edit' ? (

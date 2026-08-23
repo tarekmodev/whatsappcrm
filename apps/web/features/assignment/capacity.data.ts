@@ -37,10 +37,10 @@ import { toAgentCapacityRows, type AgentCapacityReport } from './capacity';
  *   pages the agents themselves, so the control is picking from agents rather
  *   than from whoever happens to be recent.
  * - `hasMore` would change meaning too. It feeds
- *   `capacityAgentHintTruncated`, which tells the supervisor this is "the first
- *   page of agents in this workspace"; derived from a mixed-role page that
- *   sentence would be a claim about people, not agents, and wrong in both
- *   directions.
+ *   `raiseLimitAgentHint(hasMore)`, whose truncated form tells the supervisor
+ *   this is "the first page of agents in this workspace"; derived from a
+ *   mixed-role page that sentence would be a claim about people, not agents,
+ *   and wrong in both directions.
  *
  * The cost is one extra indexed read set: `readActiveTicketCounts`' `GROUP BY`
  * over a bounded id list (served by `tickets_tenant_assigned_user_queue_idx`)

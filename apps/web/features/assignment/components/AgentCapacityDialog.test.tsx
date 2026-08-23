@@ -319,6 +319,67 @@ describe('AgentCapacityDialog', () => {
     expect(limitField()).toHaveValue(4);
   });
 
+  /**
+   * A refusal is about the agent it was made for. `useActionForm` only clears on
+   * the next submit and these two codes disable the submit, so without an explicit
+   * clear the dialog goes on insisting an agent is gone after the supervisor has
+   * already picked somebody else — a dead end whose only exit is a reload.
+   */
+  it('lets the supervisor out of a blocking refusal by picking another agent', async () => {
+    renderDialog();
+
+    updateAgentCapacityAction.mockResolvedValue({
+      status: 'error',
+      message: 'That agent is no longer in this workspace.',
+      requestId: 'req-4',
+      code: 'not_found',
+    });
+
+    typeLimit('4');
+    submit();
+
+    await waitFor(() => {
+      expect(screen.getByText(content.assignment.raiseLimitNotFound)).toBeInTheDocument();
+    });
+
+    fireEvent.change(fieldByLabel(content.assignment.raiseLimitAgentLabel), {
+      target: { value: LIANG_ID },
+    });
+
+    expect(screen.queryByText(content.assignment.raiseLimitNotFound)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: content.assignment.raiseLimitSubmit })).toBeEnabled();
+  });
+
+  /**
+   * The field error is about the value that caused it. Left in place it keeps
+   * `aria-invalid` and the server's message on a number nobody typed — and across
+   * an agent change it would sit under somebody else's name.
+   */
+  it('drops the server field error once the value it refused is gone', async () => {
+    renderDialog();
+
+    updateAgentCapacityAction.mockResolvedValue({
+      status: 'error',
+      message: 'maxConcurrentTickets must be between 1 and 1000.',
+      requestId: 'req-5',
+      code: 'validation_failed',
+    });
+
+    typeLimit('4');
+    submit();
+
+    await waitFor(() => {
+      expect(limitField()).toHaveAttribute('aria-invalid', 'true');
+    });
+
+    typeLimit('6');
+
+    expect(limitField()).not.toHaveAttribute('aria-invalid', 'true');
+    expect(
+      screen.queryByText('maxConcurrentTickets must be between 1 and 1000.'),
+    ).not.toBeInTheDocument();
+  });
+
   /** Anything else keeps the action's own message, because it is worth retrying. */
   it('keeps the API’s message and the submit for a retryable failure', async () => {
     renderDialog();

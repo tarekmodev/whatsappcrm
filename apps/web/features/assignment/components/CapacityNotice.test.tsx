@@ -114,10 +114,11 @@ describe('CapacityNotice', () => {
 
   /**
    * A permitted caller the console cannot read limits for is not the same absence
-   * as a refused one: telling a supervisor to ask a supervisor is nonsense, so the
-   * notice states the consequence and offers nothing.
+   * as a refused one, and it is not the permitted case either: telling a
+   * supervisor to ask a supervisor is nonsense, and naming a remedy with no button
+   * beside it is a dead end. Its own sentence, and no route promised.
    */
-  it('does not tell a permitted caller to go and ask somebody else', () => {
+  it('says why there is nothing to change when the console cannot read the limits', () => {
     render(
       <CapacityNotice
         atCapacityCount={2}
@@ -126,9 +127,12 @@ describe('CapacityNotice', () => {
       />,
     );
 
-    expect(screen.getByText(content.assignment.capacityNoticeConsequence)).toBeInTheDocument();
+    expect(screen.getByText(content.assignment.capacityNoticeUnavailable)).toBeInTheDocument();
     expect(
       screen.queryByText(content.assignment.capacityNoticeAskSupervisor),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(content.assignment.capacityNoticeConsequence),
     ).not.toBeInTheDocument();
     expect(trigger()).not.toBeInTheDocument();
   });
