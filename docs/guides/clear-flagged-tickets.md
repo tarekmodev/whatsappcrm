@@ -203,6 +203,13 @@ Your workspace has no active agent accounts to offer. Invite an agent, or activa
 account, on the **People** page. This is the same situation as **No agents to route to**, seen
 from inside the dialog.
 
+**The note says "This console cannot read agent limits right now, so there is no limit to
+change from here."**
+Either the workspace could not be asked for its limits just now, or it has no agent whose limit
+this console can read. Nothing is wrong with the flagged tickets themselves — assign them by
+hand as usual. If it persists, check on the **People** page that your workspace has active
+agent accounts.
+
 **Tickets keep arriving in this list every morning.**
 Either your agents' limits are too low for the volume you receive, or too few of them mark
 themselves available early. The reason column tells you which: **Everyone at capacity** points
