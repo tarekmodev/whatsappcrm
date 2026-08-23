@@ -1,6 +1,6 @@
 # Assignment rotation, workload limits and the supervisor's deferred queue (TAR-271)
 
-Status: proposed · Builds on [0002 — architecture and API contract](./0002-architecture-and-api-contract.md), [0003 — ticket auto-linking contract](./0003-ticket-auto-linking-contract.md), [0004 — RBAC permission matrix](./0004-rbac-permission-matrix.md) · **Fills in the resolver behind the seam published by [0007 — routing rules and the assignment-fallback seam](./0007-routing-rules-and-assignment-fallback.md) (TAR-279)** · Consumed by TAR-272 (schema), TAR-273 (backend), TAR-274 (frontend), TAR-275 (QA), TAR-277 (documentation) · [Amendments](#amendments): 3
+Status: proposed · Builds on [0002 — architecture and API contract](./0002-architecture-and-api-contract.md), [0003 — ticket auto-linking contract](./0003-ticket-auto-linking-contract.md), [0004 — RBAC permission matrix](./0004-rbac-permission-matrix.md) · **Fills in the resolver behind the seam published by [0007 — routing rules and the assignment-fallback seam](./0007-routing-rules-and-assignment-fallback.md) (TAR-279)** · Consumed by TAR-272 (schema), TAR-273 (backend), TAR-274 (frontend), TAR-275 (QA), TAR-277 (documentation) · [Amendments](#amendments): 4
 
 > **Read 0007 first.** It owns the routing pipeline this document plugs into, and the two are only
 > comprehensible together: 0007 says who calls rotation and what it does with the answer, this one
@@ -1114,7 +1114,9 @@ PATCH /api/v1/users/{id}               user:update
 `AssignmentSettingsController` lives in `AssignmentModule`; the per-agent write stays in
 `PeopleModule`, on the resource that owns the column. No module imports the other — the two reads
 they share are free functions in `apps/api/src/people/agent-capacity.ts`, placed there on the same
-reasoning as `supervisor-recipients.ts` (delta 4 of 0009): a pure helper two modules need should not
+reasoning as `supervisor-recipients.ts` (delta 4 of
+[0009 — workflow triggers, conditions and actions](./0009-workflow-triggers-conditions-actions.md)): a pure
+helper two modules need should not
 live inside one of them, and `UsersService` is L3 and could not import L4 anyway.
 
 #### Three rules that are easy to get wrong

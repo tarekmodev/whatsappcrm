@@ -10,11 +10,13 @@ import type { TenantPrisma } from '../prisma/prisma.tokens';
  * turns them into an effective cap (TAR-384, 0008 amendment 4).
  *
  * Free functions in `people/` rather than a provider in `AssignmentModule`,
- * following 0009's ruling on `supervisor-recipients.ts`: two modules need this
- * and a pure function should not live in one of them. `UsersService` (L3) could
- * not import from `AssignmentModule` (L4) anyway — that is the upward import
- * 0002's layering forbids — while `AssignmentSettingsService` reaching down into
- * `people/` is the allowed direction.
+ * following `0009-workflow-triggers-conditions-actions.md`'s ruling on
+ * `supervisor-recipients.ts` (delta 4): two modules need this and a pure
+ * function should not live in one of them. `UsersService` (L3) could not import
+ * from `AssignmentModule` (L4) anyway — that is the upward import
+ * `0002-architecture-and-api-contract.md`'s layering forbids — while
+ * `AssignmentSettingsService` reaching down into `people/` is the allowed
+ * direction.
  *
  * Every function takes the client rather than injecting one, so a caller decides
  * where the read sits. `TenantPrisma` and not a transaction client on purpose:
