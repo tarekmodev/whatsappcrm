@@ -40,14 +40,9 @@
   max-inline-size: min(44ch, 100%);
 }
 
-.actions {
-  /* Full-width, stacked buttons in the mobile card layout; inline in the table. */
-  inline-size: 100%;
-}
-
-@media (min-width: 48rem) {
-  .actions {
-    inline-size: auto;
-    flex-wrap: nowrap;
-  }
-}
+/*
+ * The actions cell has no rule of its own any more: `RowActions` owns the wrap
+ * behaviour, and it switches on `DataTable`'s own `--table-unstacked` rather than
+ * on a repeated pixel threshold, so the controls stop being a row at the width
+ * this table actually stacks at instead of at a guess (TAR-727).
+ */

@@ -3,6 +3,8 @@ import { FALLBACK_ASSIGNMENT_RESOLVER, TICKET_ROUTER } from '@whatsappcrm/contra
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { AssignmentQueueRunner } from './assignment-queue.runner';
 import { AssignmentRulesController } from './assignment-rules.controller';
+import { AssignmentSettingsController } from './assignment-settings.controller';
+import { AssignmentSettingsService } from './assignment-settings.service';
 import { AssignmentRulesService } from './assignment-rules.service';
 import { RotationFallbackResolver } from './rotation-fallback.resolver';
 import { RuleEngineService } from './rule-engine.service';
@@ -38,6 +40,12 @@ import { RuleEngineService } from './rule-engine.service';
  * while every unit test that supplies its own double kept passing. TAR-288's
  * unit tests inject a fake resolver directly, which is where a stub belongs.
  *
+ * `AssignmentSettingsController` (TAR-384) is the third piece and the smallest:
+ * the tenant-wide cap the resolver already reads, finally writable. It adds no
+ * seam — the per-agent override stays on `PATCH /api/v1/users/{id}` in
+ * `PeopleModule`, because that is the resource that owns the column, and this
+ * module imports nothing to reach it.
+ *
  * Everything else comes from global modules — `TenantPrisma` from
  * `PrismaModule`, `TenantContextService` from `TenantContextModule`,
  * `QueueService` from `QueueModule`, `AuditService` from `AuditModule`. No
@@ -45,9 +53,10 @@ import { RuleEngineService } from './rule-engine.service';
  * installed application-wide by `RequestPipelineModule`.
  */
 @Module({
-  controllers: [AssignmentRulesController],
+  controllers: [AssignmentRulesController, AssignmentSettingsController],
   providers: [
     AssignmentRulesService,
+    AssignmentSettingsService,
     ApiExceptionFilter,
     { provide: FALLBACK_ASSIGNMENT_RESOLVER, useClass: RotationFallbackResolver },
     { provide: TICKET_ROUTER, useClass: RuleEngineService },

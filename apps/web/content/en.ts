@@ -1823,6 +1823,71 @@ export const content = {
     assignTicketSuccess: (ticketLabel: string, agentName: string) =>
       `${ticketLabel} assigned to ${agentName}`,
     assignTicketNoAgentsError: 'Nobody in this workspace is active enough to take a ticket.',
+
+    /**
+     * The cap-edit control (TAR-384). A supervisor looking at "everyone at
+     * capacity" needs a path to raise the limit that is in the way without
+     * leaving the console — and copy that is honest about what raising it does
+     * and does not do.
+     */
+    editCapacity: 'Agent limits',
+    editCapacityAria: (ticketLabel: string) => `Change agent limits for ${ticketLabel}`,
+    capacityTitle: 'Agent ticket limits',
+    /**
+     * Says what the write actually achieves. Raising a limit frees the agent for
+     * the *next* ticket routing places; nothing re-routes a ticket already
+     * deferred, so the row in front of the supervisor stays flagged until they
+     * assign it. Left unsaid, the control reads as if the ticket places itself,
+     * and it does not.
+     */
+    capacityDescription:
+      'A higher limit frees that agent for the next ticket auto-assignment routes. It does not move this one — assign it when you are ready.',
+    capacityAgentLabel: 'Agent',
+    capacityAgentHint: 'Agents already at their limit are listed first.',
+    /** Said out loud rather than implied: the picker holds one page of agents. */
+    capacityAgentHintTruncated:
+      'Agents already at their limit are listed first. This list holds the first page of agents in this workspace.',
+    capacityAgentOption: (name: string, active: number, limit: number) =>
+      `${name} — ${String(active)} of ${String(limit)}`,
+    capacityLoadLabel: 'Holding now',
+    capacityLoad: (active: number, limit: number) =>
+      `${String(active)} of ${String(limit)} tickets`,
+    capacityAtLimit: 'At their limit',
+    capacityHasRoom: 'Has room',
+    capacityInherited: (workspaceDefault: number) =>
+      `No limit of their own — inherits the workspace default of ${String(workspaceDefault)}.`,
+    capacityOverridden: 'Set for this agent, rather than inherited.',
+    capacityLimitSourceLegend: 'Where this agent’s limit comes from',
+    capacityLimitLabel: 'Ticket limit',
+    capacityLimitHint: (min: number, max: number) =>
+      `A whole number between ${String(min)} and ${String(max)}.`,
+    capacityUseDefaultLabel: (workspaceDefault: number) =>
+      `Use the workspace default of ${String(workspaceDefault)}`,
+    capacityRangeError: (min: number, max: number) =>
+      `Enter a whole number between ${String(min)} and ${String(max)}.`,
+    /**
+     * ADR 0008's failure-mode table rules that lowering a cap below an agent's
+     * current load takes no ticket off them — they are skipped by rotation until
+     * they close down to it. It looks like a bug from the queue, so it is said
+     * before the supervisor presses save rather than discovered afterwards.
+     */
+    capacityBelowLoadWarning: (name: string, active: number) =>
+      `${name} is holding ${String(active)}. A lower limit takes none of those away — they stop receiving new tickets until they are back under it.`,
+    capacitySubmit: 'Save limit',
+    capacitySuccess: (name: string, limit: number) =>
+      limit === 1
+        ? `${name} can now hold 1 ticket at a time`
+        : `${name} can now hold ${String(limit)} tickets at a time`,
+    capacityClearedSuccess: (name: string, workspaceDefault: number) =>
+      `${name} now uses the workspace default of ${String(workspaceDefault)}`,
+    /**
+     * The permission-denied state, seen from inside the control. Read-only rather
+     * than hidden: knowing where the limit sits is what tells a supervisor whether
+     * to wait or to escalate, and hiding it would leave them guessing.
+     */
+    capacityReadOnlyNotice:
+      'Only a supervisor or an admin can change an agent’s limit. You can see the limits here, not edit them.',
+
     routedToTeam: (teamName: string) => `${teamName} team`,
     routedToNobody: 'Whole workspace',
   },

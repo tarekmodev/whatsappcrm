@@ -8,7 +8,7 @@ import { flaggedTicketColumnMeta } from './flagged-columns';
 
 /**
  * The flagged queue's placeholder. Usage:
- * `<FlaggedTicketsTableSkeleton canAssign={canAssign} />`.
+ * `<FlaggedTicketsTableSkeleton hasRowActions={hasRowActions} />`.
  *
  * Its own file, not an export beside the table, and that is load-bearing: the
  * lazy boundary imports this statically as its fallback, so a shared module would
@@ -17,10 +17,10 @@ import { flaggedTicketColumnMeta } from './flagged-columns';
  *
  * It cannot drift from the table, because both build their columns from
  * `flaggedTicketColumnMeta` — same columns, same widths, same breakpoint, same
- * `canAssign` flag. A column the real table will not have is a layout shift with
+ * `hasRowActions` flag. A column the real table will not have is a layout shift with
  * extra steps, so the flag is threaded through rather than defaulted per file.
  */
-export function FlaggedTicketsTableSkeleton({ canAssign = true }: { canAssign?: boolean }) {
+export function FlaggedTicketsTableSkeleton({ hasRowActions = true }: { hasRowActions?: boolean }) {
   const content = useContent();
 
   return (
@@ -29,7 +29,7 @@ export function FlaggedTicketsTableSkeleton({ canAssign = true }: { canAssign?: 
       <DataTableSkeleton
         caption={content.assignment.flaggedHeading}
         rowCount={FLAGGED_TICKETS_SKELETON_COUNT}
-        columns={flaggedTicketColumnMeta(content, canAssign).map((meta) => ({
+        columns={flaggedTicketColumnMeta(content, hasRowActions).map((meta) => ({
           ...meta,
           render: () => null,
         }))}
