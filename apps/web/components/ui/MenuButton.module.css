@@ -125,6 +125,35 @@
   border: var(--border-hairline) solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-overlay);
+  /*
+   * The panel arrives *from its trigger* rather than appearing on top of it —
+   * 0002's "something arriving from a control's edge" row: opacity plus one
+   * `--space-1` step on the block axis, at `--duration-fast`.
+   *
+   * The keyframe carries `--menu-shift` through rather than letting it fall back
+   * to zero. That property is the inline-axis nudge `MenuButton` measures after
+   * the panel opens, and `translate` is a single property: a `from` that named
+   * only the block axis would animate a panel that had just been pushed back on
+   * screen straight off it again for the length of the entrance.
+   */
+  animation: menuPanelEnter var(--duration-fast) var(--easing-enter);
+}
+
+@keyframes menuPanelEnter {
+  from {
+    opacity: 0;
+    translate: var(--menu-shift, 0) calc(var(--space-1) * -1);
+  }
+}
+
+/*
+ * It fades *and* moves, so the preference drops it outright rather than running
+ * it in 1ms — `StateLayout`'s rule, and 0002 §0.2's.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    animation: none;
+  }
 }
 
 /*
@@ -182,4 +211,26 @@
   .menuItem:hover {
     background: var(--color-surface-hover);
   }
+}
+
+/*
+ * The mark on the entry that is already chosen. It reserves its box on *every*
+ * entry and paints on one, so opening a panel does not show two labels at two
+ * different indents — and so the current choice is legible without comparing
+ * font weights.
+ *
+ * Shared rather than per-menu: it began in the inbox's sort picker, and the
+ * reference puts the same mark in its views and its assignee menus.
+ */
+.menuTick {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  inline-size: var(--size-icon-sm);
+  color: var(--color-accent);
+  visibility: hidden;
+}
+
+.menuTick[data-current='true'] {
+  visibility: visible;
 }
