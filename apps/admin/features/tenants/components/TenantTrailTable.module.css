@@ -1,0 +1,33 @@
+/* The two chips and the arrow between them, as one cell. */
+.change {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.arrow {
+  color: var(--color-on-surface-muted);
+}
+
+/*
+ * The reason, capped rather than wrapped: one long sentence should not set the
+ * width of every other column. The full value is in the cell's `title`.
+ *
+ * It is capped and *never dropped* — this column is why the operator's trail
+ * endpoint exists at all (ADR 0009), so if the table must lose something when it
+ * stacks, it is not this.
+ */
+.reason {
+  display: block;
+  max-inline-size: var(--measure-cell);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The backfill's actor, which names nobody. Muted, because it is the absence of
+   an actor rather than one. */
+.unattributed {
+  color: var(--color-on-surface-muted);
+}

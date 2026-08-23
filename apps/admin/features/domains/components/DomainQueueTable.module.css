@@ -1,0 +1,30 @@
+/* The tenant's name over its slug, as one cell. */
+.tenant {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+/* The caption beneath the name. Muted and small: it is the key the rest of the
+   console uses, not the thing an operator reads first. */
+.slug {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}
+
+/*
+ * A hostname is an identifier an operator compares against a hosting dashboard,
+ * so it is monospaced — a proportional face makes `l`, `1` and `I` one shape.
+ * Capped rather than wrapped, with the full value in the cell's `title`: one long
+ * hostname must not set the width of every other column (0001, TAR-727).
+ */
+.hostname {
+  display: block;
+  max-inline-size: var(--measure-cell);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+}

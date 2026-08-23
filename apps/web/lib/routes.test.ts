@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ADMIN_DOMAIN_STATUS_DEFAULT,
-  parseAdminDomainStatus,
-  parseOnboardingStep,
-  parseRedirectPath,
-  routes,
-} from './routes';
+import { parseOnboardingStep, parseRedirectPath, routes } from './routes';
 
 describe('routes', () => {
   /**
@@ -77,56 +71,6 @@ describe('routes.contacts', () => {
     expect(routes.contact('0192f003-0000-7000-8000-000000000301')).toBe(
       '/contacts/0192f003-0000-7000-8000-000000000301',
     );
-  });
-});
-
-describe('the platform-operator console', () => {
-  /**
-   * The prefix is load-bearing rather than cosmetic: `proxy.ts` reads it to
-   * decide which of the app's two credentials a request is missing, and the
-   * operator's cookie is scoped to it so the platform token never rides along on
-   * a call to a tenant's API. A rename here without the same rename in
-   * `admin-paths.ts` would silently open the console to anyone.
-   */
-  it.each([
-    routes.adminSignIn(),
-    routes.adminTenants(),
-    routes.adminTenant('northwind'),
-    routes.adminDomains(),
-    routes.adminWebhookEvents(),
-  ])('puts %s under the /admin prefix', (path) => {
-    expect(path.startsWith('/admin')).toBe(true);
-  });
-
-  /**
-   * The one route in the map whose parameter is typed by a person rather than
-   * read back from the API, so it is the one that has to encode.
-   */
-  it('encodes the slug an operator typed', () => {
-    expect(routes.adminTenant('north/wind')).toBe('/admin/tenants/north%2Fwind');
-  });
-
-  it('carries the trail cursor, and drops it on the newest page', () => {
-    expect(routes.adminTenant('northwind')).toBe('/admin/tenants/northwind');
-    expect(routes.adminTenant('northwind', { cursor: 'abc' })).toBe(
-      '/admin/tenants/northwind?cursor=abc',
-    );
-  });
-
-  /**
-   * A parameter that says exactly what the API would have done anyway is one
-   * more thing in a shared URL that means nothing to whoever receives it.
-   */
-  it('spells the queue’s default half as the bare route', () => {
-    expect(routes.adminDomains()).toBe('/admin/domains');
-    expect(routes.adminDomains({ status: 'live' })).toBe('/admin/domains?status=live');
-  });
-
-  it('narrows an untrusted queue filter to a half the API answers', () => {
-    expect(parseAdminDomainStatus('live')).toBe('live');
-    expect(parseAdminDomainStatus('verified')).toBe('verified');
-    expect(parseAdminDomainStatus('nonsense')).toBe(ADMIN_DOMAIN_STATUS_DEFAULT);
-    expect(parseAdminDomainStatus(undefined)).toBe(ADMIN_DOMAIN_STATUS_DEFAULT);
   });
 });
 

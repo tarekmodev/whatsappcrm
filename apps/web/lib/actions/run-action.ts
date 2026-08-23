@@ -178,9 +178,6 @@ export function toActionErrorResult<T>(
  * for, and leave a supervisor re-pressing Enable on a workflow that names a tag
  * somebody deleted last week.
  */
-/** Shared, so the default argument allocates nothing per call. */
-const EMPTY_CODES: ReadonlySet<string> = new Set<string>();
-
 const ACTIONABLE_ERROR_CODES = new Set([
   'conflict',
   'validation_failed',
@@ -190,3 +187,6 @@ const ACTIONABLE_ERROR_CODES = new Set([
   'whatsapp_template_invalid',
   'workflow_reference_broken',
 ]);
+
+/** Shared, so the default argument allocates nothing per call. */
+const EMPTY_CODES: ReadonlySet<string> = new Set<string>();

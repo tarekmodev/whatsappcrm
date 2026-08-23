@@ -61,7 +61,8 @@ export default tseslint.config(
   },
 
   {
-    files: ['apps/web/**/*.{ts,tsx}'],
+    // Both Next apps: the tenant console and the operator console (TAR-804).
+    files: ['apps/web/**/*.{ts,tsx}', 'apps/admin/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser } },
     plugins: { '@next/next': nextPlugin },
     rules: {

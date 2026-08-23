@@ -1,0 +1,14 @@
+/*
+ * The operator console's single global entry point.
+ *
+ * The same three layers `apps/web` imports, from `apps/web` — the token layer is
+ * shared, not copied, which is the whole reason this app resolves `@/*` there
+ * (see `tsconfig.json`). A second copy of the palette is a second design system
+ * that drifts one commit later.
+ *
+ * Nothing else belongs in global CSS; component styling lives in colocated CSS
+ * Modules, and this app writes very few of its own — it consumes `components/ui`.
+ */
+@import '../../web/styles/tokens/primitives.css';
+@import '../../web/styles/tokens/semantic.css';
+@import '../../web/styles/base.css';

@@ -1,8 +1,6 @@
 import {
-  ADMIN_DOMAIN_QUERY_STATUSES,
   CONVERSATION_SORT_DEFAULT,
   ONBOARDING_STEP_IDS,
-  type AdminDomainStatus,
   type ConversationListQuery,
   type ConversationSort,
   type KnowledgeDocumentStatus,
@@ -233,41 +231,6 @@ export const routes = {
    */
   resetPassword: () => '/reset-password',
   forbidden: () => '/forbidden',
-
-  /**
-   * The platform-operator console (TAR-804). Everything below `/admin` is *ours*
-   * — the surface `apps/api`'s `/api/v1/admin/*` controllers answer — and it is
-   * not reachable by a tenant's own users at any role.
-   *
-   * A path segment rather than a route group, unlike `(app)` and `(auth)`: the
-   * prefix is load-bearing. `proxy.ts` decides which of the two credentials a
-   * request is missing by reading it, and the platform-admin cookie is scoped to
-   * it so the operator's token is never sent on a call to a tenant's API.
-   */
-  adminSignIn: (query?: LoginQuery) =>
-    withQuery('/admin/sign-in', { [searchParamKeys.redirectTo]: query?.redirectTo }),
-  /**
-   * Where an operator arrives. Tenants rather than a dashboard, because a
-   * dashboard would need cross-tenant aggregates the admin API does not expose —
-   * see `lib/api/admin.ts` for the endpoints that exist and the reads that do not.
-   */
-  adminTenants: () => '/admin/tenants',
-  /**
-   * One tenant: its lifecycle state, its trail, and the two operator actions.
-   *
-   * Encoded, unlike the id-keyed routes above. A slug is *typed by an operator*
-   * into the lookup form, so this is the one route in the map whose parameter is
-   * not already known to be URL-safe.
-   */
-  adminTenant: (slug: string, query?: AdminTenantQuery) =>
-    withQuery(`/admin/tenants/${encodeURIComponent(slug)}`, {
-      [searchParamKeys.adminTrailCursor]: query?.cursor,
-    }),
-  /** The operator's custom-domain queue — `GET /v1/admin/domains` (TAR-419). */
-  adminDomains: (query?: AdminDomainsQuery) =>
-    withQuery('/admin/domains', { [searchParamKeys.adminDomainStatus]: query?.status }),
-  /** Replaying a parked inbound webhook event — TAR-94's one route. */
-  adminWebhookEvents: () => '/admin/webhook-events',
 } as const;
 
 /** Query keys are named once so a link and the page that reads it cannot drift. */
@@ -381,25 +344,6 @@ export const searchParamKeys = {
   billingPlan: 'plan',
   /** Where sign-in sends the user afterwards. Read through `parseRedirectPath`. */
   redirectTo: 'next',
-  /**
-   * Which half of the operator's domain queue is shown — `verified` (waiting to
-   * be attached at the edge) or `live` (already attached). Spelled exactly as
-   * `AdminDomainQuerySchema` names it, so the URL parameter and the query it
-   * becomes cannot drift; dropped while it is the API's own default, which is
-   * `verified`.
-   */
-  adminDomainStatus: 'status',
-  /**
-   * Which page of a tenant's lifecycle trail is shown. Spelled `cursor`, as
-   * `CursorPageQuerySchema` names it.
-   *
-   * In the URL rather than in component state because the trail is what an
-   * operator sends to somebody mid-incident, and "the page I was on" has to
-   * survive the link. It is opaque and paged forward only — the API publishes no
-   * previous cursor — so the way back to the newest page is the bare route,
-   * which is what the pager offers.
-   */
-  adminTrailCursor: 'cursor',
 } as const;
 
 /**
@@ -433,32 +377,6 @@ export interface OnboardingQuery {
 
 export interface LoginQuery {
   redirectTo?: string;
-}
-
-/** `?cursor=` on one tenant's lifecycle trail. Omitted means the newest page. */
-export interface AdminTenantQuery {
-  cursor?: string;
-}
-
-/** `?status=` on the operator's domain queue. Omitted means the API's default. */
-export interface AdminDomainsQuery {
-  status?: AdminDomainStatus;
-}
-
-/**
- * The queue's default half, spelled the same way `AdminDomainQuerySchema`
- * defaults it. Named rather than repeated, because two places have to agree on
- * it: the tab that renders as current when the URL says nothing, and the link
- * that must *drop* the parameter rather than write one saying what the API would
- * have done anyway.
- */
-export const ADMIN_DOMAIN_STATUS_DEFAULT: AdminDomainStatus = 'verified';
-
-/** Narrows an untrusted `?status=`; anything else is the default half. */
-export function parseAdminDomainStatus(value: string | undefined): AdminDomainStatus {
-  return (
-    ADMIN_DOMAIN_QUERY_STATUSES.find((status) => status === value) ?? ADMIN_DOMAIN_STATUS_DEFAULT
-  );
 }
 
 /**
