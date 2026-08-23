@@ -169,6 +169,35 @@ change.
 
 ### Added
 
+- **A number connected through Embedded Signup can now send, and one that could not is
+  retryable** (TAR-170) — shipped across TAR-766 (the contract), TAR-767 (the columns) and this
+  change (the client, the service, automatic registration and the retry route). Cloud API
+  refuses every send from a phone number that was never registered, and 0002 amendment 2
+  deferred that call, so a self-service connection produced an inbox that received and a number
+  that silently could not answer. The platform now generates a six-digit registration PIN,
+  stores it encrypted at rest under the same cipher and key as the access token, and calls
+  `POST /{phone-number-id}/register` as the last step of the connection.
+  The PIN has to be durable **before** it reaches Meta — it is the one credential in this flow
+  that the platform invents, so a register that succeeded against a commit that then failed
+  would strand a secret nobody here holds — which is why this single Meta call sits after the
+  transaction rather than before it with the others. It never fails the connection: a number
+  Meta refused still receives, and the connect response now carries `registrationStatus`,
+  `registrationFailureReason`, `registeredAt` and `registrationAttemptedAt` per number, so the
+  console can say "connected — sending unavailable" with a reason instead of showing a healthy
+  row over a silent inbox.
+  `POST /api/v1/whatsapp/phone-numbers/{whatsappAccountId}/registration` on `channel:manage`
+  retries, reusing the **stored** PIN — never a second one, because a number Meta accepted
+  under a PIN this platform then replaced could never be re-registered. It is a second caller
+  of the same service the automatic attempt drives, so both write identical state and publish
+  identical reasons; a number that already reads `registered` is a no-op that never touches
+  Meta. A registration failure answers `200` with a reason rather than an error envelope,
+  because the first attempt cannot report one and the console should not need two parsers for
+  the same fact. Both outcomes are audited with Meta's code and `fbtrace_id` — never the PIN.
+  `WhatsAppAccessTokenCipher` becomes `WhatsAppCredentialCipher` in
+  `whatsapp-credential.cipher.ts`, and its AAD parameter becomes `boundTo`: the PIN binds to
+  `phone_number_id` where the token binds to `waba_id`, because two numbers under one WABA
+  register independently. Behaviour-preserving.
+
 - **A platform operator can replay a parked webhook event** (TAR-94) —
   `POST /api/v1/admin/webhook-events/{id}/replay`, behind the same `PlatformAdminGuard` as the
   tenant routes. Ingest has always parked an event it cannot apply — an

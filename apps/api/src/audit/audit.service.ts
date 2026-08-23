@@ -12,6 +12,7 @@ export interface AuditEntry {
     | 'team'
     | 'invite'
     | 'whatsapp_business_account'
+    | 'whatsapp_account'
     | 'assignment_rule'
     | 'custom_field'
     | 'canned_response'

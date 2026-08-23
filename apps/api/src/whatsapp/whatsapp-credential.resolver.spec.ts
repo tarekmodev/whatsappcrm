@@ -1,5 +1,5 @@
 import type { TenantPrisma } from '../prisma/prisma.tokens';
-import type { WhatsAppAccessTokenCipher } from './access-token.cipher';
+import type { WhatsAppCredentialCipher } from './whatsapp-credential.cipher';
 import { WhatsAppCredentialResolver } from './whatsapp-credential.resolver';
 import {
   WhatsAppAccountNotFoundError,
@@ -42,7 +42,7 @@ describe('WhatsAppCredentialResolver', () => {
         whatsappBusinessAccount: { findUnique: wabaFindUnique },
         whatsappAccount: { findUnique: accountFindUnique },
       } as unknown as TenantPrisma,
-      { decrypt } as unknown as WhatsAppAccessTokenCipher,
+      { decrypt } as unknown as WhatsAppCredentialCipher,
     );
   });
 

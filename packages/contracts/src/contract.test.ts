@@ -69,8 +69,11 @@ import {
   MessageTemplateAdminResponseSchema,
   MessageTemplateListQuerySchema,
   MessageTemplateResponseSchema,
+  WhatsAppAccountResponseSchema,
   WhatsAppBusinessAccountResponseSchema,
   WhatsAppEmbeddedSignupInputSchema,
+  WhatsAppPhoneNumberRegistrationResponseSchema,
+  WHATSAPP_REGISTRATION_FAILURE_REASONS,
 } from './whatsapp';
 
 describe('error taxonomy', () => {
@@ -791,6 +794,58 @@ describe('connecting a whatsapp business account', () => {
     });
 
     expect(parsed).not.toHaveProperty('accessTokenEncrypted');
+  });
+
+  it('never publishes a registration PIN, in any form', () => {
+    // The PIN is a credential of the same class as the access token: this
+    // platform generated it, Meta holds it, and there is no endpoint that
+    // returns it. The registration *state* is published; the secret is not.
+    const parsed = WhatsAppAccountResponseSchema.parse({
+      id: '01890a5d-ac96-774b-bcce-b302099a8058',
+      whatsappBusinessAccountId: '01890a5d-ac96-774b-bcce-b302099a8057',
+      phoneNumberId: '15550001111',
+      displayPhoneNumber: '+15550001111',
+      verifiedName: null,
+      qualityRating: null,
+      status: 'connected',
+      registrationStatus: 'registered',
+      registrationFailureReason: null,
+      registeredAt: '2026-08-23T09:30:24Z',
+      registrationAttemptedAt: '2026-08-23T09:30:24Z',
+      registrationPinEncrypted: 'v1.leaked',
+      registrationPin: '000042',
+      createdAt: '2026-08-10T09:30:24Z',
+      updatedAt: '2026-08-10T09:30:24Z',
+    });
+
+    expect(parsed).not.toHaveProperty('registrationPinEncrypted');
+    expect(parsed).not.toHaveProperty('registrationPin');
+    expect(parsed.registrationStatus).toBe('registered');
+  });
+
+  it('publishes the same registration shape on the retry route as on the connection', () => {
+    // One vocabulary, one parser: a failure reported by the automatic first
+    // attempt and one reported by a retry have to be the same six strings, or
+    // the console needs two copies of the same copy.
+    const retry = WhatsAppPhoneNumberRegistrationResponseSchema.parse({
+      whatsappAccountId: '01890a5d-ac96-774b-bcce-b302099a8058',
+      phoneNumberId: '15550001111',
+      registrationStatus: 'failed',
+      registrationFailureReason: 'rate_limited',
+      registeredAt: null,
+      registrationAttemptedAt: '2026-08-23T09:30:24Z',
+    });
+
+    expect(retry.registrationFailureReason).toBe('rate_limited');
+
+    for (const reason of WHATSAPP_REGISTRATION_FAILURE_REASONS) {
+      expect(() =>
+        WhatsAppPhoneNumberRegistrationResponseSchema.parse({
+          ...retry,
+          registrationFailureReason: reason,
+        }),
+      ).not.toThrow();
+    }
   });
 
   it('still requires the pasted token, because the operator path is unchanged', () => {

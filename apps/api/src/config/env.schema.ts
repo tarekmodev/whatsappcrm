@@ -611,7 +611,7 @@ const envShape = z.object({
    *
    * It is a key, not a password, so it is checked for length rather than
    * strength — 32 bytes from a CSPRNG, held in the platform's secret store.
-   * Rotating it needs the tokens re-encrypted; see `access-token.cipher.ts`,
+   * Rotating it needs the tokens re-encrypted; see `whatsapp-credential.cipher.ts`,
    * whose payloads carry a version tag for exactly that reason.
    */
   WHATSAPP_TOKEN_ENCRYPTION_KEY: z

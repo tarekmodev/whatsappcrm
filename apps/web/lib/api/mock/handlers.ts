@@ -2529,6 +2529,13 @@ function connectWhatsAppBusinessAccount({
         // Meta has not rated a number nobody has messaged yet.
         qualityRating: null,
         status: 'connected',
+        // Registration runs as the last step of the connection, so the mock
+        // reports what the happy path produces: a number that can send from the
+        // moment the console shows it.
+        registrationStatus: 'registered',
+        registrationFailureReason: null,
+        registeredAt: MOCK_CREATED_AT,
+        registrationAttemptedAt: MOCK_CREATED_AT,
         createdAt: MOCK_CREATED_AT,
         updatedAt: MOCK_CREATED_AT,
       },
