@@ -1,0 +1,93 @@
+/*
+ * The ladder: a marker gutter beside the settings form's own two columns.
+ *
+ * `--rule-marker-offset` is how far the marker sits below the top of its rung.
+ * Zero while the form is stacked, and at the width where `Field` drops its label
+ * onto the control's line it takes the same step, so the disc stays level with
+ * the rule's name at every size. One variable rather than two rules, because the
+ * connector is measured from it too.
+ */
+.ladder {
+  --rule-marker-offset: 0px;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.rule {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--size-stage-marker) minmax(0, 1fr);
+  column-gap: var(--space-3);
+  align-items: start;
+  min-inline-size: 0;
+}
+
+/*
+ * The connector, from under this marker to the top of the next one. Drawn by the
+ * rung above rather than by the one below, so the last rung ends cleanly instead
+ * of trailing a stub into the card's padding.
+ */
+.rule:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: calc(var(--size-stage-marker) / 2);
+  inset-block-start: calc(var(--rule-marker-offset) + var(--size-stage-marker));
+  /* Past this rung's own box by the gap, and by the step the next marker takes. */
+  inset-block-end: calc(-1 * (var(--space-6) + var(--rule-marker-offset)));
+  border-inline-start: var(--border-hairline) solid var(--color-border);
+}
+
+.marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--size-stage-marker);
+  block-size: var(--size-stage-marker);
+  margin-block-start: var(--rule-marker-offset);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+}
+
+.dot {
+  inline-size: var(--size-marker-dot);
+  block-size: var(--size-marker-dot);
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+}
+
+/* A gate that is real and cannot be changed. Quieter, because there is nothing
+   here to act on — and never absent, because it is still a reason the bot stops. */
+.dot[data-configurable='false'] {
+  background: var(--color-on-surface-subtle);
+}
+
+.body {
+  min-inline-size: 0;
+}
+
+/*
+ * The width at which `Field` becomes two columns and pads its label group down
+ * onto the control's line. The marker follows, centred on the same
+ * `--size-touch-target` row the control occupies.
+ */
+@media (min-width: 64rem) {
+  .ladder {
+    --rule-marker-offset: calc((var(--size-touch-target) - var(--size-stage-marker)) / 2);
+  }
+}
+
+@media (forced-colors: active) {
+  .marker {
+    border: var(--border-hairline) solid CanvasText;
+  }
+
+  .dot {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+}

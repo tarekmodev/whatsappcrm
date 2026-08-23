@@ -1,0 +1,187 @@
+.band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+/*
+ * The rail, handed to `Slider` as its `trackSlot`. It inherits `--slider-ratio`
+ * from the layer it is drawn in, which is what puts the boundary between the two
+ * regions exactly under the knob.
+ *
+ * `--size-control-md` (2.5rem) rather than the touch target it sits inside
+ * (2.75rem): the band has to fit within the control's row, and a hairline of
+ * surface either side of it is what keeps it reading as a band on the card
+ * rather than as the card's own edge.
+ */
+.regions {
+  display: flex;
+  align-items: stretch;
+  block-size: var(--size-control-md);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/*
+ * The boundary, in the knob's coordinates rather than as a flat percentage.
+ * `Slider`'s knob travels from half a knob in to half a knob short of the end,
+ * so a region sized to a flat 60% would sit visibly off the thing it is meant to
+ * be under — worst at the two ends, where the drift is a whole half-knob.
+ */
+.handover {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  inline-size: calc(
+    var(--size-slider-knob) / 2 + var(--slider-ratio) * (100% - var(--size-slider-knob))
+  );
+  /*
+   * Half a knob of extra clearance on the boundary edge. The knob is centred on
+   * the seam, so it covers half its own width of each region — without this it
+   * sits on the first letter of whichever label is next to it.
+   */
+  padding-inline-start: var(--space-2);
+  padding-inline-end: calc(var(--space-2) + var(--size-slider-knob) / 2);
+  background: var(--color-warning-subtle);
+  color: var(--color-on-warning-subtle);
+  /*
+   * A keyboard step is animated, so an arrow press reads as the boundary moving
+   * rather than as the band redrawing. A drag is not — see `:active` below.
+   */
+  transition: inline-size var(--duration-fast) var(--easing-standard);
+  /* So the label can be dropped when its region gets too narrow to hold it. */
+  container-type: inline-size;
+}
+
+/*
+ * While a pointer is down on the range, the boundary follows the finger with no
+ * easing at all — a 120ms catch-up on a drag reads as the control being slow.
+ * `:active` is the seam that separates the two, and it is the platform's own:
+ * an arrow press never sets it, so a keyboard step keeps the animation above.
+ */
+.band:has(input:active) .handover {
+  transition-duration: var(--duration-instant);
+}
+
+.answer {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  padding-inline-start: calc(var(--space-2) + var(--size-slider-knob) / 2);
+  padding-inline-end: var(--space-2);
+  background: var(--color-success-subtle);
+  color: var(--color-on-success-subtle);
+  container-type: inline-size;
+}
+
+/*
+ * A region too narrow for its own name drops it rather than showing three
+ * letters and an ellipsis. Nothing is lost: the readout above the band always
+ * carries the value, and the scale below always carries the ends.
+ */
+.regionLabel {
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+@container (max-width: 7rem) {
+  .regionLabel {
+    display: none;
+  }
+}
+
+/*
+ * The scale and the default tick, in one positioning context so both are placed
+ * with the same arithmetic the boundary uses.
+ *
+ * Two rows deep: the percentages, and the tick's label under them. Sized from
+ * the caption's own line box so the row does not collapse.
+ */
+.scale {
+  position: relative;
+  block-size: calc(var(--font-size-caption) * var(--line-height-body) * 2 + var(--space-1));
+  min-inline-size: 0;
+}
+
+/*
+ * A zero-width anchor at the mark's position, with its text centred on it by
+ * flex. This is the direction-agnostic way to centre something on a point:
+ * `translateX(-50%)` is a physical shift and would move the wrong way under
+ * `dir="rtl"`, taking the whole scale out of step with the band above it.
+ */
+.stop,
+.tick {
+  position: absolute;
+  inset-inline-start: calc(
+    var(--size-slider-knob) / 2 + var(--stop-ratio) * (100% - var(--size-slider-knob))
+  );
+  display: flex;
+  inline-size: 0;
+  justify-content: center;
+}
+
+.stop {
+  inset-block-start: 0;
+}
+
+.stopText {
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  color: var(--color-on-surface-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The value a tenant is on until they choose otherwise, named rather than
+   implied — a mark with no label is a smudge. */
+.tick {
+  inset-block-end: 0;
+  flex-direction: column;
+  align-items: center;
+}
+
+.tickText {
+  padding-block-start: var(--space-1);
+  border-block-start: var(--border-hairline) solid var(--color-border-strong);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  color: var(--color-on-surface-subtle);
+  white-space: nowrap;
+}
+
+.caption {
+  max-inline-size: var(--measure-body);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  color: var(--color-on-surface-muted);
+}
+
+/*
+ * Disabled: both fills collapse to the sunken role, and the readout stays at
+ * full contrast. A principal who may read but not write still has to be able to
+ * read the threshold — greying the number along with the control is how a
+ * read-only page stops telling anybody anything.
+ */
+.band:has(input:disabled) .handover,
+.band:has(input:disabled) .answer {
+  background: var(--color-surface-sunken);
+  color: var(--color-on-surface-muted);
+}
+
+/*
+ * Forced colors drops both fills, which is exactly why the readout, the scale
+ * and the tick label are text rather than positions. The band keeps an outline
+ * so the knob still has something to sit on.
+ */
+@media (forced-colors: active) {
+  .regions {
+    border: var(--border-hairline) solid CanvasText;
+  }
+
+  .handover {
+    border-inline-end: var(--border-hairline) solid CanvasText;
+  }
+}

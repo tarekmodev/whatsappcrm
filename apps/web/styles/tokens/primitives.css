@@ -267,6 +267,17 @@
    * which is a 3px rule beside a label and disappears as a circle on its own.
    */
   --scale-size-marker-dot: 0.5rem;
+  /*
+   * The disc a stage marker draws, on the chatbot pipeline rail and on the rule
+   * ladder that borrows its vocabulary (TAR-813).
+   *
+   * Its own step rather than a reuse, because nothing in the set is a small
+   * status disc: `--scale-size-marker` is a 3px edge rule, `--scale-size-marker-dot`
+   * is the dot that goes *inside* this, and `--scale-size-state-plate` is the
+   * 4.5rem plate an empty state draws its icon in. 1.5rem is the smallest disc
+   * that still reads as a node on a line at `--font-size-body-sm`.
+   */
+  --scale-size-stage-marker: 1.5rem;
 
   /*
    * The box a tenant's uploaded logo is drawn into (TAR-29). Fixed in both axes

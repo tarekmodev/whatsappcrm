@@ -1,0 +1,70 @@
+/*
+ * Pinned to the block end of the viewport while the form scrolls past it, and
+ * an ordinary block once the form's end comes into view.
+ *
+ * `sticky`, not `fixed`. A fixed bar sits outside the flow and needs the page to
+ * carry matching block-end padding — one measurement kept in two places, which
+ * is one measurement that goes wrong the first time the bar gains a line. In the
+ * flow it reserves exactly its own height, whatever that turns out to be.
+ */
+.bar {
+  position: sticky;
+  /*
+   * `0` here, and the home indicator cleared with padding below — the same split
+   * `ThreadComposerDock` makes, and worth keeping: an `env()` that fails to
+   * resolve in an inset leaves `inset-block-end: auto`, and a sticky box with no
+   * offset silently stops sticking. In the padding the worst case is a few
+   * pixels of missing clearance rather than a save button that scrolls away.
+   *
+   * The form is the containing block, so the bar pins to the foot of the
+   * viewport while the form is in view and rides at the form's top edge before
+   * the reader has scrolled down to it. That is the right range: it can only
+   * become dirty from a field inside the form.
+   */
+  inset-block-end: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  padding-block-end: calc(var(--space-3) + env(safe-area-inset-bottom));
+  border-block-start: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  /*
+   * It appears when the form first goes dirty, so it rises rather than blinking
+   * into place under the cursor. One pass; the token layer flattens the duration
+   * to 1ms under `prefers-reduced-motion`.
+   */
+  animation: saveBarEnter var(--duration-medium) var(--easing-enter);
+}
+
+@keyframes saveBarEnter {
+  from {
+    opacity: 0;
+    translate: 0 var(--space-2);
+  }
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.count {
+  font-size: var(--font-size-body-sm);
+  color: var(--color-on-surface-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  /* On a narrow viewport the count wraps above and the buttons take the row. */
+  margin-inline-start: auto;
+}

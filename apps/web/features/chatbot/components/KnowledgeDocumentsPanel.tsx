@@ -3,6 +3,7 @@ import { content } from '@/content/en';
 import type { PermissionChecker } from '@/lib/session/permissions';
 import { loadChatbotConfig, type KnowledgeDocumentsData } from '../chatbot.data';
 import { CHATBOT_PERMISSIONS, KNOWLEDGE_DOCUMENTS_PAGE_SIZE } from '../constants';
+import type { KnowledgeListParams } from '../knowledge-params';
 import { KnowledgeDocumentsTable } from './KnowledgeDocumentsTable';
 
 /**
@@ -26,18 +27,24 @@ import { KnowledgeDocumentsTable } from './KnowledgeDocumentsTable';
  */
 export async function KnowledgeDocumentsPanel({
   documentsPromise,
-  isFiltered,
+  filters,
   checker,
 }: {
   documentsPromise: Promise<KnowledgeDocumentsData>;
-  /** A search term or a status is applied, which changes the empty state and the notice. */
-  isFiltered: boolean;
+  /**
+   * The filters this page was read with. The truncation notice needs only to
+   * know whether there were any; the table's four empty states need the values
+   * themselves, so the values are what travels.
+   */
+  filters: KnowledgeListParams;
   checker: PermissionChecker;
 }) {
   const [{ documents, hasMoreDocuments }, config] = await Promise.all([
     documentsPromise,
     loadChatbotConfig(),
   ]);
+
+  const isFiltered = filters.q !== undefined || filters.status !== undefined;
 
   const isInPlan = !config.readiness.blockers.includes('feature_not_in_plan');
   const canWrite = checker.can(CHATBOT_PERMISSIONS.write) && isInPlan;
@@ -58,12 +65,12 @@ export async function KnowledgeDocumentsPanel({
 
       <KnowledgeDocumentsTable
         documents={documents}
-        // From the same read as the readiness panel above, so "the only entry
-        // the chatbot can answer from" and "it answers from N entries" are one
+        // From the same read as the pipeline rail above, so "the only source
+        // the chatbot can answer from" and "N sources ready" are one
         // number rather than two that can disagree.
         indexedEntryCount={config.readiness.indexedDocumentCount}
         canWrite={canWrite}
-        isFiltered={isFiltered}
+        filters={filters}
       />
     </>
   );

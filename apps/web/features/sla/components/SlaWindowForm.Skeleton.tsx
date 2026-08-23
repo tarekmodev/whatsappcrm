@@ -28,7 +28,7 @@ import styles from './SlaWindowForm.module.css';
  * `'use client'`, and it has to be: it renders through the real `Field` and the
  * real `SettingsForm`, whose render-prop children are a function, and a function
  * cannot cross the server-to-client boundary. The same trade
- * `AiConfigForm.Skeleton` makes, for the same reason — rendering the real layout
+ * `ChatbotSettingsForm.Skeleton` makes, for the same reason — rendering the real layout
  * is what stops this drifting when its spacing changes.
  *
  * Changed in the same commit as the form it stands in for.
