@@ -135,9 +135,11 @@ describe('knowledge base', () => {
 
   /**
    * The mock is a transport, not a per-feature fake (`lib/api/http.ts`), and
-   * `NEXT_PUBLIC_USE_MOCK_API=true` is the shipped default — so a field it
-   * handles differently from the API is a bug an admin meets on the default
-   * local environment, not a test-only inaccuracy.
+   * `NEXT_PUBLIC_USE_MOCK_API=true` is still how the console is worked on with
+   * no API running — so a field it handles differently from the API is a bug
+   * somebody meets while building against it, not a test-only inaccuracy. It is
+   * no longer the `.env.example` default (TAR-830); that changes who meets it,
+   * not whether it matters.
    *
    * `sourceUrl` is the one field on this input that is nullable as well as
    * optional, which makes it the one field where `??` is the wrong operator.
