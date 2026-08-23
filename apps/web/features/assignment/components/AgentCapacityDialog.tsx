@@ -78,7 +78,7 @@ export function AgentCapacityDialog({
     onClose();
   }, [content, nextLimit, onClose, selected, showToast, workspaceDefault]);
 
-  const { submit, isPending, formError, requestId, errorCode } = useActionForm({
+  const { submit, isPending, formError, requestId, errorCode, clearError } = useActionForm({
     perform,
     onSuccess,
   });
@@ -165,6 +165,15 @@ export function AgentCapacityDialog({
 
                   setUserId(event.target.value);
                   setLimitError(undefined);
+                  /*
+                   * The server's refusal was about the agent who just left the
+                   * form. `useActionForm` only clears on the next submit, and a
+                   * `forbidden` or `not_found` disables the button — so without
+                   * this the dialog insists an agent is gone after the
+                   * supervisor has already picked somebody else, with no way
+                   * back but a reload.
+                   */
+                  clearError();
 
                   // The form re-reads from the agent it now describes. Carrying
                   // the previous agent's number across would let a supervisor
@@ -187,6 +196,10 @@ export function AgentCapacityDialog({
               onDraftChange={(next) => {
                 setDraft(next);
                 setLimitError(undefined);
+                // Same reason the client-side error goes: the server refused a
+                // value that is no longer in the field. Leaving it would keep
+                // `aria-invalid` and a stale message on a number nobody typed.
+                clearError();
               }}
             />
           )}
