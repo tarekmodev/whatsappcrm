@@ -7,6 +7,7 @@ import { readTheme } from '@/lib/theme/read-theme';
 import { readBranding } from '@/lib/branding/read-branding';
 import { brandStyleSheet } from '@/lib/branding/brand-style';
 import { ToastProvider } from '@/components/ui/ToastProvider';
+import { MockModeBadge } from '@/components/env/MockModeBadge';
 import './globals.css';
 
 /**
@@ -141,6 +142,13 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           dangerouslySetInnerHTML={{ __html: brandStyleSheet(branding) }}
         />
         <ToastProvider>{children}</ToastProvider>
+        {/*
+          Above both route groups because the flag governs both: with the mock
+          transport on, the signed-out screens read their branding from fixtures
+          too. Renders nothing with the flag off, which is every deployed
+          environment (`components/env/MockModeBadge.tsx`).
+        */}
+        <MockModeBadge />
       </body>
     </html>
   );
