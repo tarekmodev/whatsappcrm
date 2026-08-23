@@ -1770,6 +1770,60 @@ describe('the onboarding checklist', () => {
     );
   });
 
+  /**
+   * The mock used to leave `set_branding` pending forever, because nothing called
+   * `completeOnboardingStep` for it — the one place the fixtures described a
+   * workspace the real API would not (TAR-832, divergence 1).
+   */
+  it('marks “set your branding” done because branding was actually edited', async () => {
+    await handleMockRequest({
+      method: 'PATCH',
+      path: '/v1/tenant',
+      body: { branding: { primaryColor: '#123456' } },
+    });
+
+    const checklist = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant/onboarding',
+    })) as OnboardingChecklistResponse;
+
+    expect(checklist.steps.find((step) => step.id === 'set_branding')?.status).toBe('completed');
+  });
+
+  it('marks it done for a logo upload too, which is branding the tenant set', async () => {
+    const body = new FormData();
+
+    body.append('file', new File(['x'], 'logo.png', { type: 'image/png' }));
+
+    await handleMockRequest({ method: 'PUT', path: '/v1/tenant/branding/logo', body });
+
+    const checklist = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant/onboarding',
+    })) as OnboardingChecklistResponse;
+
+    expect(checklist.steps.find((step) => step.id === 'set_branding')?.status).toBe('completed');
+  });
+
+  /**
+   * Clearing the one value a tenant had set is not an edit that finishes the
+   * step: the real API derives it from a row holding something non-null.
+   */
+  it('leaves it pending when the write only clears a value', async () => {
+    await handleMockRequest({
+      method: 'PATCH',
+      path: '/v1/tenant',
+      body: { branding: { supportEmail: null } },
+    });
+
+    const checklist = (await handleMockRequest({
+      method: 'GET',
+      path: '/v1/tenant/onboarding',
+    })) as OnboardingChecklistResponse;
+
+    expect(checklist.steps.find((step) => step.id === 'set_branding')?.status).toBe('pending');
+  });
+
   it('skips a step and puts it back, which is the whole of “return to it later”', async () => {
     const skipped = (await handleMockRequest({
       method: 'PATCH',
@@ -1830,6 +1884,35 @@ describe('the onboarding checklist', () => {
         body: { intent: 'skip' },
       }),
     ).rejects.toBeInstanceOf(ApiRequestError);
+  });
+
+  /**
+   * `reopen` on a completed step answers 200 with the step still completed, not
+   * a reset to pending. Completion is derived from what the tenant actually did,
+   * so there is nothing to un-derive — TAR-832 decision 3, and the behaviour the
+   * real endpoint has. The console never sends it (`onboardingStepIntent` offers
+   * no control on a completed step); this pins the transport to the API anyway,
+   * because a fixture that answered differently would send a reviewer looking
+   * for a bug in the wrong half.
+   */
+  it('leaves a completed step completed when it is reopened', async () => {
+    await handleMockRequest({
+      method: 'POST',
+      path: '/v1/users/invites',
+      body: { email: 'reopened.agent@northwind.example', role: 'agent', teamIds: [] },
+    });
+
+    const reopened = (await handleMockRequest({
+      method: 'PATCH',
+      path: '/v1/tenant/onboarding/steps/invite_agents',
+      body: { intent: 'reopen' },
+    })) as OnboardingChecklistResponse;
+
+    const step = reopened.steps.find((candidate) => candidate.id === 'invite_agents');
+
+    expect(step?.status).toBe('completed');
+    expect(step?.completedAt).not.toBeNull();
+    expect(step?.skippedAt).toBeNull();
   });
 
   it('refuses a status write, because completion is the server’s to derive', async () => {
