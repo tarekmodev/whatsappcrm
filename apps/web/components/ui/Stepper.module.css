@@ -1,0 +1,212 @@
+.stepper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* --- The progress meter -------------------------------------------------- */
+
+.meter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.track {
+  position: relative;
+  flex: 1 1 auto;
+  block-size: var(--space-2);
+  overflow: hidden;
+  background-color: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-pill);
+}
+
+/*
+ * `inline-size`, not `width`: under `dir="rtl"` the bar fills from the right,
+ * and a logical property gets that for free.
+ */
+.fill {
+  display: block;
+  block-size: 100%;
+  inline-size: calc(var(--stepper-progress) * 100%);
+  background-color: var(--color-accent);
+  border-radius: inherit;
+  transition: inline-size var(--duration-medium) var(--easing-standard);
+}
+
+.count {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- The list ------------------------------------------------------------ */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  /*
+   * No gap: the rail between the markers is drawn by each item's own
+   * `::before`, and a gap would break it into dashes. The items carry their
+   * own vertical padding instead.
+   */
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  position: relative;
+  padding-block: var(--space-3);
+  /* Leaves the marker column clear so the copy and the body line up under each
+     other rather than under the number. */
+  padding-inline-start: calc(var(--size-control-sm) + var(--space-3));
+}
+
+/*
+ * The rail joining one marker to the next. It runs from this step's marker to
+ * the next one's — hence the negative block end, which carries it across the
+ * item boundary into the following step's top padding — and the marker sits on
+ * top of it, so the line is drawn once and punched through rather than assembled
+ * from two stubs that have to meet exactly.
+ *
+ * Not on the last item: a line trailing off the bottom reads as a step that was
+ * cut off.
+ */
+.item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  inset-block-start: var(--space-3);
+  inset-block-end: calc(-1 * var(--space-3));
+  /* Centres a hairline on the marker's axis whichever way the page reads. */
+  inset-inline-start: calc((var(--size-control-sm) - var(--border-hairline)) / 2);
+  inline-size: var(--border-hairline);
+  background-color: var(--color-border);
+}
+
+/* The rail below a finished step is finished too — reinforcement only, never the
+   carrier: the badge beside it says the word. */
+.item[data-status='done']::before {
+  background-color: var(--color-success);
+}
+
+.header {
+  display: grid;
+  /* Marker, then the copy. The badge drops under the copy at the narrowest
+     widths rather than squeezing the title to two characters. */
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2) var(--space-3);
+}
+
+.marker {
+  position: absolute;
+  inset-inline-start: 0;
+  /* Aligned with the top of the title rather than with the item's edge, and
+     above the rail it interrupts. */
+  inset-block-start: var(--space-3);
+  z-index: var(--z-base);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  background-color: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-pill);
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    border-color var(--duration-fast) var(--easing-standard),
+    color var(--duration-fast) var(--easing-standard);
+}
+
+.item[data-status='done'] .marker {
+  color: var(--color-on-success-subtle);
+  background-color: var(--color-success-subtle);
+  border-color: var(--color-success);
+}
+
+.item[data-status='current'] .marker {
+  color: var(--color-on-accent);
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.item[data-status='error'] .marker {
+  color: var(--color-on-danger-subtle);
+  background-color: var(--color-danger-subtle);
+  border-color: var(--color-danger);
+}
+
+.headingGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.title {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-tight);
+}
+
+/* An upcoming step is not yet the reader's problem, so it recedes. Never below
+   the muted role — this is de-emphasis, not disablement, and the text still has
+   to be readable by somebody planning ahead. */
+.item[data-status='upcoming'] .title {
+  color: var(--color-on-surface-muted);
+  font-weight: var(--font-weight-medium);
+}
+
+.summary {
+  margin: 0;
+  max-inline-size: var(--measure-body);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+.header > :last-child {
+  justify-self: start;
+}
+
+/* The open step's own controls. Fades in rather than sliding or growing: the
+   list's items move when this appears, and animating a height would drag every
+   step below it through the transition. */
+.body {
+  margin-block-start: var(--space-3);
+  animation: stepper-body-in var(--duration-fast) var(--easing-enter);
+}
+
+@keyframes stepper-body-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/*
+ * From 40rem the badge sits on the heading row. Below it the two-column grid
+ * would leave the title about two words wide at 320px, so the badge wraps under
+ * the copy instead. A literal, like every other breakpoint in this codebase: a
+ * media condition cannot read a custom property.
+ */
+@media (min-width: 40rem) {
+  .header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .header > :last-child {
+    grid-column: 2;
+    justify-self: end;
+  }
+}

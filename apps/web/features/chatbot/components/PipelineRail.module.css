@@ -1,0 +1,204 @@
+/*
+ * The rail. Four tiles on a line, each one a link to the card that sets it.
+ *
+ * Every measurement here is logical — `inset-inline`, `border-inline`,
+ * `margin-inline` — so the whole diagram mirrors under `dir="rtl"` and the flow
+ * still reads from the start of the line to the end of it.
+ */
+
+.rail {
+  display: grid;
+  /* Four equal columns, so the connectors are all the same length whatever the
+     value lines say. `minmax(0, 1fr)` rather than `1fr`: a long value line must
+     wrap inside its tile instead of widening the column it sits in. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.item {
+  position: relative;
+  min-inline-size: 0;
+}
+
+/*
+ * The connector, drawn by the tile it leads *out of* rather than as an element
+ * of its own — there are three of them between four tiles, and an element per
+ * gap would mean either a fifth stub or a special case at the end.
+ *
+ * It runs from the previous marker's centre to this one's. The percentages
+ * resolve against this tile — one grid column — so the previous marker's centre
+ * is a whole column back, and this one's is a column-width in from the end.
+ */
+.item + .item::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: calc(-100% + var(--space-3) + var(--size-stage-marker) / 2);
+  inset-inline-end: calc(100% - var(--space-3) - var(--size-stage-marker) / 2);
+  /* Centred on the marker row: the tile's block padding, plus half a marker. */
+  inset-block-start: calc(var(--space-3) + var(--size-stage-marker) / 2);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+  transition: border-color var(--duration-fast) var(--easing-standard);
+}
+
+/* The flow, as far as it gets. Past the first blocking stage every connector
+   stays on the border role, which is what makes the stop visible. */
+.item[data-flowing='true'] + .item::before {
+  border-block-start-color: var(--color-accent);
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+  /*
+   * The tiles arrive in reading order and then stop. One pass, no loop: this is
+   * a diagram somebody reads once, and a repeating animation on a settings page
+   * is furniture that moves. `backwards`, so a staggered tile is invisible
+   * during its delay rather than flashing in and out. The token layer flattens
+   * both durations to 1ms under `prefers-reduced-motion`, which is why nothing
+   * here branches on the preference.
+   */
+  animation: stageEnter var(--duration-fast) var(--easing-enter) backwards;
+}
+
+@media (hover: hover) {
+  .tile:hover {
+    background: var(--color-surface-hover);
+  }
+}
+
+.marker {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--size-stage-marker);
+  block-size: var(--size-stage-marker);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+}
+
+.dot {
+  inline-size: var(--size-marker-dot);
+  block-size: var(--size-marker-dot);
+  border-radius: var(--radius-pill);
+  /* The one property that changes when readiness does — the last source
+     finishing while somebody watches — so it is the only one that transitions. */
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+.marker[data-tone='live'] .dot {
+  background: var(--color-success);
+}
+
+.marker[data-tone='blocking'] .dot {
+  background: var(--color-warning);
+}
+
+.marker[data-tone='failed'] .dot {
+  background: var(--color-danger);
+}
+
+.marker[data-tone='inert'] .dot {
+  background: var(--color-on-surface-subtle);
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.label {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-tight);
+  color: var(--color-on-surface);
+  overflow-wrap: anywhere;
+}
+
+.value {
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  color: var(--color-on-surface-muted);
+  overflow-wrap: anywhere;
+}
+
+.item:nth-child(2) .tile {
+  animation-delay: var(--duration-stagger);
+}
+
+.item:nth-child(3) .tile {
+  animation-delay: calc(var(--duration-stagger) * 2);
+}
+
+.item:nth-child(4) .tile {
+  animation-delay: calc(var(--duration-stagger) * 3);
+}
+
+@keyframes stageEnter {
+  from {
+    opacity: 0;
+  }
+}
+
+/*
+ * Below 48rem the rail becomes a vertical ladder — the same marker-and-connector
+ * vocabulary stage B's rule list uses, so the page speaks one language about
+ * "these things happen in order" at every width rather than two.
+ */
+@media (max-width: 47.999rem) {
+  .rail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tile {
+    flex-direction: row;
+    align-items: start;
+    gap: var(--space-3);
+  }
+
+  .item + .item::before {
+    /* Now a rule down the gutter, from the marker above to the marker below. */
+    inset-inline-start: calc(var(--space-3) + var(--size-stage-marker) / 2);
+    inset-inline-end: auto;
+    inset-block-start: calc(-1 * var(--space-3));
+    block-size: calc(var(--space-3) * 2);
+    border-block-start: none;
+    border-inline-start: var(--border-hairline) solid var(--color-border);
+  }
+
+  .item[data-flowing='true'] + .item::before {
+    border-inline-start-color: var(--color-accent);
+  }
+}
+
+/*
+ * Forced colors drops every background, which takes the dots and the connectors
+ * with them. The value lines already carry each stage's state in words, so
+ * nothing is lost — but the markers have to stay visible as *shapes* or the rail
+ * collapses into four unrelated links.
+ */
+@media (forced-colors: active) {
+  .marker {
+    border: var(--border-hairline) solid CanvasText;
+  }
+
+  .dot {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+
+  .item + .item::before {
+    border-block-start-color: CanvasText;
+  }
+}

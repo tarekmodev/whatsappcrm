@@ -353,6 +353,9 @@
   --size-bar: var(--scale-size-bar);
   --size-marker: var(--scale-size-marker);
   --size-marker-dot: var(--scale-size-marker-dot);
+  /* The disc a stage marker draws on a pipeline rail or a rule ladder, with a
+     `--size-marker-dot` dot inside it (TAR-813). */
+  --size-stage-marker: var(--scale-size-stage-marker);
   /* The tenant logo's reserved box: chrome-sized in the shell, larger above the
      sign-in form. See `BrandLogo` for why both axes are fixed. */
   --size-brand-block: var(--scale-size-brand-block-sm);

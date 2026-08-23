@@ -1,0 +1,50 @@
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.caption {
+  font-size: var(--font-size-caption);
+  color: var(--color-on-surface-muted);
+}
+
+/*
+ * `MessageBubble`'s outbound face, in the same roles and with the same corner
+ * squared off, so the preview and the thread are one drawing. Not imported: that
+ * component takes a `MessageResponse` and carries delivery state, attachments
+ * and a run's alignment, none of which a setting has.
+ *
+ * The enter animation is the bubble's own, and it fires only when the preview
+ * first has something to show — a keystroke updates the text in place, because a
+ * bubble that re-animated on every character would be unreadable while typing.
+ */
+.bubble {
+  align-self: start;
+  max-inline-size: min(100%, var(--measure-body));
+  min-inline-size: 0;
+  padding: var(--space-3);
+  background: var(--color-accent-subtle);
+  border: var(--border-hairline) solid var(--color-accent-subtle);
+  border-radius: var(--radius-md);
+  border-start-end-radius: var(--radius-sm);
+  color: var(--color-on-accent-subtle);
+  font-size: var(--font-size-body-sm);
+  /* The message carries its own line breaks; collapsing them rewrites it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  animation: previewEnter var(--duration-fast) var(--easing-enter);
+}
+
+@keyframes previewEnter {
+  from {
+    opacity: 0;
+  }
+}
+
+.silent {
+  max-inline-size: var(--measure-body);
+  font-size: var(--font-size-caption);
+  color: var(--color-on-surface-muted);
+}

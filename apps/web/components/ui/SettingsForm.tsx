@@ -30,7 +30,7 @@ import styles from './SettingsForm.module.css';
  *
  * The layout is published to the fields through context rather than passed to
  * each one, because a `Field` two components deep — `ModelChoiceField`,
- * `ConfidenceField` — still belongs to this form's layout, and threading a prop
+ * `ConfidenceBand` — still belongs to this form's layout, and threading a prop
  * through each of them would let one be forgotten.
  *
  * `noValidate` is set here rather than by each caller: the app validates in the

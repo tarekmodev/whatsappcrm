@@ -856,7 +856,7 @@ unused area in the product.
   belongs to the second section and every one after it (`.section + .section`), so a form
   of one group draws no rule and a form of three never ends on one.
 - **The layout reaches the fields through context, not props.** A `Field` two components
-  deep — `ModelChoiceField`, `ConfidenceField` — still belongs to the form's layout, and a
+  deep — `ModelChoiceField`, `ConfidenceBand` — still belongs to the form's layout, and a
   prop threaded through each of them is a prop one of them will be missing.
 - **A save failure is inline, above the action** (`FormError`), never a toast: a message
   that slides away takes the reason with it while the reader is still looking at the fields
@@ -924,6 +924,51 @@ The slider's rail is `--color-surface-sunken` rather than `--color-border-strong
 fourth row: a border-weight rail left the knob's ring at 2.15:1 in the dark theme, which is
 the whole reason this table exists.
 
+#### Ordered stages: a rail and a ladder (TAR-813)
+
+Some settings are not a set of fields, they are a **sequence the product walks**, and the
+reader's real question is where it stops. The chatbot is the first: every inbound message
+passes four gates in a fixed order, and the old form showed seven unrelated-looking
+controls and left the order to be inferred.
+
+One vocabulary, drawn twice, so a screen never says "these happen in order" two ways:
+
+- **A rail** for stages across a page — a `--size-stage-marker` disc holding a
+  `--size-marker-dot` dot, a `--font-size-body-sm` label, a `--font-size-caption` line
+  saying what the stage is currently set to, and a `--border-hairline` connector to the
+  next. Horizontal at `48rem` and up, a vertical ladder below it.
+- **A ladder** for rules inside one card — the same marker and connector in a gutter beside
+  `SettingsForm`'s two columns, one rung per rule.
+
+The rules that make it a diagram rather than decoration:
+
+- **The connector carries the state, not just the dot.** Every connector before the first
+  blocking stage is `--color-accent`; from that stage on they drop to `--color-border`, so
+  the flow visibly stops where it actually stops. A stage past the block draws an inert
+  marker — three green dots after an amber one would say the opposite of what is happening.
+- **Colour is never the only carrier.** Each stage prints its condition in words, and the
+  link's accessible name is the label, the value line _and_ whether the flow stops there.
+  The markers are `aria-hidden`; under `forced-colors` they keep an outline so the sequence
+  is still a sequence.
+- **No ordinal numbers.** Numbers imply a wizard somebody steps through. This is a state
+  diagram of a path the product walks on its own.
+- **Nothing is editable about the shape.** The stages come from an architecture decision,
+  not from data: there is no add, no reorder and no connect gesture. A surface that needs
+  those is a graph editor and a different story — do not grow one out of this.
+- **A stage links to the card that sets it**, and moves focus to that card's heading.
+  `SectionCard` puts `tabindex="-1"` on the heading of any card with an `id` for this; the
+  focus call is deferred a task, because a fragment navigation resets focus to the body as
+  part of the link's own default action.
+
+A rule that is real and **not configurable** stays on the ladder with a quieter marker and
+a `StaticFieldValue` saying there is nothing to set. Leaving it out is tidier and wrong: it
+is still a reason the sequence stops, and the reader debugging that has to be able to see
+it.
+
+Both composites live in `features/chatbot/components/` while the chatbot is their only
+consumer. The second surface that needs ordered stages promotes them to `components/ui/`
+rather than copying them.
+
 ### Detail views
 
 A contact, a ticket, a conversation:
@@ -935,6 +980,56 @@ A contact, a ticket, a conversation:
 The tab is a real link and the active tab is in the URL, for the same reason the filters
 are. Below the breakpoint the summary panel stacks above the tabbed area rather than
 sitting beside it.
+
+### Stepped setup flows (TAR-814)
+
+`Stepper` + `StepperStep` is the frame for work with a **real dependency chain** in it —
+step 3 cannot be attempted until step 2 has happened. The WhatsApp connect wizard
+(`features/whatsapp/components/WhatsAppConnectWizard.tsx`) is the instance it was built
+for and the worked example.
+
+**It is not the third way of listing things.** Three patterns look alike from a distance
+and are answers to different questions:
+
+| Pattern     | Use when                                           | Shape                                            |
+| ----------- | -------------------------------------------------- | ------------------------------------------------ |
+| `Tabs`      | Several views of the same thing, in any order      | One visible at a time, chosen by the reader      |
+| A checklist | Independent jobs that happen to be listed together | All open, any order, each skippable — onboarding |
+| `Stepper`   | One job whose parts depend on the ones before them | One open at a time, order fixed, none skippable  |
+
+The onboarding checklist is deliberately **not** a stepper: an admin may invite agents
+before connecting a number, and drawing that as blocked would be a lie about the product.
+
+**The four statuses are the whole vocabulary**: `done`, `current`, `upcoming`, `error`.
+
+- `error` implies open. A step that failed is the one the reader has to deal with, so it
+  takes `aria-current="step"` exactly as `current` does.
+- There is no fifth for "in flight". A step mid-request is still `current`, and the
+  pending state belongs on the control the reader just pressed (`Button isPending`) — a
+  marker saying it too would say it in a place nobody is looking.
+- **A step nobody can reach is never `error`.** Deriving that correctly is the point of
+  keeping the machine in a pure module (`features/whatsapp/wizard.ts`, with its own test)
+  rather than inside the component: a red marker beside work that has not started sends
+  somebody looking for a problem that is not theirs yet.
+
+**Every status is server-derived, never asserted.** A step is `done` because the API said
+the thing happened, on the same reasoning `contracts/onboarding.ts` gives for its own
+checklist. A step a client could mark done makes the flow decoration rather than a
+description of the workspace.
+
+**Anatomy.** A `progressbar` above the list carrying the same sentence the visible count
+shows (`aria-valuetext`, not a bare percentage); then an `<ol role="list">`, one `<li>`
+per step. Each row is a marker in the gutter — a numeral, a tick, or an alert glyph, all
+`aria-hidden` — a title, a one-line summary that is present whatever the status, and a
+`Badge` carrying **the status in words**. The rail between markers is reinforcement only.
+The open step's body appears under it and fades in over `--duration-fast`; a closed step
+shows its summary and keeps its controls out of the tab order.
+
+**A done step still says what it produced.** The summary is where — "Connected to Northwind
+Traders", "Sending from +966501234567" — so a flow resumed a day later is checkable at a
+glance without reopening anything. And when every step is done the list **stays on
+screen**: TAR-36's rule for the onboarding checklist holds here too, because a
+congratulation that swallows the list takes the way back with it.
 
 ### The inbox
 
@@ -1194,6 +1289,7 @@ space:
 | A row's actions           | `RowActions` — see "Row actions" for the ladder                                         |
 | An action the list shares | `Notice variant="quiet"` above the table, one `Button` — see "A remedy above the queue" |
 | Tabs                      | `Tabs`                                                                                  |
+| A stepped setup flow      | `Stepper` + `StepperStep` — see "Stepped setup flows"                                   |
 | A filter row              | `FilterBar`                                                                             |
 | Filter pills              | `FilterPills`                                                                           |
 | A search filter           | `SearchField`                                                                           |
@@ -1201,7 +1297,8 @@ space:
 | A settings form           | `SettingsForm` — see "Settings forms"                                                   |
 | An on/off setting         | `Switch` — never a checkbox for a live setting                                          |
 | A multi-select tick       | `Checkbox`, or `CheckboxGroup` for a whole set                                          |
-| A value in a range        | `Slider`                                                                                |
+| A value in a range        | `Slider` — `trackSlot` to repaint the rail, `layout="block"` for a promoted readout     |
+| Stages that run in order  | A rail or a ladder — see "Ordered stages"                                               |
 | A date range              | `DateRangeField`                                                                        |
 | Collapsed filters         | `FilterMenu` + `ActiveFilterChips`                                                      |
 | A status chip or count    | `Badge` — see "Status vocabulary" for how many                                          |
