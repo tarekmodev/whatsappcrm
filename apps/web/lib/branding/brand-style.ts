@@ -1,4 +1,9 @@
-import { brandCssVariables, type BrandTheme, type TenantBranding } from '@whatsappcrm/contracts';
+import {
+  BRANDING_DEFAULTS,
+  brandCssVariables,
+  type BrandTheme,
+  type TenantBranding,
+} from '@whatsappcrm/contracts';
 
 /**
  * The tenant's accent tokens as a stylesheet, for the root layout to emit.
@@ -33,7 +38,43 @@ const THEME_SELECTORS: Record<BrandTheme, string> = {
   dark: ":root[data-theme='dark']",
 };
 
+/**
+ * A tenant that has chosen neither colour gets **no block at all**, and that is
+ * the difference between "the platform's accent" and "a hex that happens to equal
+ * it" (TAR-801).
+ *
+ * `brandCssVariables` derives one accent from one hue and emits it into both
+ * themes, because that is the contract a tenant's colour has: it is passed
+ * through untouched. The platform layer is not bound by that, and since the Reqta
+ * port it is not *expressible* under it either — an accent is a ground under a
+ * button label in one direction and link text in the other, and against a
+ * near-black page a single hex cannot clear AA in both (`semantic.css`). The
+ * token layer answers that by inverting the pair per theme.
+ *
+ * Emitting the defaults would overwrite that answer with the light theme's hue in
+ * both themes, and every unbranded console — which is most of them — would render
+ * dark-mode links at 2.79:1. So when there is nothing to say, this says nothing
+ * and `semantic.css` stands.
+ *
+ * A tenant who *has* picked a colour still gets it exactly as before. The dark
+ * theme's accent-as-link is under-contrast for them too, at whatever their hue
+ * measures; that is the pre-existing shape of the tenant contract rather than
+ * something this function may quietly change, and it needs either an eighth
+ * tenant-owned token or a per-theme step of the tenant's hue — see 0001's
+ * "What TAR-801 left open".
+ */
+export function isPlatformDefault(branding: TenantBranding): boolean {
+  return (
+    branding.primaryColor === BRANDING_DEFAULTS.primaryColor &&
+    branding.accentColor === BRANDING_DEFAULTS.accentColor
+  );
+}
+
 export function brandStyleSheet(branding: TenantBranding): string {
+  if (isPlatformDefault(branding)) {
+    return '';
+  }
+
   return (Object.keys(THEME_SELECTORS) as BrandTheme[])
     .map((theme) => {
       const declarations = Object.entries(brandCssVariables(branding, theme))

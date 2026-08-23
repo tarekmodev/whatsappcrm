@@ -87,8 +87,8 @@ client renders unconditionally and never branches on "has this tenant configured
 | Field          | Type                      | Notes                                                               |
 | -------------- | ------------------------- | ------------------------------------------------------------------- |
 | `productName`  | string, 1–60              | Defaults to `PLATFORM_PRODUCT_NAME`, then to `WhatsApp CRM`         |
-| `primaryColor` | `#rrggbb`                 | Defaults to `#067a52`                                               |
-| `accentColor`  | `#rrggbb`                 | Defaults to `#2e4a63`. Decorative only — never rendered behind text |
+| `primaryColor` | `#rrggbb`                 | Defaults to `#4f46e5`                                               |
+| `accentColor`  | `#rrggbb`                 | Defaults to `#7a5af8`. Decorative only — never rendered behind text |
 | `supportEmail` | string \| `null`          | `null` means the tenant has cleared it                              |
 | `logo`         | `BrandingAsset` \| `null` | `null` until one is uploaded                                        |
 | `favicon`      | `BrandingAsset` \| `null` |                                                                     |
