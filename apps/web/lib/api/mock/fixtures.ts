@@ -1,5 +1,6 @@
 import {
   AI_CONFIG_DEFAULTS,
+  ASSIGNMENT_POLICY,
   ONBOARDING_STEP_IDS,
   SLA_DEFAULTS,
   type AiConfigResponse,
@@ -243,7 +244,30 @@ export interface TenantScoped {
   readonly tenantId: string;
 }
 
-export type MockUser = UserResponse & TenantScoped;
+/**
+ * `UserResponse.assignmentCapacity` is **derived, so it is not seeded** (TAR-384):
+ * two of its three fields are a live count and a coalesce over the tenant
+ * default, and a fixture holding a stale copy of either would let the console
+ * render a workload nobody has. The stored half is the override alone, and
+ * `toUserResponse` computes the rest per request — the same way the API's
+ * serializer will.
+ */
+export type MockUser = Omit<UserResponse, 'assignmentCapacity'> &
+  TenantScoped & {
+    /** The per-agent cap. Absent or `null` means inherit the tenant default. */
+    readonly maxConcurrentTickets?: number | null;
+  };
+
+/**
+ * The tenant-scoped singleton behind `GET /v1/assignment-settings`, keyed by
+ * tenant for the reason `MockAiConfigRecord` is: a tenant has exactly one, and a
+ * surrogate key would invite a handler to look one up by something other than
+ * the caller's tenant.
+ */
+export interface MockAssignmentSettings extends TenantScoped {
+  readonly defaultMaxConcurrentTickets: number;
+  readonly updatedAt: string | null;
+}
 export type MockTeam = TeamResponse & TenantScoped;
 export type MockTag = Tag & TenantScoped;
 export type MockContact = ContactResponse & TenantScoped;
@@ -710,6 +734,16 @@ export const MOCK_USERS: readonly MockUser[] = [
     teamIds: [TEAM_IDS.billing],
     occupiesSeat: true,
     lastSeenAt: '2026-08-10T08:40:00.000Z',
+    /**
+     * The one agent carrying an override, and it is set to exactly what she is
+     * already holding — so the flagged queue's `all_at_capacity` row has somebody
+     * whose limit is genuinely in the way, and the cap-edit control opens on a
+     * real "1 of 1" rather than on a number nothing explains (TAR-384).
+     *
+     * Liang has none, so the other half of the control — a cap inherited from the
+     * workspace default, and clearing an override back to it — is reachable too.
+     */
+    maxConcurrentTickets: 1,
     // The mock transport does not model lockout yet: TAR-59 adds the enforcement
     // that moves this off `null`, and TAR-35 the admin view that reads it. Until
     // then every fixture reports "you are not allowed to know", which is a valid
@@ -1735,6 +1769,31 @@ export const MOCK_CUSTOM_FIELD_DEFINITIONS: readonly MockCustomFieldDefinition[]
  * left inactive, so a supervisor finds a rule needing a new target rather than
  * finding it silently gone.
  */
+/**
+ * The workspace default cap every agent without an override inherits.
+ *
+ * Both tenants get a row, because `GET /v1/assignment-settings` is tenant-scoped
+ * and a second tenant reading the first one's default is exactly the leak the
+ * two-tenant fixture set exists to catch. The value is
+ * `ASSIGNMENT_POLICY.defaultMaxConcurrentTickets` rather than a literal — that
+ * constant is what the column default and the CHECK constraint are written from,
+ * and a third copy here would be the drift they were consolidated to prevent.
+ */
+export const MOCK_ASSIGNMENT_SETTINGS: readonly MockAssignmentSettings[] = [
+  {
+    tenantId: MOCK_TENANT_ID,
+    defaultMaxConcurrentTickets: ASSIGNMENT_POLICY.defaultMaxConcurrentTickets,
+    updatedAt: '2026-08-01T09:00:00.000Z',
+  },
+  {
+    // No row was ever written for this tenant, which is the `updatedAt: null`
+    // case the contract describes: the default still applies, nobody chose it.
+    tenantId: OTHER_TENANT_ID,
+    defaultMaxConcurrentTickets: ASSIGNMENT_POLICY.defaultMaxConcurrentTickets,
+    updatedAt: null,
+  },
+];
+
 export const MOCK_ASSIGNMENT_RULES: readonly MockAssignmentRule[] = [
   {
     tenantId: MOCK_TENANT_ID,

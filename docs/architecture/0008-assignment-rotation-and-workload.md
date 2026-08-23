@@ -754,13 +754,14 @@ PATCH /api/v1/assignment-settings   → { defaultMaxConcurrentTickets }   assign
 PATCH /api/v1/users/{id}            → maxConcurrentTickets on the body  assignment_rule:write, in addition to user:update
 ```
 
-Until they exist, the tenant default is the column default, which is a working system.
+> ✅ **Built — this surface has an owner and exists. The line above is still the specification.**
+> It was unowned for three releases, exactly the shape amendment 1 warns about; **TAR-384** claimed
+> it. The three routes are as written, plus a self-read (`GET /assignment-settings/me`) and the
+> per-agent value published as a gated `assignmentCapacity` on `GET /api/v1/users` — because a
+> roster embedded here would be an unbounded payload. Schemas, error shapes, enforcement order and
+> audit actions are in [amendment 4](#amendment-4--the-cap-editing-surface-built-tar-384).
 
-**TAR-384 claims this surface** (2026-08-22), and its contract keeps the split above rather than
-folding the per-agent cap into `/assignment-settings`. It is not built or merged yet; when it
-lands it belongs here as a numbered amendment, alongside the two additions it makes that this
-section does not specify — an agent's own read-only capacity view, and a permission-gated
-capacity field on the people list.
+Before it existed, the tenant default was the column default, which was a working system.
 
 ### Realtime
 
@@ -1076,3 +1077,135 @@ so the flagged queue now has rows to order. Amendment 2 built the endpoint a sup
 This one decides what they are looking at and in what order. The order and the reason filter are
 asserted against a fixture that sets the three columns directly rather than through the router, so
 the query is proved independently of whichever job produced the rows.
+
+### Amendment 4 — the cap-editing surface, built (TAR-384)
+
+_The section above records this surface under "Specified, and required by no acceptance criterion"
+and names no owner. **It has one now: TAR-384**, and this amendment is what shipped. The endpoint
+table there is unchanged and still correct; everything below fills in what it did not say._
+
+#### What was left open, and how it is settled
+
+The table published three lines and three permissions. It did not fix a request or response schema,
+an error shape, or where the per-agent value is _read_ — only where it is written. Those are the
+gaps, and they are settled as follows.
+
+**The split between tenant and agent is kept.** TAR-384's acceptance criteria asked for per-agent
+`maxConcurrentTickets` on `GET /api/v1/assignment-settings`. That would make the response a roster,
+and a roster grows with tenant headcount — an unbounded payload, against this repo's standing rule,
+and a second people list to filter and page beside `GET /api/v1/users`, which is already cursor-paged
+and filterable by `role`, `status`, `teamId` and `q`. So `/assignment-settings` stays the
+tenant-scoped singleton this document specified, and the per-agent number is published as a **gated
+field on the people list** instead. What the story asked for is delivered in three pieces rather than
+one endpoint.
+
+**Four surfaces, three of them new:**
+
+```
+GET   /api/v1/assignment-settings      assignment_rule:read     → AssignmentSettingsResponse
+PATCH /api/v1/assignment-settings      assignment_rule:write    → AssignmentSettingsResponse
+GET   /api/v1/assignment-settings/me   any principal            → OwnAssignmentCapacityResponse
+GET   /api/v1/users                    user:read                → UserResponse.assignmentCapacity,
+                                                                   gated on assignment_rule:read|write
+PATCH /api/v1/users/{id}               user:update
+                                       + assignment_rule:write iff the body carries maxConcurrentTickets
+```
+
+`AssignmentSettingsController` lives in `AssignmentModule`; the per-agent write stays in
+`PeopleModule`, on the resource that owns the column. No module imports the other — the two reads
+they share are free functions in `apps/api/src/people/agent-capacity.ts`, placed there on the same
+reasoning as `supervisor-recipients.ts` (delta 4 of 0009): a pure helper two modules need should not
+live inside one of them, and `UsersService` is L3 and could not import L4 anyway.
+
+#### Three rules that are easy to get wrong
+
+1. **`assignmentCapacity` is gated on `assignment_rule:read` _or_ `assignment_rule:write`**, and the
+   gate is in the serializer rather than the handler — `UserResponse.security`'s precedent, and for
+   the same reason: a future endpoint returning a `UserResponse` cannot leak it by forgetting to.
+   `read || write` rather than `read` alone, so a role granted write without read is not handed
+   `null` back for a value it just set. This is the one field on this surface where a mistake is a
+   disclosure: `user:read` is held by every agent, so flat cap fields would give anyone in the tenant
+   a live readout of a named colleague's workload.
+2. **A body carrying `maxConcurrentTickets` without `assignment_rule:write` is refused, not
+   stripped** — `CapacityChangeNotPermittedError`, beside `RoleAssignmentNotPermittedError`, mapping
+   to `forbidden`. A privilege-shaped change that appears to have succeeded is worse than a refusal;
+   the rule TAR-79 established for `role`.
+3. **The permission check runs after the row is resolved.** Enforcement order inside
+   `UsersService.update` is **validate (pipe) → resolve the row (404) → permission-on-field (403) →
+   domain invariants (409) → write**. A caller without the permission patching an id that does not
+   exist gets `not_found`, because a 403 on an unknown id is an existence oracle — `people.http.ts`'
+   documented rule, unchanged.
+
+`null` on `maxConcurrentTickets` clears the override and returns the agent to the tenant default;
+omitting the field leaves it alone. The two are distinct and a handler must not collapse them.
+
+#### Error shapes — no new codes
+
+The existing taxonomy covers every refusal and `API_ERROR_STATUS` already fixes each status, so
+adding a code here would be vocabulary for its own sake. `unauthenticated` / `tenant_mismatch` (401),
+`forbidden` (403), `validation_failed` (400, with `details[].path` naming the field), `not_found`
+(404), `rate_limited` (429). The 1–1000 bounds are enforced in Zod from
+`ASSIGNMENT_POLICY.min/maxMaxConcurrentTickets`; the `users_max_concurrent_tickets_range` and
+`tenant_settings_default_max_concurrent_tickets_range` CHECKs are the backstop, and a constraint
+violation would surface as a 500 rather than the published envelope — which is why the edge
+validation is what produces the shape.
+
+#### Behaviour worth stating
+
+- **A missing `tenant_settings` row answers the built-in default with `updatedAt: null`, not a 404.**
+  That tenant has a working effective default — the same `coalesce` the resolver does at
+  `rotation-fallback.resolver.ts:170` — and a 404 would say otherwise. `PATCH` **upserts**, so the
+  missing-row case is not a second failure path.
+- **`updatedAt` is the settings row's last write, and nothing more.** It is deliberately _not_ a
+  "has anybody configured this" signal, and a console must not render it as one: provisioning writes
+  the row for every tenant without choosing a cap (`tenant-provisioning.service.ts:461`), and the
+  column also moves when `timezone`, `locale` or `businessHours` change. The question "was this
+  chosen deliberately?" is answered by the `assignment_settings.updated` audit rows below — which is
+  why the tenant write is audited even when the number does not move.
+- **Last write wins.** No `If-Match`, no version column. Two supervisors editing one integer seconds
+  apart is not worth a concurrency protocol, and the trail records both.
+- **Lowering a cap below an agent's current load is allowed and takes no ticket off them.** Rotation
+  skips them until they close down to the new number. Stated because it looks like a bug from the
+  queue; the failure-mode table above already rules on it.
+- **A change takes effect on the very next assignment, with no restart and no invalidation** — the
+  story's third acceptance criterion, and it holds because _nothing was added_.
+  `RotationFallbackResolver.readCandidates` reads `coalesce(u.max_concurrent_tickets, d.value)` in
+  raw SQL per job; there is no cap cache anywhere, and the principal cache carries permissions, not
+  workload. The way to break this criterion is to add a cache in front of either column.
+- **Raising a cap does not re-route the ticket already in front of the supervisor.**
+  `tickets_routing_deferred_consistent` holds a deferred ticket in that state until something writes
+  it out, and nothing re-enqueues deferred tickets. The freed capacity applies to the _next_ ticket
+  routed; the one on screen is assigned by hand through `POST /tickets/{id}/assign` (amendment 2).
+  That satisfies the criterion as written, and it is the half a supervisor will not guess.
+
+#### Audit
+
+Two actions, on the `assignment_rule.*` precedent — this is a permissioned, privilege-shaped field,
+not an ordinary one:
+
+```ts
+assignmentSettingsUpdated: 'assignment_settings.updated',  // target tenant_settings/<tenantId>, { from, to }
+userCapacityChanged:       'user.capacity_changed',        // target user/<userId>,               { from, to }
+```
+
+`from`/`to` are nullable on both — `null` means "inherits" for an agent and "there was no settings
+row" for a tenant. **No session revocation:** a cap change alters what work reaches someone, not what
+they may do, and the principal carries no cap to go stale.
+
+#### Cost
+
+`activeTicketCount` is one `GROUP BY assigned_user_id` over the page's ids — never one query per row
+— bounded by `CursorPageQuerySchema.limit` (max 100) and skipped entirely for a caller who would get
+`null`, so an agent's people list pays nothing. `tickets_tenant_assigned_user_queue_idx` covers the
+predicate and the grouping. **Unmeasured**, and recorded as such: no benchmark exists for the
+aggregate on a hot list, and if it shows up in p95 the fallback is a separate workload endpoint and a
+second round trip.
+
+#### No schema change, and nothing to migrate
+
+`users.max_concurrent_tickets INT NULL` and
+`tenant_settings.default_max_concurrent_tickets INT NOT NULL DEFAULT 5`, their CHECKs and
+`assignment-workload-schema.int-spec.ts` all landed with TAR-272 and are unchanged. The Database
+Specialist verified the CHECK bounds still equal `ASSIGNMENT_POLICY`'s constants and that no cache
+sits between the column and the resolver, which is what makes the acceptance criterion above a
+property rather than a hope.

@@ -1,5 +1,6 @@
 import { ApiException } from '../common/errors/api.exception';
 import {
+  CapacityChangeNotPermittedError,
   EmailAlreadyRegisteredError,
   LastAdminRequiredError,
   RoleAssignmentNotPermittedError,
@@ -48,7 +49,8 @@ export function translatePeopleFailure(error: unknown): never {
   if (
     error instanceof SelfRoleChangeError ||
     error instanceof RoleEscalationError ||
-    error instanceof RoleAssignmentNotPermittedError
+    error instanceof RoleAssignmentNotPermittedError ||
+    error instanceof CapacityChangeNotPermittedError
   ) {
     throw new ApiException('forbidden', error.message);
   }

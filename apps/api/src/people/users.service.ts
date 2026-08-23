@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   type AgentAvailability,
+  type AgentCapacity,
   type CursorPage,
   type SessionPrincipal,
   type TenantRole,
@@ -20,8 +21,23 @@ import { Prisma } from '../generated/prisma/client';
 import { LoginThrottleService } from '../identity/login-throttle.service';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { SessionRevocationService } from '../rbac/session-revocation.service';
-import { toUserResponse, type UserRow, type UserSecurityRow } from './people.mapper';
-import { LastAdminRequiredError, SelfRoleChangeError, UserNotFoundError } from './people.errors';
+import {
+  readActiveTicketCounts,
+  readTenantCapacityDefault,
+  toAgentCapacity,
+} from './agent-capacity';
+import {
+  toUserResponse,
+  type UserCapacityRow,
+  type UserRow,
+  type UserSecurityRow,
+} from './people.mapper';
+import {
+  CapacityChangeNotPermittedError,
+  LastAdminRequiredError,
+  SelfRoleChangeError,
+  UserNotFoundError,
+} from './people.errors';
 import { assertRoleAssignable } from './role-assignment';
 import { assertTeamsExist } from './team-references';
 
@@ -49,6 +65,10 @@ const USER_PROJECTION = {
   // for nothing.
   lockedUntil: true,
   failedLoginAttempts: true,
+  // One more scalar out of the same tuple, gated the same way (TAR-384): the
+  // response field is assembled by `capacityFor`, which returns `null` for a
+  // caller who may not see it, so widening the projection widens no response.
+  maxConcurrentTickets: true,
   // Prisma resolves this as one batched `IN` over the page's users, not one
   // query per row, and it is served by TAR-80's `(tenant_id, user_id, team_id)`
   // index without touching the heap.
@@ -116,7 +136,12 @@ export class UsersService {
       take: query.limit + 1,
     });
 
-    return toPage(rows, query.limit, this.maySeeSecurity());
+    // Bounded by `take` above — at most `limit + 1` ids, and `limit` is capped
+    // at 100 by `CursorPageQuerySchema`. Two extra statements for a caller who
+    // may see the field, and none at all for an agent.
+    const capacities = await this.capacitiesFor(rows.slice(0, query.limit));
+
+    return toPage(rows, query.limit, this.maySeeSecurity(), capacities);
   }
 
   /**
@@ -136,16 +161,32 @@ export class UsersService {
       this.assertMayChangeRole(userId, input.role, principal);
     }
 
-    const response = await this.prisma.$tenantTransaction(async (tx) => {
+    // Read here, checked inside the transaction once the target row exists.
+    // `@RequirePermission` metadata is static and this condition depends on the
+    // body, which is why the guard cannot express it — the same reason `role`
+    // is enforced in this service (TAR-79, delta 1).
+    const mayWriteCapacity = principal.permissions.includes('assignment_rule:write');
+
+    const { response, after } = await this.prisma.$tenantTransaction(async (tx) => {
       const before = await tx.user.findUnique({
         where: { id: userId },
-        select: { id: true, role: true, status: true, name: true },
+        select: { id: true, role: true, status: true, name: true, maxConcurrentTickets: true },
       });
 
       if (before === null) {
         // Absent, or in another tenant — RLS makes the two indistinguishable,
         // which is the intent: a 403 here would confirm the id exists somewhere.
         throw new UserNotFoundError(userId);
+      }
+
+      // After the row is resolved, deliberately: a caller without the
+      // permission patching an id that does not exist gets `not_found`, because
+      // a 403 on an unknown id is an existence oracle (TAR-384). The order is
+      // validate → resolve (404) → permission-on-field (403) → invariants (409)
+      // → write, and it is stated here because two implementations of it would
+      // eventually disagree.
+      if (input.maxConcurrentTickets !== undefined && !mayWriteCapacity) {
+        throw new CapacityChangeNotPermittedError();
       }
 
       if (leavesTenantWithoutAdmin(before, input)) {
@@ -162,6 +203,12 @@ export class UsersService {
           ...(input.displayName === undefined ? {} : { name: input.displayName }),
           ...(input.role === undefined ? {} : { role: input.role }),
           ...(input.status === undefined ? {} : { status: input.status }),
+          // `undefined` leaves the override alone; an explicit `null` clears it
+          // and returns the agent to the tenant default. The two are distinct
+          // and the spread is what keeps them so.
+          ...(input.maxConcurrentTickets === undefined
+            ? {}
+            : { maxConcurrentTickets: input.maxConcurrentTickets }),
         },
         select: USER_PROJECTION,
       });
@@ -187,19 +234,23 @@ export class UsersService {
       await this.recordUserChanges(tx, tenantId, before, input, teamsChanged, workflowsDisarmed);
 
       return {
-        ...toUserResponse(
-          // `teamMemberships` was read before the membership write, so it would
-          // report the old set. Re-read rather than patch the object by hand.
-          input.teamIds === undefined
-            ? after
-            : { ...after, teamMemberships: input.teamIds.map((teamId) => ({ teamId })) },
-          this.securityFor(after),
-        ),
-        // TAR-605. Reported rather than notified — `UserUpdateResponseSchema`
-        // holds the argument. Always present, `0` on the requests that disarmed
-        // nothing, so a client reads one field instead of inferring from
-        // `status`.
-        workflowsDisarmed,
+        response: {
+          ...toUserResponse(
+            // `teamMemberships` was read before the membership write, so it
+            // would report the old set. Re-read rather than patch the object by
+            // hand.
+            input.teamIds === undefined
+              ? after
+              : { ...after, teamMemberships: input.teamIds.map((teamId) => ({ teamId })) },
+            this.securityFor(after),
+          ),
+          // TAR-605. Reported rather than notified — `UserUpdateResponseSchema`
+          // holds the argument. Always present, `0` on the requests that
+          // disarmed nothing, so a client reads one field instead of inferring
+          // from `status`.
+          workflowsDisarmed,
+        },
+        after,
       };
     });
 
@@ -208,7 +259,10 @@ export class UsersService {
     // rather than gated on whether anything was actually revoked.
     await this.sessions.purgeCacheFor(tenantId, userId);
 
-    return response;
+    // The committed row, so a caller who just raised a cap is told the number
+    // they set — and read outside the transaction, because counting somebody's
+    // open tickets is not part of the write.
+    return { ...response, assignmentCapacity: await this.capacityFor(after) };
   }
 
   /**
@@ -389,7 +443,7 @@ export class UsersService {
   async unlock(userId: string): Promise<UserResponse> {
     const tenantId = this.tenantContext.requireTenantId();
 
-    const response = await this.prisma.$tenantTransaction(async (tx) => {
+    const { response, row } = await this.prisma.$tenantTransaction(async (tx) => {
       const row = await tx.user.findUnique({ where: { id: userId }, select: USER_PROJECTION });
 
       if (row === null) {
@@ -418,7 +472,7 @@ export class UsersService {
       // The post-state, which this transaction just wrote — not a second read.
       // Never gated: the route requires `user:update`, so a caller who reached
       // it may see it by definition.
-      return toUserResponse(row, { lockedUntil: null, failedLoginAttempts: 0 });
+      return { response: toUserResponse(row, { lockedUntil: null, failedLoginAttempts: 0 }), row };
     });
 
     // After the commit, and unconditional: clearing a lock that was not set
@@ -426,7 +480,10 @@ export class UsersService {
     // account refused by a layer the admin cannot see.
     await this.loginThrottle.clearEmailFailures(tenantId, response.email);
 
-    return response;
+    // Gated on its own permission, unlike `security` above: `user:update` and
+    // `assignment_rule:read` are not the same question, and a future role could
+    // hold one without the other.
+    return { ...response, assignmentCapacity: await this.capacityFor(row) };
   }
 
   /**
@@ -446,7 +503,7 @@ export class UsersService {
       select: USER_PROJECTION,
     });
 
-    return toUserResponse(row, this.securityFor(row));
+    return toUserResponse(row, this.securityFor(row), await this.capacityFor(row));
   }
 
   /**
@@ -465,6 +522,64 @@ export class UsersService {
   /** The security state to publish for one row: the real thing, or nothing. */
   private securityFor(row: UserSecurityRow): UserSecurityRow | null {
     return this.maySeeSecurity() ? row : null;
+  }
+
+  /**
+   * Whether the caller may be told a colleague's workload at all (TAR-384).
+   *
+   * `read` **or** `write`, not `read` alone: a role granted write without read
+   * would otherwise set a cap and be handed `null` back. `user:read` is held by
+   * every agent, so gating on the route's own permission would publish a live
+   * readout of a named colleague's load — and how close they are to being cut
+   * off from work — to the whole tenant.
+   */
+  private maySeeCapacity(): boolean {
+    const { permissions } = this.tenantContext.requirePrincipal();
+
+    return (
+      permissions.includes('assignment_rule:read') || permissions.includes('assignment_rule:write')
+    );
+  }
+
+  /**
+   * The capacity block for a set of rows, keyed by user id — empty for a caller
+   * who may not see it, which is what makes the two extra statements cost an
+   * agent nothing.
+   */
+  private async capacitiesFor(
+    rows: readonly (UserCapacityRow & { id: string })[],
+  ): Promise<ReadonlyMap<string, AgentCapacity>> {
+    if (rows.length === 0 || !this.maySeeCapacity()) {
+      return new Map();
+    }
+
+    const tenantId = this.tenantContext.requireTenantId();
+    const [tenantDefault, counts] = await Promise.all([
+      readTenantCapacityDefault(this.prisma, tenantId),
+      readActiveTicketCounts(
+        this.prisma,
+        tenantId,
+        rows.map((row) => row.id),
+      ),
+    ]);
+
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        toAgentCapacity(row.maxConcurrentTickets, tenantDefault, counts.get(row.id) ?? 0),
+      ]),
+    );
+  }
+
+  /**
+   * The same, for the single row every write path answers with.
+   *
+   * Called **after** the write transaction commits, never inside it: these are
+   * two reads that have no business holding a write connection open, and the
+   * number they produce has to reflect the committed row.
+   */
+  private async capacityFor(row: UserCapacityRow & { id: string }): Promise<AgentCapacity | null> {
+    return (await this.capacitiesFor([row])).get(row.id) ?? null;
   }
 
   /** Invariants 1 and 2, applied to a role write on an existing user. */
@@ -489,7 +604,13 @@ export class UsersService {
   private async recordUserChanges(
     tx: Prisma.TransactionClient,
     tenantId: string,
-    before: { id: string; role: TenantRole; status: UserStatus; name: string },
+    before: {
+      id: string;
+      role: TenantRole;
+      status: UserStatus;
+      name: string;
+      maxConcurrentTickets: number | null;
+    },
     input: UserUpdateInput,
     teamsChanged: TeamMembershipDelta | null,
     workflowsDisarmed: number,
@@ -540,9 +661,28 @@ export class UsersService {
       });
     }
 
+    if (
+      input.maxConcurrentTickets !== undefined &&
+      input.maxConcurrentTickets !== before.maxConcurrentTickets
+    ) {
+      await this.audit.record(tx, {
+        action: AUDIT_ACTIONS.userCapacityChanged,
+        targetType: 'user',
+        targetId: before.id,
+        // Two integers, either of which may be `null` for "inherits the tenant
+        // default". No PII, and enough to answer "who throttled this agent, and
+        // from what?" six months later.
+        metadata: { from: before.maxConcurrentTickets, to: input.maxConcurrentTickets },
+      });
+    }
+
     // One revocation, whichever of the three fired: `permissions` and `teamIds`
     // are both materialised onto the principal at resolution, so any of them
     // leaves an active session describing a person who no longer exists.
+    //
+    // A cap change is deliberately **not** one of them (TAR-384): it alters how
+    // much work reaches somebody, not what they may do, and the principal
+    // carries no cap to go stale — rotation reads the column per job.
     const reason = roleChanged
       ? 'role_change'
       : statusChanged
@@ -710,13 +850,16 @@ function toPage(
   rows: readonly (UserRow & UserSecurityRow)[],
   limit: number,
   withSecurity: boolean,
+  capacities: ReadonlyMap<string, AgentCapacity>,
 ): CursorPage<UserResponse> {
   const items = rows.slice(0, limit);
 
   return {
     // Arrow, not a bare reference: `map` would pass the index as the second
     // argument, which is `security` (TAR-53).
-    items: items.map((row) => toUserResponse(row, withSecurity ? row : null)),
+    items: items.map((row) =>
+      toUserResponse(row, withSecurity ? row : null, capacities.get(row.id) ?? null),
+    ),
     nextCursor: rows.length > limit ? (items.at(-1)?.id ?? null) : null,
   };
 }

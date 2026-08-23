@@ -1,4 +1,4 @@
-import type { TeamResponse, UserResponse } from '@whatsappcrm/contracts';
+import type { AgentCapacity, TeamResponse, UserResponse } from '@whatsappcrm/contracts';
 
 /**
  * Row → response. Explicit field by field, never a spread.
@@ -34,15 +34,31 @@ export interface UserSecurityRow {
 }
 
 /**
+ * The per-agent cap column (TAR-384). Separate from `UserRow` for the same
+ * reason as the security state: it is published under a different permission
+ * from the rest of the record, and the number beside it — `activeTicketCount` —
+ * is not on `users` at all.
+ */
+export interface UserCapacityRow {
+  maxConcurrentTickets: number | null;
+}
+
+/**
  * `security` defaults to `null`, which is what a caller **without**
  * `user:update` must see (TAR-53). Making the argument explicit rather than
  * reading the principal in here keeps the mapper a pure row→response function
  * and puts the permission decision at the handler, where the principal already
  * is. Until TAR-54 lands the columns, every call site correctly passes nothing.
+ *
+ * `capacity` is gated the same way and for the same reason (TAR-384): `null` is
+ * what a caller holding neither `assignment_rule:read` nor
+ * `assignment_rule:write` must see, and defaulting to it means a new caller
+ * leaks nothing by forgetting the argument.
  */
 export function toUserResponse(
   row: UserRow,
   security: UserSecurityRow | null = null,
+  capacity: AgentCapacity | null = null,
 ): UserResponse {
   return {
     id: row.id,
@@ -67,6 +83,7 @@ export function toUserResponse(
             lockedUntil: security.lockedUntil?.toISOString() ?? null,
             failedLoginAttempts: security.failedLoginAttempts,
           },
+    assignmentCapacity: capacity,
     createdAt: row.createdAt.toISOString(),
   };
 }

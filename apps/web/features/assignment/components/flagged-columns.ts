@@ -6,9 +6,11 @@ import type { FlaggedTicketRow } from '../flagged-rows';
  * Column metadata for the flagged-ticket queue, without the cell renderers, so
  * the table and its skeleton build from one array and cannot drift apart.
  *
- * `canAssign` drops the actions column entirely rather than rendering an empty
- * one, and the skeleton takes the same flag — a placeholder column that the real
- * table will not have is a layout shift with extra steps.
+ * `hasRowActions` drops the actions column entirely rather than rendering an
+ * empty one, and the skeleton takes the same flag — a placeholder column that the
+ * real table will not have is a layout shift with extra steps. It is "any row
+ * action at all", not "may assign": a row carries an assign control, a cap-edit
+ * control (TAR-384), or both, and the column exists for whichever it has.
  *
  * **Four columns, and that is a ceiling rather than a coincidence.** Where
  * routing *tried* to send a ticket rides inside the ticket cell instead of taking
@@ -19,7 +21,7 @@ import type { FlaggedTicketRow } from '../flagged-rows';
  */
 export function flaggedTicketColumnMeta(
   content: Content,
-  canAssign: boolean,
+  hasRowActions: boolean,
 ): Omit<DataTableColumn<FlaggedTicketRow>, 'render'>[] {
   const columns: Omit<DataTableColumn<FlaggedTicketRow>, 'render'>[] = [
     { key: 'ticket', header: content.assignment.columnTicket },
@@ -27,7 +29,7 @@ export function flaggedTicketColumnMeta(
     { key: 'waiting', header: content.assignment.columnWaiting, isNarrow: true },
   ];
 
-  if (canAssign) {
+  if (hasRowActions) {
     columns.push({
       key: 'assign',
       header: content.assignment.columnAssign,

@@ -44,6 +44,22 @@ export const AUDIT_ACTIONS = {
   assignmentRuleDeleted: 'assignment_rule.deleted',
   assignmentRuleReordered: 'assignment_rule.reordered',
   /**
+   * The two cap writes (TAR-384, 0008 amendment 4), on the `assignment_rule.*`
+   * precedent above: how much work reaches a person is a standing instruction
+   * about where customer conversations go, not an ordinary profile edit.
+   *
+   * `assignment_settings.updated` is the tenant default, targeted at the tenant;
+   * `user.capacity_changed` is one agent's override, targeted at that user. Both
+   * carry `{ from, to }` and nothing else — two integers, no PII.
+   *
+   * These rows are also the honest answer to "was this tenant's default ever
+   * chosen deliberately?", which `tenant_settings.updated_at` cannot give:
+   * provisioning writes that row for every tenant without picking a cap, and the
+   * column moves when the timezone or business hours change.
+   */
+  assignmentSettingsUpdated: 'assignment_settings.updated',
+  userCapacityChanged: 'user.capacity_changed',
+  /**
    * Custom field definition writes (TAR-33, 0002 amendment 10). Tenant
    * configuration in the same class as a routing rule: a definition change
    * alters the shape of every contact record in the tenant, and a delete

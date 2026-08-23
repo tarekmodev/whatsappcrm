@@ -17,6 +17,12 @@ export interface AuditEntry {
     | 'custom_field'
     | 'canned_response'
     | 'tenant_domain'
+    /**
+     * The tenant's own settings row, targeted by its tenant id (TAR-384). The
+     * one singleton on this list: there is exactly one per tenant, so there is
+     * no other id it could carry.
+     */
+    | 'tenant_settings'
     | 'workflow';
   targetId: string;
   /**

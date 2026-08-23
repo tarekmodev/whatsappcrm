@@ -190,28 +190,36 @@ to move together.
 
 ### Where a cap is configured
 
-| Scope     | Column                                            | Set by                  |
-| --------- | ------------------------------------------------- | ----------------------- |
-| Tenant    | `tenant_settings.default_max_concurrent_tickets`  | Nothing yet — see below |
-| Per agent | `users.max_concurrent_tickets` (`NULL` = inherit) | Nothing yet — see below |
+| Scope     | Column                                            | Set by                                               |
+| --------- | ------------------------------------------------- | ---------------------------------------------------- |
+| Tenant    | `tenant_settings.default_max_concurrent_tickets`  | `PATCH /api/v1/assignment-settings`                  |
+| Per agent | `users.max_concurrent_tickets` (`NULL` = inherit) | `maxConcurrentTickets` on `PATCH /api/v1/users/{id}` |
 
-⚠️ **No endpoint writes either column today.**
-[`0008-assignment-rotation-and-workload.md`](../architecture/0008-assignment-rotation-and-workload.md)
-specifies `GET`/`PATCH /api/v1/assignment-settings` and `maxConcurrentTickets` on
-`PATCH /api/v1/users/{id}`, both behind `assignment_rule:write` rather than `user:update` —
-setting a colleague's cap is deciding how much work reaches them, which is the same act as
-writing a routing rule. Neither is built, and no acceptance criterion in TAR-23 asked for
-them. Until they exist every tenant runs on the column default of 5, which is a working
-system. The columns and their constraints are described in
-[the data model reference](data-model.md).
+Both writes need **`assignment_rule:write`** — supervisor and admin — rather than
+`user:update`. Setting a colleague's cap is deciding how much work reaches them, which is the
+same act as writing a routing rule; routing it through `user:update` would mean anyone who may
+edit a display name may also quietly stop work reaching a colleague. A body carrying
+`maxConcurrentTickets` from a caller without the permission is **refused**, not served with the
+field dropped.
 
-**The surface now has an owner: TAR-384**, whose API contract is settled and keeps the split
-above — `/assignment-settings` stays a tenant-scoped singleton, and the per-agent cap is still
-written through `PATCH /api/v1/users/{id}`. It adds an agent's own read-only view and a
-permission-gated capacity field on the people list, neither of which 0008 specifies. Nothing of
-it is merged, so this page still describes a system with no cap-editing surface. It will
-document the endpoints and the supervisor's cap-edit control against the shipped code rather
-than against the contract.
+Two reads go with them. `GET /api/v1/assignment-settings` is the tenant default —
+`assignment_rule:read`, answering the built-in fallback of 5 with `updatedAt: null` for a tenant
+that has no settings row rather than a 404. `GET /api/v1/assignment-settings/me` is an agent's
+own cap and live load, open to any signed-in principal, and read-only: an agent may see the
+limit being applied to them and may not change it. A supervisor reading a colleague's number
+gets it as `assignmentCapacity` on `GET /api/v1/users`, which is `null` for anyone without
+`assignment_rule:read` or `:write` — every agent holds `user:read`, so an ungated field there
+would publish the whole tenant's workload to the whole tenant.
+
+Changes take effect on the **next assignment**, with no restart and no cache to clear: the
+resolver's `coalesce` reads both columns per routing job and nothing memoises them. It does not
+re-route a ticket that is already deferred — that one stays flagged until somebody assigns it —
+so raising a cap frees the agent for the next ticket, not for the one on screen.
+
+The columns and their constraints are described in [the data model reference](data-model.md);
+the endpoints are specified in full in 0008
+[amendment 4](../architecture/0008-assignment-rotation-and-workload.md#amendment-4--the-cap-editing-surface-built-tar-384),
+built by TAR-384.
 
 ## When nobody is eligible
 

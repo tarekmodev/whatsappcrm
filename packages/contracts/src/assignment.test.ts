@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ASSIGNMENT_POLICY,
+  AgentCapacitySchema,
   AssignmentRuleCreateInputSchema,
   AssignmentRuleResponseSchema,
+  AssignmentSettingsResponseSchema,
+  AssignmentSettingsUpdateInputSchema,
   ContactAttributeConditionSchema,
+  OwnAssignmentCapacityResponseSchema,
   ROUTING_RULE_LIMITS,
   RoutingConditionSchema,
   RoutingTargetSchema,
@@ -148,5 +153,118 @@ describe('AssignmentRuleResponseSchema', () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+});
+
+/**
+ * The cap-editing surface (TAR-384, 0008 amendment 4). What is asserted here is
+ * the half a reader cannot derive from the shape: the bounds come from
+ * `ASSIGNMENT_POLICY` rather than from a second copy of the numbers, and the
+ * three ways a cap field can be null all mean different things.
+ */
+describe('the cap-editing surface (TAR-384)', () => {
+  describe('AssignmentSettingsUpdateInputSchema', () => {
+    it('enforces the same bounds as the CHECK constraints, from the policy constants', () => {
+      const tooLow = ASSIGNMENT_POLICY.minMaxConcurrentTickets - 1;
+      const tooHigh = ASSIGNMENT_POLICY.maxMaxConcurrentTickets + 1;
+
+      expect(
+        AssignmentSettingsUpdateInputSchema.safeParse({ defaultMaxConcurrentTickets: tooLow })
+          .success,
+      ).toBe(false);
+      expect(
+        AssignmentSettingsUpdateInputSchema.safeParse({ defaultMaxConcurrentTickets: tooHigh })
+          .success,
+      ).toBe(false);
+      expect(
+        AssignmentSettingsUpdateInputSchema.safeParse({ defaultMaxConcurrentTickets: 1.5 }).success,
+      ).toBe(false);
+      expect(
+        AssignmentSettingsUpdateInputSchema.safeParse({
+          defaultMaxConcurrentTickets: ASSIGNMENT_POLICY.defaultMaxConcurrentTickets,
+        }).success,
+      ).toBe(true);
+    });
+
+    it('refuses an empty body rather than answering 200 to a no-op', () => {
+      // One required field, not a `.partial()`: the resource has exactly one
+      // writable value, so "changed nothing" has no honest success response.
+      expect(AssignmentSettingsUpdateInputSchema.safeParse({}).success).toBe(false);
+    });
+
+    it('does not accept null — clearing a tenant default is not an operation', () => {
+      expect(
+        AssignmentSettingsUpdateInputSchema.safeParse({ defaultMaxConcurrentTickets: null })
+          .success,
+      ).toBe(false);
+    });
+  });
+
+  describe('AssignmentSettingsResponseSchema', () => {
+    it('allows a null updatedAt, for a tenant with no settings row at all', () => {
+      const parsed = AssignmentSettingsResponseSchema.safeParse({
+        defaultMaxConcurrentTickets: ASSIGNMENT_POLICY.defaultMaxConcurrentTickets,
+        updatedAt: null,
+      });
+
+      expect(parsed.success).toBe(true);
+    });
+  });
+
+  describe('AgentCapacitySchema', () => {
+    it('allows a null override — inherit — but never a null effective cap', () => {
+      expect(
+        AgentCapacitySchema.safeParse({
+          maxConcurrentTickets: null,
+          effectiveMaxConcurrentTickets: 5,
+          activeTicketCount: 0,
+        }).success,
+      ).toBe(true);
+
+      // The server owns the coalesce, so the effective value is always a number
+      // — a client that had to handle null here would be reimplementing it.
+      expect(
+        AgentCapacitySchema.safeParse({
+          maxConcurrentTickets: null,
+          effectiveMaxConcurrentTickets: null,
+          activeTicketCount: 0,
+        }).success,
+      ).toBe(false);
+    });
+
+    it('lets the load exceed the cap, which is what lowering one looks like', () => {
+      // Rotation skips the agent until they close down to the new number; no
+      // ticket is taken off them, so the count legitimately sits above the cap.
+      const parsed = AgentCapacitySchema.safeParse({
+        maxConcurrentTickets: 2,
+        effectiveMaxConcurrentTickets: 2,
+        activeTicketCount: 6,
+      });
+
+      expect(parsed.success).toBe(true);
+    });
+
+    it('refuses a negative load', () => {
+      expect(
+        AgentCapacitySchema.safeParse({
+          maxConcurrentTickets: null,
+          effectiveMaxConcurrentTickets: 5,
+          activeTicketCount: -1,
+        }).success,
+      ).toBe(false);
+    });
+  });
+
+  describe('OwnAssignmentCapacityResponseSchema', () => {
+    it('carries the tenant default too, so the console needs no second call', () => {
+      const parsed = OwnAssignmentCapacityResponseSchema.safeParse({
+        maxConcurrentTickets: null,
+        effectiveMaxConcurrentTickets: 5,
+        activeTicketCount: 3,
+        defaultMaxConcurrentTickets: 5,
+      });
+
+      expect(parsed.success).toBe(true);
+    });
   });
 });

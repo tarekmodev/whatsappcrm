@@ -76,6 +76,26 @@ export class RoleAssignmentNotPermittedError extends Error {
   }
 }
 
+/**
+ * The caller may administer this person but may not decide how much work
+ * reaches them (TAR-384, 0008 decision 4).
+ *
+ * `assignment_rule:write` rather than `user:update`, and refused rather than
+ * quietly dropped: setting a colleague's cap to 1 stops work reaching them, and
+ * a privilege-shaped change that appears to have succeeded is the worse of the
+ * two failures — the rule TAR-79 established for `role`.
+ */
+export class CapacityChangeNotPermittedError extends Error {
+  constructor() {
+    super(
+      'Changing an agent’s maximum concurrent tickets requires the assignment_rule:write ' +
+        'permission, which is held by supervisors and admins. You can change this person’s ' +
+        'name, status and teams.',
+    );
+    this.name = 'CapacityChangeNotPermittedError';
+  }
+}
+
 /** Invariant 2: no principal grants a role above their own. */
 export class RoleEscalationError extends Error {
   constructor(

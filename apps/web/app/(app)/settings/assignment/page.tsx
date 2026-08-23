@@ -72,6 +72,10 @@ export default async function AssignmentPage({
   };
   const canAssign = session.checker.can('ticket:assign');
   const canReadRules = session.checker.can('assignment_rule:read');
+  // The same permission that writes a routing rule, and deliberately so: setting
+  // how much work reaches a colleague is the same kind of act (ADR 0008
+  // decision 4, TAR-384). Never `user:update`.
+  const canEditCapacity = session.checker.can('assignment_rule:write');
 
   return (
     <Stack gap="5">
@@ -83,9 +87,15 @@ export default async function AssignmentPage({
               than leaving the previous reason's rows on screen. */}
           <Suspense
             key={filters.deferredReason ?? ''}
-            fallback={<FlaggedTicketsSectionSkeleton canAssign={canAssign} />}
+            fallback={
+              <FlaggedTicketsSectionSkeleton hasRowActions={canAssign || canEditCapacity} />
+            }
           >
-            <FlaggedTicketsSection filters={filters} canAssign={canAssign} />
+            <FlaggedTicketsSection
+              filters={filters}
+              canAssign={canAssign}
+              canEditCapacity={canEditCapacity}
+            />
           </Suspense>
         </SectionErrorBoundary>
       ) : null}

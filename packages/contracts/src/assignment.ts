@@ -489,3 +489,83 @@ export interface TicketRouter {
 }
 
 export const TICKET_ROUTER = Symbol.for('whatsappcrm.TicketRouter');
+
+// ---------------------------------------------------------------------------
+// The cap-editing surface — 0008 amendment 4 (TAR-384)
+// ---------------------------------------------------------------------------
+
+/**
+ * The tenant-wide cap, as `GET`/`PATCH /api/v1/assignment-settings` publish it.
+ *
+ * A **singleton scoped to the tenant**, not a roster: the per-agent override is
+ * a column on `users` and is written through `PATCH /api/v1/users/{id}`, which
+ * is the resource that owns the row. Embedding a people list here would grow
+ * without bound with tenant headcount and would re-implement the filtering and
+ * cursor paging `GET /api/v1/users` already has.
+ */
+export const AssignmentSettingsResponseSchema = z.object({
+  defaultMaxConcurrentTickets: MaxConcurrentTicketsSchema,
+  /**
+   * When the tenant's settings **row** was last written — not when the cap was
+   * last set, and **not** a "has anybody configured this" signal.
+   *
+   * Two reasons a console must not read it as the second thing. Provisioning
+   * writes a `tenant_settings` row for every tenant
+   * (`tenant-provisioning.service.ts`) without choosing a cap, so the row exists
+   * with a non-null timestamp on a value nobody picked; and the column moves
+   * when `timezone`, `locale` or `businessHours` change, none of which is this
+   * field. "Was the cap ever set deliberately" is answered by the
+   * `assignment_settings.updated` audit trail, which records exactly that.
+   *
+   * `null` only for a legacy tenant with no settings row at all, where
+   * `defaultMaxConcurrentTickets` above is
+   * `ASSIGNMENT_POLICY.defaultMaxConcurrentTickets` — the built-in fallback the
+   * resolver already coalesces to, rather than a 404 that would claim the tenant
+   * has no working default.
+   */
+  updatedAt: TimestampSchema.nullable(),
+});
+
+/**
+ * One required field rather than a `.partial()`: the resource has exactly one
+ * writable value today, and an empty body would be a silent no-op answering
+ * 200. When a second field lands this becomes `.partial()` plus a refine for
+ * at-least-one.
+ */
+export const AssignmentSettingsUpdateInputSchema = z.object({
+  defaultMaxConcurrentTickets: MaxConcurrentTicketsSchema,
+});
+
+/** One agent's workload picture: what they may hold, and what they hold now. */
+export const AgentCapacitySchema = z.object({
+  /** The per-agent override. `null` means inherit the tenant default. */
+  maxConcurrentTickets: MaxConcurrentTicketsSchema.nullable(),
+  /**
+   * `coalesce(users.max_concurrent_tickets, tenant_settings.default_max_concurrent_tickets)`.
+   * Published because the server owns that coalesce — a client recomputing it is
+   * a second implementation of a policy rule.
+   */
+  effectiveMaxConcurrentTickets: MaxConcurrentTicketsSchema,
+  /**
+   * Assigned tickets in `TICKET_ACTIVE_STATUSES` — the same count
+   * `RotationFallbackResolver.readCandidates` compares against the cap. Without
+   * it a supervisor cannot tell whether raising a cap will actually free the
+   * ticket in front of them.
+   */
+  activeTicketCount: z.int().min(0),
+});
+
+/**
+ * `GET /api/v1/assignment-settings/me` — the caller's own capacity, and nothing
+ * else. It takes no id and accepts no query, so "own value only" is structural
+ * rather than a branch a later refactor can drop.
+ */
+export const OwnAssignmentCapacityResponseSchema = AgentCapacitySchema.extend({
+  /** So the console can render "5 (tenant default)" without a second call. */
+  defaultMaxConcurrentTickets: MaxConcurrentTicketsSchema,
+});
+
+export type AssignmentSettingsResponse = z.infer<typeof AssignmentSettingsResponseSchema>;
+export type AssignmentSettingsUpdateInput = z.infer<typeof AssignmentSettingsUpdateInputSchema>;
+export type AgentCapacity = z.infer<typeof AgentCapacitySchema>;
+export type OwnAssignmentCapacityResponse = z.infer<typeof OwnAssignmentCapacityResponseSchema>;
