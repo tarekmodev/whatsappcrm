@@ -1,8 +1,10 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { Figtree } from 'next/font/google';
+import { Figtree, IBM_Plex_Sans_Arabic } from 'next/font/google';
 import { content } from '@/content/en';
 import { readTheme } from '@/lib/theme/read-theme';
+import { readLocale } from '@/lib/locale/read-locale';
+import { directionOf } from '@/lib/locale/locale';
 import { readBranding } from '@/lib/branding/read-branding';
 import { brandStyleSheet } from '@/lib/branding/brand-style';
 import { ToastProvider } from '@/components/ui/ToastProvider';
@@ -78,11 +80,51 @@ const bodyFont = Figtree({
   variable: '--font-sans',
 });
 
+/**
+ * The Arabic face (TAR-806). Figtree carries no Arabic glyphs at all, so a
+ * console at `lang="ar"` would otherwise fall through to whatever the device
+ * happens to have — which on Windows is a face with different metrics and no
+ * relationship to the Latin one beside it.
+ *
+ * Three weights, matching the three the type scale names; a variable Arabic face
+ * would be a fourth download for a range nothing uses.
+ *
+ * ## `preload: false`, deliberately
+ *
+ * `next/font` preloads by default, which would put an Arabic download on the
+ * critical path of every English visitor — the overwhelming majority — for a face
+ * their document never references. The `@font-face` is still emitted and still
+ * self-hosted; it is only the `<link rel="preload">` that is dropped, so an
+ * Arabic reader gets the face on first paint through `display: 'swap'` instead
+ * of ahead of it. The family is reached only from the `[lang='ar']` branch in
+ * `styles/tokens/primitives.css`, so an English document never requests it.
+ *
+ * Both subsets, not just `arabic`: an Arabic console still shows Latin — a
+ * customer's email address, a product name, a phone number — and a face covering
+ * only one script would render those in a second, unrelated one.
+ */
+const arabicFont = IBM_Plex_Sans_Arabic({
+  subsets: ['arabic', 'latin'],
+  weight: ['400', '500', '600'],
+  display: 'swap',
+  preload: false,
+  variable: '--font-sans-arabic',
+});
+
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const [theme, branding] = await Promise.all([readTheme(), readBranding()]);
+  const [theme, locale, branding] = await Promise.all([
+    readTheme(),
+    readLocale(),
+    readBranding(),
+  ]);
 
   return (
-    <html lang="en" dir="ltr" data-theme={theme} className={bodyFont.variable}>
+    <html
+      lang={locale}
+      dir={directionOf(locale)}
+      data-theme={theme}
+      className={`${bodyFont.variable} ${arabicFont.variable}`}
+    >
       <body>
         {/*
           React hoists this into `<head>`. `precedence` is what makes the hoist

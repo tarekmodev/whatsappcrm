@@ -400,3 +400,25 @@
     --duration-stagger: 0ms;
   }
 }
+
+/*
+ * --- Arabic (TAR-806) -------------------------------------------------------
+ *
+ * The whole of what a locale swaps, and it is one line — because direction is
+ * carried by logical properties, which need no branch at all. The same shape as
+ * the dark branch above: a role re-declared in the token layer, so no component
+ * branches on the language any more than it branches on the theme.
+ *
+ * Keyed off `lang`, not `dir`. The two travel together today but they are not
+ * the same question — a future Persian locale is also `dir="rtl"` and would want
+ * its own face, while an Arabic quotation inside an English console is
+ * `dir="rtl"` on a subtree whose surrounding chrome keeps the console's type.
+ *
+ * On the *semantic* role rather than the primitive it reads, so a subtree marked
+ * `lang="ar"` — a customer's message in an otherwise English inbox — gets the
+ * face too. Redefining the primitive would only work on `<html>`: `--font-family-body`
+ * has already substituted it by the time it inherits down.
+ */
+[lang='ar'] {
+  --font-family-body: var(--scale-font-family-arabic);
+}

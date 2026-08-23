@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { readTheme } from '@/lib/theme/read-theme';
+import { readLocale } from '@/lib/locale/read-locale';
 import { readBranding } from '@/lib/branding/read-branding';
 import { BrandLockup } from '@/components/brand/BrandLockup';
 import { MAIN_CONTENT_ID } from '@/components/shell/main-content';
@@ -46,7 +47,11 @@ export const metadata: Metadata = {
 };
 
 export default async function AuthLayout({ children }: { children: ReactNode }) {
-  const [theme, branding] = await Promise.all([readTheme(), readBranding()]);
+  const [theme, locale, branding] = await Promise.all([
+    readTheme(),
+    readLocale(),
+    readBranding(),
+  ]);
 
   return (
     <div className={styles.layout}>
@@ -62,7 +67,7 @@ export default async function AuthLayout({ children }: { children: ReactNode }) 
         <main id={MAIN_CONTENT_ID} tabIndex={-1} className={styles.content}>
           <div className={styles.column}>{children}</div>
         </main>
-        <AuthFooter theme={theme} />
+        <AuthFooter theme={theme} locale={locale} />
       </div>
       <AuthBrandPanel branding={branding} />
     </div>

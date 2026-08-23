@@ -1142,6 +1142,37 @@ Dynamic state is a `data-` attribute or a module class toggle (`cx()` in `lib/cx
 a concatenated class string. Layout uses logical properties (`margin-inline-start`,
 `inset-inline-end`) so RTL works without a second stylesheet.
 
+### Language and direction (TAR-806)
+
+The locale is resolved on the server from the `wac_locale` cookie and rendered into
+`<html lang dir>` in the first response — the same mechanism as the theme, and for a
+sharper reason: a direction corrected after hydration moves every element on the screen
+rather than recolouring them. `lib/locale/locale.ts` is the one list of locales and the one
+place a direction is derived; `LocaleToggle` persists a change through a server action and
+flips the two attributes locally so the swap is instant.
+
+**Direction costs the token layer one line.** Because every module styles with logical
+properties, `dir="rtl"` mirrors the whole console on its own — so the only thing a locale
+actually swaps is the typeface, and that is one `[lang='ar']` branch in `semantic.css`
+pointing `--font-family-body` at `--scale-font-family-arabic` (IBM Plex Sans Arabic, loaded
+by `app/layout.tsx`). The branch is keyed off `lang` rather than `dir` so a future Persian
+locale can take its own face, and it sits on the semantic role rather than the primitive so
+a subtree marked `lang="ar"` — a customer's Arabic message in an English console — picks it
+up too. The Arabic face is declared `preload: false`: it is referenced only from that
+branch, so an English document never requests it.
+
+**Horizontal arrow keys are the one thing logical properties do not fix.** `ArrowRight`
+means "the next one" in English and "the previous one" in Arabic, and WAI-ARIA puts a
+horizontal composite's arrows on the reading order rather than the screen. Any widget with
+left/right arrow handling reads its step from `forwardArrowStep()`
+(`lib/locale/reading-direction.ts`) rather than hard-coding `+1` — the calendar grid, the
+composer's tab strip and the daily-volume chart all do. Vertical arrows never mirror.
+
+The toggle itself is behind `NEXT_PUBLIC_ENABLE_LOCALE_SWITCH`, **off by default**, because
+the copy is not translated yet: `content/en.ts` is the only content module that exists, so
+turning it on gives a correctly mirrored console still reading English. The flag comes out
+when `content/ar.ts` lands and `lib/content.ts` selects on the locale.
+
 ### Adding a component, with its skeleton
 
 1. **Look for an existing one first.** `components/ui/` holds the domain-free primitives.

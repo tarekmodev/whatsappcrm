@@ -429,6 +429,56 @@ function token(theme: Theme, name: string): string {
  * matters — a role pointing at a primitive that does not exist — surfaces as an
  * undefined lookup, which the assertions above name.
  */
+/**
+ * The Arabic branch (TAR-806). One role, re-declared for `lang="ar"` — the whole
+ * of what a locale swaps, because direction is carried by logical properties and
+ * needs no token at all.
+ */
+describe('the Arabic branch', () => {
+  const semantic = readTokenFile('semantic.css');
+  const primitives = readTokenFile('primitives.css');
+
+  it('re-declares the body face for lang="ar"', () => {
+    const branch = blocksOf(semantic).find((block) => block.selector.includes("[lang='ar']"));
+
+    expect(branch?.declarations['--font-family-body']).toBe('var(--scale-font-family-arabic)');
+  });
+
+  /*
+   * On the semantic role rather than the primitive it reads. Redefining
+   * `--scale-font-family-sans` would only work on `<html>`: `--font-family-body`
+   * has already substituted it by the time it inherits into a subtree marked
+   * `lang="ar"` — a customer's Arabic message inside an English console.
+   */
+  it('leaves the primitive scale alone, so a subtree branch still works', () => {
+    const branch = blocksOf(semantic).find((block) => block.selector.includes("[lang='ar']"));
+
+    expect(branch?.declarations['--scale-font-family-sans']).toBeUndefined();
+  });
+
+  /*
+   * Keyed off the language, not the direction. A future Persian locale is also
+   * `dir="rtl"` and wants its own face, and an Arabic quotation inside an English
+   * console is `dir="rtl"` on a subtree that keeps the console's own type.
+   */
+  it('keys off lang rather than dir', () => {
+    const selectors = blocksOf(semantic).map((block) => block.selector);
+
+    expect(selectors.some((selector) => selector.includes("[dir='rtl']"))).toBe(false);
+  });
+
+  it('falls back to a sans face when the download has not landed', () => {
+    const stack = blocksOf(primitives)
+      .flatMap((block) => Object.entries(block.declarations))
+      .find(([name]) => name === '--scale-font-family-arabic')?.[1];
+
+    expect(stack).toContain('var(--font-sans-arabic');
+    // Never a bare `var()` with no fallback: an invalid declaration would drop
+    // the whole stack and land the console on the browser's default serif.
+    expect(stack).toContain('sans-serif');
+  });
+});
+
 function readTokens(): Record<Theme, Record<string, string>> {
   const declarations = [
     ...blocksOf(readTokenFile('primitives.css')),
@@ -440,6 +490,16 @@ function readTokens(): Record<Theme, Record<string, string>> {
 
     for (const block of declarations) {
       if (block.selector.includes("[data-theme='dark']") && theme !== 'dark') {
+        continue;
+      }
+
+      /*
+       * The locale branch is orthogonal to the theme — it re-declares one role
+       * for `lang="ar"` and applies in both themes. Folding it in here would
+       * silently make every theme's `--font-family-body` the Arabic stack; it
+       * has its own case below instead.
+       */
+      if (block.selector.includes("[lang='ar']")) {
         continue;
       }
 

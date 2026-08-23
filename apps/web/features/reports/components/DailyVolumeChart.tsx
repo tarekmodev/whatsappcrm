@@ -5,6 +5,7 @@ import type { DailyPoint } from '@whatsappcrm/contracts';
 import { VisuallyHidden } from '@/components/layout/VisuallyHidden';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useContent } from '@/lib/content';
+import { forwardArrowStep } from '@/lib/locale/reading-direction';
 import { barFraction, chartScale, dayLabelIndexes } from '@/features/reports/chart-scale';
 import { MAX_STAGGERED_COLUMNS } from '@/features/reports/constants';
 import { formatCount, formatReportDayLabel } from '@/features/reports/presentation';
@@ -99,9 +100,13 @@ export function DailyVolumeChart({ series }: { series: readonly DailyPoint[] }) 
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLUListElement>): void {
+    // The days run along the reading direction, so the arrows do too: under
+    // `dir="rtl"` the column to the *left* of today is tomorrow, and an arrow
+    // hard-coded to +1 would walk the list backwards through its own order.
+    const forward = forwardArrowStep(event.currentTarget);
     const moves: Record<string, number | undefined> = {
-      ArrowRight: 1,
-      ArrowLeft: -1,
+      ArrowRight: forward,
+      ArrowLeft: -forward,
       // A range is read from its start, so Home and End are its first and last
       // day rather than the ends of whatever is currently scrolled into view.
       Home: -series.length,

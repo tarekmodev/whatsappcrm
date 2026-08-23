@@ -63,6 +63,37 @@ describe('ThreadComposerTabs', () => {
     expect(reply).toHaveAttribute('aria-selected', 'true');
   });
 
+  /*
+   * TAR-806. WAI-ARIA puts a horizontal tablist's arrows on the reading order
+   * rather than the screen, so under `dir="rtl"` the next tab is the one to the
+   * left. The vertical pair is not mirrored — down is always next.
+   */
+  it('follows the reading direction under RTL', () => {
+    document.documentElement.setAttribute('dir', 'rtl');
+
+    try {
+      renderTabs();
+
+      const reply = screen.getByRole('tab', { name: /reply on whatsapp/i });
+      const comment = screen.getByRole('tab', { name: 'Comment' });
+
+      fireEvent.keyDown(reply, { key: 'ArrowLeft' });
+
+      expect(comment).toHaveAttribute('aria-selected', 'true');
+
+      fireEvent.keyDown(comment, { key: 'ArrowRight' });
+
+      expect(reply).toHaveAttribute('aria-selected', 'true');
+
+      // Down stays "the next one" whichever way the page reads.
+      fireEvent.keyDown(reply, { key: 'ArrowDown' });
+
+      expect(comment).toHaveAttribute('aria-selected', 'true');
+    } finally {
+      document.documentElement.removeAttribute('dir');
+    }
+  });
+
   it('points each tab at the panel it controls', () => {
     renderTabs();
 

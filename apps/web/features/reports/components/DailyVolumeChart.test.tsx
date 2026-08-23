@@ -71,6 +71,34 @@ describe('the daily-volume chart', () => {
     expect(days.at(-1)).toHaveFocus();
   });
 
+  /*
+   * TAR-806. The days run along the reading direction, so under `dir="rtl"` the
+   * column to the *left* of today is tomorrow. Before this, `ArrowRight` was
+   * pinned to +1 and walked an Arabic reader backwards through their own chart.
+   */
+  it('follows the reading direction under RTL', () => {
+    document.documentElement.setAttribute('dir', 'rtl');
+
+    try {
+      render(<DailyVolumeChart series={SERIES} />);
+
+      const days = screen.getAllByRole('img');
+
+      days[0]?.focus();
+      fireEvent.keyDown(days[0] as HTMLElement, { key: 'ArrowLeft' });
+
+      // Left is *forward* here, so it lands on the second day rather than
+      // stopping dead against the start of the range.
+      expect(days[1]).toHaveFocus();
+
+      fireEvent.keyDown(days[1] as HTMLElement, { key: 'ArrowRight' });
+
+      expect(days[0]).toHaveFocus();
+    } finally {
+      document.documentElement.removeAttribute('dir');
+    }
+  });
+
   it('stops at the ends of the range rather than wrapping round it', () => {
     render(<DailyVolumeChart series={SERIES} />);
 

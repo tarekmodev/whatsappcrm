@@ -3,6 +3,7 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react';
 import { Icon } from './Icon';
 import { useContent } from '@/lib/content';
+import { forwardArrowStep } from '@/lib/locale/reading-direction';
 import {
   addMonths,
   clampDate,
@@ -83,8 +84,7 @@ export function DateRangeCalendar({
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     // Under `dir="rtl"` the forward arrow is the left one. Read from the element
     // rather than from a prop, so a document-level direction is enough.
-    const isRtl = getComputedStyle(event.currentTarget).direction === 'rtl';
-    const forward = isRtl ? -1 : 1;
+    const forward = forwardArrowStep(event.currentTarget);
 
     const moves: Record<string, () => string> = {
       ArrowLeft: () => shiftDays(focusedDate, -forward),

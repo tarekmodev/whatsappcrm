@@ -48,6 +48,22 @@ export interface WebEnv {
    */
   readonly enableRoleStub: boolean;
   /**
+   * Exposes the language toggle, and with it Arabic/RTL (TAR-806).
+   *
+   * Off by default, and the reason has the same shape as `useMockApi`'s: the
+   * mechanism is complete — `lang`, `dir`, the Arabic face, and every mirrored
+   * layout — but the *copy* is not. `content/en.ts` is the only content module
+   * that exists, so pressing the toggle today gives a correctly mirrored console
+   * still reading English, and `<html lang="ar">` over English text also hands a
+   * screen reader the wrong pronunciation for the whole page. Turn it on to
+   * review RTL on a branch; leaving it off is not a kill switch but a "not
+   * finished yet".
+   *
+   * It comes out when `content/ar.ts` lands and `lib/content.ts` selects on the
+   * locale — at which point the toggle is simply always on.
+   */
+  readonly enableLocaleSwitch: boolean;
+  /**
    * Meta's app id, as `FB.login` needs it (TAR-169). `null` when the console has
    * no Meta app configured, which is a real state rather than a fault: the
    * connection surface says so instead of offering a button that cannot work.
@@ -214,6 +230,11 @@ function readWebEnv(): WebEnv {
     enableRoleStub: readFlag(
       'NEXT_PUBLIC_ENABLE_ROLE_STUB',
       process.env.NEXT_PUBLIC_ENABLE_ROLE_STUB,
+      false,
+    ),
+    enableLocaleSwitch: readFlag(
+      'NEXT_PUBLIC_ENABLE_LOCALE_SWITCH',
+      process.env.NEXT_PUBLIC_ENABLE_LOCALE_SWITCH,
       false,
     ),
     metaAppId: readOptionalMetaId('NEXT_PUBLIC_META_APP_ID', process.env.NEXT_PUBLIC_META_APP_ID),

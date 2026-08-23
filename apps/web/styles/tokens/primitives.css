@@ -164,6 +164,18 @@
     sans-serif;
   --scale-font-family-mono: ui-monospace, SFMono-Regular, 'Cascadia Mono', monospace;
 
+  /*
+   * The Arabic face, held as its own primitive so the branch below has something
+   * to point at. `--font-sans-arabic` is the variable `next/font` puts on
+   * `<html>` for it (`app/layout.tsx`); the fallbacks after it are the faces a
+   * device is likely to have when the download has not landed, in the same
+   * order of preference, so a first paint at `lang="ar"` is still Arabic rather
+   * than a serif.
+   */
+  --scale-font-family-arabic:
+    var(--font-sans-arabic, ui-sans-serif), 'Noto Sans Arabic', 'Segoe UI', Tahoma, ui-sans-serif,
+    system-ui, sans-serif;
+
   /* --- Radii -------------------------------------------------------------- */
   --scale-radius-sm: 0.25rem;
   --scale-radius-md: 0.375rem;
