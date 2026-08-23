@@ -3,6 +3,7 @@ import 'server-only';
 import {
   MOCK_AI_CONFIGS,
   MOCK_ASSIGNMENT_RULES,
+  MOCK_ASSIGNMENT_SETTINGS,
   MOCK_CANNED_RESPONSES,
   MOCK_CONTACTS,
   MOCK_CONVERSATIONS,
@@ -29,6 +30,7 @@ import {
   MOCK_WORKFLOW_RUNS,
   type MockAiConfigRecord,
   type MockAssignmentRule,
+  type MockAssignmentSettings,
   type MockCannedResponse,
   type MockContact,
   type MockConversation,
@@ -87,6 +89,12 @@ interface MockState {
   tags: Map<string, MockTag>;
   customFieldDefinitions: Map<string, MockCustomFieldDefinition>;
   assignmentRules: Map<string, MockAssignmentRule>;
+  /**
+   * Keyed by **tenant**, like `aiConfigs` below: a tenant has exactly one
+   * workspace default cap, and a surrogate key would invite a handler to look
+   * one up by something other than the caller's tenant.
+   */
+  assignmentSettings: Map<string, MockAssignmentSettings>;
   /** Read-only from the console at v1: the composer expands them, nothing edits them. */
   cannedResponses: Map<string, MockCannedResponse>;
   workflows: Map<string, MockWorkflow>;
@@ -212,6 +220,9 @@ function seed(): MockState {
     ),
     assignmentRules: new Map(
       MOCK_ASSIGNMENT_RULES.map((rule) => [rule.id, { ...rule, conditions: [...rule.conditions] }]),
+    ),
+    assignmentSettings: new Map(
+      MOCK_ASSIGNMENT_SETTINGS.map((settings) => [settings.tenantId, settings]),
     ),
     cannedResponses: new Map(MOCK_CANNED_RESPONSES.map((item) => [item.id, item])),
     workflows: new Map(
