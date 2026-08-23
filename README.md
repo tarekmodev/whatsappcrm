@@ -75,6 +75,7 @@ the one that produced it.
 | [ADR 0001 — stack decision](docs/adr/0001-stack-decision.md)                                 | Why each piece of the stack, and what it costs                                     |
 | [Architecture and API contract](docs/architecture/0002-architecture-and-api-contract.md)     | Module boundaries, tenant resolution, the endpoint surface, webhooks               |
 | [Visual design language](docs/design/0001-visual-design-language.md)                         | What the design tokens equal, the console frame, and the list/detail patterns      |
+| [Reqta alignment spec](docs/design/0002-reqta-alignment-spec.md)                             | Interaction states for every control, the admin console screens, the signup flow   |
 | [Data model reference](docs/reference/data-model.md)                                         | Every entity, which are tenant-scoped, which constraints and indexes matter        |
 | [Tenant isolation contract](docs/reference/tenancy.md)                                       | Which Prisma client to inject, and what the database refuses                       |
 | [Platform admin API](docs/reference/admin-api.md)                                            | Provisioning and deactivation: request, response, errors, retention                |
