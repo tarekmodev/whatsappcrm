@@ -82,17 +82,18 @@ Two splits in that table carry the security of the whole surface:
 
 ### Route summary
 
-| Route                                  | Permission                      | Held by           |
-| -------------------------------------- | ------------------------------- | ----------------- |
-| `GET /api/v1/users`                    | `user:read`                     | every role        |
-| `PATCH /api/v1/users/me/availability`  | none beyond being signed in     | every role        |
-| `PATCH /api/v1/users/{id}`             | `user:update`                   | supervisor, admin |
-| `PATCH /api/v1/users/{id}` with `role` | `user:update` + `user:set_role` | admin             |
-| `POST /api/v1/users/{id}/unlock`       | `user:update`                   | supervisor, admin |
-| `DELETE /api/v1/users/{id}`            | `user:remove`                   | admin             |
-| `GET /api/v1/teams`                    | `team:read`                     | every role        |
-| `POST /api/v1/teams`                   | `team:write`                    | supervisor, admin |
-| `PATCH /api/v1/teams/{id}`             | `team:write`                    | supervisor, admin |
+| Route                                                  | Permission                              | Held by           |
+| ------------------------------------------------------ | --------------------------------------- | ----------------- |
+| `GET /api/v1/users`                                    | `user:read`                             | every role        |
+| `PATCH /api/v1/users/me/availability`                  | none beyond being signed in             | every role        |
+| `PATCH /api/v1/users/{id}`                             | `user:update`                           | supervisor, admin |
+| `PATCH /api/v1/users/{id}` with `role`                 | `user:update` + `user:set_role`         | admin             |
+| `PATCH /api/v1/users/{id}` with `maxConcurrentTickets` | `user:update` + `assignment_rule:write` | supervisor, admin |
+| `POST /api/v1/users/{id}/unlock`                       | `user:update`                           | supervisor, admin |
+| `DELETE /api/v1/users/{id}`                            | `user:remove`                           | admin             |
+| `GET /api/v1/teams`                                    | `team:read`                             | every role        |
+| `POST /api/v1/teams`                                   | `team:write`                            | supervisor, admin |
+| `PATCH /api/v1/teams/{id}`                             | `team:write`                            | supervisor, admin |
 
 `GET /api/v1/users` is tenant-wide for every role, `agent` included: the console cannot
 render an assignee name, a "routed to" label or a mention without it. It exposes who works
@@ -132,6 +133,11 @@ curl -b cookies.txt 'http://northwind.app.localhost:3051/api/v1/users?limit=3'
       "occupiesSeat": true,
       "lastSeenAt": "2026-08-10T08:30:59.681Z",
       "security": { "lockedUntil": null, "failedLoginAttempts": 0 },
+      "assignmentCapacity": {
+        "maxConcurrentTickets": null,
+        "effectiveMaxConcurrentTickets": 5,
+        "activeTicketCount": 2
+      },
       "createdAt": "2026-07-03T08:30:59.681Z"
     }
   ],
@@ -141,7 +147,7 @@ curl -b cookies.txt 'http://northwind.app.localhost:3051/api/v1/users?limit=3'
 
 `nextCursor` is `null` on the last page.
 
-Two fields behave in ways the shape does not show:
+Three fields behave in ways the shape does not show:
 
 - **`security` is `null` for a caller without `user:update`.** Every agent holds
   `user:read`, so flat lockout fields would give anyone in the tenant a live readout of how
@@ -150,6 +156,14 @@ Two fields behave in ways the shape does not show:
   `UserResponse` cannot leak it by forgetting to. For a caller who _does_ hold the
   permission it is never `null` — an admin reading `null` could not tell "not locked" from
   "not allowed to know".
+- **`assignmentCapacity` is `null` for a caller holding neither `assignment_rule:read` nor
+  `assignment_rule:write`** — which is every agent. It carries the agent's own concurrent-ticket
+  override, the effective cap they inherit when they have none, and how many active tickets they
+  hold right now. Same reasoning as `security`, and the same mapper-level gate: `user:read` is
+  held by every role, so an ungated cap field here would publish a live readout of a named
+  colleague's workload, and how close they are to being cut off from work, to the whole
+  workspace. Documented in full in
+  [the assignment settings API reference](assignment-settings-api.md#reading-it).
 - **`removed` accounts are absent unless asked for by name.** With no `status` filter the
   list excludes them; `?status=removed` returns them. A soft delete that still appears in a
   people list, an assignee picker or a mention menu is a soft delete nobody trusts.
@@ -189,21 +203,30 @@ Answers `200` with the caller's full `UserResponse`.
 
 ## `PATCH /api/v1/users/{id}`
 
-Changes a person's display name, role, status or team membership.
+Changes a person's display name, role, status, team membership or concurrent-ticket limit.
 
-**The route needs `user:update`; a body carrying `role` additionally needs
-`user:set_role`.** A caller without it is refused rather than served with the field quietly
-dropped — a privilege change that appears to have succeeded is the worse of the two
-failures. That second check is in the service rather than the guard because the guard's
-metadata is static and this condition is not.
+**The route needs `user:update`. A body carrying `role` additionally needs `user:set_role`, and
+a body carrying `maxConcurrentTickets` additionally needs `assignment_rule:write`.** A caller
+without the extra permission is refused rather than served with the field quietly dropped — a
+privilege-shaped change that appears to have succeeded is the worse of the two failures. Both
+extra checks live in the service rather than in the guard, because the guard's metadata is
+static and these conditions depend on the body.
 
-| Parameter     | In   | Type   | Required | Default | Notes                                                                          |
-| ------------- | ---- | ------ | -------- | ------- | ------------------------------------------------------------------------------ |
-| `id`          | path | uuid   | yes      | —       | A malformed id is `validation_failed`, not a database error                    |
-| `displayName` | body | string | no       | —       | 1–120 characters                                                               |
-| `role`        | body | enum   | no       | —       | `agent` \| `supervisor` \| `admin`. Additionally requires `user:set_role`      |
-| `status`      | body | enum   | no       | —       | `active` \| `suspended` **only**                                               |
-| `teamIds`     | body | uuid[] | no       | —       | Replaces the whole membership. Omitting it leaves membership alone. At most 50 |
+The two checks sit at different points, and the `maxConcurrentTickets` one is the later of them:
+it runs **after** the row is resolved, so a caller without `assignment_rule:write` patching an id
+that does not exist gets `404`, not `403` — a `403` on an unknown id is an existence oracle. The
+order is validate → resolve the row (404) → capacity permission (403) → invariants (409) →
+write. The `role` check is older and runs before the row is read, so an unknown id sent with a
+role the caller may not grant still answers `403`.
+
+| Parameter              | In   | Type   | Required | Default | Notes                                                                                                                    |
+| ---------------------- | ---- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `id`                   | path | uuid   | yes      | —       | A malformed id is `validation_failed`, not a database error                                                              |
+| `displayName`          | body | string | no       | —       | 1–120 characters                                                                                                         |
+| `role`                 | body | enum   | no       | —       | `agent` \| `supervisor` \| `admin`. Additionally requires `user:set_role`                                                |
+| `status`               | body | enum   | no       | —       | `active` \| `suspended` **only**                                                                                         |
+| `teamIds`              | body | uuid[] | no       | —       | Replaces the whole membership. Omitting it leaves membership alone. At most 50                                           |
+| `maxConcurrentTickets` | body | int    | no       | —       | 1–1000, or `null` to clear the override and inherit the workspace default. Additionally requires `assignment_rule:write` |
 
 `status` is narrower than the `user_status` column on purpose. `invited` is written by the
 invite flow and cleared by acceptance, and `removed` is written by `DELETE`, which is gated
@@ -212,6 +235,12 @@ through the side door.
 
 `teamIds` is the whole membership, not a delta. A client sends the membership it wants
 rather than a delta it computed against a list it may have read minutes ago.
+
+`maxConcurrentTickets` distinguishes `null` from omitted, and a client must not collapse them:
+`null` clears the agent's override and returns them to the workspace default, while omitting the
+field leaves whatever is set alone. What the cap does, where the workspace default is written,
+and when a change takes effect are all in
+[the assignment settings API reference](assignment-settings-api.md).
 
 ```bash
 curl -X PATCH -b cookies.txt \
@@ -233,6 +262,11 @@ curl -X PATCH -b cookies.txt \
   "occupiesSeat": true,
   "lastSeenAt": "2026-08-12T08:28:59.681Z",
   "security": { "lockedUntil": null, "failedLoginAttempts": 0 },
+  "assignmentCapacity": {
+    "maxConcurrentTickets": null,
+    "effectiveMaxConcurrentTickets": 5,
+    "activeTicketCount": 0
+  },
   "createdAt": "2026-06-15T08:30:59.681Z",
   "workflowsDisarmed": 0
 }
@@ -255,14 +289,14 @@ asynchronously what the acting admin is better told in the response. `DELETE
 /api/v1/users/{id}` answers `204` and has nowhere to put it; its count stays on the
 `user.removed` audit row beside the assignments it cleared and the invitations it revoked.
 
-| Status | Code                  | Cause                                                                                                                               |
-| ------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `200`  | —                     |                                                                                                                                     |
-| `400`  | `validation_failed`   | A field failed its schema, or `teamIds` names a team that is not in this tenant                                                     |
-| `401`  | `unauthenticated`     | No usable session                                                                                                                   |
-| `403`  | `forbidden`           | No `user:update`; or `role` was sent without `user:set_role`; or it is the caller's own role; or the role is above the caller's own |
-| `404`  | `not_found`           | No such user in this tenant                                                                                                         |
-| `409`  | `last_admin_required` | The change would leave the tenant with no active admin                                                                              |
+| Status | Code                  | Cause                                                                                                                                                                                                   |
+| ------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`  | —                     |                                                                                                                                                                                                         |
+| `400`  | `validation_failed`   | A field failed its schema, or `teamIds` names a team that is not in this tenant                                                                                                                         |
+| `401`  | `unauthenticated`     | No usable session                                                                                                                                                                                       |
+| `403`  | `forbidden`           | No `user:update`; or `role` was sent without `user:set_role`; or `maxConcurrentTickets` was sent without `assignment_rule:write`; or it is the caller's own role; or the role is above the caller's own |
+| `404`  | `not_found`           | No such user in this tenant                                                                                                                                                                             |
+| `409`  | `last_admin_required` | The change would leave the tenant with no active admin                                                                                                                                                  |
 
 The three `403`s carry different messages, because the reasons are genuinely different:
 

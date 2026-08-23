@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import type { Tag } from '@whatsappcrm/contracts';
 import { Field } from '@/components/ui/Field';
 import { FilterBar } from '@/components/ui/FilterBar';
@@ -9,7 +9,9 @@ import { SearchField } from '@/components/ui/SearchField';
 import { Select } from '@/components/ui/Select';
 import { useContent } from '@/lib/content';
 import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
-import { routes, searchParamKeys } from '@/lib/routes';
+import { useFilterNavigation } from '@/lib/hooks/useFilterNavigation';
+import { routes, searchParamKeys, type ContactsQuery } from '@/lib/routes';
+import { searchTermParam } from '@/lib/search-params';
 import { UNSET_VALUE, tagFilterOptions } from '../presentation';
 
 /**
@@ -37,7 +39,6 @@ export function ContactsFilterBar({
   isTruncated?: boolean;
 }) {
   const content = useContent();
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const tagParam = searchParams.get(searchParamKeys.contactsTag) ?? UNSET_VALUE;
@@ -46,6 +47,17 @@ export function ContactsFilterBar({
   // Local state only for the in-flight keystrokes; the URL stays the source of truth.
   const [draftQuery, setDraftQuery] = useState(queryParam);
   const debouncedQuery = useDebouncedValue(draftQuery, SEARCH_DEBOUNCE_MS);
+
+  // Both filters navigate through one place, so each carries the other even
+  // while the URL that set it is still in flight — see `useFilterNavigation`.
+  const filters = useMemo<ContactsQuery>(
+    () => ({
+      q: searchTermParam(queryParam),
+      tagId: tagParam === UNSET_VALUE ? undefined : tagParam,
+    }),
+    [queryParam, tagParam],
+  );
+  const replaceFilters = useFilterNavigation<ContactsQuery>(filters, routes.contacts);
 
   // Keeps the box in step when the URL changes from elsewhere — back button, a
   // shared link, the empty state's "clear filters" link.
@@ -58,15 +70,8 @@ export function ContactsFilterBar({
       return;
     }
 
-    router.replace(
-      routes.contacts({
-        tagId: tagParam === UNSET_VALUE ? undefined : tagParam,
-        q: debouncedQuery.trim() === '' ? undefined : debouncedQuery.trim(),
-      }),
-      // `replace`, so a search does not fill the back stack with every prefix.
-      { scroll: false },
-    );
-  }, [debouncedQuery, queryParam, tagParam, router]);
+    replaceFilters({ q: searchTermParam(debouncedQuery) });
+  }, [debouncedQuery, queryParam, replaceFilters]);
 
   return (
     <FilterBar label={content.contacts.filtersLabel}>
@@ -92,13 +97,13 @@ export function ContactsFilterBar({
             onChange={(event) => {
               const nextTagId = event.target.value;
 
-              router.replace(
-                routes.contacts({
-                  tagId: nextTagId === UNSET_VALUE ? undefined : nextTagId,
-                  q: queryParam === '' ? undefined : queryParam,
-                }),
-                { scroll: false },
-              );
+              replaceFilters({
+                tagId: nextTagId === UNSET_VALUE ? undefined : nextTagId,
+                // The term the box currently *shows*, not the one the URL holds:
+                // a tag chosen mid-word must not discard the keystrokes the
+                // debounce has not fired yet.
+                q: searchTermParam(draftQuery),
+              });
             }}
           />
         )}

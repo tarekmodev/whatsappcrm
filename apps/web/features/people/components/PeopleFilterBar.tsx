@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { TENANT_ROLES, type TenantRole } from '@whatsappcrm/contracts';
 import { Field } from '@/components/ui/Field';
 import { FilterBar } from '@/components/ui/FilterBar';
@@ -9,7 +9,9 @@ import { SearchField } from '@/components/ui/SearchField';
 import { Select } from '@/components/ui/Select';
 import { useContent } from '@/lib/content';
 import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
-import { routes, searchParamKeys } from '@/lib/routes';
+import { useFilterNavigation } from '@/lib/hooks/useFilterNavigation';
+import { routes, searchParamKeys, type PeopleQuery } from '@/lib/routes';
+import { searchTermParam } from '@/lib/search-params';
 import { roleOptions } from '../presentation';
 
 /**
@@ -29,7 +31,6 @@ const ALL_ROLES_VALUE = '';
 
 export function PeopleFilterBar() {
   const content = useContent();
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const roleParam = searchParams.get(searchParamKeys.peopleRole) ?? ALL_ROLES_VALUE;
@@ -38,6 +39,17 @@ export function PeopleFilterBar() {
   // Local state only for the in-flight keystrokes; the URL stays the source of truth.
   const [draftQuery, setDraftQuery] = useState(queryParam);
   const debouncedQuery = useDebouncedValue(draftQuery, SEARCH_DEBOUNCE_MS);
+
+  // Both filters navigate through one place, so each carries the other even
+  // while the URL that set it is still in flight — see `useFilterNavigation`.
+  const filters = useMemo<PeopleQuery>(
+    () => ({
+      q: searchTermParam(queryParam),
+      role: roleParam === ALL_ROLES_VALUE ? undefined : roleParam,
+    }),
+    [queryParam, roleParam],
+  );
+  const replaceFilters = useFilterNavigation<PeopleQuery>(filters, routes.settingsPeople);
 
   // Keeps the box in step when the URL changes from elsewhere — back button,
   // a shared link, a nav click.
@@ -50,15 +62,8 @@ export function PeopleFilterBar() {
       return;
     }
 
-    router.replace(
-      routes.settingsPeople({
-        role: roleParam === ALL_ROLES_VALUE ? undefined : roleParam,
-        q: debouncedQuery.trim() === '' ? undefined : debouncedQuery.trim(),
-      }),
-      // `replace`, so a search does not fill the back stack with every prefix.
-      { scroll: false },
-    );
-  }, [debouncedQuery, queryParam, roleParam, router]);
+    replaceFilters({ q: searchTermParam(debouncedQuery) });
+  }, [debouncedQuery, queryParam, replaceFilters]);
 
   return (
     <FilterBar label={content.people.filtersLabel}>
@@ -82,13 +87,13 @@ export function PeopleFilterBar() {
             onChange={(event) => {
               const nextRole = event.target.value as TenantRole | typeof ALL_ROLES_VALUE;
 
-              router.replace(
-                routes.settingsPeople({
-                  role: nextRole === ALL_ROLES_VALUE ? undefined : nextRole,
-                  q: queryParam === '' ? undefined : queryParam,
-                }),
-                { scroll: false },
-              );
+              replaceFilters({
+                role: nextRole === ALL_ROLES_VALUE ? undefined : nextRole,
+                // The term the box currently *shows*, not the one the URL holds:
+                // a role chosen mid-word must not discard the keystrokes the
+                // debounce has not fired yet.
+                q: searchTermParam(draftQuery),
+              });
             }}
           />
         )}

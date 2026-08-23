@@ -216,10 +216,12 @@ resolver's `coalesce` reads both columns per routing job and nothing memoises th
 re-route a ticket that is already deferred — that one stays flagged until somebody assigns it —
 so raising a cap frees the agent for the next ticket, not for the one on screen.
 
-The columns and their constraints are described in [the data model reference](data-model.md);
-the endpoints are specified in full in 0008
-[amendment 4](../architecture/0008-assignment-rotation-and-workload.md#amendment-4--the-cap-editing-surface-built-tar-384),
-built by TAR-384.
+The columns and their constraints are described in [the data model reference](data-model.md).
+The four routes, their payloads, permissions and error shapes are
+[the assignment settings API reference](assignment-settings-api.md); the design behind them is
+0008 [amendment 4](../architecture/0008-assignment-rotation-and-workload.md#amendment-4--the-cap-editing-surface-built-tar-384),
+built by TAR-384. For a supervisor doing this in the console, see
+[Clear tickets nobody could take](../guides/clear-flagged-tickets.md#raise-an-agents-ticket-limit).
 
 ## When nobody is eligible
 
@@ -454,7 +456,9 @@ Each of these is a deliberate v1 boundary, not an oversight.
   `?assignedUserId=`.
 - **No skill-, tag- or language-based routing.** Out of scope for TAR-23 explicitly. Team and
   tag matching is a routing rule's job.
-- **No cap-editing surface**, as above.
+- **No bulk or team-level cap editing.** A cap is edited one agent at a time, or for the whole
+  workspace at once; there is nothing in between. Out of scope for TAR-384 explicitly. The
+  single-agent and workspace-default surfaces are [above](#where-a-cap-is-configured).
 - **No realtime push on a routing change.** `ticket.updated` exists as a server event and
   emits for nothing here; the console refetches the flagged queue. 0008's Realtime section
   specifies the `ticketReadersRoom` fan-out this would need, so the push is additive rather
