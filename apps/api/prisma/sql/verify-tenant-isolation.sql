@@ -44,9 +44,9 @@
 --               table returns zero rows. With the GUC set, each tenant sees its
 --               own rows and none of the other's. Writing another tenant's
 --               `tenant_id` is rejected; updating and deleting its rows match
---               nothing. `webhook_events` and `tenant_signups` are unreachable
---               by grant. The system role sees across tenants, which is what it
---               is for.
+--               nothing. `webhook_events`, `webhook_event_replays` and
+--               `tenant_signups` are unreachable by grant. The system role sees
+--               across tenants, which is what it is for.
 --
 -- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74), one in
 -- each of the five auth tables — `teams`, `invites`, `invite_teams`, `sessions`,
@@ -636,6 +636,8 @@ DECLARE
     n bigint;
     leaked text[] := '{}';
     scoped_tables int := 0;
+    trail text;
+    priv text;
 BEGIN
     IF current_setting('app.tenant_id', true) IS NOT NULL THEN
         RAISE EXCEPTION 'expected a connection that has never set app.tenant_id, got %',
@@ -1041,13 +1043,13 @@ BEGIN
 
     RAISE NOTICE 'ok: GUC cleared to the empty string -> 0 rows';
 
-    -- 3g. `webhook_events`, `tenant_signups` and `lifecycle_events` carry no
-    -- policy by design, so on all three the grant is the enforcement. The app
-    -- role must not be able to read any of them at all.
+    -- 3g. `webhook_events`, `webhook_event_replays`, `tenant_signups` and
+    -- `lifecycle_events` carry no policy by design, so on all four the grant is
+    -- the enforcement. The app role must not be able to read any of them at all.
     --
     -- Asserted here rather than left to phase 1b, which only proves the negative
     -- — "no privilege on an unprotected table" also passes for a table that was
-    -- never created. These three are named, so a grant added by hand or an
+    -- never created. These four are named, so a grant added by hand or an
     -- `app-roles.sql` branch dropped in a refactor fails by name.
     BEGIN
         EXECUTE 'SELECT count(*) FROM "public"."webhook_events"';
@@ -1055,6 +1057,18 @@ BEGIN
     EXCEPTION
         WHEN insufficient_privilege THEN
             RAISE NOTICE 'ok: webhook_events unreachable by the app role (no grant)';
+    END;
+
+    -- TAR-94. The operator replay trail for the table above, and unreachable
+    -- for the same reason: a parked event may name no tenant, so no policy could
+    -- apply and the grant is what stands in for one. Withholding UPDATE and
+    -- DELETE from `whatsappcrm_system` as well is asserted by 3i below.
+    BEGIN
+        EXECUTE 'SELECT count(*) FROM "public"."webhook_event_replays"';
+        RAISE EXCEPTION 'app role can read webhook_event_replays — it holds no policy and must hold no grant';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: webhook_event_replays unreachable by the app role (no grant)';
     END;
 
     -- TAR-440. A signup row exists before its tenant does and holds an argon2id
@@ -1082,7 +1096,27 @@ BEGIN
             RAISE NOTICE 'ok: lifecycle_events unreachable by the app role (no grant)';
     END;
 
-    -- 3h. The system role, with no GUC at all, sees both tenants. Proves the
+    -- 3i. The append-only trails stay append-only for `whatsappcrm_system` too
+    -- (TAR-403, TAR-94). Both tables are the record of an operator acting on
+    -- production state, and `SystemPrisma` is the credential a mistake would run
+    -- under — so the grant withholds UPDATE and DELETE from it, and a re-run of
+    -- `app-roles.sql` that lost that branch has to fail here rather than in a
+    -- compliance review.
+    --
+    -- Read as privileges rather than attempted as statements: an UPDATE matching
+    -- no rows succeeds, so executing one would prove nothing about a table this
+    -- fixture leaves empty.
+    FOREACH trail IN ARRAY ARRAY['lifecycle_events', 'webhook_event_replays'] LOOP
+        FOREACH priv IN ARRAY ARRAY['UPDATE', 'DELETE'] LOOP
+            IF has_table_privilege('whatsappcrm_system', format('"public".%I', trail), priv) THEN
+                RAISE EXCEPTION 'system role holds % on %, which is append-only', priv, trail;
+            END IF;
+        END LOOP;
+    END LOOP;
+
+    RAISE NOTICE 'ok: the append-only trails withhold UPDATE and DELETE from the system role';
+
+    -- 3j. The system role, with no GUC at all, sees both tenants. Proves the
     -- SystemPrisma path works — and, read the other way, is the measure of what
     -- a leaked system credential would reach.
     EXECUTE 'RESET ROLE';

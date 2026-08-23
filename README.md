@@ -315,7 +315,7 @@ carries the per-model reasoning next to each model.
 Most models are tenant-scoped: they carry a non-null `tenant_id`, and row-level security
 filters them. Five are not — `tenants`, `plans`, `webhook_events`, `tenant_signups` and
 `lifecycle_events`, each deliberately, and
-[the tenant isolation contract](docs/reference/tenancy.md#the-five-tables-with-no-rls-policy)
+[the tenant isolation contract](docs/reference/tenancy.md#the-six-tables-with-no-rls-policy)
 says what `TenantPrisma` does with each instead. Six conventions hold across every model,
 starting with a non-null `tenant_id` on every scoped table and composite
 `(tenant_id, <parent_id>)` foreign keys.
@@ -667,18 +667,28 @@ FROM webhook_events WHERE status = 'failed' GROUP BY 1;
 ```
 
 Replaying one is a deliberate operator act, not a re-enqueue: a parked row is not
-claimable, so a job that named it would no-op. Reset it and the next sweep collects it.
+claimable, so a job that named it would no-op. Resetting it to `received` is what the next
+sweep collects, and that reset is a platform-admin route rather than a statement somebody
+types into psql:
 
-```sql
-UPDATE webhook_events
-   SET status = 'received', attempts = 0, last_error = NULL
- WHERE id = '<event id>' AND status = 'failed';
+```bash
+curl -X POST -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+  http://localhost:3001/api/v1/admin/webhook-events/<event id>/replay
+# 200 { "id": "...", "provider": "whatsapp", "status": "received",
+#       "parkedError": "unknown_phone_number_id: 15550001111", "replayedAt": "..." }
 ```
+
+It resets `status`, `attempts` and `last_error` and writes a `webhook_event_replays` row
+naming the operator credential that asked — see
+[the platform admin API reference](docs/reference/admin-api.md). A row that is not parked is
+refused with `409` rather than answered `200` for work it did not do, because "already
+recovered" and "nothing happened" are different things to be told mid-incident.
 
 A repeatable sweep re-enqueues anything still `received`, or stuck in `processing`, past
 `WEBHOOK_STUCK_AFTER_MS`. That job is what converts a Redis outage into message
 _lateness_ rather than message _loss_, so an inbox that has stopped updating usually needs
-Redis looked at rather than anything replayed by hand. `webhook_events` in `received`
+Redis looked at rather than anything replayed one event at a time. `webhook_events` in
+`received`
 older than five minutes is the condition worth alerting on.
 
 Without `REDIS_URL` the API still boots and still accepts and stores deliveries — it logs

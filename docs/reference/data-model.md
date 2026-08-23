@@ -45,22 +45,23 @@ Six rules hold across every model. A change that breaks one needs a reason in re
 ## Tenancy classification
 
 50 models. **45 are tenant-scoped**: they carry a non-null `tenant_id`, have
-`ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Five are
+`ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Six are
 not, each deliberately:
 
-| Table              | Why it has no policy                                                                                             | Reachable by                                                                |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `tenants`          | It _is_ the tenant. Provisioning and host→tenant resolution both read it before any tenant is in scope           | `SystemPrisma` for writes; `TenantPrisma` reads are narrowed to the own row |
-| `plans`            | Platform-wide product catalogue, shared by every tenant                                                          | `TenantPrisma` read-only; `SystemPrisma` for writes                         |
-| `webhook_events`   | Written _before_ the tenant is known — storing first and routing later is the point — so `tenant_id` is nullable | `SystemPrisma` only. The app role is granted nothing on it                  |
-| `tenant_signups`   | A signup exists _before_ its tenant does, so there is nothing for a policy to compare against                    | `SystemPrisma` only. The app role is granted nothing on it                  |
-| `lifecycle_events` | It outlives the tenant it describes, so `tenant_id` is a recorded identifier and not a reference (ADR 0009)      | `SystemPrisma` only. The app role is granted nothing on it                  |
+| Table                   | Why it has no policy                                                                                             | Reachable by                                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `tenants`               | It _is_ the tenant. Provisioning and host→tenant resolution both read it before any tenant is in scope           | `SystemPrisma` for writes; `TenantPrisma` reads are narrowed to the own row |
+| `plans`                 | Platform-wide product catalogue, shared by every tenant                                                          | `TenantPrisma` read-only; `SystemPrisma` for writes                         |
+| `webhook_events`        | Written _before_ the tenant is known — storing first and routing later is the point — so `tenant_id` is nullable | `SystemPrisma` only. The app role is granted nothing on it                  |
+| `webhook_event_replays` | The operator replay trail for the row above, and the parked row it recovers may name no tenant either (TAR-94)   | `SystemPrisma` only, SELECT and INSERT. Nothing may UPDATE it               |
+| `tenant_signups`        | A signup exists _before_ its tenant does, so there is nothing for a policy to compare against                    | `SystemPrisma` only. The app role is granted nothing on it                  |
+| `lifecycle_events`      | It outlives the tenant it describes, so `tenant_id` is a recorded identifier and not a reference (ADR 0009)      | `SystemPrisma` only. The app role is granted nothing on it                  |
 
-`TenantPrisma` applies its own rule to all five, because there is no policy to do it —
-see [`tenancy.md`](tenancy.md#the-five-tables-with-no-rls-policy).
+`TenantPrisma` applies its own rule to all six, because there is no policy to do it —
+see [`tenancy.md`](tenancy.md#the-six-tables-with-no-rls-policy).
 
-On the last three the **grant, not RLS, is the enforcement**, and `pnpm db:verify:rls`
-asserts all three by name rather than inferring them from the catalog. `lifecycle_events`
+On the last four the **grant, not RLS, is the enforcement**, and `pnpm db:verify:rls`
+asserts all four by name rather than inferring them from the catalog. `lifecycle_events`
 is the one that needs saying out loud: unlike the other two it _does_ carry `tenant_id`,
 so it looks scoped to every tool that reads the catalog. Granting the app role anything on
 it would expose every tenant's lifecycle history to every tenant connection.
@@ -567,12 +568,44 @@ One phone number, child of a WABA.
   that does not change with several WABAs behind it); `(tenant_id, id)`
 - **Indexes:** `(tenant_id, whatsapp_business_account_id)`
 - **Relations:** `whatsapp_business_accounts` → this on `(tenant_id, whatsapp_business_account_id)`, `Cascade`
-- **Owned by:** TAR-52, consumed by TAR-20
+- **Owned by:** TAR-52, consumed by TAR-20; registration columns added by TAR-767
 
 `quality_rating` is Meta's per-number rating. NULL means it has never been read; `unknown`
 is a value Meta itself returns. The two are not the same thing. Messaging limits are not
 modelled yet — Meta's tier vocabulary is version-dependent, and TAR-20 adds the column once
 it has confirmed it.
+
+**Registration is a second axis to `status`, not part of it** (TAR-170, contract TAR-766).
+Cloud API requires `POST /{phone-number-id}/register` with a six-digit PIN before a number
+may **send**; a number that was never registered still receives normally. So a row can read
+`status = 'connected'` and `registration_status = 'unregistered'` at once, which one enum
+cannot say — and adding a `connected_unregistered` value to `whatsapp_account_status` would
+have broken every existing `= 'connected'` check.
+
+`registration_status` is `unregistered`/`pending`/`registered`/`failed`, defaulting to
+`unregistered`. `unregistered` ("never attempted") and `failed` ("Meta answered and
+refused") are kept apart deliberately: every row predating TAR-767 was never attempted, and
+every row the operator paste-token path creates still is, so a `failed` default would report
+a rejection that never happened. `pending` is an attempt in flight, leased by
+`registration_attempted_at` so an attempt that died without an answer is recoverable rather
+than stuck.
+
+`registration_pin_encrypted` is a credential of the same class as `access_token_encrypted`:
+the same AES-256-GCM cipher, the same key, the same `v1.<iv>.<tag>.<ciphertext>` payload. It
+is bound to `phone_number_id` as AAD rather than to `waba_id` — the number, not the
+business, because Meta registers a number and a PIN copied between two numbers of one WABA
+must fail to authenticate. It lives here rather than beside the token because two numbers
+under one WABA register independently and can hold different PINs. Never selected into a
+response projection, never logged, never written to an audit row.
+
+`registration_failure_reason` is TEXT rather than an enum type, holding a value from
+`WHATSAPP_REGISTRATION_FAILURE_REASONS`. The vocabulary grows as Meta's failure codes are
+confirmed, and a reason a rolled-back build does not recognise has to read as `rejected`
+rather than fail a deserialise — the same arrangement as `sessions.revoked_reason`.
+
+There is deliberately no `(tenant_id, registration_status)` index: every access to this
+table is by primary key, by `(tenant_id, id)` or by `phone_number_id`, and the monitoring
+query — count by status — scans a table bounded by numbers-per-tenant.
 
 #### `message_templates`
 
@@ -1523,6 +1556,33 @@ calendar month, so a counter cannot straddle two invoices when a tenant upgrades
   lateness rather than loss; `(tenant_id)`
 - **Owned by:** TAR-20
 
+#### `webhook_event_replays`
+
+Append-only: no `updated_at`. One row per operator-triggered replay of a parked
+`webhook_events` row (TAR-94).
+
+- **Tenant-scoped:** no, and not because it was forgotten. `audit_logs.tenant_id` is NOT
+  NULL and policy-filtered, and the parked event a replay recovers is precisely the one with
+  no tenant — an `unknown_phone_number_id` is a number connected _after_ its customers
+  messaged it. Filing that entry under a tenant the operator asserted would be an invention,
+  so the trail takes the posture of the table it describes instead.
+- **Indexes:** `(webhook_event_id, replayed_at)` — "has this been replayed before, and how
+  often", which is what an operator asks before replaying it again
+- **Foreign key:** `webhook_event_id` → `webhook_events(id)` `ON DELETE CASCADE`. Unlike
+  `lifecycle_events`, which dropped its foreign keys so the trail could outlive the tenant it
+  names, a replay row without its event is an id, a label and nothing recoverable
+- **Owned by:** TAR-94
+
+`actor_label` is the label half of the `PLATFORM_ADMIN_TOKEN` entry that authenticated the
+request — the same value `audit_logs.actor_label` carries for an operator action inside a
+tenant, and never the secret half. `parked_error` is a copy of the `last_error` the row
+carried, because the replay clears it and why an event was parked is what the trail is read
+for.
+
+`webhook_event_replays_append_only`, a `BEFORE UPDATE` trigger, raises `TN002` on any update,
+including by the table owner. The grants withhold UPDATE and DELETE from both application
+roles; the trigger is the half they cannot cover.
+
 #### `idempotency_keys`
 
 Replay protection for unsafe POSTs that cause external side effects. Rows expire after 24
@@ -1640,6 +1700,7 @@ Applied in this order. Every directory carries a hand-written `down.sql` beside 
 | `20260816150000_notification_type_escalation`                             | `ALTER TYPE notification_type ADD VALUE 'escalation'`, alone in its own migration                                                                                                                                                                                                                                                                                                                                                                               | TAR-468 |
 | `20260816160000_ticket_escalation_notifications`                          | `ticket_events (tenant_id, id)` UNIQUE; `notifications.ticket_event_id` with its composite FK, its unique and `notifications_escalation_columns`. No new table, no new policy, no `ALTER TABLE tickets`, no backfill. The UNIQUE is the one statement that scales — `ticket_events` is populated and append-only, so the migration asserts its size and refuses above 250 000 rows with the `CONCURRENTLY` statement to run instead                             | TAR-468 |
 | `20260822120000_workflow_broken_reason_suspended`                         | `ALTER TYPE workflow_broken_reason ADD VALUE 'reference_suspended'`, alone in its own migration                                                                                                                                                                                                                                                                                                                                                                 | TAR-596 |
+| `20260823120000_webhook_event_replays`                                    | `webhook_event_replays`, the sixth table with no `tenant_isolation` policy and the second append-only one: an operator replaying a parked webhook event may be recovering a row that names no tenant, so the grant is the enforcement here too. One table, one index, one foreign key and a `BEFORE UPDATE` trigger. No new policy                                                                                                                              | TAR-94  |
 
 The 33 in TAR-48's row is correct for the migration as applied. The 34th tenant-scoped
 table, `whatsapp_business_accounts`, did not exist yet and carries its policy in TAR-52's

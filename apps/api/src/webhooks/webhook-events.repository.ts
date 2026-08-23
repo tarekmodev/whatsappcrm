@@ -67,18 +67,9 @@ export class WebhookEventsRepository {
    * stands", and a queue that could pick a parked row back up would spend the
    * retry budget on a refusal that has not changed. Replaying one is therefore
    * an explicit operator act — reset the row, and the sweeper takes it from
-   * there:
-   *
-   * ```sql
-   * UPDATE webhook_events
-   *    SET status = 'received', attempts = 0, last_error = NULL
-   *  WHERE id = $1 AND status = 'failed';
-   * ```
-   *
-   * `findStale` picks a `received` row up on the next sweep, which is what makes
-   * that one statement the whole procedure. An endpoint for it belongs on the
-   * platform-admin surface, where an operator action can be authorised and
-   * audited; there is none yet.
+   * there. `replay` below is that reset, authorised and audited on the
+   * platform-admin surface (TAR-94), and `findStale` collecting a `received` row
+   * on the next sweep is what makes one UPDATE the whole procedure.
    */
   async claim(id: string): Promise<ClaimedWebhookEvent | null> {
     const claimed = await this.prisma.webhookEvent.updateManyAndReturn({
@@ -113,13 +104,96 @@ export class WebhookEventsRepository {
    * Parked, never dropped (TAR-39, failure modes): the row keeps its raw payload
    * and stays queryable by `status = 'failed'`, so an unknown `phone_number_id`
    * — a number connected before its tenant record existed — can be replayed once
-   * the tenant is there rather than lost. Replay is the status reset described
-   * on `claim`, not a re-enqueue: a parked row is not claimable by design.
+   * the tenant is there rather than lost. Replay is `replay` below: the status
+   * reset described on `claim`, not a re-enqueue, because a parked row is not
+   * claimable by design.
    */
   async markFailed(id: string, reason: string, tenantId: string | null = null): Promise<void> {
     await this.prisma.webhookEvent.update({
       where: { id },
       data: { status: WebhookEventStatus.failed, lastError: reason, tenantId },
+    });
+  }
+
+  /**
+   * Puts a parked event back in front of the sweeper, and records who did it
+   * (TAR-94).
+   *
+   * The reset and the trail row are one transaction on purpose, for the same
+   * reason `AuditService` takes its caller's transaction client: an event that
+   * is replayed with nothing saying who replayed it, and a row claiming a replay
+   * that then rolled back, are both worse than the failure that would have
+   * produced them. Two statements, one commit.
+   *
+   * **The `status` filter on the UPDATE is the concurrency control**, exactly as
+   * in `claim`. Two operators replaying the same row at once both read `failed`;
+   * only one of them matches a row, and the other is told the row is no longer
+   * parked rather than adding a second trail entry for a reset that already
+   * happened.
+   *
+   * `attempts` goes back to zero because the retry budget belongs to the
+   * *attempt* to apply an event rather than to the event: a row parked with
+   * `attempts_exhausted` and replayed with its attempts intact would be parked
+   * again by the first transient failure. `last_error` is cleared for the same
+   * reason — which is why `parked_error` on the trail row is a copy, since after
+   * this commits the row itself no longer says what was being recovered.
+   *
+   * Nothing is enqueued. `findStale` collects a `received` row on the next sweep,
+   * and a second path onto the queue here would be a second way for one event to
+   * be in flight — the shape of the job-id collision TAR-67 fixed.
+   */
+  async replay(id: string, actorLabel: string): Promise<WebhookEventReplayOutcome> {
+    return await this.prisma.$transaction(async (tx) => {
+      const parked = await tx.webhookEvent.findUnique({
+        where: { id },
+        select: { provider: true, status: true, lastError: true },
+      });
+
+      if (parked === null) {
+        return { kind: 'not-found' };
+      }
+
+      if (parked.status !== WebhookEventStatus.failed) {
+        return { kind: 'not-parked', status: parked.status };
+      }
+
+      const { count } = await tx.webhookEvent.updateMany({
+        where: { id, status: WebhookEventStatus.failed },
+        data: { status: WebhookEventStatus.received, attempts: 0, lastError: null },
+      });
+
+      if (count === 0) {
+        // Parked when it was read and not now: a concurrent replay committed in
+        // between. Re-read rather than report the status from above, so the
+        // answer describes the row as it actually stands.
+        const current = await tx.webhookEvent.findUnique({
+          where: { id },
+          select: { status: true },
+        });
+
+        return current === null
+          ? { kind: 'not-found' }
+          : { kind: 'not-parked', status: current.status };
+      }
+
+      const { replayedAt } = await tx.webhookEventReplay.create({
+        data: { webhookEventId: id, actorLabel, parkedError: parked.lastError },
+        select: { replayedAt: true },
+      });
+
+      return {
+        kind: 'replayed',
+        event: {
+          // `webhook_events.provider` is a TEXT column, and `store` — the only
+          // statement in the platform that writes it — takes a `WebhookProvider`.
+          // The assertion states that, so the published response can carry the
+          // union instead of widening the contract to a bare string.
+          provider: parked.provider as WebhookProvider,
+          id,
+          parkedError: parked.lastError,
+          replayedAt,
+        },
+      };
     });
   }
 
@@ -159,6 +233,35 @@ export class WebhookEventsRepository {
 
     return stale.map(({ id }) => id);
   }
+}
+
+/**
+ * What a replay did, as a discriminated union rather than a boolean and a
+ * nullable field.
+ *
+ * Three genuinely different answers — an id nobody stored, a row that is not
+ * parked, and a row that has been reset — and the caller maps each to its own
+ * status code. A union is what stops a fourth being added later without every
+ * call site being made to handle it.
+ */
+export type WebhookEventReplayOutcome =
+  | { readonly kind: 'replayed'; readonly event: ReplayedWebhookEvent }
+  | { readonly kind: 'not-found' }
+  /** The row exists and is `received`, `processing` or `processed`. */
+  | { readonly kind: 'not-parked'; readonly status: WebhookEventStatus };
+
+export interface ReplayedWebhookEvent {
+  readonly id: string;
+  /**
+   * Which pipeline owns the row, and therefore which sweeper will collect it.
+   * Reported rather than assumed: only the WhatsApp sweep runs today, so a
+   * `billing` row reset to `received` waits for the worker TAR-37 adds.
+   */
+  readonly provider: WebhookProvider;
+  /** The `last_error` the row carried, captured before the reset cleared it. */
+  readonly parkedError: string | null;
+  /** When the reset committed — not when the sweeper will collect it. */
+  readonly replayedAt: Date;
 }
 
 export interface ClaimedWebhookEvent {

@@ -39,7 +39,10 @@ import type { ReportParams } from '@/features/reports/report-params';
 
 export interface UseReportExportOptions {
   params: ReportParams;
-  /** Which CSV. The contract's default is the per-agent table (ADR 0009 decision 7). */
+  /**
+   * Which CSV. The contract's default is the per-agent table — ADR 0010
+   * (reporting dashboard and export) decision 7.
+   */
   section?: ReportExportSection;
   /** Called with the saved file name, for the success toast. */
   onExported: (fileName: string) => void;
