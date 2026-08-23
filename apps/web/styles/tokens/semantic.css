@@ -326,6 +326,8 @@
   --size-media-thumb: var(--scale-size-media-sm);
   --size-media-inline: var(--scale-size-media-md);
   --size-media-player: var(--scale-size-player);
+  /* The box a button-shaped placeholder occupies. */
+  --size-action: var(--scale-size-action);
   --measure-body: var(--scale-measure-body);
   /* How wide a truncating table cell may get before the ellipsis takes over. */
   --measure-cell: var(--scale-measure-cell);

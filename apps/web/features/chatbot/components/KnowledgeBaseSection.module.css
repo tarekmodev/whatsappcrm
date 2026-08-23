@@ -1,0 +1,11 @@
+/*
+ * The `Add entry` placeholder.
+ *
+ * `SkeletonBlock` fills its parent, and `SectionCard`’s action slot is
+ * `flex: 0 0 auto` — shrink-to-fit around whatever it holds. Without a width of
+ * its own the placeholder would be invisible, and the card header would still
+ * jump when the real button arrived.
+ */
+.actionSkeleton {
+  inline-size: var(--size-action);
+}

@@ -3,6 +3,7 @@ import {
   ONBOARDING_STEP_IDS,
   type ConversationListQuery,
   type ConversationSort,
+  type KnowledgeDocumentStatus,
   type OnboardingStepId,
   type ReportScope,
   type TicketListQuery,
@@ -158,11 +159,18 @@ export const routes = {
    *
    * `chatbot`, not `ai`. The path is read by a customer, and `docs/STYLE.md`
    * reserves *agent* for a person — so the on-screen word for the machine is
-   * "chatbot", and the URL takes the on-screen word. Nothing here is a query
-   * parameter: the surface is two cards on one page, and neither is a filter
-   * anybody would share.
+   * "chatbot", and the URL takes the on-screen word.
+   *
+   * The knowledge base's title search and status filter ride in the URL
+   * (TAR-613). The table holds one page of ten and a tenant may have more, so
+   * the two filters are the only way to reach the rest — and "everything that
+   * failed to index" is a link an admin sends rather than a sequence of clicks
+   * they describe.
+   *
+   * No `cursor`: this surface ships no pager, so there is no page to reproduce.
    */
-  settingsChatbot: () => '/settings/chatbot',
+  settingsChatbot: (query?: ChatbotQuery) =>
+    withQuery('/settings/chatbot', chatbotSearchParams(query)),
   settingsSecurity: () => '/settings/security',
   /**
    * Sign in. `redirectTo` is where the user was heading when the guard turned
@@ -267,6 +275,17 @@ export const searchParamKeys = {
    * API's business. The query it becomes is `ContactListQuery.tagId`.
    */
   contactsTag: 'tag',
+  /**
+   * The knowledge base table's two filters (TAR-613). Spelled exactly as
+   * `KnowledgeDocumentListQuerySchema` names them, so a URL parameter and the
+   * query it becomes cannot drift — the rule `ticketStatus` already follows.
+   *
+   * `q` is a title match, not a content search: the contract documents it as
+   * "a plain case-insensitive match over `title` — a console filter, not the
+   * retrieval path", and the search box says so on screen.
+   */
+  knowledgeQuery: 'q',
+  knowledgeStatus: 'status',
   /**
    * Which deferral reason the supervisor's flagged-ticket queue is narrowed to.
    * In the URL rather than component state because it is the thing a supervisor
@@ -489,6 +508,16 @@ export interface ContactsQuery {
   tagId?: string;
 }
 
+export interface ChatbotQuery {
+  /**
+   * A title fragment, 1–120 chars. Matched against `title` only — never the
+   * entry's text, which is what the chatbot itself searches.
+   */
+  q?: string;
+  /** A `KnowledgeDocumentStatus`; omitted means every entry. */
+  status?: KnowledgeDocumentStatus;
+}
+
 export interface AssignmentQuery {
   /** A `FallbackAssignmentReason`; omitted means every flagged ticket. */
   deferredReason?: string;
@@ -541,6 +570,13 @@ function contactsSearchParams(
   return {
     [searchParamKeys.contactsQuery]: query?.q,
     [searchParamKeys.contactsTag]: query?.tagId,
+  };
+}
+
+function chatbotSearchParams(query: ChatbotQuery | undefined): Record<string, string | undefined> {
+  return {
+    [searchParamKeys.knowledgeQuery]: query?.q,
+    [searchParamKeys.knowledgeStatus]: query?.status,
   };
 }
 

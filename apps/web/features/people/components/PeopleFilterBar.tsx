@@ -8,7 +8,7 @@ import { FilterBar } from '@/components/ui/FilterBar';
 import { SearchField } from '@/components/ui/SearchField';
 import { Select } from '@/components/ui/Select';
 import { useContent } from '@/lib/content';
-import { useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
+import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
 import { routes, searchParamKeys } from '@/lib/routes';
 import { roleOptions } from '../presentation';
 
@@ -26,7 +26,6 @@ import { roleOptions } from '../presentation';
  */
 
 const ALL_ROLES_VALUE = '';
-const SEARCH_DEBOUNCE_MS = 300;
 
 export function PeopleFilterBar() {
   const content = useContent();

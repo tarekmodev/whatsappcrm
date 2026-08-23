@@ -31,6 +31,47 @@ export const KNOWLEDGE_STATUS_TONES = {
 } as const satisfies Record<KnowledgeDocumentStatus, BadgeTone>;
 
 /**
+ * What the status filter’s empty option is worth in the URL: nothing at all.
+ * `withQuery` drops an empty string, so “All statuses” leaves `?status=` off
+ * the link rather than writing a parameter that says the default.
+ */
+export const ALL_STATUSES_VALUE = '';
+
+/**
+ * The order the status filter offers its options in.
+ *
+ * Most-looked-for first rather than `KNOWLEDGE_DOCUMENT_STATUSES` order: an
+ * admin opening this filter is usually chasing what the chatbot can already
+ * answer from, or what failed.
+ */
+export const KNOWLEDGE_STATUS_FILTER_ORDER = [
+  'indexed',
+  'pending',
+  'failed',
+] as const satisfies readonly KnowledgeDocumentStatus[];
+
+/**
+ * The status filter’s options, “All statuses” first.
+ *
+ * Labels are read from `content.chatbot.statuses` rather than retyped, so the
+ * filter and the badge on the row it selects cannot drift apart. No tone or
+ * colour on the options: `<option>` styling is the platform’s, and a partly
+ * coloured native list looks broken — the badge in the row is where status
+ * colour lives.
+ */
+export function knowledgeStatusFilterOptions(
+  content: Content,
+): Array<{ value: string; label: string }> {
+  return [
+    { value: ALL_STATUSES_VALUE, label: content.chatbot.filterStatusAll },
+    ...KNOWLEDGE_STATUS_FILTER_ORDER.map((status) => ({
+      value: status,
+      label: content.chatbot.statuses[status],
+    })),
+  ];
+}
+
+/**
  * The model a configuration actually uses, which is not the same as the one it
  * stores: `null` means "the platform default", so a tenant that never chose is
  * not pinned to whatever was current the day their row was written.

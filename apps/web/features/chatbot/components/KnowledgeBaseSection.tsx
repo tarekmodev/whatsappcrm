@@ -1,103 +1,97 @@
-'use client';
-
-import { useState } from 'react';
-import type { KnowledgeDocumentListItem } from '@whatsappcrm/contracts';
-import { Button } from '@/components/ui/Button';
-import { Notice } from '@/components/ui/Notice';
+import { Suspense, type ReactNode } from 'react';
 import { SectionCard } from '@/components/ui/SectionCard';
+import { SkeletonBlock } from '@/components/ui/Skeleton';
 import { Stack } from '@/components/layout/Stack';
-import { useContent } from '@/lib/content';
-import { KNOWLEDGE_DOCUMENTS_PAGE_SIZE } from '../constants';
-import {
-  KnowledgeDocumentsTable,
-  KnowledgeDocumentsTableSkeleton,
-} from './KnowledgeDocumentsTable';
-import { LazyKnowledgeEntryDialog } from './knowledge-dialogs.lazy';
+import { content } from '@/content/en';
+import type { PermissionChecker } from '@/lib/session/permissions';
+import { AddKnowledgeEntryAction } from './AddKnowledgeEntryAction';
+import { KnowledgeFilterBarSkeleton } from './KnowledgeFilterBar.Skeleton';
+import { KnowledgeDocumentsTableSkeleton } from './KnowledgeDocumentsTable';
+import styles from './KnowledgeBaseSection.module.css';
 
 /**
- * The knowledge base section: the card, the add trigger and the table. Usage:
- * `<KnowledgeBaseSection documents={documents} hasMore indexedEntryCount={count} canWrite />`.
+ * The knowledge base card: the frame, the `Add entry` action, and whatever the
+ * page composes into it. Usage:
+ * `<KnowledgeBaseSection checker={checker}><KnowledgeFilterSection …/><KnowledgeDocumentsPanel …/></KnowledgeBaseSection>`.
  *
- * `canWrite` comes from the server's permission check, so a principal holding
- * only `ai:read` is never rendered a control that leads to a refusal.
+ * A **server** component that awaits nothing (TAR-613). It used to be a client
+ * component holding the add dialog's open state, and it used to receive the
+ * documents as a prop. Both moved: the dialog into `AddKnowledgeEntryButton`,
+ * the read into the page. What is left is a frame that renders synchronously —
+ * which is what lets the filter bar and the table sit in two different Suspense
+ * boundaries inside it, one unkeyed and one keyed, without either waiting on the
+ * configuration.
  *
- * The "more entries than fit" line is a notice rather than a pager. The list is
- * keyset-paginated and a second page is a real feature; until it exists, saying
- * how many are shown is honest, and a pager that could not page would not be.
+ * The card is where the filters live rather than above the page header: this
+ * route has three cards and only one of them is a list, so a page-level filter
+ * row would read as filtering the readiness panel and the settings form too.
  *
- * `indexedEntryCount` is passed down rather than derived from `documents` for
- * the reason the notice exists at all: this is one page of the knowledge base,
- * and the delete warning it drives is about the whole of it.
+ * `children` sits in a single `Stack gap="4"` — bar, notice, table, one gap
+ * between each. Neither child wraps itself in a stack of its own.
  */
 export function KnowledgeBaseSection({
-  documents,
-  hasMore,
-  indexedEntryCount,
-  canWrite,
+  checker,
+  children,
 }: {
-  documents: readonly KnowledgeDocumentListItem[];
-  hasMore: boolean;
-  /** The tenant's indexed count, which the delete warning needs and one page cannot give. */
-  indexedEntryCount: number;
-  canWrite: boolean;
+  checker: PermissionChecker;
+  children: ReactNode;
 }) {
-  const content = useContent();
-  const [isAdding, setIsAdding] = useState(false);
-
   return (
     <SectionCard
       id="knowledge-base"
       title={content.chatbot.knowledgeHeading}
       description={content.chatbot.knowledgeDescription}
       action={
-        canWrite ? (
-          <Button
-            variant="primary"
-            onClick={() => {
-              setIsAdding(true);
-            }}
-          >
-            {content.chatbot.addEntry}
-          </Button>
-        ) : undefined
+        // The plan gate needs the configuration, and the frame must not wait for
+        // it. A button-sized placeholder rather than nothing, so the card header
+        // keeps its height and the affordance is visibly on its way.
+        <Suspense fallback={<AddEntryActionSkeleton />}>
+          <AddKnowledgeEntryAction checker={checker} />
+        </Suspense>
       }
     >
-      <Stack gap="4">
-        {hasMore ? (
-          <Notice tone="info">
-            {content.chatbot.knowledgeShowingFirst(KNOWLEDGE_DOCUMENTS_PAGE_SIZE)}
-          </Notice>
-        ) : null}
-
-        <KnowledgeDocumentsTable
-          documents={documents}
-          indexedEntryCount={indexedEntryCount}
-          canWrite={canWrite}
-        />
-      </Stack>
-
-      {isAdding ? (
-        <LazyKnowledgeEntryDialog
-          onClose={() => {
-            setIsAdding(false);
-          }}
-        />
-      ) : null}
+      <Stack gap="4">{children}</Stack>
     </SectionCard>
   );
 }
 
-/** Mirrors the section's frame, with the table's own skeleton inside it. */
+/**
+ * The whole card as a placeholder, for the route-level `loading.tsx` where there
+ * is no session to gate the action on and no filters to read.
+ *
+ * It draws the filter row, because that is what the page paints first: the bar's
+ * own boundary shows its fallback on first mount whether or not the tenant turns
+ * out to have entries, so leaving it out here would move the table when the page
+ * takes over from the route skeleton.
+ *
+ * Row actions are assumed present for the same reason the workspace skeleton
+ * always draws its plan card: this route's `loading.tsx` has no session to read,
+ * and every principal who reaches this page under today's role table holds
+ * `ai:write`.
+ *
+ * Changed in the same commit as the section it stands in for.
+ */
 export function KnowledgeBaseSectionSkeleton({ hasActions = true }: { hasActions?: boolean }) {
-  const content = useContent();
-
   return (
     <SectionCard
       id="knowledge-base"
       title={content.chatbot.knowledgeHeading}
       description={content.chatbot.knowledgeDescription}
+      action={<AddEntryActionSkeleton />}
     >
-      <KnowledgeDocumentsTableSkeleton hasActions={hasActions} />
+      <Stack gap="4">
+        <KnowledgeFilterBarSkeleton />
+        <KnowledgeDocumentsTableSkeleton hasActions={hasActions} />
+      </Stack>
     </SectionCard>
   );
+}
+
+/**
+ * A block the size of the `Add entry` button, so the card's header row does not
+ * change height when the plan gate resolves. `--size-touch-target` is what
+ * `Control.module.css` resolves a control's height to.
+ */
+function AddEntryActionSkeleton() {
+  return <SkeletonBlock height="var(--size-touch-target)" className={styles.actionSkeleton} />;
 }

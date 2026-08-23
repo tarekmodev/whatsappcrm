@@ -3221,12 +3221,40 @@ export const content = {
     knowledgeEmptyBody:
       'The chatbot answers only from entries you add here, so until there is one it stays quiet and every conversation goes to your team. Add your returns policy, your delivery times, your opening hours.',
     /**
-     * Said rather than paged. The list is keyset-paginated and a second page is
-     * a real feature; until it exists, naming how many are shown is honest, and
-     * a pager that could not page would not be. TAR-613 is the follow-up.
+     * Unfiltered and truncated. Says how to reach the rest, now that there is a
+     * way (TAR-613) — the previous wording named the ceiling and offered no way
+     * past it. Rendered only when there are more entries than fit; when the list
+     * is complete, silence is the honest answer.
      */
     knowledgeShowingFirst: (count: number) =>
-      `Showing the ${count} most recent entries. The chatbot searches every entry, not only these.`,
+      `Showing the ${count} most recent entries. Search by title or filter by status to reach the others — the chatbot searches every entry, not only these.`,
+    /** Filtered and still truncated: more matches than fit, so narrow it further. */
+    knowledgeShowingFirstFiltered: (count: number) =>
+      `Showing the first ${count} matches. Narrow the search to see the others.`,
+
+    // --- The filter row ----------------------------------------------------
+    knowledgeFiltersLabel: 'Knowledge base filters',
+    searchEntriesLabel: 'Search entries',
+    /** Says what `q` actually matches. A title match, not a content search. */
+    searchEntriesPlaceholder: 'Search by title',
+    filterStatusLabel: 'Status',
+    filterStatusAll: 'All statuses',
+
+    /**
+     * A filter is applied and nothing matched — a different state from a
+     * knowledge base that has never had an entry, and it gets a way back.
+     *
+     * The first sentence of the body is load-bearing rather than padding:
+     * title-only matching is the most likely reason an admin is looking at this
+     * screen, and it is the only place they will read the explanation. The
+     * heading deliberately does not quote the term back the way the top bar’s
+     * search does — here the term is on screen in the box directly above, with
+     * its own clear button.
+     */
+    knowledgeFilteredEmptyHeading: 'No entries match this filter',
+    knowledgeFilteredEmptyBody:
+      'Search matches entry titles, not their text. Clear the search or the status filter to see the whole knowledge base again.',
+    knowledgeClearFilters: 'Clear filters',
 
     columnTitle: 'Title',
     columnStatus: 'Status',

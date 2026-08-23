@@ -8,7 +8,7 @@ import { FilterBar } from '@/components/ui/FilterBar';
 import { SearchField } from '@/components/ui/SearchField';
 import { Select } from '@/components/ui/Select';
 import { useContent } from '@/lib/content';
-import { useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
+import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
 import { routes, searchParamKeys } from '@/lib/routes';
 import { UNSET_VALUE, tagFilterOptions } from '../presentation';
 
@@ -24,8 +24,6 @@ import { UNSET_VALUE, tagFilterOptions } from '../presentation';
  * One tag, not a set, because `ContactListQuerySchema` takes one `tagId`. A
  * multi-select here would be a control the API answers by ignoring all but one.
  */
-
-const SEARCH_DEBOUNCE_MS = 300;
 
 export function ContactsFilterBar({
   tags,
