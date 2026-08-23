@@ -1666,13 +1666,32 @@ sessions have since landed on both sides — signing in, the API's session cooki
 console's route guard all work, and with the stub off the API answers `401` to anything that
 is not a real session. The flags survive as a development and test convenience only. Both
 default to off in code (`lib/config/env.ts`) and both must stay off in a deployed
-environment; `.env.example` turns both on, and its comments say why:
+environment. `.env.example` leaves the **mock transport off** and the **role stub on**, and
+its comments say why:
 
 - `NEXT_PUBLIC_USE_MOCK_API` serves every API call from `lib/api/mock/` instead of HTTP.
   The mock is a _transport_, not a per-feature fake: the resource modules in `lib/api/` are
   identical in both modes, so wiring the real endpoints is one flag. The mock enforces the
   same tenant scoping and permissions the real API does, and seeds a second tenant purely so
   that isolation is testable.
+
+  **It is off in `.env.example` (TAR-830).** It shipped `true` there long after the
+  endpoints it stood in for had landed, so `cp .env.example .env` — the setup this README
+  documents — produced a console that never called the API and did not say so. What made
+  that expensive is the same fidelity that makes the mock useful: the fixtures reuse the
+  seed dataset's ids and names, so a mocked screen and a real one are the same screen. A
+  tester reported the connect wizard showing a WhatsApp number nobody had chosen; the number
+  is a literal in `lib/api/mock/handlers.ts`.
+
+  Turn it on to work on the console with no database and no API running. While it is on the
+  console wears a standing **"Mock data"** badge in the corner of every screen —
+  `components/env/MockModeBadge.tsx`, rendered from the root layout so the signed-out
+  screens carry it too, and rendered as nothing at all with the flag off.
+
+  One screen still needs it: `/onboarding` reads `GET /v1/tenant/onboarding`, which only the
+  fixtures answer (TAR-405 is the endpoint). With the flag off that route renders its error
+  state. Every other path `lib/api/` calls exists on the API today.
+
 - `NEXT_PUBLIC_ENABLE_ROLE_STUB` reads the role from a cookie and exposes a switcher, so the
   agent/supervisor/admin views can be demonstrated without three real accounts.
   `getSession()` refuses it in production regardless of the flag, and while it is on the
