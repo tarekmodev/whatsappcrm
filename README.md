@@ -151,8 +151,19 @@ Step 7 needs steps 5 and 6 for the same reason the API does — it connects as
 [Seed data](#seed-data) for what it writes and why it is written that way. Skip it and
 everything still runs, against an empty database.
 
-`pnpm dev` runs both apps: the API on <http://localhost:3001/api> and the frontend on
-<http://localhost:3000>.
+`pnpm dev` runs both apps: the API on <http://localhost:3001/api> and the console on
+port 3000. Open the console on a **tenant hostname** — <http://northwind.app.localhost:3000>
+— and not on `localhost:3000`.
+
+The console resolves the tenant from the host it is served on, and `localhost` names no
+tenant: the shell renders, then every read under it answers `tenant_not_found`. Step 7
+writes two hostnames, `northwind.app.localhost` and `southwind.app.localhost` (the suffix
+is `PLATFORM_DOMAIN`), and prints both. Chrome, Firefox and Safari resolve `*.localhost`
+themselves, so there is no hosts entry to add.
+
+That address is load-bearing now in a way it was not before TAR-830: while
+`NEXT_PUBLIC_USE_MOCK_API` was on by default, no request left the Next process and any host
+worked.
 
 ### Check it worked
 
@@ -175,8 +186,8 @@ pnpm test:db
 Step 7 prints what it wrote and where to reach it:
 
 ```text
-  northwind  http://northwind.app.localhost  5 users, 5 conversations, 13 messages, 2 tickets
-  southwind  http://southwind.app.localhost  2 users, 1 conversation, 2 messages, 0 tickets
+  northwind  http://northwind.app.localhost:3000  5 users, 5 conversations, 13 messages, 3 tickets, 1 overdue
+  southwind  http://southwind.app.localhost:3000  2 users, 1 conversation, 2 messages, 0 tickets, 0 overdue
 ```
 
 Once the database and Redis are up, readiness reports them:
@@ -445,14 +456,14 @@ another story.
 pnpm db:seed
 ```
 
-Two tenants, reachable at `northwind.app.localhost` and `southwind.app.localhost`.
-`northwind` is the one to work in: five agents across the three roles, two teams, two
+Two tenants, reachable at `northwind.app.localhost:3000` and `southwind.app.localhost:3000`.
+`northwind` is the one to work in: five users across the three roles, two teams, two
 WhatsApp numbers under two business accounts, five approved-and-pending templates, four
-contacts, five threads and their messages, two tickets, and a subscription with usage
-counters. `southwind` is small and exists to be **absent** — every list in the console is
-served under row-level security, and a dropped tenant predicate is invisible in a database
-holding one tenant. Its first message reads `SOUTHWIND ONLY —`, so a leak is something you
-notice rather than something you have to query for.
+contacts, five threads and their messages, three tickets with one already overdue, and a
+subscription with usage counters. `southwind` is small and exists to be **absent** — every
+list in the console is served under row-level security, and a dropped tenant predicate is
+invisible in a database holding one tenant. Its first message reads `SOUTHWIND ONLY —`, so
+a leak is something you notice rather than something you have to query for.
 
 Three things about how it is written are worth knowing before you change it:
 
@@ -1689,8 +1700,8 @@ its comments say why:
   screens carry it too, and rendered as nothing at all with the flag off.
 
   One screen still needs it: `/onboarding` reads `GET /v1/tenant/onboarding`, which only the
-  fixtures answer (TAR-405 is the endpoint). With the flag off that route renders its error
-  state. Every other path `lib/api/` calls exists on the API today.
+  fixtures answer — TAR-831 tracks the missing endpoint. With the flag off that route
+  renders its error state. Every other path `lib/api/` calls exists on the API today.
 
 - `NEXT_PUBLIC_ENABLE_ROLE_STUB` reads the role from a cookie and exposes a switcher, so the
   agent/supervisor/admin views can be demonstrated without three real accounts.

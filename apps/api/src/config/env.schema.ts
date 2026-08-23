@@ -33,6 +33,16 @@ export const DEPLOY_ENVS = ['local', 'development', 'staging', 'production'] as 
 export const DEFAULT_REALTIME_URL = 'http://localhost:3001';
 
 /**
+ * Where the console sits on a developer's machine.
+ *
+ * Exported for the same reason as `DEFAULT_REALTIME_URL` above, and read by the
+ * same `??`: `pnpm db:seed` prints each seeded tenant's address on this origin's
+ * port, and it builds its `ConfigService` over raw `process.env` with no schema
+ * applied — so it cannot assume the default below was ever reached (TAR-830).
+ */
+export const DEFAULT_WEB_ORIGIN = 'http://localhost:3000';
+
+/**
  * A configured Meta id — the app id, the Embedded Signup configuration id.
  *
  * Digits, held as a string: Meta's ids exceed `Number.MAX_SAFE_INTEGER`, so a
@@ -51,7 +61,7 @@ const envShape = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
 
   /** Origin of the Next.js app, used for the CORS allow-list. */
-  WEB_ORIGIN: z.string().min(1).default('http://localhost:3000'),
+  WEB_ORIGIN: z.string().min(1).default(DEFAULT_WEB_ORIGIN),
 
   /** Injected by the deployment target; surfaced on the health endpoint. */
   APP_VERSION: z.string().min(1).default('0.0.0'),
