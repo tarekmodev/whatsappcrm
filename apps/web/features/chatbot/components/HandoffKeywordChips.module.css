@@ -1,0 +1,92 @@
+.list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+/*
+ * `ActiveFilterChips`' chip, in the neutral roles rather than the accent ones —
+ * a filter chip is a thing the reader just did, and this is a value they set
+ * some time ago. Same shape, same height, same radius: the console has one chip.
+ */
+.chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-block-size: var(--size-control-sm);
+  padding-inline-start: var(--space-3);
+  /* No trailing padding: the remove button's own touch box provides it. */
+  padding-inline-end: var(--space-1);
+  background: var(--color-neutral-subtle);
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--color-on-neutral-subtle);
+  font-size: var(--font-size-caption);
+  /*
+   * Chips appear as the debounced parse lands, so they fade rather than pop.
+   * Removal has no exit animation on purpose: a chip that lingers after a click
+   * reads as a click that missed.
+   */
+  animation: chipEnter var(--duration-fast) var(--easing-enter);
+}
+
+@keyframes chipEnter {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The word that broke the length cap, named by the field's error above it. */
+.chip[data-invalid='true'] {
+  background: var(--color-danger-subtle);
+  color: var(--color-on-danger-subtle);
+}
+
+.text {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * A `--size-icon-sm` glyph in a real hit area. The chip is caption-sized, so the
+ * box the finger gets is larger than the mark it draws — and it is a `button`
+ * rather than a clickable span, so it is reachable, focusable and announced.
+ */
+.remove {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--size-control-sm);
+  block-size: var(--size-control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+@media (hover: hover) {
+  .remove:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}
+
+.empty {
+  max-inline-size: var(--measure-body);
+  font-size: var(--font-size-caption);
+  color: var(--color-on-surface-muted);
+}
+
+@media (forced-colors: active) {
+  .chip {
+    border-color: ButtonText;
+  }
+}

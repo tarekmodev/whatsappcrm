@@ -3194,9 +3194,10 @@ export const content = {
     subtitle: 'What the chatbot knows, and when it answers instead of your team.',
     loading: 'Loading chatbot settings',
 
-    // --- Readiness ---------------------------------------------------------
-    readinessHeading: 'Automated replies',
-    readinessDescription: 'Whether the chatbot is answering customers right now.',
+    // --- The pipeline band -------------------------------------------------
+    pipelineHeading: 'Automated replies',
+    pipelineDescription:
+      'Whether the chatbot is answering customers right now, and where it stops.',
     /**
      * The readiness badge, and deliberately not `enabledOn` / `enabledOff`
      * (TAR-710). Those two words belong to the switch in the settings card and
@@ -3212,8 +3213,15 @@ export const content = {
         ? 'It answers from 1 indexed entry, and passes anything it is unsure about to your team.'
         : `It answers from ${indexedCount} indexed entries, and passes anything it is unsure about to your team.`,
     notReadyHeading: 'The chatbot is not answering',
+    /**
+     * No longer introduces a list (TAR-813). Every blocker that is a stage now
+     * says so in that stage's own value line, and the two that are not — the
+     * provider and the plan — are notices above the rail. A colon here would be
+     * pointing at bullets that are no longer drawn, and repeating the reasons
+     * underneath would be the same fact told twice.
+     */
     notReadyBody:
-      'Every conversation goes straight to your team, exactly as it did before. Clear the following to switch automated replies on:',
+      'Every conversation goes straight to your team, exactly as it did before. The rail below shows where it stops.',
     /**
      * One line per clause of the KB-ready rule, and every failing one is shown
      * rather than only the first. An admin who fixes one of four and still gets
@@ -3232,14 +3240,65 @@ export const content = {
         'The knowledge base is empty, so there is nothing to answer from. Add an entry and index it — the chatbot never invents an answer.',
     } satisfies Record<AiReadinessBlocker, string>,
 
+    /**
+     * The rail (TAR-813): the four gates a message passes, named as gates and
+     * not as settings, with a line under each saying what it is currently set
+     * to. The order is ADR 0010's, and it is the order the bot actually runs.
+     *
+     * Every value line is a sentence rather than a figure, because the rail's
+     * job is to answer "why is the bot quiet" without an admin having to know
+     * that 0.6 is a threshold or that five is a turn limit.
+     */
+    railLabel: 'How the chatbot decides',
+    stages: {
+      sources: 'Sources',
+      eligibility: 'When it may answer',
+      confidence: 'How sure it has to be',
+      handoff: 'What it says',
+    },
+    stageSourcesReady: (count: number) =>
+      count === 1 ? '1 source ready' : `${count} sources ready`,
+    stageSourcesNone: 'No sources ready',
+    /** Appended to whichever of the two above applies, so a failure is never colour alone. */
+    stageSourcesFailed: (count: number) => (count === 1 ? '1 failed' : `${count} failed`),
+    stageEligibilityOn: (maxTurns: number) =>
+      maxTurns === 1 ? 'On · 1 reply at most' : `On · up to ${maxTurns} replies`,
+    stageEligibilityOff: 'Bot is switched off',
+    stageConfidence: (percent: string) => `At least ${percent} sure`,
+    stageHandoffMessage: 'Sends a handoff message',
+    stageHandoffSilent: 'Hands over silently',
+    /**
+     * What a rail link is announced as. The value line is part of the name
+     * rather than text beside it: a link reading only "Sources" tells a screen
+     * reader user nothing about the state the sighted reader can see in the dot.
+     */
+    stageLinkName: (label: string, value: string) => `${label} — ${value}`,
+    stageLinkNameBlocking: (label: string, value: string) =>
+      `${label} — ${value}. This is where the chatbot stops.`,
+
     // --- Configuration -----------------------------------------------------
-    settingsHeading: 'Chatbot settings',
-    settingsDescription: 'When the chatbot replies, and when it hands over.',
+    eligibilityHeading: 'When it may answer',
+    eligibilityDescription:
+      'Every rule has to pass, and they are checked in this order. The first one that fails hands the conversation to your team.',
+    confidenceHeading: 'How sure it has to be',
+    confidenceDescription: 'Where the line sits between answering and handing over.',
+    handoffHeading: 'What it says',
+    handoffDescription:
+      'Who writes the reply, how it should sound, and the last thing a customer hears from the chatbot.',
     enabledLabel: 'Answer customers automatically',
+    /**
+     * Says that this one control saves on its own (TAR-813). It is the only
+     * setting on the page with a live customer consequence, so it does not wait
+     * behind a Save somebody may never press — and a switch that behaves
+     * differently from the fields around it has to say so where it is used.
+     */
     enabledHint:
-      'Switch this off to send every conversation to your team without changing anything else here.',
+      'Switches every conversation straight to your team. This one saves as soon as you flip it.',
     enabledOn: 'On',
     enabledOff: 'Off',
+    /** The switch's own failure. Inline and persistent: the state on screen is wrong. */
+    enabledSaveFailed:
+      'That could not be saved, so the chatbot is still in the state shown. Try again.',
     modelLabel: 'Model',
     modelHint:
       'A faster model costs less per reply and is less careful about what it does not know.',
@@ -3287,19 +3346,121 @@ export const content = {
     upsellNotice:
       'The chatbot is not included in this workspace’s plan. These settings are read-only until it is.',
 
-    // --- Knowledge base ----------------------------------------------------
-    knowledgeHeading: 'Knowledge base',
+    // --- The rule ladder (stage B) -----------------------------------------
+    /**
+     * The four gates as rules rather than as fields, each with a sentence saying
+     * what the current value *does* (TAR-813). "Passes while…" and "Fails as
+     * soon as…" are deliberate: a rule is a thing a message either gets past or
+     * does not, and the old labels ("Replies before handing over") described the
+     * setting instead of the behaviour.
+     */
+    ruleLadderLabel: 'The rules a message has to pass',
+    ruleEnabledName: 'The chatbot is on',
+    ruleEnabledClause: 'Passes while the chatbot is switched on.',
+    ruleThreadName: 'The thread is still the chatbot’s',
+    ruleThreadClause: 'Fails as soon as one of your team replies in the inbox.',
+    /**
+     * Shown only on the rule nobody can configure. It is on the ladder because
+     * it is a real gate and an admin debugging "why did the bot stop" needs to
+     * see it; the note is what stops them hunting for the missing control.
+     */
+    ruleThreadNote: 'Always on. There is nothing to set here.',
+    ruleTurnsName: 'Under the reply limit',
+    ruleTurnsClause: (maxTurns: number) =>
+      maxTurns === 1
+        ? 'Passes until the chatbot has replied once in this conversation.'
+        : `Passes while the chatbot has replied fewer than ${maxTurns} times in this conversation.`,
+    ruleTurnsClauseUnset: 'Set a limit between 1 and 20 replies.',
+    ruleKeywordsName: 'No handoff word in the message',
+    ruleKeywordsClause: (count: number) =>
+      count === 1
+        ? 'Passes when the message does not contain your 1 handoff word.'
+        : `Passes when the message contains none of your ${count} handoff words.`,
+    /**
+     * Not an error. A workspace with no handoff words has not misconfigured
+     * anything — a customer can still reach a person by asking an agent, or by
+     * the chatbot's own confidence falling through.
+     */
+    ruleKeywordsClauseEmpty:
+      'No handoff words yet, so nothing hands over on wording alone. A customer can still reach your team another way.',
+    /** The parsed result of the textarea, so an admin can see what their text became. */
+    handoffKeywordsPreviewLabel: 'Handoff words',
+    removeHandoffKeyword: (keyword: string) => `Remove ${keyword}`,
+
+    // --- The confidence band (stage C) -------------------------------------
+    confidenceHandoverRegion: 'Hands to a human',
+    confidenceAnswerRegion: 'Bot answers',
+    confidenceDefaultTick: 'Default',
+    confidenceScaleLabel: 'Confidence scale',
+    /**
+     * The one thing about this number an admin cannot guess and will otherwise
+     * get wrong. `compositeConfidence` is `min(model, retrieval)` by design
+     * (ADR 0010 decision 3), and somebody who reads it as an average tunes the
+     * threshold in the wrong direction.
+     */
+    confidenceCaption:
+      'Confidence is the lower of two numbers — how well your sources matched the question, and how sure the model was that it used them. Not an average: a confident model cannot make up for a weak match.',
+
+    // --- What it says (stage D) --------------------------------------------
+    handoffPreviewLabel: 'What the customer sees',
+    handoffPreviewEmpty:
+      'Nothing is sent. The conversation moves to your team without the chatbot saying goodbye.',
+    /** Reads as room left rather than as a running total, which is the number that matters. */
+    charactersLeft: (remaining: number) =>
+      remaining === 1 ? '1 character left' : `${remaining} characters left`,
+    charactersOver: (over: number) =>
+      over === 1 ? '1 character too many' : `${over} characters too many`,
+
+    // --- The save bar ------------------------------------------------------
+    saveBarLabel: 'Unsaved changes',
+    unsavedChanges: (count: number) =>
+      count === 1 ? '1 unsaved change' : `${count} unsaved changes`,
+    discardChanges: 'Cancel',
+
+    // --- Sources (the knowledge base) --------------------------------------
+    /**
+     * "Sources" on screen, `knowledge*` in the keys (TAR-813). The resource is
+     * still `knowledge-documents` in the API and in every file around this one,
+     * and renaming half a vocabulary is how the two drift apart; the rail calls
+     * this stage Sources, so the card it links to has to as well.
+     */
+    knowledgeHeading: 'Sources',
     knowledgeDescription: 'What the chatbot is allowed to answer from. Nothing else.',
-    knowledgeLoading: 'Loading knowledge base entries',
-    addEntry: 'Add entry',
-    knowledgeEmptyHeading: 'Nothing in the knowledge base yet',
+    knowledgeLoading: 'Loading sources',
+    addEntry: 'Add source',
+    knowledgeEmptyHeading: 'The chatbot has nothing to answer from',
     /**
      * The empty state carries TAR-28's AC3 rather than only saying "no rows":
      * with nothing here the chatbot stays silent, and an admin who does not know
      * that reads the empty table as a feature that is broken.
      */
     knowledgeEmptyBody:
-      'The chatbot answers only from entries you add here, so until there is one it stays quiet and every conversation goes to your team. Add your returns policy, your delivery times, your opening hours.',
+      'The chatbot answers only from sources you add here, so until there is one it stays quiet and every conversation goes to your team. Add your returns policy, your delivery times, your opening hours.',
+
+    /**
+     * The health strip: how many sources are in each state, as three filter
+     * links (TAR-813).
+     *
+     * `Ready` is exact — the API publishes it as `indexedDocumentCount`. The
+     * other two are counted from one page of a filtered read, which is why they
+     * have an over-the-page form: saying "100" when the real number is 340 is
+     * worse than saying "100+".
+     */
+    sourceHealthLabel: 'Sources by status',
+    sourceHealthReady: 'Ready',
+    sourceHealthIndexing: 'Indexing',
+    sourceHealthFailed: 'Failed',
+    sourceHealthCount: (count: number) => String(count),
+    sourceHealthCountCapped: (count: number) => `${count}+`,
+    /**
+     * The count is inside the link's name rather than beside it: the figure is
+     * drawn at `--font-size-metric` and is the first thing a sighted reader
+     * takes from the tile, so it has to be the first thing a screen reader gets
+     * too. `aria-current` carries "this is the filter you are on" — that is the
+     * same convention `FilterPills` already uses, and saying it in words as well
+     * would be the state announced twice.
+     */
+    sourceHealthTileName: (status: string, count: string) => `${count} ${status}`,
     /**
      * Unfiltered and truncated. Says how to reach the rest, now that there is a
      * way (TAR-613) — the previous wording named the ceiling and offered no way
@@ -3331,10 +3492,39 @@ export const content = {
      * search does — here the term is on screen in the box directly above, with
      * its own clear button.
      */
-    knowledgeFilteredEmptyHeading: 'No entries match this filter',
+    knowledgeFilteredEmptyHeading: 'No sources match this filter',
     knowledgeFilteredEmptyBody:
-      'Search matches entry titles, not their text. Clear the search or the status filter to see the whole knowledge base again.',
+      'Search matches source titles, not their text. Clear the search or the status filter to see every source again.',
     knowledgeClearFilters: 'Clear filters',
+
+    /**
+     * Four empty states, not one (TAR-813). "Never had a source", "the search
+     * matched nothing" and "no source is in that state" are three different
+     * facts with three different ways out, and a read-only principal gets a
+     * fourth because the way out of the first is a button they do not have.
+     */
+    knowledgeSearchEmptyHeading: (term: string) => `Nothing matches “${term}”`,
+    knowledgeSearchEmptyBody:
+      'Search matches source titles, not their text. Try a shorter term, or clear the search.',
+    knowledgeClearSearch: 'Clear search',
+    /**
+     * One heading and one body per status rather than a sentence built from the
+     * status name. "No sources are failed" is not a sentence anybody writes, and
+     * an empty `Failed` filter is good news where an empty `Ready` filter is the
+     * reason the chatbot is silent — a shared body could only say one of those.
+     */
+    knowledgeStatusEmptyHeadings: {
+      indexed: 'No sources are ready yet',
+      pending: 'Nothing is indexing',
+      failed: 'No sources have failed',
+    } satisfies Record<KnowledgeDocumentStatus, string>,
+    knowledgeStatusEmptyBodies: {
+      indexed:
+        'Nothing has finished indexing, so the chatbot has nothing to answer from. Look at what is still indexing, or what failed.',
+      pending: 'Every source has finished indexing. Nothing is waiting.',
+      failed: 'Every source indexed cleanly.',
+    } satisfies Record<KnowledgeDocumentStatus, string>,
+    knowledgeShowAllSources: 'Show all sources',
 
     columnTitle: 'Title',
     columnStatus: 'Status',

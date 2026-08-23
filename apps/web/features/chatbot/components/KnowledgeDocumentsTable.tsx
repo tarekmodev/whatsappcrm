@@ -15,6 +15,7 @@ import { useContent } from '@/lib/content';
 import { reindexKnowledgeEntryAction } from '../chatbot.actions';
 import { routes } from '@/lib/routes';
 import { KNOWLEDGE_DOCUMENTS_PAGE_SIZE, KNOWLEDGE_FILTERED_SKELETON_ROWS } from '../constants';
+import type { KnowledgeListParams } from '../knowledge-params';
 import { KNOWLEDGE_STATUS_TONES } from '../presentation';
 import { useIndexingRefresh } from '../useIndexingRefresh';
 import { knowledgeColumnMeta } from './knowledge-columns';
@@ -47,19 +48,23 @@ export interface KnowledgeDocumentsTableProps {
   indexedEntryCount: number;
   canWrite: boolean;
   /**
-   * A search term or a status filter is applied, which picks between the two
-   * empty states. Not optional: "this workspace has no entries" and "nothing
-   * matched" need different copy and different next steps, and a caller that
-   * could leave it out is a caller that would get it wrong.
+   * The filters this page was read with — the values, not just whether there
+   * were any (TAR-813).
+   *
+   * Four empty states hang off this, and each needs something the boolean it
+   * replaced could not supply: the term that matched nothing has to be quoted
+   * back, the status nothing is in has to be named, and the way out of each is a
+   * different link. Not optional, because a caller that could leave it out is a
+   * caller that would show "no sources yet" over a filtered view.
    */
-  isFiltered: boolean;
+  filters: KnowledgeListParams;
 }
 
 export function KnowledgeDocumentsTable({
   documents,
   indexedEntryCount,
   canWrite,
-  isFiltered,
+  filters,
 }: KnowledgeDocumentsTableProps) {
   const content = useContent();
   const [editing, setEditing] = useState<KnowledgeDocumentListItem | null>(null);
@@ -113,29 +118,7 @@ export function KnowledgeDocumentsTable({
   }, [canWrite, content]);
 
   if (documents.length === 0) {
-    // Two states, not one. A filter that matched nothing offers the way back;
-    // a knowledge base that has never had an entry gets the explanation of what
-    // the emptiness costs, and its next step is the `Add entry` button in the
-    // card header directly above — a second one inside the state would be the
-    // same control twice in one card.
-    return isFiltered ? (
-      <EmptyState
-        icon="filter"
-        title={content.chatbot.knowledgeFilteredEmptyHeading}
-        description={content.chatbot.knowledgeFilteredEmptyBody}
-        action={
-          <TextLink href={routes.settingsChatbot()}>
-            {content.chatbot.knowledgeClearFilters}
-          </TextLink>
-        }
-      />
-    ) : (
-      <EmptyState
-        icon="note"
-        title={content.chatbot.knowledgeEmptyHeading}
-        description={content.chatbot.knowledgeEmptyBody}
-      />
-    );
+    return <KnowledgeEmptyState filters={filters} canWrite={canWrite} />;
   }
 
   return (
@@ -187,6 +170,80 @@ export function KnowledgeDocumentsTable({
  * being a direct mutation rather than a dialog is also why it asks nothing first:
  * it is not destructive, so a confirmation would be a click for its own sake.
  */
+/**
+ * The four ways this table can be empty (TAR-813).
+ *
+ * They are four rather than one because they are four different facts with four
+ * different ways out, and a single "nothing here" would be wrong for three of
+ * them. A search that matched nothing quotes the term back and offers to clear
+ * it. A status filter that matched nothing says what nothing is in — and an
+ * empty `Failed` filter is good news where an empty `Ready` filter is the reason
+ * the chatbot is silent, so each status brings its own sentence. A knowledge
+ * base that has never had a source explains what the silence costs.
+ *
+ * A reader who cannot write gets that last one `quiet`: the tone is the
+ * difference between "here is your next step" and "here is why it is empty, and
+ * it is not yours to fix". No action either way — the `Add source` button in the
+ * card header directly above is the next step, and a second one inside the state
+ * would be the same control twice in one card.
+ */
+function KnowledgeEmptyState({
+  filters,
+  canWrite,
+}: {
+  filters: KnowledgeListParams;
+  canWrite: boolean;
+}) {
+  const content = useContent();
+
+  // The search is checked first because it is the narrower claim: with both
+  // applied, the term is what the reader last typed and the thing they will
+  // want back.
+  if (filters.q !== undefined) {
+    return (
+      <EmptyState
+        icon="search"
+        title={content.chatbot.knowledgeSearchEmptyHeading(filters.q)}
+        description={content.chatbot.knowledgeSearchEmptyBody}
+        action={
+          // Keeps the status filter: clearing a search is not asking to see
+          // everything, it is asking to stop searching.
+          <TextLink href={routes.settingsChatbot({ status: filters.status })}>
+            {content.chatbot.knowledgeClearSearch}
+          </TextLink>
+        }
+      />
+    );
+  }
+
+  if (filters.status !== undefined) {
+    return (
+      <EmptyState
+        icon="filter"
+        title={content.chatbot.knowledgeStatusEmptyHeadings[filters.status]}
+        description={content.chatbot.knowledgeStatusEmptyBodies[filters.status]}
+        // Nothing is wrong here — the reader asked a question and the answer was
+        // "none", which for two of the three statuses is the answer they wanted.
+        tone="quiet"
+        action={
+          <TextLink href={routes.settingsChatbot()}>
+            {content.chatbot.knowledgeShowAllSources}
+          </TextLink>
+        }
+      />
+    );
+  }
+
+  return (
+    <EmptyState
+      icon="note"
+      title={content.chatbot.knowledgeEmptyHeading}
+      description={content.chatbot.knowledgeEmptyBody}
+      tone={canWrite ? 'neutral' : 'quiet'}
+    />
+  );
+}
+
 function KnowledgeRowActions({
   document,
   onEdit,
