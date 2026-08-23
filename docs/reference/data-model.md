@@ -44,24 +44,27 @@ Six rules hold across every model. A change that breaks one needs a reason in re
 
 ## Tenancy classification
 
-52 models. **47 are tenant-scoped**: they carry a non-null `tenant_id`, have
-`ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Six are
+56 models. **48 are tenant-scoped**: they carry a non-null `tenant_id`, have
+`ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Eight are
 not, each deliberately:
 
-| Table                   | Why it has no policy                                                                                             | Reachable by                                                                |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `tenants`               | It _is_ the tenant. Provisioning and host→tenant resolution both read it before any tenant is in scope           | `SystemPrisma` for writes; `TenantPrisma` reads are narrowed to the own row |
-| `plans`                 | Platform-wide product catalogue, shared by every tenant                                                          | `TenantPrisma` read-only; `SystemPrisma` for writes                         |
-| `webhook_events`        | Written _before_ the tenant is known — storing first and routing later is the point — so `tenant_id` is nullable | `SystemPrisma` only. The app role is granted nothing on it                  |
-| `webhook_event_replays` | The operator replay trail for the row above, and the parked row it recovers may name no tenant either (TAR-94)   | `SystemPrisma` only, SELECT and INSERT. Nothing may UPDATE it               |
-| `tenant_signups`        | A signup exists _before_ its tenant does, so there is nothing for a policy to compare against                    | `SystemPrisma` only. The app role is granted nothing on it                  |
-| `lifecycle_events`      | It outlives the tenant it describes, so `tenant_id` is a recorded identifier and not a reference (ADR 0009)      | `SystemPrisma` only. The app role is granted nothing on it                  |
+| Table                      | Why it has no policy                                                                                                                                | Reachable by                                                                |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `tenants`                  | It _is_ the tenant. Provisioning and host→tenant resolution both read it before any tenant is in scope                                              | `SystemPrisma` for writes; `TenantPrisma` reads are narrowed to the own row |
+| `plans`                    | Platform-wide product catalogue, shared by every tenant                                                                                             | `TenantPrisma` read-only; `SystemPrisma` for writes                         |
+| `webhook_events`           | Written _before_ the tenant is known — storing first and routing later is the point — so `tenant_id` is nullable                                    | `SystemPrisma` only. The app role is granted nothing on it                  |
+| `webhook_event_replays`    | The operator replay trail for the row above, and the parked row it recovers may name no tenant either (TAR-94)                                      | `SystemPrisma` only, SELECT and INSERT. Nothing may UPDATE it               |
+| `tenant_signups`           | A signup exists _before_ its tenant does, so there is nothing for a policy to compare against                                                       | `SystemPrisma` only. The app role is granted nothing on it                  |
+| `lifecycle_events`         | It outlives the tenant it describes, so `tenant_id` is a recorded identifier and not a reference (ADR 0009)                                         | `SystemPrisma` only. The app role is granted nothing on it                  |
+| `platform_settings`        | Platform-wide configuration encrypted at rest (TAR-811) — the Meta app id, the app secret, the verify token. Singular values belonging to no tenant | `SystemPrisma` only. The app role is granted nothing on it                  |
+| `platform_setting_changes` | The append-only change history for the row above (TAR-811)                                                                                          | `SystemPrisma` only, SELECT and INSERT. Nothing may UPDATE it               |
 
-`TenantPrisma` applies its own rule to all six, because there is no policy to do it —
+`TenantPrisma` applies its own rule to all eight, because there is no policy to do it —
 see [`tenancy.md`](tenancy.md#the-six-tables-with-no-rls-policy).
 
-On the last four the **grant, not RLS, is the enforcement**, and `pnpm db:verify:rls`
-asserts all four by name rather than inferring them from the catalog. `lifecycle_events`
+On the last six the **grant, not RLS, is the enforcement**, and `pnpm db:verify:rls`
+asserts the four it knows by name rather than inferring them from the catalog.
+`lifecycle_events`
 is the one that needs saying out loud: unlike the other two it _does_ carry `tenant_id`,
 so it looks scoped to every tool that reads the catalog. Granting the app role anything on
 it would expose every tenant's lifecycle history to every tenant connection.
@@ -222,6 +225,46 @@ tenant routes correctly with nothing configured, is bounded 1–1000 by
 `users.max_concurrent_tickets`. Five is defensible rather than measured — ADR 0008
 decision 4 says so, and names `ASSIGNMENT_POLICY` as the constant that has to agree with
 it.
+
+#### `tenant_onboarding_steps`
+
+Which onboarding steps a tenant has chosen to put off. **Skips only** — a step is
+`completed` because the tenant actually has a connected WABA, an invite or edited
+branding, derived on every read (TAR-832 decision 1), so there is no status column here.
+A row's absence means "not skipped", which for a step whose fact is not yet true renders
+as `pending`.
+
+- **Unique:** `(tenant_id, step_id)`
+- **Indexes:** none beyond that unique key — see below
+- **Owned by:** TAR-833, against TAR-832's contract
+
+Storing only the skip is what keeps `OnboardingStepSchema.completedAt`'s promise that it
+is _"cleared if the underlying fact goes away"_: a tenant that disconnects its WABA sees
+the step return to `pending` with no reverse hook in `whatsapp/`, `identity/` or
+`tenancy/branding/`. It is also why the migration is create-only — every tenant
+provisioned before it gets a correct checklist on first load, with nothing to backfill.
+
+`step_id` is `text`, not an enum type, and carries no `CHECK`. `OnboardingStepIdSchema`
+enforces the domain at the request boundary, where an unknown id has to produce a 404
+anyway, and a database-side constraint would make adding a fourth step a deploy-ordering
+hazard — the API shipping the new id ahead of the migration.
+
+The unique key is the table's **only** index, and doubles as the concurrency guarantee:
+two tabs skipping the same step race into one upsert rather than two rows. Both access
+patterns are `(tenant_id)` and `(tenant_id, step_id)`, and a btree leading with
+`tenant_id` serves both, so a separate `(tenant_id)` index would be a strict prefix paid
+for on every write. There is no index on `(tenant_id, skipped_by_user_id)` either, unlike
+`invites`: the whole table is bounded at three rows per tenant, so the referential check
+on a user delete reads a page or two whatever the tenant count.
+
+`skipped_by_user_id` is a `NO ACTION` composite key into `users`, which is why
+`PURGE_ORDER` lists this table in the identity block **ahead of `users`** rather than
+down with the other tenant configuration. Its cascade from `tenants` never fires during a
+hard delete — the `tenants` row is retained as the slug tombstone.
+
+No `audit_logs` row is written for a skip or a reopen (TAR-832 decision 5): deferring a
+setup prompt has no security or billing consequence and is reversible by the same click.
+`skipped_by_user_id` and `updated_at` answer "who put this off" if support asks.
 
 #### `lifecycle_events`
 

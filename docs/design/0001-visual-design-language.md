@@ -7,6 +7,10 @@
 - **Builds on**: [ADR 0001 — stack decision](../adr/0001-stack-decision.md),
   [Architecture and API contract](../architecture/0002-architecture-and-api-contract.md)
 - **Supersedes**: nothing. This is the first design decision on the project.
+- **Amended**: 2026-08-23 by TAR-801, which replaced the palette, the radii, the
+  elevation and the body face with the Reqta reference's. Every ratio table below was
+  re-measured against the new values in that change; see "What TAR-801 ported, and what
+  it did not".
 
 This document is for the engineer building a screen. It fixes what the design tokens
 equal and what the recurring layouts are, so a screen built after it looks like the
@@ -61,7 +65,7 @@ Three layers, one direction, and no component may skip a step:
 
 | Layer     | File                                    | Holds                                             |
 | --------- | --------------------------------------- | ------------------------------------------------- |
-| Primitive | `apps/web/styles/tokens/primitives.css` | Raw scales. Named for what they are (`slate-700`) |
+| Primitive | `apps/web/styles/tokens/primitives.css` | Raw scales. Named for what they are (`grey-700`)  |
 | Semantic  | `apps/web/styles/tokens/semantic.css`   | Roles. Named for what they do (`--color-surface`) |
 | Component | `Component.module.css`                  | Reads semantic roles only                         |
 
@@ -85,6 +89,86 @@ every screen outside that branch reads as undefined; `styles/tokens/tokens.test.
 asserts the Arabic branch does not, and the same assertion is what a future locale
 branch inherits.
 
+## What TAR-801 ported, and what it did not
+
+TAR-800 fixes the pixel-level source of truth as `Reqta CRM.dc.html` and
+`Reqta Admin.dc.html`. Both were attached to TAR-801 and read directly; every value in
+this document that changed on 2026-08-23 came from their `:root` and
+`[data-theme="dark"]` blocks rather than from a screenshot. The two files declare an
+**identical** token set, so there is one palette here, not two.
+
+`styles/tokens/tokens.test.ts` asserts a sample of the port against the reference's own
+literals, so "we took these from the file" is a claim the suite checks rather than a
+sentence in a document.
+
+**One caveat on the counts anywhere in this document.** `reqta-crm-design.html` as attached
+is clipped at 262144 bytes, mid-`<script>`. Both token blocks sit in its first 30 lines and
+are complete, so every _ported value_ is verifiable and is verified — but any count of how
+often the reference _uses_ something was read off that clipped copy and is a **lower
+bound**. That is why the radius steps below are described as the clusters its declarations
+fall into rather than as a tally. `reqta-admin-design.html` is complete, and its token block
+is byte-identical to the CRM one, which is the claim that actually mattered.
+
+### What the reference supplies, and was taken
+
+| Layer         | Ported                                                                          |
+| ------------- | ------------------------------------------------------------------------------- |
+| Colour, light | All 6 greys, the 4 status hues and their tints, the accent and its two tints    |
+| Colour, dark  | The same set from `[data-theme="dark"]`, with the alpha tints composited to hex |
+| Elevation     | Both shadows, per theme — the reference re-states them for the dark ground      |
+| Radius        | The four clusters its radius declarations fall into                             |
+| Decoration    | `--violet`, as the platform value for `--color-brand-decor`                     |
+| Body face     | Manrope, and IBM Plex Sans Arabic for `[lang\|='ar']`                           |
+
+### What the reference does not supply
+
+**It has a colour token layer and no other.** Its spacing, type and size values are inline
+literals in markup: more than two dozen distinct font sizes between 7px and 34px, most of
+its body copy at 10.5–12.5px, and no scale connecting them. Porting that is not porting a scale — it is
+copying a mock, and it would put text below the readable floor on every screen. The
+spacing scale and the type scale therefore stay as this document ruled them, and a screen
+that wants to match the reference's _density_ does it by choosing lower steps of an
+existing scale, never by adding a 10.5px one.
+
+### The three kinds of deviation, and every instance
+
+Everything not taken verbatim is one of three, and each is marked `derived` at its
+declaration in `primitives.css` with the reason:
+
+1. **A text step the reference does not clear.** It draws chip text in the chip's own
+   saturated hue — `color:var(--green)` on `background:var(--green-bg)` — and three of its
+   four status hues fail AA that way (2.25:1, 2.49:1, 3.01:1; `--red` reaches 3.46:1). The
+   tints are ported exactly and only the text moved, to the next step of the same family.
+   The same shortfall makes `--color-danger` — a _text and border_ role here — the family's
+   text step rather than the reference's `--red`, which is 3.76:1 on white.
+2. **A role the reference has no value for**, because a static mock has no such state: the
+   pressed grounds, the second border weight, the modal shadow.
+3. **A role assignment the reference's own values cannot satisfy in the role it puts them
+   in.** There is exactly one: the dark accent — see "The accent". Both values involved are
+   still the reference's.
+
+The reference's saturated status hues are **not carried into the semantic layer at all**.
+They are 2.35–3.46:1 against its own white card, so they clear neither 1.4.3 as text nor
+1.4.11 as a graphic that carries meaning, and a role nothing may legally draw with is a
+trap rather than a token.
+
+### What TAR-801 left open
+
+Two things it deliberately did not decide, both with an owner:
+
+- **The rail.** The reference draws a light sidebar; this layer keeps a dark one. That is a
+  restyle of the shell and of the sign-in screen rather than a value port — see "The rail"
+  for what it would move. **TAR-803 decides it**, with screenshots.
+- **A tenant's accent in the dark theme.** `brandCssVariables` passes a tenant's hue
+  through untouched into both themes, which is its documented contract and is asserted.
+  Since the dark theme's accent must be _lighter_ than the light theme's to be readable as
+  link text, one tenant hex cannot serve both, and a branded console renders dark-mode
+  links below AA at whatever its hue measures. `brandStyleSheet` now emits nothing when a
+  tenant has chosen no colours, so the **unbranded** console gets this layer's per-theme
+  answer; a branded one still does not. Closing it needs either an eighth tenant-owned
+  token (`--color-accent-text`) or a per-theme step of the tenant's hue, and it is a
+  contract change rather than a token change.
+
 ## Colour
 
 Neutral grey and white carry the product. One accent carries action. Nothing else is
@@ -92,47 +176,57 @@ allowed to be loud.
 
 ### The accent
 
-A deep green, WhatsApp-adjacent rather than WhatsApp's own, and deliberately not
-HubSpot's orange. It is the only saturated colour on a screen that is not reporting
-status, and it means exactly one thing: **this is the action, or this is where you are.**
+The reference's indigo — `--primary`, `#4f46e5`. It is the only saturated colour on a
+screen that is not reporting status, and it means exactly one thing: **this is the action,
+or this is where you are.**
 
-| Role                       | Light       | Dark        | Used for                            |
-| -------------------------- | ----------- | ----------- | ----------------------------------- |
-| `--color-accent`           | `green-600` | `green-500` | Primary buttons, current tab, links |
-| `--color-accent-hover`     | `green-700` | `green-300` | Their hover state                   |
-| `--color-accent-subtle`    | `green-100` | `green-900` | Selected rows, avatar backgrounds   |
-| `--color-on-accent`        | `white`     | `slate-950` | Text on the accent                  |
-| `--color-on-accent-subtle` | `green-700` | `green-100` | Text on the subtle accent           |
+| Role                       | Light        | Dark         | Used for                            |
+| -------------------------- | ------------ | ------------ | ----------------------------------- |
+| `--color-accent`           | `indigo-500` | `indigo-300` | Primary buttons, current tab, links |
+| `--color-accent-hover`     | `indigo-600` | `indigo-200` | Their hover state                   |
+| `--color-accent-subtle`    | `indigo-50`  | `indigo-900` | Selected rows, avatar backgrounds   |
+| `--color-on-accent`        | `white`      | `night-950`  | Text on the accent                  |
+| `--color-on-accent-subtle` | `indigo-600` | `indigo-200` | Text on the subtle accent           |
+
+**The dark theme inverts the pair, and that is not a style choice.** An accent is a
+_ground_ under a button label and a _foreground_ for a link (`base.css:80`), and those
+pull opposite ways against a near-black page. The reference uses one step for both — its
+dark `--primary`, `#6366f1` — and clears neither: 4.47:1 under its own white label and
+3.93:1 as link text. No step of an indigo ramp clears both, so the dark theme takes a
+_light_ accent with _dark_ text on it. Both values are still the reference's — its dark
+`--primary-hov` and `--primary-700` — one role along.
 
 Every pair clears WCAG AA in both themes. The measured ratios, which is what the values
 were picked for rather than the other way round:
 
-| Pair                                              | Ratio  | Floor |
-| ------------------------------------------------- | ------ | ----- |
-| `white` on `green-600` (primary button, light)    | 5.37:1 | 4.5   |
-| `green-600` on the canvas (link on light)         | 5.13:1 | 4.5   |
-| `slate-950` on `green-500` (primary button, dark) | 5.73:1 | 4.5   |
-| `green-500` on `slate-900` (link on dark)         | 5.07:1 | 4.5   |
-| `green-700` on `green-100` (subtle accent, light) | 6.35:1 | 4.5   |
-| `green-100` on `green-900` (subtle accent, dark)  | 10.3:1 | 4.5   |
-| `slate-300` on `navy-900` (rail label)            | 10.1:1 | 4.5   |
-| `slate-400` on `navy-900` (rail muted text)       | 5.86:1 | 4.5   |
+| Pair                                               | Ratio  | Floor |
+| -------------------------------------------------- | ------ | ----- |
+| `white` on `indigo-500` (primary button, light)    | 6.29:1 | 4.5   |
+| `indigo-500` on the canvas (link on light)         | 5.87:1 | 4.5   |
+| `night-950` on `indigo-300` (primary button, dark) | 6.34:1 | 4.5   |
+| `indigo-300` on the canvas (link on dark)          | 6.34:1 | 4.5   |
+| `indigo-300` on `night-900` (link on a card, dark) | 5.89:1 | 4.5   |
+| `indigo-600` on `indigo-50` (subtle accent, light) | 7.07:1 | 4.5   |
+| `indigo-200` on `indigo-900` (subtle accent, dark) | 7.59:1 | 4.5   |
+| `night-25` on `night-950` (rail label, light)      | 17.2:1 | 4.5   |
+| `grey-400` on `night-950` (rail muted text, light) | 7.34:1 | 4.5   |
+| `night-25` on `night-975` (rail label, dark)       | 17.9:1 | 4.5   |
 
 A focus indicator is measured against the colour beside it, and its floor is 3:1
 (WCAG 2.2 SC 1.4.11) rather than 4.5:1. The rail is the one region where the global ring
 is not the answer — see below — so its ring is measured against all three of the
 backgrounds it can land on:
 
-| Pair                                                    | Ratio  | Floor |
-| ------------------------------------------------------- | ------ | ----- |
-| `green-300` on `navy-900` (rail ring, light)            | 8.18:1 | 3     |
-| `green-300` on `navy-800` (on a hovered entry, light)   | 6.97:1 | 3     |
-| `green-300` on `navy-700` (on the current entry, light) | 5.03:1 | 3     |
-| `green-300` on `slate-950` (rail ring, dark)            | 11.0:1 | 3     |
-| `green-300` on `slate-700` (on the current entry, dark) | 5.64:1 | 3     |
+| Pair                                               | Ratio  | Floor |
+| -------------------------------------------------- | ------ | ----- |
+| `indigo-200` on `night-950` (rail ring, light)     | 9.48:1 | 3     |
+| `indigo-200` on `night-900` (on a hovered entry)   | 8.81:1 | 3     |
+| `indigo-200` on `night-800` (on the current entry) | 7.11:1 | 3     |
+| `indigo-200` on `night-975` (rail ring, dark)      | 9.88:1 | 3     |
 
-Re-measure before changing any of them. `--color-on-surface-subtle` is around 2.6:1 and
-is decoration only — never put text on it.
+Re-measure before changing any of them. `--color-on-surface-subtle` is 2.58:1 and is
+decoration only — never put text on it. The reference calls that same value `--subtle` and
+puts placeholder text in it; we do not, and 0002 §1.1 is why.
 
 ### Status colour
 
@@ -143,13 +237,26 @@ shouts louder than it inverts the whole hierarchy. `neutral` is a status like th
 has its own pair: before TAR-514 it borrowed `surface-sunken` + `on-surface-muted`, which
 is how it came to be the one chip nobody had measured, at 4.34:1.
 
-| Role                     | Light       | Dark        | Text role                   | Light       | Dark        |
-| ------------------------ | ----------- | ----------- | --------------------------- | ----------- | ----------- |
-| `--color-neutral-subtle` | `slate-100` | `slate-750` | `--color-on-neutral-subtle` | `slate-600` | `slate-100` |
-| `--color-success-subtle` | `green-100` | `green-900` | `--color-on-success-subtle` | `green-700` | `green-100` |
-| `--color-warning-subtle` | `amber-100` | `amber-900` | `--color-on-warning-subtle` | `amber-600` | `amber-100` |
-| `--color-danger-subtle`  | `red-100`   | `red-900`   | `--color-on-danger-subtle`  | `red-600`   | `red-100`   |
-| `--color-info-subtle`    | `blue-100`  | `blue-900`  | `--color-on-info-subtle`    | `blue-500`  | `blue-100`  |
+Every tint below is the reference's own — `--green-bg`, `--amber-bg`, `--red-bg`,
+`--blue-bg`, `--ink-bg` — ported exactly. The **text** on them is not, and that is
+TAR-801's one substantive deviation: the reference draws chip text in the chip's own
+saturated hue (`color:var(--green)` on `background:var(--green-bg)`), which is 2.49:1.
+Three of its four status hues fail AA that way, so each text role took the next step of
+the same family. `neutral` is the one whose reference pair already cleared AA, at 9.49:1,
+and it is untouched.
+
+| Role                     | Light      | Dark        | Text role                   | Light       | Dark        |
+| ------------------------ | ---------- | ----------- | --------------------------- | ----------- | ----------- |
+| `--color-neutral-subtle` | `grey-100` | `night-750` | `--color-on-neutral-subtle` | `grey-700`  | `night-25`  |
+| `--color-success-subtle` | `green-50` | `green-900` | `--color-on-success-subtle` | `green-700` | `green-300` |
+| `--color-warning-subtle` | `amber-50` | `amber-900` | `--color-on-warning-subtle` | `amber-700` | `amber-300` |
+| `--color-danger-subtle`  | `red-50`   | `red-900`   | `--color-on-danger-subtle`  | `red-700`   | `red-300`   |
+| `--color-info-subtle`    | `blue-50`  | `blue-900`  | `--color-on-info-subtle`    | `blue-700`  | `blue-300`  |
+
+The dark `*-900` tints are the reference's `rgba(…, .14)` declarations **composited over
+the dark surface** and stored as opaque hex. A translucent tint has no contrast ratio until
+you know what is behind it, so the alpha form is a chip nothing can measure; the ground
+chosen is the one a chip actually renders on, which is a card rather than the canvas.
 
 Two ratios matter for a chip, not one. The **text pair** is the AA floor; the **stand-off**
 is how far the tint sits from the surface behind it, and it is the number that decides
@@ -158,15 +265,17 @@ asserts both against the token files, so neither can drift the way the dark them
 
 | Chip      | Text, light | Text, dark | Stand-off, light | Stand-off, dark |
 | --------- | ----------- | ---------- | ---------------- | --------------- |
-| `neutral` | 6.92:1      | 11.4:1     | 1.10:1           | 1.43:1          |
-| `accent`  | 6.35:1      | 10.3:1     | 1.19:1           | 1.46:1          |
-| `success` | 6.35:1      | 10.3:1     | 1.19:1           | 1.46:1          |
-| `warning` | 6.07:1      | 10.9:1     | 1.13:1           | 1.46:1          |
-| `danger`  | 7.33:1      | 10.1:1     | 1.22:1           | 1.45:1          |
-| `info`    | 5.46:1      | 10.1:1     | 1.23:1           | 1.45:1          |
+| `neutral` | 9.49:1      | 12.7:1     | 1.10:1           | 1.26:1          |
+| `accent`  | 7.07:1      | 7.59:1     | 1.12:1           | 1.16:1          |
+| `success` | 5.13:1      | 7.44:1     | 1.05:1           | 1.24:1          |
+| `warning` | 5.20:1      | 7.59:1     | 1.04:1           | 1.26:1          |
+| `danger`  | 6.05:1      | 5.50:1     | 1.09:1           | 1.15:1          |
+| `info`    | 5.57:1      | 6.26:1     | 1.07:1           | 1.21:1          |
 
-Text floor 4.5:1. The accent's own stand-off is **5.37:1 light and 5.07:1 dark**, so the
-ordering on any screen is: solid accent button > chip > body text > muted text.
+Text floor 4.5:1. The accent's own stand-off is **6.29:1 light and 5.89:1 dark**, so the
+ordering on any screen is: solid accent button > chip > body text > muted text. The
+reference's tints are quieter than the ones they replaced — a spread of 0.08 in the light
+theme and 0.11 in the dark — which makes that ordering wider, not narrower.
 
 #### Two roles that are identity, not status (TAR-518)
 
@@ -211,16 +320,28 @@ brand from being invisible against the surface it was chosen to sit on.
 
 ### Surfaces
 
-| Role                           | Light       | Dark        |
-| ------------------------------ | ----------- | ----------- |
-| `--color-canvas`               | `slate-50`  | `slate-950` |
-| `--color-surface`              | `white`     | `slate-900` |
-| `--color-surface-sunken`       | `slate-100` | `slate-950` |
-| `--color-surface-hover`        | `slate-100` | `slate-800` |
-| `--color-surface-sunken-hover` | `slate-200` | `slate-800` |
-| `--color-border`               | `slate-200` | `slate-700` |
+| Role                            | Light      | Dark        |
+| ------------------------------- | ---------- | ----------- |
+| `--color-canvas`                | `grey-25`  | `night-950` |
+| `--color-surface`               | `white`    | `night-900` |
+| `--color-surface-sunken`        | `grey-100` | `night-950` |
+| `--color-surface-hover`         | `grey-25`  | `night-950` |
+| `--color-surface-active`        | `grey-200` | `night-975` |
+| `--color-surface-sunken-hover`  | `grey-200` | `night-900` |
+| `--color-surface-sunken-active` | `grey-300` | `night-800` |
+| `--color-border`                | `grey-200` | `night-800` |
+| `--color-border-strong`         | `grey-300` | `night-700` |
 
-Light grey canvas, white cards, hairline borders. A card is separated from the canvas by
+Light grey canvas, white cards, hairline borders.
+
+**Hover and press move in the same direction, and which direction that is depends on the
+theme.** The reference's own hover answer is the canvas (`background:var(--bg)`, 47 of its
+hover declarations), so a row on a card dips toward the page behind it — and in its dark
+theme the page is _darker_ than a card, where in its light theme it is lighter. A press is
+one step further along the same line, never a different colour;
+`--color-surface-active` exists so it is not `--color-surface-selected`, which would make
+every press look like a selection that did not stick (0002 §0.3). A row on the sunken
+column has nothing below it to dip into, so it lifts instead. A card is separated from the canvas by
 its **border** first and its shadow second — a shadow doing the whole job reads as a
 floating panel rather than a section of a page.
 
@@ -236,20 +357,30 @@ all (TAR-517). Match the hover role to the surface underneath, not to the compon
 
 The navigation rail is a dark region in both themes. That is the layout, not a
 consequence of the light palette, so it has its own roles (`--color-rail`,
-`--color-on-rail`, `--color-rail-selected`, …) mapping onto a `navy` family that is
-independent of the neutral text scale. Retuning the rail must not move body text, and
-retuning body text must not move the rail.
+`--color-on-rail`, `--color-rail-selected`, …) mapping onto the `night` family — the
+reference's _dark-theme_ greys — rather than onto `surface`. Retuning the rail must not
+move body text, and retuning body text must not move the rail.
 
-Dark theme drops the navy for the neutral scale: navy against a near-black canvas reads
-as a colour cast rather than as a distinct region.
+Dark theme moves the rail one step further down the same family rather than to a different
+one, so it stays the darkest region on the screen while the canvas comes down to meet it.
+
+**The reference draws a light sidebar, and TAR-801 did not follow it.** Both `.dc.html`
+files put the sidebar on `--surface` with a `--border` edge and a `--primary-50` hover.
+Adopting that is not a value port: it inverts `--color-on-rail`, retires the focus-ring
+override below, and leaves `AuthBrandPanel` — the signed-out brand panel, which is this
+rail's colour carrying a product name — as white text on white. That is a restyle of the
+shell and of the first screen anybody sees, which TAR-801 is told not to do and TAR-803
+exists to do with screenshots in hand. **This is the open structural question TAR-803
+decides**, and it is the largest single difference between this token layer and the
+reference.
 
 Two consequences of the rail staying dark while the theme flips around it:
 
 - **It has its own focus ring**, `--color-focus-ring-on-rail`, applied once in
-  `AppSidebar.module.css`. The global `--color-focus-ring` flips with the theme, so the
-  light-theme ring landed on navy at 2.80:1 and on the current entry at 1.72:1 — below
-  SC 1.4.11's 3:1. This is the only override of the app's one focus style, and a control
-  added to the rail later inherits it without knowing that.
+  `AppSidebar.module.css`. The global `--color-focus-ring` flips with the theme and the
+  rail does not, so on a light-theme page the ordinary ring would land on a near-black
+  rail well under SC 1.4.11's 3:1. This is the only override of the app's one focus style,
+  and a control added to the rail later inherits it without knowing that.
 - **`--color-on-rail-muted` is the ruled answer for secondary text on the rail** — a
   section heading, a count beside a label. Nothing reads it yet. It is declared and
   measured so the first control that needs it inherits an answer instead of choosing a
@@ -257,9 +388,14 @@ Two consequences of the rail staying dark while the theme flips around it:
 
 ## Typography
 
-Figtree, a clean geometric sans, self-hosted through `next/font` in
-`apps/web/app/layout.tsx`. Self-hosted means no runtime request to a third party, no
-consent question, and no layout shift on load.
+Manrope, self-hosted through `next/font` in `apps/web/app/layout.tsx`. It is what both
+reference files load and set as their `--font`, and the one typographic value the
+reference states as a token rather than as an inline literal — so it is the one TAR-801
+could take verbatim. Self-hosted means no runtime request to a third party, no consent
+question, and no layout shift on load.
+
+**The type scale is not the reference's, and could not be.** See "What TAR-801 ported, and
+what it did not" for the measurement.
 
 One family, one variable axis, three weights from the scale — regular, medium, semibold.
 Sizes come from `--font-size-*`; the two heading sizes above body are fluid via `clamp()`
@@ -276,7 +412,9 @@ scale.
 
 ### The Arabic face (TAR-801)
 
-Figtree carries no Arabic glyphs. Left alone, an Arabic console would render in whatever
+Manrope carries no Arabic glyphs — and the reference knows it, which is why its CRM file
+loads IBM Plex Sans Arabic beside Manrope and switches to it under `[lang="ar"]`. Left
+alone, an Arabic console would render in whatever
 face the reader's operating system happens to substitute — a different one on Windows,
 macOS and Android, which is the single typographic decision a token layer exists to take
 away from a machine.
@@ -312,14 +450,21 @@ stylesheet.
 - **Spacing**: an 8px rhythm with 4px half-steps. Every step from `--space-2` up is a
   multiple of 8; `--space-1` and `--space-3` are the half-steps a dense control needs.
   Nothing spaces itself off the grid.
-- **Radius**: `--radius-sm` 4px for a tight inline mark, `--radius-md` 6px for controls,
-  `--radius-lg` 8px for cards, `--radius-pill` for pills and avatars. Cards and controls
-  are the 6–8px range; anything rounder belongs to a pill.
+- **Radius**: read off the reference, which is markedly rounder than what preceded it.
+  `--radius-sm` 6px for a tight inline mark, `--radius-md` 8px for controls — the
+  reference's default and its most common by a wide margin — `--radius-lg` 12px for cards,
+  `--radius-xl` 14px for a panel that frames a whole region, `--radius-pill` for pills
+  and avatars. The four steps are the clusters its radius declarations fall into.
 - **Elevation**: three soft, low shadows — `--shadow-raised` for a card,
   `--shadow-overlay` for a popover, `--shadow-modal` for a dialog. There is no fourth.
+  They are declared **inside the theme blocks**, because the reference re-states both of
+  its shadows for the dark theme: ink at 6% opacity does not exist on a near-black canvas.
+  `--shadow-modal` is the one derived step — the reference draws no modal.
 - **Motion**: `--duration-fast` for a colour change, `--duration-medium` for a panel,
-  `--easing-standard` for both. Reduced motion collapses the durations in the token
-  layer, so no component branches on the preference.
+  `--easing-standard` for a colour and `--easing-enter` for an arrival. A dismissal takes
+  `--easing-exit`, which accelerates: an entrance is telling the reader where something
+  came from and an exit is the reader having already decided (0002 §0.2). Reduced motion
+  collapses the durations in the token layer, so no component branches on the preference.
 
 ## The console frame
 
@@ -528,10 +673,15 @@ is a chart with no series at all, and no amount of tenant goodwill fixes that.
 
 | Role              | Light                        | Dark                         |
 | ----------------- | ---------------------------- | ---------------------------- |
-| `--color-chart-1` | `chart-blue-500` `#1d4ed8`   | `chart-blue-300` `#5b8ce8`   |
+| `--color-chart-1` | `chart-teal-800` `#125d56`   | `chart-teal-500` `#0e9384`   |
 | `--color-chart-2` | `chart-orange-500` `#dd6b12` | `chart-orange-300` `#fdba74` |
 
-Blue against orange, chosen twice over. It is the pair that survives every common
+**Series one was a blue and TAR-801 had to move it.** The reference's accent is an indigo,
+and the blue this role carried (`#1d4ed8`) sits at **1.07:1** against it — the same colour
+to any reader. Leaving it would have recreated the exact bug above under the new palette,
+so it took the reference's own `--teal`, which nothing in that palette is adjacent to.
+
+Teal against orange, chosen twice over. It is a pair that survives every common
 colour-vision deficiency — the red/green and the blue/yellow confusions both leave it
 standing — and the two steps are separated in **lightness** as well, so the distinction
 also survives a greyscale print.
@@ -540,9 +690,9 @@ Two ratios matter, and both are asserted in `apps/web/styles/tokens/tokens.test.
 
 | Measurement                       | Light  | Dark   | Floor |
 | --------------------------------- | ------ | ------ | ----- |
-| `--color-chart-1` on `surface`    | 6.70:1 | 5.41:1 | 3:1   |
-| `--color-chart-2` on `surface`    | 3.39:1 | 10.6:1 | 3:1   |
-| The two series against each other | 1.97:1 | 1.96:1 | 1.8:1 |
+| `--color-chart-1` on `surface`    | 7.70:1 | 4.62:1 | 3:1   |
+| `--color-chart-2` on `surface`    | 3.39:1 | 10.4:1 | 3:1   |
+| The two series against each other | 2.27:1 | 2.25:1 | 1.8:1 |
 
 3:1 is WCAG 2.2 SC 1.4.11 — a graphic that carries meaning against its background. The
 third row is this document's own floor, and it is the one that would have caught the bug.
@@ -711,12 +861,12 @@ same one, whereas the section heading above the table is not focusable and givin
 The measured pairs, asserted in `apps/web/styles/tokens/tokens.test.ts` alongside the chip
 ones:
 
-| Pair                                                     | Ratio  | Floor |
-| -------------------------------------------------------- | ------ | ----- |
-| `red-500` on `white` (destructive label, light)          | 6.54:1 | 4.5   |
-| `red-500` on `red-100` (its hover and focus tint, light) | 5.38:1 | 4.5   |
-| `red-300` on `slate-900` (destructive label, dark)       | 9.28:1 | 4.5   |
-| `red-300` on `red-900` (its hover and focus tint, dark)  | 6.41:1 | 4.5   |
+| Pair                                                    | Ratio  | Floor |
+| ------------------------------------------------------- | ------ | ----- |
+| `red-700` on `white` (destructive label, light)         | 6.57:1 | 4.5   |
+| `red-700` on `red-50` (its hover and focus tint, light) | 6.05:1 | 4.5   |
+| `red-300` on `night-900` (destructive label, dark)      | 6.31:1 | 4.5   |
+| `red-300` on `red-900` (its hover and focus tint, dark) | 5.50:1 | 4.5   |
 
 #### A remedy above the queue, not inside a row (TAR-778)
 
@@ -814,10 +964,12 @@ a brand panel filling the rest.
   with the screen's single `<h1>`, and a footer carrying the support link and the theme
   control. The form is centred in what is left over, with the void above it capped at
   `--size-band` so a tall screen does not leave it floating.
-- **Brand panel** — `--color-rail`, the navy that frames the console when somebody is
+- **Brand panel** — `--color-rail`, the dark region that frames the console when somebody is
   signed in, carrying the product name at display size, one line of positioning, and a
   motif of a disc, a ring and a rounded square. The ring is the only thing drawn in
-  `--color-brand-decor`; the motif is in flow below the copy, never behind it, because
+  `--color-brand-decor` — a role a tenant owns and the platform now also declares, so the
+  motif survives a workspace that has never chosen a colour; the motif is in flow below the
+  copy, never behind it, because
   that colour is the tenant's and no contrast guarantee can be made about it. The panel
   is `aria-hidden`: the lockup beside the form is the accessible spelling of the name,
   and announcing the workspace twice before the heading is worse than announcing it once.
@@ -914,11 +1066,11 @@ WCAG 2.2 SC 1.4.11's 3:1 and asserted in `apps/web/styles/tokens/tokens.test.ts`
 
 | Pair                                                          | Light  | Dark   | Floor |
 | ------------------------------------------------------------- | ------ | ------ | ----- |
-| Switch knob (`surface`) on its off track (`on-surface-muted`) | 4.76:1 | 6.96:1 | 3     |
-| Switch knob (`on-accent`) on its on track (`accent`)          | 5.37:1 | 5.73:1 | 3     |
-| The off track itself, against the `surface` behind it         | 4.76:1 | 6.96:1 | 3     |
-| Slider knob's accent ring on the rail (`surface-sunken`)      | 4.90:1 | 5.73:1 | 3     |
-| Slider knob's `surface` disc on the filled portion (`accent`) | 5.37:1 | 5.07:1 | 3     |
+| Switch knob (`surface`) on its off track (`on-surface-muted`) | 4.97:1 | 6.82:1 | 3     |
+| Switch knob (`on-accent`) on its on track (`accent`)          | 6.29:1 | 6.34:1 | 3     |
+| The off track itself, against the `surface` behind it         | 4.97:1 | 6.82:1 | 3     |
+| Slider knob's accent ring on the rail (`surface-sunken`)      | 5.71:1 | 6.34:1 | 3     |
+| Slider knob's `surface` disc on the filled portion (`accent`) | 6.29:1 | 5.89:1 | 3     |
 
 The slider's rail is `--color-surface-sunken` rather than `--color-border-strong` for the
 fourth row: a border-weight rail left the knob's ring at 2.15:1 in the dark theme, which is
@@ -1087,8 +1239,8 @@ a column they have to scroll to understand. The rules:
   rule is answered by the focus and pointer rules, not by an overflow menu.
 - **The selected row lifts to `--color-surface`** — the reading surface, matching the
   thread column beside it — plus a `--size-marker` accent bar on its leading edge. Not
-  `--color-surface-selected`: that role is a green tint in the light theme and a slate one
-  step off the surface in the dark one, so the same rule read as two different states. A
+  `--color-surface-selected`: that role is an accent tint in the light theme and a dark one
+  in the dark theme, so the same rule read as two different states. A
   surface change plus a marker reads identically in both and survives forced colours.
 - **The column has a header**: the result count on the left, the order on the right, both
   sticky. The count is the page's own, never a tenant total — the list read carries no
@@ -1274,6 +1426,18 @@ between them would mean drawing the section twice. Under `prefers-reduced-motion
 token layer takes the durations to 1ms and `StateLayout` drops the animation outright.
 
 ## What a new screen inherits
+
+**How to consume the token layer, in three rules.** Read `--color-*`, `--space-*`,
+`--radius-*`, `--font-*`, `--size-*` and `--duration-*` — the _role_ names from
+`semantic.css` — and nothing else. Never a `--palette-*` or `--scale-*` name: those are
+the vocabulary the roles are written in, and a component that reads one has opted out of
+the theme, the tenant brand and the Arabic branch in a single line. Never a literal —
+no hex, no px, no `cubic-bezier`; if a value is missing, add a role here and a step to the
+scale rather than an exception in a module. And never branch on the theme in a component:
+`[data-theme='dark']` re-declares values, so a component written against roles is already
+both themes. TAR-801 replaced the entire palette, the radii, the elevation and the body
+face without editing a single one of the 117 modules under `components/ui/`, and that is
+the property these three rules exist to keep.
 
 Compose these and the screen matches this document without you specifying a colour or a
 space:

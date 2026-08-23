@@ -573,15 +573,33 @@ BEGIN
     -- Equality, not "greater than zero". A fresh database legitimately has zero
     -- of both, and both sides being zero is a pass; one side being short by any
     -- amount is not.
+    --
+    -- **Both counts are `kind = 'whatsapp'`-scoped, on both sides.** This block
+    -- only ever creates WhatsApp rows, so anything of another kind was written
+    -- by something else and is not evidence about this backfill. Today that is
+    -- vacuous — `whatsapp` is the only kind with rows — but rule 0 makes this
+    -- file the worked example later backfills are read against, the header
+    -- invites re-running section 6 by hand, and TAR-820 re-runs it wholesale.
+    -- Unscoped, the first Instagram channel TAR-822 connects would make a re-run
+    -- abort with "the backfill in 6a did not reach every number", which is both
+    -- false and the opposite of what happened.
+    --
+    -- The mirror on the `expected_ids` side — a phone-less contact that somehow
+    -- holds a WhatsApp identity, which would overshoot — is unreachable and
+    -- deliberately not given a predicate: `contacts.phone_e164` is immutable
+    -- through the API (`ContactUpdateInputSchema` omits `phone`), and only this
+    -- block writes `whatsapp` identities until TAR-820.
     SELECT count(*) INTO expected_channels FROM "public"."whatsapp_accounts";
     SELECT count(*) INTO expected_ids
       FROM "public"."contacts" WHERE "phone_e164" IS NOT NULL;
 
-    IF (SELECT count(*) FROM "public"."channels") <> expected_channels THEN
+    IF (SELECT count(*) FROM "public"."channels" WHERE "kind" = 'whatsapp')
+       <> expected_channels THEN
         RAISE EXCEPTION
-            'channels holds % row(s) for % whatsapp_accounts row(s); the backfill in 6a '
-            'did not reach every number',
-            (SELECT count(*) FROM "public"."channels"), expected_channels;
+            'channels holds % whatsapp row(s) for % whatsapp_accounts row(s); the backfill '
+            'in 6a did not reach every number',
+            (SELECT count(*) FROM "public"."channels" WHERE "kind" = 'whatsapp'),
+            expected_channels;
     END IF;
 
     IF (SELECT count(*) FROM "public"."contact_identities" WHERE "kind" = 'whatsapp')

@@ -25,7 +25,7 @@ const AA_TEXT = 4.5;
 const FOCUS_INDICATOR = 3;
 
 /** Canvas per theme, mirroring `styles/tokens/semantic.css`. */
-const CANVAS: Record<BrandTheme, string> = { light: '#f8fafc', dark: '#020617' };
+const CANVAS: Record<BrandTheme, string> = { light: '#f6f7f9', dark: '#0e1117' };
 
 function branding(primaryColor: string, accentColor = '#2e4a63'): TenantBranding {
   return withBrandingDefaults({ primaryColor, accentColor });

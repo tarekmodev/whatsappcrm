@@ -450,9 +450,28 @@ inserted nothing — the worst failure available, because it is silent.
 `20260816150100_reporting_attribution_backfill` follows it for two read-only
 tables.
 
-This is written as a rule here because the local and CI databases both run
-migrations as the initdb superuser, so the toggles are inert there and no test
-can catch a missing one. See Amendment 2.
+**Assert the precondition, not the outcome.** Read
+`pg_class.relforcerowsecurity` for every table the block touches, before anything
+reads a row, and raise naming any table still forced. A count assertion against
+the source does **not** catch this: the source is hidden and the destination is
+legitimately empty, so both sides come back `0` and `0 = 0` commits. The catalog
+is the one thing RLS cannot hide, which is also why the precondition check is the
+only guard here that means anything in CI — local and CI databases run migrations
+as the initdb superuser, so every toggle is inert and no behavioural check can
+tell a complete toggle list from an empty one.
+
+A count assertion still earns its place, with a narrower job than "catch a
+missing toggle": it catches a source that is **visible but silently narrowed** —
+a predicate that excludes more than it means to, a join that drops rows, a
+conflict target that swallows them. Both guards, in that order.
+
+A post-condition assert is the right shape where zero rows changed is legitimate
+— a fresh database, a second application — since a row count cannot distinguish
+that from a backfill that matched nothing. `20260823140100`'s two blocks do this:
+they assert no `tenant_entitlements` row and no `plans` row is left without
+`channel_whatsapp`, rather than counting updates.
+
+Making RLS actually run in local and CI databases is TAR-842. See Amendment 2.
 
 ### 1. Expand — TAR-819, shipped additive
 
@@ -794,7 +813,7 @@ placement — or moving it earlier — is the open decision.
 
 ---
 
-## Amendment 2 — the RLS toggle rule, and why no test can hold it
+## Amendment 2 — the RLS toggle rule, and what a test can and cannot hold
 
 **Author**: Architect, from a Senior Code Reviewer finding on PR #250.
 **Date**: 2026-08-23. **Status**: accepted.
@@ -807,14 +826,20 @@ non-superuser owner: the source holds a row, the owner sees none, the
 `INSERT … SELECT` reports zero and succeeds. Fixed in PR #250; rule 0 in the
 Migration strategy section is now where it is stated for future work.
 
-**The part that outlives the fix.** Nothing in the test suite can catch this
-class. `docker-compose.yml` sets `POSTGRES_USER: whatsappcrm`, the container's
-initdb superuser, so local and CI databases bypass RLS outright and every toggle
-in every migration is inert — including the assertion in
-`channel-schema.int-spec.ts` that claims to prove the toggle matters, and
-including the 120 000-row verification that reported success. A migration is the
-one place in this codebase where the tests run as a role the production code
-never uses.
+**The part that outlives the fix.** No _behavioural_ test in this suite can catch
+this class. `docker-compose.yml` sets `POSTGRES_USER: whatsappcrm`, the
+container's initdb superuser, so local and CI databases bypass RLS outright and
+every toggle in every migration is inert — including the 120 000-row verification
+that reported success. A migration is the one place in this codebase where the
+tests run as a role the production code never uses.
+
+What does hold is a check that reads the catalog rather than rows: rule 0's
+`relforcerowsecurity` precondition, and
+`channel_backfill_toggles_every_table_it_reads` in `channel-schema.int-spec.ts`,
+which derives the table set from the migration's own text and intersects it with
+the catalog. Neither can be blinded by a role that bypasses RLS, because there is
+nothing for RLS to hide them behind. What they still cannot do is exercise RLS
+itself — see the TAR-842 paragraph below.
 
 **Unresolved and load-bearing:** `render.yaml:99` asserts that the migration
 owner on a managed instance _is_ a superuser, which if true makes this class
@@ -827,19 +852,28 @@ the migration role — and `rolbypassrls` is the attribute that decides it, not
 `rolsuper` alone. Until someone runs it, migrations follow rule 0, because rule 0
 is correct under both answers and costs two lines.
 
-**Recommended, not yet scoped:** give the local and CI databases a non-superuser
-`migrator` role and run `migrate deploy` as it. It is the only change that closes
-the class rather than catching instances of it, and it makes
-`verify-tenant-isolation.sql` mean what it claims. Until then, every backfill
-closes with a count assertion against its source, which catches the symptom where
-it happens.
+**Scoped as TAR-842:** give the local and CI databases a non-superuser `migrator`
+role and run `migrate deploy` as it, so every toggle, policy and grant behaves in
+CI the way it will in production and `verify-tenant-isolation.sql` means what it
+claims.
+
+The argument for it is narrower than it was when this amendment was written. The
+claim that it is "the only change that closes the class" was true of the count
+assertion this paragraph originally recommended, and is not true of the catalog
+precondition check that replaced it (see the implementation note below and rule
+0). A `relforcerowsecurity` assert runs under a superuser owner and does catch a
+missing toggle. What it cannot do is exercise RLS: it proves a toggle list is
+complete, not that a `tenant_isolation` policy is correct, that a grant is
+present, or that `system_unrestricted` does what it claims. Those are what
+TAR-842 is for, and the 20 assertions in `verify-tenant-isolation.sql` are
+currently run by a role RLS does not apply to at all.
 
 ### Implementation note — a count assertion does not catch this one
 
-**Author**: Database Specialist, 2026-08-23. **Status**: proposed, raised for the
-Architect. Recorded here because the closing sentence above is the instruction
-TAR-820 inherits, and it is measured to be false for the failure this amendment
-is about.
+**Author**: Database Specialist, 2026-08-23. **Status**: **accepted** by the
+Architect, 2026-08-23 — the correction is right and its substance is folded into
+rule 0, which is where TAR-820 will read it. Kept here as the record of what was
+measured and why the guidance changed.
 
 A count assertion against the source is the natural guard and it was the first
 thing tried. It passes the broken case. `channels` vs `whatsapp_accounts` reads

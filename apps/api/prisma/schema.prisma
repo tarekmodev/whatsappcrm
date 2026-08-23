@@ -759,6 +759,26 @@ enum LifecycleTrigger {
   @@map("lifecycle_trigger")
 }
 
+/// What a `platform_setting_changes` row records (TAR-811, TAR-815).
+///
+/// Two labels, because a managed key has exactly two states an operator can put
+/// it in: holding a database override, or not holding one. `cleared` is
+/// **revert to environment**, not "delete the setting" — the key stays managed
+/// and keeps resolving, from the environment variable behind it. That
+/// distinction is the one an operator reading the history needs, and it is why
+/// this is an enum rather than a boolean on the row.
+///
+/// Adding a third label means revisiting `platform_setting_changes_fingerprints`
+/// in `20260823140000_platform_settings`: that CHECK enumerates these two by
+/// name and a `CASE` with no matching arm evaluates to NULL, which a CHECK
+/// accepts.
+enum PlatformSettingChangeAction {
+  set
+  cleared
+
+  @@map("platform_setting_change_action")
+}
+
 // ---------------------------------------------------------------------------
 // Tenancy — TAR-19 / TAR-29 / TAR-36
 // ---------------------------------------------------------------------------
@@ -836,6 +856,7 @@ model Tenant {
   domains                  TenantDomain[]
   branding                 TenantBranding?
   settings                 TenantSettings?
+  onboardingSteps          TenantOnboardingStep[]
   users                    User[]
   sessions                 Session[]
   passwordResetTokens      PasswordResetToken[]
@@ -1355,6 +1376,72 @@ model TenantSettings {
   @@map("tenant_settings")
 }
 
+/// Which onboarding steps a tenant has chosen to put off (TAR-832, TAR-833).
+///
+/// **Skips only.** `completed` is derived on read from the tenant's actual
+/// `whatsapp_business_accounts`, `invites`/`users` and `tenant_branding` rows —
+/// TAR-832 decision 1 — so there is no status column here and nothing to
+/// backfill for tenants that predate this. A row's absence means "not skipped",
+/// which for a step whose fact is not yet true renders as `pending`.
+///
+/// The derivation is what keeps `OnboardingStepSchema.completedAt`'s promise
+/// that it is *"cleared if the underlying fact goes away"*: a tenant that
+/// disconnects its WABA sees the step return to `pending` with no reverse hook
+/// anywhere. A materialised `status` column would need one on every delete
+/// path, and the one nobody writes is the one that leaves a checklist lying.
+model TenantOnboardingStep {
+  id       String @id @default(uuid(7)) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  /// A member of `ONBOARDING_STEP_IDS` in `@whatsappcrm/contracts`. Text rather
+  /// than a PostgreSQL enum: the vocabulary grows, it is only ever written from
+  /// that closed TS constant, and a row naming a step this build does not know
+  /// is ignored by the reader rather than failing a deserialise.
+  ///
+  /// No `CHECK` on the value either, deliberately (TAR-832, "Data Model").
+  /// `OnboardingStepIdSchema` enforces the domain in the validation pipe, where
+  /// an unknown id has to produce a 404 anyway, and a `CHECK` would make adding
+  /// a fourth step a deploy-ordering hazard — the API shipping the new id ahead
+  /// of the migration turns every skip of it into a 500.
+  stepId   String @map("step_id")
+
+  /// When the admin skipped it. **NULL means the row survived a `reopen`** —
+  /// kept rather than deleted so the checklist's own `updatedAt` still moves
+  /// when a step is put back, and so "was this ever skipped" stays answerable.
+  skippedAt       DateTime? @map("skipped_at") @db.Timestamptz(3)
+  /// Who skipped it. Never on the wire; support-facing only, which is why
+  /// TAR-832 decision 5 files no `audit_logs` row for a skip.
+  skippedByUserId String?   @map("skipped_by_user_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// `NoAction`, like `invites.invitedBy` and for the same reason: conventions
+  /// rule 4 forbids `SetNull` on a composite key — it would null `tenant_id`
+  /// too — and removing a user is a status change rather than a row delete. The
+  /// purge is the only path that really deletes one, and `PURGE_ORDER` lists
+  /// this table ahead of `users` so the rows are gone before that runs.
+  skippedBy User?  @relation(fields: [tenantId, skippedByUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  /// The concurrency guarantee as well as the lookup: two tabs skipping the
+  /// same step race into one upsert rather than two rows.
+  ///
+  /// **No separate `@@index([tenantId])`.** Every access this table has is
+  /// `(tenant_id)` or `(tenant_id, step_id)`, and a btree leading with
+  /// `tenant_id` serves both — a second index would be a strict prefix of this
+  /// one, paid for on every write. TAR-832's model block carries one; it is
+  /// omitted here deliberately and is a one-line migration if a reader ever
+  /// wants it back.
+  ///
+  /// **No index on `(tenant_id, skipped_by_user_id)`** either, unlike
+  /// `invites`. It exists there to keep the referential-integrity check on a
+  /// user delete off a table that grows with the invite history; this one is
+  /// bounded at three rows per tenant, so that scan is a page or two whatever
+  /// the tenant count.
+  @@unique([tenantId, stepId])
+  @@map("tenant_onboarding_steps")
+}
+
 // ---------------------------------------------------------------------------
 // Identity and access — TAR-22 / TAR-35
 // ---------------------------------------------------------------------------
@@ -1423,28 +1510,29 @@ model User {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant                Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  sessions              Session[]
-  passwordResetTokens   PasswordResetToken[]
-  invitesSent           Invite[]
-  teamMemberships       TeamMember[]
-  assignedConversations Conversation[]
-  sentMessages          Message[]
-  uploadedMedia         MediaObject[]
-  internalNotes         InternalNote[]
-  assignedTickets       Ticket[]             @relation("TicketAssignee")
+  tenant                 Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions               Session[]
+  passwordResetTokens    PasswordResetToken[]
+  invitesSent            Invite[]
+  teamMemberships        TeamMember[]
+  assignedConversations  Conversation[]
+  sentMessages           Message[]
+  uploadedMedia          MediaObject[]
+  internalNotes          InternalNote[]
+  assignedTickets        Ticket[]               @relation("TicketAssignee")
   /// The two sides of TAR-30's per-agent breakdown (0010 decision 4). Named
   /// because there are now three relations between `User` and `Ticket`, and
   /// Prisma refuses more than one unnamed relation between a pair of models.
-  ticketsFirstResponded Ticket[]             @relation("TicketFirstResponder")
-  ticketsResolved       Ticket[]             @relation("TicketResolver")
-  ticketEvents          TicketEvent[]
-  assignmentRules       AssignmentRule[]
-  assignmentCursors     AssignmentState[]
-  notifications         Notification[]
-  workflowReferences    WorkflowReference[]
-  cannedResponses       CannedResponse[]
-  auditLogs             AuditLog[]
+  ticketsFirstResponded  Ticket[]               @relation("TicketFirstResponder")
+  ticketsResolved        Ticket[]               @relation("TicketResolver")
+  ticketEvents           TicketEvent[]
+  assignmentRules        AssignmentRule[]
+  assignmentCursors      AssignmentState[]
+  notifications          Notification[]
+  workflowReferences     WorkflowReference[]
+  cannedResponses        CannedResponse[]
+  onboardingStepsSkipped TenantOnboardingStep[]
+  auditLogs              AuditLog[]
   /// No `lifecycleEvents` relation. `lifecycle_events.actor_user_id` records who
   /// acted and keeps recording it after the purge deletes this row — the
   /// composite foreign key it used to carry is what made that purge impossible
@@ -2971,7 +3059,7 @@ model Notification {
   ticket      Ticket       @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
   /// `NoAction`, matching every other user reference in this file: removing a
   /// user is a status change, never a row delete (convention 4).
-  recipient User      @relation(fields: [tenantId, recipientUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  recipient   User         @relation(fields: [tenantId, recipientUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
 
   /// The SLA path's second idempotency layer. A retry after a partial failure
   /// re-inserts nothing.
@@ -3603,18 +3691,18 @@ model CannedResponse {
 /// Platform-wide, not per tenant: every tenant chooses from the same catalogue.
 /// Not RLS-protected — it is public product data.
 model Plan {
-  id              String          @id @default(uuid(7)) @db.Uuid
+  id                String          @id @default(uuid(7)) @db.Uuid
   /// `PlanSchema.key` — `PLAN_KEY_PATTERN`, at most `PLAN_KEY_MAX_LENGTH`
   /// characters. `plans_key_format` (TAR-657) asserts exactly that at the write,
   /// because the console parses this response against the same contract and a
   /// single non-conforming row used to fail the whole `GET /billing/plans` parse
   /// — the billing page down for every tenant, from one bad catalogue row.
-  key             String          @unique
-  name            String
+  key               String          @unique
+  name              String
   /// Integer minor units, never a float (TAR-39, conventions).
-  priceMinorUnits Int             @map("price_minor_units")
-  currency        String          @default("USD") @db.Char(3)
-  interval        BillingInterval @default(month)
+  priceMinorUnits   Int             @map("price_minor_units")
+  currency          String          @default("USD") @db.Char(3)
+  interval          BillingInterval @default(month)
   /// `PlanEntitlementsSchema`: `{ features: PlanFeature[], limits: { seats,
   /// conversationsPerPeriod, whatsappNumbers, teams, knowledgeDocuments } }` —
   /// the **same shape** as `tenant_entitlements.entitlements`, and that is the
@@ -3629,19 +3717,19 @@ model Plan {
   ///
   /// JSONB so adding an entitlement is a data change, not a migration. **A null
   /// limit means unlimited** — deliberately not `-1` or a sentinel maximum.
-  entitlements    Json
-  isActive        Boolean         @default(true) @map("is_active")
+  entitlements      Json
+  isActive          Boolean         @default(true) @map("is_active")
   /// The provider's **product** id. Polar's `POST /v1/checkouts/` takes
   /// `products: uuid[]`, so this — not `provider_price_id` — is what the adapter
   /// sends. Null until the Polar organisation's product ids are seeded; the
   /// checkout route answers `upstream_unavailable` for a plan with no product id
   /// rather than calling Polar with a null.
-  providerProductId String?       @map("provider_product_id")
+  providerProductId String?         @map("provider_product_id")
   /// Retained and unused by the Polar adapter — a second provider may key on a
   /// price rather than a product.
-  providerPriceId String?         @map("provider_price_id")
-  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  providerPriceId   String?         @map("provider_price_id")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   subscriptions Subscription[]
 
@@ -3670,13 +3758,13 @@ model Subscription {
   /// this date and stays fully serviceable until it. This column is what the
   /// console renders its "closing on {date}" banner from, and it is why a
   /// requested cancellation writes no lifecycle transition at all.
-  cancelsAt              DateTime?          @map("cancels_at") @db.Timestamptz(3)
+  cancelsAt DateTime? @map("cancels_at") @db.Timestamptz(3)
 
   /// When the provider first reported this subscription past due, for support
   /// and reporting. **Not the dunning clock** — the timer the lifecycle sweeper
   /// reads is `tenants.grace_period_ends_at`, and duplicating a deadline in two
   /// columns is how the two drift apart.
-  pastDueSince           DateTime?          @map("past_due_since") @db.Timestamptz(3)
+  pastDueSince DateTime? @map("past_due_since") @db.Timestamptz(3)
 
   /// The provider timestamp of the last webhook that wrote this row.
   ///
@@ -3689,10 +3777,10 @@ model Subscription {
   ///
   /// Distinct from `updated_at`, which is *our* write time and would compare two
   /// different clocks.
-  lastEventAt            DateTime?          @map("last_event_at") @db.Timestamptz(3)
+  lastEventAt DateTime? @map("last_event_at") @db.Timestamptz(3)
 
-  createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   plan   Plan   @relation(fields: [planId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -3860,4 +3948,146 @@ model AuditLog {
   /// this is not drift — the same arrangement as the predicated indexes on
   /// `users` and `tickets`. Nothing regenerates it from this file alone.
   @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Platform settings — TAR-811 / TAR-815
+// ---------------------------------------------------------------------------
+
+/// A runtime override for one boot-time environment variable, encrypted at rest
+/// (TAR-811). The admin console writes these; `PlatformSettingsService` reads
+/// them into an in-memory snapshot at boot and on a timer, and every consumer
+/// reads the snapshot rather than this table.
+///
+/// **Resolution order is database row → environment variable → unset.** The
+/// environment is the fallback and this table is the override, so an
+/// environment that never opens the admin console behaves exactly as it did
+/// before this table existed — an empty table is the pre-migration behaviour,
+/// not a degraded one. The cost is that editing Render's environment group has
+/// no effect on a key that has a row here, which is why `source` is a mandatory
+/// field on every read response and is rendered per key in the admin UI.
+///
+/// ## What is deliberately *not* a column
+///
+/// No `is_secret`, no `visibility`, no role or scope columns. Which keys are
+/// manageable at all, and whether a key's value may ever leave the API in
+/// plaintext, come from the code registry
+/// (`src/platform-settings/platform-settings.registry.ts`) and from nowhere
+/// else. A row whose `key` is not in the registry is ignored on load and logged
+/// at `warn` — that is the allowlist's enforcement point, and it is what stops a
+/// row written straight into the database introducing a new managed key or
+/// reclassifying a secret as public.
+///
+/// TAR-811 dissolves the read-access question rather than modelling it: no
+/// endpoint returns a `secret` plaintext to anybody, so there is no per-key
+/// visibility model for this table to support.
+///
+/// ## Reachability
+///
+/// No `tenant_id`, no RLS policy, and **no grant at all for `whatsappcrm_app`**
+/// — the same posture as `webhook_events` and `tenant_signups`, where the grant
+/// is the enforcement. `SystemPrisma` alone reaches it, and `PlatformSetting` is
+/// `system-only` in `tenant-scope.extension.ts` so a tenant-side call names the
+/// cause instead of failing with SQLSTATE 42501.
+///
+/// Two CHECK constraints live in raw SQL in `20260823140000_platform_settings`
+/// rather than here — `platform_settings_key_format` and
+/// `platform_settings_value_envelope`. Prisma's schema language cannot express a
+/// CHECK and its describer ignores them, so `migrate dev` proposes neither to
+/// create nor to drop them and this is not drift; the same arrangement as
+/// `plans_key_format` and `audit_logs_actor_attribution`.
+model PlatformSetting {
+  id             String @id @default(uuid(7)) @db.Uuid
+  /// The registry key, e.g. `whatsapp.app_secret`. This is the natural key —
+  /// the uuid exists for convention and for nothing else. Never renamed: a
+  /// rename orphans the row, because the registry looks the value up by this
+  /// string.
+  key            String @unique
+  /// `v1.<iv>.<tag>.<ct>`, base64url, AES-256-GCM under `SECRETS_ENCRYPTION_KEY`
+  /// — byte-identical to the format `WhatsAppCredentialCipher` already writes,
+  /// with `platform_setting:<key>` as AAD.
+  ///
+  /// **Every value is encrypted, including the ones that are not secret.** One
+  /// column and one code path means there is no clear column a secret can be
+  /// written into by mistake; encrypting a public Meta app id costs one AES call
+  /// per snapshot refresh, not one per read.
+  ///
+  /// Binding the AAD to the *key* rather than to this row's uuid is what stops
+  /// anyone with database write access copying the `whatsapp.app_secret`
+  /// ciphertext into the `meta.app_id` row — the two are read by different code
+  /// paths with very different exposure — while still letting a
+  /// delete-then-recreate of the same key decrypt.
+  ///
+  /// Never null. "No value" is the absence of a row, not an empty string.
+  valueEncrypted String @map("value_encrypted")
+  /// First 8 hex characters of `SHA-256(plaintext)`, written with the value.
+  ///
+  /// This is what lets the console answer "do staging and production hold the
+  /// same secret" without ever decrypting one, and what lets
+  /// `platform_setting_changes` reference a value it deliberately does not
+  /// store. An 8-hex prefix is offline-guessable for a low-entropy plaintext,
+  /// which is why the registry puts a `min(32)` write floor on both secret keys.
+  fingerprint    String @db.Char(8)
+  /// The **label** half of the `PLATFORM_ADMIN_TOKEN` entry that authenticated
+  /// the write, never the secret half — the same rule `audit_logs.actor_label`
+  /// and `webhook_event_replays.actor_label` follow.
+  updatedByLabel String @map("updated_by_label")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  /// The unique index on `key` is the only access path, and the table is bounded
+  /// by the registry at single-digit rows, so no other index is warranted.
+  @@map("platform_settings")
+}
+
+/// Append-only history of platform setting changes (TAR-811). One row per write
+/// or revert, recording that a key changed, when, and by whom.
+///
+/// ## No previous value is stored, in any form
+///
+/// Fingerprints only. This forecloses a one-click rollback, and in exchange each
+/// secret exists in exactly one row in the database rather than accumulating a
+/// tail of superseded copies nobody is tracking. An operator reverting re-enters
+/// the value — and since the value's origin is the Meta app dashboard, that is a
+/// lookup rather than a loss.
+///
+/// ## Why a table of its own rather than an `audit_logs` row
+///
+/// `audit_logs.tenant_id` is `NOT NULL` with a foreign key to `tenants`, and a
+/// platform credential belongs to no tenant. Making that column nullable would
+/// touch the `tenant_isolation` policy, the `audit_logs_actor_attribution`
+/// CHECK, four indexes and every existing query on the platform's most
+/// safety-critical table — for the sake of one writer. TAR-811 rejected it as
+/// disproportionate, on the same reasoning that gave `webhook_event_replays` and
+/// `lifecycle_events` tables of their own.
+///
+/// ## Append-only, and not a child row
+///
+/// `key` is a plain column and **not** a foreign key to `PlatformSetting`: the
+/// history has to survive a `DELETE` of the setting, which is precisely the
+/// event a `cleared` row records. `app-roles.sql` withholds UPDATE and DELETE
+/// from `SystemPrisma` as well as from the app role, and
+/// `platform_setting_changes_append_only` closes the half a grant cannot — the
+/// table owner, which is the credential a psql session runs as.
+model PlatformSettingChange {
+  id                  String                      @id @default(uuid(7)) @db.Uuid
+  /// The registry key this entry is about. Not an FK — see the note above.
+  key                 String
+  action              PlatformSettingChangeAction
+  /// The fingerprint the key held before this change. Null on the first `set`
+  /// for a key, and on a `cleared` of a key that held no row.
+  previousFingerprint String?                     @map("previous_fingerprint") @db.Char(8)
+  /// The fingerprint the key holds after this change. Null on `cleared`, which
+  /// `platform_setting_changes_fingerprints` enforces.
+  newFingerprint      String?                     @map("new_fingerprint") @db.Char(8)
+  /// The label half of the `PLATFORM_ADMIN_TOKEN` entry behind the change, never
+  /// the secret half.
+  actorLabel          String                      @map("actor_label")
+  createdAt           DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// "What has happened to this key, most recent first" — the only query this
+  /// table is read by, kept a backwards index scan rather than a sort.
+  @@index([key, createdAt(sort: Desc)])
+  @@map("platform_setting_changes")
 }
