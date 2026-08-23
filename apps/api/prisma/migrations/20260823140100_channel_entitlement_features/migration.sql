@@ -138,6 +138,35 @@ BEGIN
 
     GET DIAGNOSTICS updated = ROW_COUNT;
 
+    -- The post-condition, not the row count. ADR 0013 rule 0 asks every backfill
+    -- to close with an assertion against its source; this table is its own
+    -- source, so the assertion is that **no row is left without the feature**.
+    --
+    -- Deliberately stricter than "the UPDATE matched something". Zero rows
+    -- updated is a legitimate outcome — a fresh database, or a second
+    -- application — and would pass a row-count check while an untoggled table
+    -- also passes it. Counting the rows that still lack the value distinguishes
+    -- the two.
+    --
+    -- A row whose `features` is not an array is out of scope for the UPDATE and
+    -- for this check: `tenant_entitlements_shape` already refuses one, and
+    -- silently "fixing" a malformed document here would hide a constraint
+    -- violation behind a backfill.
+    IF EXISTS (
+        SELECT 1 FROM "public"."tenant_entitlements"
+         WHERE jsonb_typeof("entitlements"::jsonb -> 'features') = 'array'
+           AND NOT ("entitlements"::jsonb -> 'features' @> '"channel_whatsapp"'::jsonb)
+    ) THEN
+        RAISE EXCEPTION
+            '% tenant_entitlements row(s) still lack channel_whatsapp after the backfill; '
+            'a fail-closed channel gate would refuse WhatsApp connect for each of them',
+            (
+                SELECT count(*) FROM "public"."tenant_entitlements"
+                 WHERE jsonb_typeof("entitlements"::jsonb -> 'features') = 'array'
+                   AND NOT ("entitlements"::jsonb -> 'features' @> '"channel_whatsapp"'::jsonb)
+            );
+    END IF;
+
     EXECUTE 'ALTER TABLE "public"."tenant_entitlements" FORCE ROW LEVEL SECURITY';
 
     RAISE NOTICE 'channel_whatsapp added to % tenant_entitlements row(s)', updated;
@@ -196,6 +225,26 @@ BEGIN
        AND NOT ("entitlements"::jsonb -> 'features' @> '"channel_whatsapp"'::jsonb);
 
     GET DIAGNOSTICS updated = ROW_COUNT;
+
+    -- The same post-condition, and it matters more here than in section 1: a
+    -- plan row left without the feature does not stay a local gap.
+    -- `copyEntitlements` writes it over every tenant on that plan at the next
+    -- subscription event, so one missed catalogue row silently un-does section 1
+    -- for a whole tier.
+    IF EXISTS (
+        SELECT 1 FROM "public"."plans"
+         WHERE jsonb_typeof("entitlements"::jsonb -> 'features') = 'array'
+           AND NOT ("entitlements"::jsonb -> 'features' @> '"channel_whatsapp"'::jsonb)
+    ) THEN
+        RAISE EXCEPTION
+            'plan(s) % still lack channel_whatsapp after the backfill; copyEntitlements '
+            'would write that array over every tenant on them at the next subscription event',
+            (
+                SELECT string_agg("key", ', ' ORDER BY "key") FROM "public"."plans"
+                 WHERE jsonb_typeof("entitlements"::jsonb -> 'features') = 'array'
+                   AND NOT ("entitlements"::jsonb -> 'features' @> '"channel_whatsapp"'::jsonb)
+            );
+    END IF;
 
     RAISE NOTICE 'channel_whatsapp added to % plan row(s)', updated;
 END

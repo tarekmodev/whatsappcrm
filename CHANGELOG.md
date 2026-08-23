@@ -201,6 +201,15 @@ change.
   the ADR did not count and the one the others depend on — a subscription event copies a
   plan's entitlements over the tenant's, so a catalogue row missing the feature un-grants it
   again on the next webhook.
+  Both migrations close with an assertion rather than a row count. A backfill that reads a
+  table with row-level security forced on it — which binds the migration's own role — sees
+  nothing and reports success, and counting the rows afterwards does not catch that because
+  it counts the source through the same blindfold. So each block asserts its precondition
+  against the system catalog before it reads anything, and its post-condition after: no
+  table left forced, no entitlements row left without the feature. Neither local nor CI
+  databases can catch this class on their own, because both run migrations as a superuser
+  and a superuser ignores row-level security entirely; `docs/runbooks/migrations.md` now
+  carries the rule and what would close the gap properly.
 
 - **A supervisor can set how much work auto-assignment sends an agent, from the queue where it
   is in the way** (TAR-384) — shipped across TAR-756 (the API) and TAR-757 (the console).

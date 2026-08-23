@@ -153,15 +153,34 @@ in a backfill block gets `NO FORCE` for the duration, and gets it back afterward
 `20260810160000_whatsapp_business_account_entity` and
 `20260816150100_reporting_attribution_backfill` both toggle tables they only read.
 
-Two things make this worth a rule rather than a review habit:
+This is **rule 0** of ADR 0013's migration strategy, restated here because it is not
+specific to that ADR.
+
+Two things make it worth a rule rather than a review habit:
 
 - **Counting rows afterwards does not catch it.** The count reads the source through the
   same blindfold — both sides come back `0`, and `0 = 0` passes. Assert the _precondition_
   instead: read `pg_class.relforcerowsecurity` before anything reads a row and raise on a
-  table still forced. The catalog is the one thing RLS cannot hide.
+  table still forced. The catalog is the one thing RLS cannot hide. Keep the count
+  assertion as well — it catches the other failure, a source that is visible but silently
+  narrowed.
 - **No environment here can catch it behaviourally.** `docker-compose.yml` connects as the
   container's initdb superuser, and a superuser bypasses RLS outright — so the toggles are
-  inert locally and in CI, and a complete list looks exactly like an empty one.
+  inert locally and in CI, and a complete list looks exactly like an empty one. Closing
+  that gap means running `migrate deploy` as a non-superuser `migrator` role in compose and
+  CI; until then the two assertions above stand in for it.
+
+Whether a **deployed** environment has the same blind spot is unsettled. `render.yaml` says
+the migration owner on a managed instance is a superuser;
+`20260815120000_branding_and_custom_domains` says the owner is not exempt. One query as the
+migration role decides it, and `rolbypassrls` rather than `rolsuper` alone is what matters:
+
+```sql
+SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
+```
+
+Until someone runs it, follow the rule — it is correct under either answer and costs two
+lines. Whoever runs it should correct or qualify the comment in `render.yaml`.
 
 ## Before shipping a schema change
 

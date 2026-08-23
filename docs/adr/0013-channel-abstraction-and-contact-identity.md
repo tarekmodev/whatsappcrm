@@ -10,10 +10,14 @@
 
 > Landed in the repository by TAR-819, per the Architect's instruction on TAR-818:
 > the ADR was posted as a comment there because a discovery issue has no PR, and
-> the first PR in the chain is where it belongs. **Sections 1–12 are the
-> Architect's text, unaltered.** Amendment 1 at the end is TAR-819's — it records
-> where the implementation had to depart from the plan and is flagged back for
-> acceptance rather than treated as settled.
+> the first PR in the chain is where it belongs.
+>
+> **The body is the Architect's text**, as corrected by their ruling of
+> 2026-08-23: Context, Decision 4's write-site list and the Migration strategy
+> section were rewritten in place, so each reads correctly on its own, and the
+> amendments are the record of why. Amendment 1 is TAR-819's four implementation
+> findings, all accepted, with the Architect's rulings inline. Amendment 2 is the
+> Architect's, from the code review of PR #250.
 >
 > Every deviation from what is written here should come back to the Architect
 > rather than be resolved locally. That is TAR-819's own acceptance criterion and
@@ -334,15 +338,44 @@ class ChannelEntitlementService {
 }
 ```
 
+**Do not read the tenant's effective entitlements through
+`BillingReaderService.toPlan`.** That path substitutes
+`{ features: [], limits: EMPTY_LIMITS }` for a row that fails
+`PlanEntitlementsSchema`, which is correct where it lives — a hand-edited
+catalogue row must not take the pricing page down. Behind a fail-closed gate the
+same substitution refuses every channel to every tenant on that plan, silently.
+The gate must distinguish **parsed and absent** (refuse the tenant, that is the
+feature) from **did not parse** (a fault: log, alert, and do not answer the
+question). Two different failures reaching the same `[]` is how a catalogue typo
+becomes a platform-wide outage.
+
 Failing closed is only safe because **every existing write site is backfilled in
-the same migration**. There are four, and TAR-819 must cover all of them or
-WhatsApp connect breaks on day one:
+the same migration**. There are five, and TAR-819 must cover all of them or
+WhatsApp connect breaks — on day one for three of them, and on the next
+subscription event for the two catalogue rows:
 
 - existing `tenant_entitlements` rows — backfill `channel_whatsapp` into `features`
 - the column default on `TenantEntitlements.entitlements`
-- `TenantProvisioningService` (`apps/api/src/tenancy/tenant-provisioning.service.ts:572` area)
-- `UNCAPPED_ENTITLEMENTS` in `apps/api/src/entitlements/plan-limits.service.ts` and
-  the three `demo-dataset.ts` plan rows
+- **existing `plans.entitlements -> 'features'` rows — backfilled in the
+  migration, not in the seed.** `SubscriptionSyncService.copyEntitlements`
+  replaces a tenant's array wholesale from its plan on every subscription event,
+  so a stale catalogue row silently reverts the first bullet. `plans` carries no
+  RLS policy, so this one needs no `NO FORCE` toggle.
+  `20260822130000_billing_polar_provider_ids` is the precedent and argues the
+  same case.
+- `TenantProvisioningService` (`apps/api/src/tenancy/tenant-provisioning.service.ts:568`)
+  and `UNCAPPED_ENTITLEMENTS` in `apps/api/src/entitlements/plan-limits.service.ts:46`
+  — both spread `[...PLAN_FEATURES]` and move on their own
+- the three `demo-dataset.ts` plan rows — the seed's copy of the catalogue, which
+  keeps a freshly seeded environment consistent with the bullet above. It is not
+  a substitute for it: `db:seed` is in neither `preDeployCommand`.
+
+**The general rule this is an instance of.** A fail-closed reader converts every
+gap in its input into a refusal. Adding one is therefore not a local change — it
+makes every writer of that input load-bearing, including writers nobody thought
+of as entitlement code. Before TAR-821's gate ships, the question to ask of each
+write site is not "does it set the flag" but "can it ever produce an array
+without the flag", and `copyEntitlements` answers yes for any row it reads from.
 
 **Refusal shape.** A named error code, not a generic 403: `channel_not_entitled`,
 HTTP 403, body naming the `channelKind` refused and the tenant's plan key. AC3's
@@ -406,6 +439,21 @@ standalone migrate release is an outage rather than a migration. Migrate and
 contract are therefore one migration, and it ships in the same release as
 TAR-820's writers. Amendment 1.2 has the per-change reasoning.
 
+### 0. The rule every backfill in this ADR obeys
+
+**A migration that reads a `FORCE ROW LEVEL SECURITY` table must toggle
+`NO FORCE` on the tables it reads, not only the tables it writes.** The migration
+role is not exempt from `FORCE`, and no migration sets `app.tenant_id`, so an
+untoggled source table returns zero rows and the backfill reports success having
+inserted nothing — the worst failure available, because it is silent.
+`20260815120000_branding_and_custom_domains:135` states the rule and
+`20260816150100_reporting_attribution_backfill` follows it for two read-only
+tables.
+
+This is written as a rule here because the local and CI databases both run
+migrations as the initdb superuser, so the toggles are inert there and no test
+can catch a missing one. See Amendment 2.
+
 ### 1. Expand — TAR-819, shipped additive
 
 Create `channels` and `contact_identities`. Insert one `channels` row per
@@ -419,9 +467,14 @@ from `whatsapp_account_id`. Create the successor unique
 TAR-820 flips a built-and-analysed index rather than building one under a live
 inbox. `contacts.phone_e164` `DROP NOT NULL` — additive, and moved here from the
 old step 2, since relaxing a constraint refuses no write. Add
-`ChannelKind`/`ChannelStatus` to `packages/contracts`. Backfill the entitlement
-write sites from Decision 4. **No application code reads the new columns** —
-that is this migration's acceptance criterion.
+`ChannelKind`/`ChannelStatus` to `packages/contracts`. Backfill the five
+entitlement write sites from Decision 4. **No application code reads the new
+columns** — that is this migration's acceptance criterion.
+
+Per rule 0, the toggle list is five tables: `channels`, `contact_identities` and
+`conversations` (written) plus `whatsapp_accounts` and `contacts` (read). Every
+backfill closes with a count assertion against its source, so an empty result
+raises instead of committing.
 
 Requires a manual `VACUUM (ANALYZE) "public"."conversations"` after applying —
 see Amendment 1.3.
@@ -430,16 +483,19 @@ see Amendment 1.3.
 
 Every change here is gated on TAR-820's code being deployed in the same release:
 
-- **Re-run the expand migration's backfill block, verbatim and first.** Expand's
-  backfills are a point-in-time snapshot; rows written between the two releases
-  are not tracked forward, and no trigger keeps them in step (a trigger would be
-  a second writer for TAR-820 to remove, for a table nothing reads). This is
-  three backfills, not one, and the order is load-bearing: `channels` rows for
-  numbers connected during the window, then `contact_identities` rows for
-  contacts created during it, then `conversations.channel_id` for threads opened
-  during it. The block is idempotent by construction — `ON CONFLICT DO NOTHING`
-  on both inserts, `WHERE channel_id IS NULL` on the update — so re-running it is
-  safe and is the only correct way to do this.
+- **Re-run the expand migration's backfill block, first, before anything
+  tightens.** Expand's backfills are a point-in-time snapshot; rows written
+  between the two releases are not tracked forward, and no trigger keeps them in
+  step (a trigger would be a second writer for TAR-820 to remove, for a table
+  nothing reads). This is three backfills, and the order is load-bearing:
+  `channels` rows for numbers connected during the window, then
+  `contact_identities` rows for contacts created during it, then
+  `conversations.channel_id` for threads opened during it. The block is
+  idempotent by construction — `ON CONFLICT DO NOTHING` on both inserts,
+  `WHERE channel_id IS NULL` on the update — so re-running it is safe and is the
+  only correct way to do this. Re-run the block **as corrected**, carrying rule
+  0's five-table toggle and the count assertions; a re-run that reads through
+  `FORCE` finds nothing and tightens over a gap.
 - `conversations.channel_id` `NOT NULL`.
 - `whatsapp_accounts.id` becomes an FK to `channels.id`. **Implementation
   constraint:** the connect path must write the `channels` row and the
@@ -738,81 +794,71 @@ placement — or moving it earlier — is the open decision.
 
 ---
 
-## Amendment 2 — the fifth entitlement write site
+## Amendment 2 — the RLS toggle rule, and why no test can hold it
 
-**Author**: Database Specialist, from a Senior Code Reviewer finding on PR #250.
-**Date**: 2026-08-23. **Status**: proposed — raised for the Architect, applied in
-the migration because leaving it out is a defect either way.
+**Author**: Architect, from a Senior Code Reviewer finding on PR #250.
+**Date**: 2026-08-23. **Status**: accepted.
 
-**Decision 4's list of four write sites should be five.** It names existing
-`tenant_entitlements` rows, the column default, `TenantProvisioningService` and
-`UNCAPPED_ENTITLEMENTS` / the seed plans. It does not name **`plans.entitlements`**,
-and without it the first four do not survive contact with the billing system.
+TAR-819's expand migration toggled `NO FORCE ROW LEVEL SECURITY` on its three
+write targets and not on the two tables it reads, `whatsapp_accounts` and
+`contacts`. Both carry `FORCE` and the `tenant_isolation` policy, and no
+migration sets `app.tenant_id`. Reproduced on `postgres:16-alpine` with a
+non-superuser owner: the source holds a row, the owner sees none, the
+`INSERT … SELECT` reports zero and succeeds. Fixed in PR #250; rule 0 in the
+Migration strategy section is now where it is stated for future work.
 
-`SubscriptionSyncService.copyEntitlements` **replaces**
-`tenant_entitlements.entitlements` wholesale from `plans.entitlements`, inside
-the transaction that applies a subscription — that is the billing contract's own
-decision 4, and it is what makes a purchased plan's limits take effect
-immediately. So a catalogue row that predates this release overwrites the tenant
-backfill with an array carrying no `channel_whatsapp`, and the tenant silently
-loses a capability nobody removed. Once TAR-821's fail-closed gate lands, the
-next Polar webhook for a paying tenant refuses WhatsApp connect — precisely the
-day-one breakage decision 4 counts write sites to prevent.
+**The part that outlives the fix.** Nothing in the test suite can catch this
+class. `docker-compose.yml` sets `POSTGRES_USER: whatsappcrm`, the container's
+initdb superuser, so local and CI databases bypass RLS outright and every toggle
+in every migration is inert — including the assertion in
+`channel-schema.int-spec.ts` that claims to prove the toggle matters, and
+including the 120 000-row verification that reported success. A migration is the
+one place in this codebase where the tests run as a role the production code
+never uses.
 
-Seed data cannot stand in for it: `db:seed` is in neither `preDeployCommand` in
-`render.yaml`, so an environment carrying `plans` rows from before this release
-is never re-seeded. `20260822130000_billing_polar_provider_ids` is the precedent
-and argues the same case in its own section 3, noting that the contract's delta
-list did not name `plans.entitlements` either.
+**Unresolved and load-bearing:** `render.yaml:99` asserts that the migration
+owner on a managed instance _is_ a superuser, which if true makes this class
+latent everywhere the app currently deploys, while
+`20260815120000_branding_and_custom_domains:135` asserts the opposite as a rule
+migrations must follow. The repository states both. This is settled by one query
+against the real dev database —
+`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user` run as
+the migration role — and `rolbypassrls` is the attribute that decides it, not
+`rolsuper` alone. Until someone runs it, migrations follow rule 0, because rule 0
+is correct under both answers and costs two lines.
 
-`20260823140100_channel_entitlement_features` section 3 does it, over every plan
-including inactive ones — `is_active` governs what may be bought, and
-`copyEntitlements` reads the row the subscription names.
+**Recommended, not yet scoped:** give the local and CI databases a non-superuser
+`migrator` role and run `migrate deploy` as it. It is the only change that closes
+the class rather than catching instances of it, and it makes
+`verify-tenant-isolation.sql` mean what it claims. Until then, every backfill
+closes with a count assertion against its source, which catches the symptom where
+it happens.
 
-**For the Architect:** the count in decision 4 is the part that needs the ruling.
-TAR-821 inherits the hole if the list stays at four.
+### Implementation note — a count assertion does not catch this one
 
-## Amendment 3 — the backfill's RLS toggle covers reads, not only writes
+**Author**: Database Specialist, 2026-08-23. **Status**: proposed, raised for the
+Architect. Recorded here because the closing sentence above is the instruction
+TAR-820 inherits, and it is measured to be false for the failure this amendment
+is about.
 
-**Author**: Database Specialist, from a Senior Code Reviewer finding on PR #250.
-**Date**: 2026-08-23. **Status**: fixed in `20260823140000`. Recorded here
-because **TAR-820 re-runs this block verbatim** and would have inherited it.
+A count assertion against the source is the natural guard and it was the first
+thing tried. It passes the broken case. `channels` vs `whatsapp_accounts` reads
+**both sides through the same blindfold**: the source is hidden by `FORCE`, the
+count comes back `0`, the destination is legitimately `0`, and `0 = 0` commits.
+Measured on the same non-superuser fixture that produced the empty backfill
+above.
 
-`FORCE ROW LEVEL SECURITY` binds the **table owner**, and the owner is the role a
-migration runs as. The expand migration's backfill toggled `NO FORCE` on the
-three tables it writes and left `whatsapp_accounts` and `contacts` — which it
-only reads — FORCEd. With no `app.tenant_id` set, those `SELECT`s return zero
-rows, so `INSERT … SELECT` inserts nothing **and reports success**.
+What does catch it is asserting the **precondition** rather than the outcome —
+read `pg_class.relforcerowsecurity` for every table the block touches, before
+anything reads a row, and raise naming the tables still forced. The catalog is
+the one thing RLS cannot hide, so this is true under a superuser owner too, where
+no behavioural check can distinguish a complete toggle list from an empty one.
+`20260823140000` does both, in that order, and
+`channel_backfill_toggles_every_table_it_reads` in `channel-schema.int-spec.ts`
+asserts the same rule against the migration's text.
 
-Measured on `postgres:16-alpine`, database owned by a non-superuser, migrations
-applied as that role, one WhatsApp number and two contacts already present:
-
-| toggle covers  | `channels` | `contact_identities` | deploy              |
-| -------------- | ---------- | -------------------- | ------------------- |
-| writes only    | 0          | 0                    | **committed clean** |
-| writes + reads | 1          | 2                    | committed clean     |
-
-Two things this taught that are worth carrying forward:
-
-1. **A row-count assertion is not enough on its own.** The first fix added one —
-   `channels` vs `whatsapp_accounts` — and it passed the broken case, because it
-   counts the source through the same blindfold: both sides read 0 and `0 = 0`.
-   The guard that works reads `pg_class.relforcerowsecurity` **before anything
-   reads a row**, because the catalog is the one thing RLS cannot hide.
-2. **No environment this project runs can catch it behaviourally.**
-   `docker-compose.yml` connects as the container's initdb superuser and
-   `render.yaml` records that a managed instance's migration owner is one too;
-   a superuser bypasses RLS outright, so the toggles are inert and a complete
-   list is indistinguishable from an empty one. Both guards are therefore
-   catalog-driven: the migration's own precondition check, and
-   `channel_backfill_toggles_every_table_it_reads` in `channel-schema.int-spec.ts`,
-   which asserts the block's text against the catalog.
-
-**For the Architect, one thing to settle rather than assume:** `render.yaml`
-states the migration owner on a managed instance _is_ a superuser, and
-`20260815120000_branding_and_custom_domains` states that "the migration owner is
-**not** exempt from FORCE". Both are in the repository and they point opposite
-ways. The rule the migrations follow is the conservative one — every table a
-backfill touches gets toggled — and it costs nothing when the owner happens to be
-a superuser. But which is true decides whether this class of defect is latent or
-live, and it should be written down once.
+So the count assertion stays and its job is narrower than the sentence above
+gives it: it catches a source that is **visible but silently narrowed** — a
+predicate that excludes more than it means to, a join that drops rows, a conflict
+target that swallows them. It does not catch a source that is hidden, and
+TAR-820's re-run should carry the catalog precondition check for that.

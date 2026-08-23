@@ -100,6 +100,25 @@ projects:
               # entirely — every tenant would see every row. These are built from
               # the same host as DATABASE_URL but with the app role's own
               # credentials, which the pre-deploy hook sets from the passwords below.
+              #
+              # ⚠️ **The superuser claim above is unverified** (TAR-819, ADR 0013
+              # Amendment 2). `20260815120000_branding_and_custom_domains:135`
+              # asserts the opposite as a rule migrations must follow — that the
+              # migration owner is *not* exempt from `FORCE ROW LEVEL SECURITY` —
+              # and nobody has checked which is true here. Settle it with one
+              # query against this environment, as the role `DATABASE_URL` names:
+              #
+              #     SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
+              #
+              # `rolbypassrls` is the attribute that decides it, not `rolsuper`
+              # alone. Correct or qualify this comment with the result.
+              #
+              # Nothing above depends on the answer: these two variables are
+              # built from the app roles' own credentials either way, which is
+              # right under both readings. What the answer decides is whether a
+              # migration that reads a FORCE-RLS table without toggling it fails
+              # silently on this instance. Migrations follow the conservative
+              # rule meanwhile.
               - key: APP_DATABASE_URL
                 sync: false
               - key: SYSTEM_DATABASE_URL
@@ -308,6 +327,25 @@ projects:
               # a managed instance is a superuser and so skips row-level security
               # entirely. Built from the same host as DATABASE_URL but with the app
               # role's own credentials, which the pre-deploy hook sets.
+              #
+              # ⚠️ **The superuser claim above is unverified** (TAR-819, ADR 0013
+              # Amendment 2). `20260815120000_branding_and_custom_domains:135`
+              # asserts the opposite as a rule migrations must follow — that the
+              # migration owner is *not* exempt from `FORCE ROW LEVEL SECURITY` —
+              # and nobody has checked which is true here. Settle it with one
+              # query against this environment, as the role `DATABASE_URL` names:
+              #
+              #     SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
+              #
+              # `rolbypassrls` is the attribute that decides it, not `rolsuper`
+              # alone. Correct or qualify this comment with the result.
+              #
+              # Nothing above depends on the answer: these two variables are
+              # built from the app roles' own credentials either way, which is
+              # right under both readings. What the answer decides is whether a
+              # migration that reads a FORCE-RLS table without toggling it fails
+              # silently on this instance. Migrations follow the conservative
+              # rule meanwhile.
               - key: APP_DATABASE_URL
                 sync: false
               - key: SYSTEM_DATABASE_URL
@@ -457,6 +495,25 @@ projects:
               # a managed instance is a superuser and so skips row-level security
               # entirely. Built from the same host as DATABASE_URL but with the app
               # role's own credentials, which the pre-deploy hook sets.
+              #
+              # ⚠️ **The superuser claim above is unverified** (TAR-819, ADR 0013
+              # Amendment 2). `20260815120000_branding_and_custom_domains:135`
+              # asserts the opposite as a rule migrations must follow — that the
+              # migration owner is *not* exempt from `FORCE ROW LEVEL SECURITY` —
+              # and nobody has checked which is true here. Settle it with one
+              # query against this environment, as the role `DATABASE_URL` names:
+              #
+              #     SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
+              #
+              # `rolbypassrls` is the attribute that decides it, not `rolsuper`
+              # alone. Correct or qualify this comment with the result.
+              #
+              # Nothing above depends on the answer: these two variables are
+              # built from the app roles' own credentials either way, which is
+              # right under both readings. What the answer decides is whether a
+              # migration that reads a FORCE-RLS table without toggling it fails
+              # silently on this instance. Migrations follow the conservative
+              # rule meanwhile.
               - key: APP_DATABASE_URL
                 sync: false
               - key: SYSTEM_DATABASE_URL
