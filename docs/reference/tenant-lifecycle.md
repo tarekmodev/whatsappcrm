@@ -305,9 +305,10 @@ the difference is what a default local setup actually gets:
   `cancel`/`cancel/undo`/`delete` writes are live in
   `apps/api/src/tenancy/lifecycle/tenant-lifecycle.controller.ts`.
 - `/onboarding` does not. `GET /v1/tenant/onboarding` and its step `PATCH` exist only in the
-  fixtures — TAR-405 is the endpoint — so with the flag off the route renders its error state
-  rather than a checklist. Turning the flag back on is the way to work on that screen, and the
-  console says so on screen while it is on (`components/env/MockModeBadge.tsx`).
+  fixtures — TAR-831 tracks the missing endpoint — so with the flag off the route renders its
+  error state rather than a checklist. Turning the flag back on is the way to work on that
+  screen, and the console says so on screen while it is on
+  (`components/env/MockModeBadge.tsx`).
 
 ## Errors
 
