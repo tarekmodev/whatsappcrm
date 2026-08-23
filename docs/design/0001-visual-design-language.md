@@ -68,6 +68,23 @@ Three layers, one direction, and no component may skip a step:
 A component that reads a primitive has skipped the layer that makes the theme swappable,
 because the dark theme and every future tenant theme re-declare **roles**, not scales.
 
+### What is allowed to re-declare a role
+
+Three things, and the list is closed:
+
+| Selector               | Re-declares          | Owner                        |
+| ---------------------- | -------------------- | ---------------------------- |
+| `[data-theme='dark']`  | Colour roles         | This document                |
+| A tenant's brand block | The accent roles     | TAR-29, `brand-style.ts`     |
+| `[lang\|='ar']`        | The body font family | TAR-801, extended by TAR-806 |
+
+Each moves **values**. None of them adds a role, removes one, or is visible to a
+component — which is the property that lets a fourth be added later without a component
+changing. A branch that declared a role the base layer does not have would be a role
+every screen outside that branch reads as undefined; `styles/tokens/tokens.test.ts`
+asserts the Arabic branch does not, and the same assertion is what a future locale
+branch inherits.
+
 ## Colour
 
 Neutral grey and white carry the product. One accent carries action. Nothing else is
@@ -256,6 +273,39 @@ heading — a screen that reaches for it to make a title bigger has the wrong to
 
 Never set a font size in a component. If a size is missing from the scale, add it to the
 scale.
+
+### The Arabic face (TAR-801)
+
+Figtree carries no Arabic glyphs. Left alone, an Arabic console would render in whatever
+face the reader's operating system happens to substitute — a different one on Windows,
+macOS and Android, which is the single typographic decision a token layer exists to take
+away from a machine.
+
+IBM Plex Sans Arabic, self-hosted the same way and for the same reasons, is the answer,
+and it is reached through exactly one declaration:
+
+```css
+[lang|='ar'] {
+  --font-family-body: var(--scale-font-family-arabic);
+}
+```
+
+Three things about it are deliberate.
+
+- **`[lang|='ar']`, not `[lang='ar']`.** A real `Accept-Language` sends `ar-SA` or
+  `ar-EG`. A branch matching only the bare tag would drop most Arabic readers back to a
+  system font, and would do it silently.
+- **Family only.** The branch moves the family and nothing else. It is not the place for
+  a size or a leading correction — if Arabic needs one, it is a change to the scale, made
+  against the reference and measured, not a second set of sizes living under a locale.
+- **It is not preloaded.** The face is declared in the root layout, so `preload: true`
+  would be a download on every route for a language the document does not yet render.
+  `app/layout.tsx` still emits `lang="en" dir="ltr"`; TAR-806 resolves the locale per
+  request and turns the preload on with it.
+
+`dir`, the logical-property sweep and the mirrored skeleton shimmer are TAR-806's. This
+is the token half, landed first so that story switches a language rather than a
+stylesheet.
 
 ## Spacing and shape
 
