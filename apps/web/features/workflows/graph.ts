@@ -1,62 +1,65 @@
-import type { WorkflowAction, WorkflowCondition, WorkflowTrigger } from '@whatsappcrm/contracts';
-import type { WorkflowDraft } from './workflow-form';
+import {
+  WORKFLOW_ACTION_TYPES,
+  WORKFLOW_CONDITION_TYPES,
+  workflowReferenceUses,
+  type WorkflowAction,
+  type WorkflowActionOutcome,
+  type WorkflowActionType,
+  type WorkflowCondition,
+  type WorkflowConditionType,
+  type WorkflowReference,
+  type WorkflowTestResponse,
+  type WorkflowTrigger,
+} from '@whatsappcrm/contracts';
+import type { Content } from '@/lib/content';
+import { blankAction, blankCondition } from './builder';
+import {
+  createReferenceLookup,
+  describeAction,
+  describeCondition,
+  describeTrigger,
+  type WorkflowVocabulary,
+} from './presentation';
+import type { WorkflowDraft, WorkflowDraftErrors } from './workflow-form';
 
 /**
- * The node/edge shape the workflow canvas edits, and the two functions that
- * carry it to and from `WorkflowDraft` (TAR-812, against TAR-809's contract).
+ * The workflow canvas's projection layer — TAR-809's Phase A, implemented.
  *
- * **This module knows nothing about any graph library.** It is plain data and
- * pure functions, so the canvas's persistence behaviour — that an existing
- * workflow survives a load/save round trip byte-identically — is testable
- * without a DOM, without a renderer, and without having chosen a renderer. A
- * `react-flow` (or other) adapter maps *this* onto that library's `Node`/`Edge`
- * types; it does not replace it. That is what keeps the library a rendering
- * decision rather than a persistence one.
+ * **The draft is the state; the graph is a picture of it.** `toGraph` is a total,
+ * deterministic function of a `WorkflowDraft` plus its annotations, and every
+ * mutation here takes a draft and returns a draft. Nothing edits a graph. That
+ * is what makes the canvas impossible to desynchronise from what will be saved:
+ * there is one source of truth and the other thing is recomputed.
  *
- * ## What the graph may be
+ * **This module knows nothing about `@xyflow/react`.** No import, no type. The
+ * renderer adapts `WorkflowGraphNode` to that library's `Node`; it does not
+ * replace it. TAR-809 requires the containment (the library is imported only
+ * from `workflow-canvas.lazy.tsx`) and it starts here.
  *
- * ADR 0009's grammar is a **strictly linear chain**, and this module refuses
- * anything else:
+ * ## Node identity is positional
  *
- * ```
- * trigger → condition* → action+
- * ```
+ * `condition:2` **is** `draft.conditions[2]`. No generated id, no reconciliation
+ * table. Deleting `condition:1` renumbers everything below it, which is correct
+ * rather than merely tolerable: the API's error paths (`conditions.2.tagIds`),
+ * its dry-run results (`{ index: 2 }`) and `validateWorkflowDraft`'s
+ * `byCondition` / `byAction` keys are all positional too, so every annotation in
+ * `toGraph` lands on its node by construction. A generated id would need a
+ * translation table to buy back exactly what positional identity gives free.
  *
- * One trigger; conditions that all must hold (`0009` decision 4 — a supervisor
- * wanting OR writes a second workflow); actions executed in the declared order.
- * There is no branch, no join and no free edge to author, because there is no
- * grammar behind one. A canvas that let a supervisor draw a fork would be
- * offering an expression the API cannot store — the failure this module exists
- * to make impossible rather than to report late.
+ * ## The grammar is a chain, so layout is arithmetic
  *
- * ## One source of truth for order
- *
- * **`nodes` order is the workflow's order. `edges` are derived from it and carry
- * no independent meaning.**
- *
- * Worth stating flatly, because the alternative is subtly broken. An earlier
- * revision read the chain by *walking edges* on the argument that edges are what
- * a supervisor sees — but every editing operation regenerates edges from the
- * node order, so a graph whose two halves disagreed would read one way before an
- * edit and the other way after it. The saved order would then depend on whether
- * the supervisor happened to touch anything first, which is the worst kind of
- * data loss: silent, and invisible until the workflow ran.
- *
- * The reason edges can be derived at all is that this grammar gives the
- * supervisor nothing to rewire — the chain has no branch to author, so an edge
- * is a drawing of the order rather than a statement of it. `draftFromGraph`
- * still *checks* the two agree and refuses (`edges_out_of_sync`) when they do
- * not, which turns a renderer that writes back nodes without rebuilding edges
- * into a loud failure instead of a quiet reordering.
+ * ADR 0009 gives one trigger, conditions that all must hold, and an ordered
+ * action list — no branch, no OR, nothing to route. `layoutSpine` is therefore
+ * the whole layout engine, and TAR-809 rejected `dagre`/`elkjs` on exactly that
+ * ground. Coordinates are derived on every render and never persisted (TAR-809
+ * decision 3), so free node placement is deliberately not a feature: a dragged
+ * action snaps back to its computed slot with the array reordered underneath.
  *
  * ## What it deliberately does not check
  *
- * Whether a condition or action is *complete* — a notify action with no
- * recipient, an empty tag list, an out-of-range `minutes`. That is
- * `validateWorkflowDraft`'s, and stating it twice is how two readings of one
- * rule drift apart. This module owns **topology**; `workflow-form.ts` owns
- * **content**. `draftFromGraph` therefore hands back a draft that is structurally
- * sound and may still be invalid, exactly as `draftFromWorkflow` does.
+ * Whether a condition or action is *complete*. That is `validateWorkflowDraft`'s,
+ * and stating it twice is how two readings of one rule drift apart. This module
+ * *carries* those messages onto nodes; it never re-derives them.
  */
 
 // ---------------------------------------------------------------------------
@@ -68,23 +71,54 @@ export const WORKFLOW_NODE_KINDS = ['trigger', 'condition', 'action'] as const;
 export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
 
 /**
- * Opaque, and opaque on purpose.
+ * `trigger`, or a kind and an index into the draft's matching array.
  *
- * Nothing may parse an id to learn a node's kind or position: the whole reason
- * ids exist is that a node keeps its identity — its selection, its focus, its
- * place in the undo stack — while its index moves underneath it. Read
- * `node.kind` and the node's position in `nodes`, never the string.
+ * A template-literal type rather than a bare `string`, so a caller cannot invent
+ * `condition-2` or `action:first` and discover it at runtime.
  */
-export type WorkflowNodeId = string;
+export type WorkflowNodeId = 'trigger' | `condition:${number}` | `action:${number}`;
 
-export type WorkflowGraphNode =
-  | { readonly kind: 'trigger'; readonly id: WorkflowNodeId; readonly trigger: WorkflowTrigger }
+/** The trigger's node id, named so no caller writes the literal. */
+export const TRIGGER_NODE_ID = 'trigger';
+
+/**
+ * A point in the canvas's own coordinate space.
+ *
+ * Declared here rather than imported from the renderer: it is two numbers, and
+ * importing `XYPosition` from `@xyflow/react` would put the library in this
+ * module's import graph for nothing — the containment TAR-809 asks for is only
+ * as good as its least interesting import.
+ */
+export interface XYPosition {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** What a dry run said about one node. */
+export type NodeTestResult =
+  | { readonly kind: 'condition'; readonly held: boolean; readonly reason: string | null }
   | {
-      readonly kind: 'condition';
-      readonly id: WorkflowNodeId;
-      readonly condition: WorkflowCondition;
-    }
-  | { readonly kind: 'action'; readonly id: WorkflowNodeId; readonly action: WorkflowAction };
+      readonly kind: 'action';
+      readonly outcome: WorkflowActionOutcome;
+      /** The server's resolved sentence: `Reassign to team "Escalations"`. */
+      readonly describes: string;
+    };
+
+export interface WorkflowGraphNode {
+  readonly id: WorkflowNodeId;
+  readonly kind: WorkflowNodeKind;
+  /** Index into `draft.conditions` / `draft.actions`; null for the trigger. */
+  readonly index: number | null;
+  readonly position: XYPosition;
+  /** One-line summary, from `presentation.ts`. */
+  readonly summary: string;
+  /** Draft-validation message for this node, from `WorkflowDraftErrors`. */
+  readonly error: string | null;
+  /** Taxonomy ids this node names that no longer resolve. */
+  readonly brokenReferences: readonly WorkflowReference[];
+  /** Dry-run outcome, when a test has been run against this draft. */
+  readonly testResult: NodeTestResult | null;
+}
 
 export interface WorkflowGraphEdge {
   readonly id: string;
@@ -93,372 +127,404 @@ export interface WorkflowGraphEdge {
 }
 
 export interface WorkflowGraph {
-  /**
-   * The trigger, then every condition, then every action — and **the order the
-   * workflow is saved in**. See the module note: this is the source of truth,
-   * not one of two.
-   */
   readonly nodes: readonly WorkflowGraphNode[];
-  /**
-   * Exactly `nodes.length - 1` edges, each joining consecutive nodes. Derived
-   * from `nodes` and never authored: a caller that wants a different order moves
-   * a *node*.
-   */
   readonly edges: readonly WorkflowGraphEdge[];
-  /**
-   * The next id to mint, carried rather than derived.
-   *
-   * Deriving it would mean parsing ids back into numbers, which is the one thing
-   * `WorkflowNodeId` promises nobody does. Carrying it also keeps every function
-   * here pure and **hydration-safe**: no `crypto.randomUUID`, no `Math.random`,
-   * no counter in module scope that a second server render would continue from.
-   * A graph built from the same draft is identical on the server and on the
-   * client, which is what lets the canvas render before it mounts.
-   */
-  readonly nextSeq: number;
 }
 
 /**
- * Why a graph could not be read back as a workflow. Topology only — see the
- * module note on what this does not check.
+ * Everything `toGraph` overlays on the spine beyond the draft itself.
  *
- * A code rather than a message: the canvas maps it to copy through the content
- * layer, and these are also the states its own editing operations must never
- * produce. Every one of them is reachable only by a bug or by a hand-built
- * graph, which is why they are worth naming individually — "invalid graph" would
- * tell whoever hits one nothing.
+ * TAR-809 lists `errors`, `references` and `test`. `vocabulary` and `content` are
+ * here because the summaries come from `presentation.ts`, whose `describe*`
+ * functions take a `ReferenceLookup` and a `Content` — the spec says the summary
+ * comes from there without restating their arguments. Nothing else is added.
  */
-export type WorkflowGraphProblem =
-  | 'missing_trigger'
-  | 'multiple_triggers'
-  | 'trigger_not_first'
-  | 'condition_after_action'
-  | 'edges_out_of_sync';
-
-export type WorkflowGraphRead =
-  | {
-      readonly status: 'ok';
-      readonly draft: WorkflowDraft;
-      /**
-       * The condition nodes' ids, in the order their conditions appear in
-       * `draft.conditions`, and the same for actions.
-       *
-       * Handed back because `validateWorkflowDraft` reports failures as
-       * `byCondition` / `byAction` keyed by **index** (`workflow-form.ts`), and a
-       * canvas renders by node id. Without these, putting "choose who to notify"
-       * on the node that caused it means re-deriving the walk order at the call
-       * site — a second reading of the order, which is exactly what the module
-       * note exists to prevent.
-       */
-      readonly conditionIds: readonly WorkflowNodeId[];
-      readonly actionIds: readonly WorkflowNodeId[];
-    }
-  | { readonly status: 'invalid'; readonly problem: WorkflowGraphProblem };
-
-// ---------------------------------------------------------------------------
-// Draft → graph
-// ---------------------------------------------------------------------------
-
-/**
- * Lays a draft out as a chain.
- *
- * Ids are minted from a counter in chain order, so this is a pure function of
- * its argument: the same draft always yields the same graph. Condition and
- * action order is preserved rather than normalised — action order *is* execution
- * order (0009), and condition order, though semantically irrelevant to an AND,
- * is what makes a load/edit-nothing/save round trip produce the payload the
- * workflow already had instead of a reshuffled one that reads as a real change
- * in the audit log.
- */
-export function graphFromDraft(draft: WorkflowDraft): WorkflowGraph {
-  const nodes: WorkflowGraphNode[] = [{ kind: 'trigger', id: nodeId(0), trigger: draft.trigger }];
-
-  for (const condition of draft.conditions) {
-    nodes.push({ kind: 'condition', id: nodeId(nodes.length), condition });
-  }
-
-  for (const action of draft.actions) {
-    nodes.push({ kind: 'action', id: nodeId(nodes.length), action });
-  }
-
-  return { nodes, edges: chainEdges(nodes), nextSeq: nodes.length };
+export interface WorkflowGraphAnnotations {
+  readonly errors: WorkflowDraftErrors;
+  /** `WorkflowResponse.references`; empty for a workflow that has never been saved. */
+  readonly references: readonly WorkflowReference[];
+  readonly test: WorkflowTestResponse | null;
+  readonly vocabulary: WorkflowVocabulary;
+  readonly content: Content;
 }
 
 // ---------------------------------------------------------------------------
-// Graph → draft
+// Layout
+// ---------------------------------------------------------------------------
+
+/** Node box and spacing, in canvas units. The only geometry this module owns. */
+export const NODE_WIDTH = 320;
+export const NODE_HEIGHT = 88;
+export const NODE_GAP = 40;
+
+const NODE_PITCH = NODE_HEIGHT + NODE_GAP;
+
+/**
+ * One column, top to bottom.
+ *
+ * Vertical rather than horizontal on TAR-809 decision 4: React Flow's viewport
+ * transform is not `dir`-aware, so a left-to-right spine would need its edge
+ * geometry mirrored for TAR-806's Arabic pass. "The next step is below" means
+ * the same thing in both directions.
+ */
+export function layoutSpine(nodeCount: number): readonly XYPosition[] {
+  return Array.from({ length: Math.max(nodeCount, 0) }, (_, index) => ({
+    x: 0,
+    y: index * NODE_PITCH,
+  }));
+}
+
+/**
+ * Where a dropped action lands, as an index into `draft.actions`.
+ *
+ * `y` is the dragged node's top edge in the same space `layoutSpine` produces,
+ * measured **from the first action's slot** — the caller subtracts the action
+ * band's origin, because only the canvas knows how many condition nodes sit
+ * above it. Rounding rather than flooring so a node dragged more than half a
+ * slot moves, which is what the gesture looks like it should do.
+ */
+export function dropIndex(y: number, actionCount: number): number {
+  if (actionCount <= 0) {
+    return 0;
+  }
+
+  return clamp(Math.round(y / NODE_PITCH), 0, actionCount - 1);
+}
+
+// ---------------------------------------------------------------------------
+// Projection
 // ---------------------------------------------------------------------------
 
 /**
- * Reads the workflow back out of the chain.
+ * The draft, as a spine with every annotation already on the right node.
  *
- * `name` and `isActive` are passed in because no node holds them. `isActive`
- * especially: the list owns the on/off switch, and a canvas that re-sent it
- * would arm a disabled workflow the moment somebody nudged a node
- * (`WorkflowDraft.isActive` says the same).
+ * Total and deterministic: no `Date.now()`, no `Math.random()`, no id counter, so
+ * the server and the client build the same graph and the canvas can render
+ * before it mounts.
  */
-export function draftFromGraph(
-  graph: WorkflowGraph,
-  { name, isActive }: { readonly name: string; readonly isActive: boolean },
-): WorkflowGraphRead {
-  const triggers = nodesOfKind(graph, 'trigger');
-  const trigger = triggers[0];
+export function toGraph(
+  draft: WorkflowDraft,
+  annotations: WorkflowGraphAnnotations,
+): WorkflowGraph {
+  const { errors, references, test, vocabulary, content } = annotations;
+  const names = createReferenceLookup(references, vocabulary);
+  const broken = brokenReferencesByNode(draft, references);
+  const positions = layoutSpine(1 + draft.conditions.length + draft.actions.length);
 
-  if (trigger === undefined) {
-    return invalid('missing_trigger');
-  }
-
-  if (triggers.length > 1) {
-    return invalid('multiple_triggers');
-  }
-
-  // Nothing runs before the event that starts the workflow, so the trigger is
-  // the head of the chain or the graph has no meaning.
-  if (graph.nodes[0] !== trigger) {
-    return invalid('trigger_not_first');
-  }
-
-  const conditions = nodesOfKind(graph, 'condition');
-  const actions = nodesOfKind(graph, 'action');
-
-  // Conditions are a set and actions a sequence, so the boundary between them is
-  // the only ordering the bands have to enforce. A condition below an action
-  // would read as "check this after doing that", which the engine cannot honour.
-  if (!isBandOrdered(graph.nodes)) {
-    return invalid('condition_after_action');
-  }
-
-  if (!edgesMatchNodes(graph)) {
-    return invalid('edges_out_of_sync');
-  }
-
-  return {
-    status: 'ok',
-    draft: {
-      name,
-      trigger: trigger.trigger,
-      conditions: conditions.map((node) => node.condition),
-      actions: actions.map((node) => node.action),
-      isActive,
+  const nodes: WorkflowGraphNode[] = [
+    {
+      id: TRIGGER_NODE_ID,
+      kind: 'trigger',
+      index: null,
+      position: positionAt(positions, 0),
+      summary: describeTrigger(draft.trigger, content),
+      error: errors.trigger ?? null,
+      brokenReferences: broken.get(TRIGGER_NODE_ID) ?? [],
+      testResult: null,
     },
-    conditionIds: conditions.map((node) => node.id),
-    actionIds: actions.map((node) => node.id),
-  };
+  ];
+
+  draft.conditions.forEach((condition, index) => {
+    const id = conditionNodeId(index);
+
+    nodes.push({
+      id,
+      kind: 'condition',
+      index,
+      position: positionAt(positions, nodes.length),
+      summary: describeCondition(condition, names, content),
+      error: errors.byCondition[index] ?? null,
+      brokenReferences: broken.get(id) ?? [],
+      testResult: conditionTestResult(test, index),
+    });
+  });
+
+  draft.actions.forEach((action, index) => {
+    const id = actionNodeId(index);
+
+    nodes.push({
+      id,
+      kind: 'action',
+      index,
+      position: positionAt(positions, nodes.length),
+      summary: describeAction(action, names, content),
+      error: errors.byAction[index] ?? null,
+      brokenReferences: broken.get(id) ?? [],
+      testResult: actionTestResult(test, index),
+    });
+  });
+
+  return { nodes, edges: chainEdges(nodes) };
 }
 
-/** `[trigger, ...conditions, ...actions]`, with no condition below an action. */
-function isBandOrdered(nodes: readonly WorkflowGraphNode[]): boolean {
-  let seenAction = false;
+/**
+ * The broken references each node names, keyed by node id.
+ *
+ * `workflowReferenceUses` is the contract's own map from a definition to the
+ * paths that name a taxonomy id, and `nodeIdForPath` is the same parser the
+ * server's refusal path uses — so a badge on a node and a `PATCH` refusal
+ * highlighting that node cannot disagree about which node it is.
+ */
+function brokenReferencesByNode(
+  draft: WorkflowDraft,
+  references: readonly WorkflowReference[],
+): ReadonlyMap<WorkflowNodeId, readonly WorkflowReference[]> {
+  const missing = new Map(
+    references
+      .filter((reference) => !reference.exists)
+      .map((reference) => [`${reference.kind}:${reference.id}`, reference]),
+  );
 
-  for (const node of nodes) {
-    if (node.kind === 'action') {
-      seenAction = true;
-    } else if (node.kind === 'condition' && seenAction) {
-      return false;
+  if (missing.size === 0) {
+    return new Map();
+  }
+
+  const byNode = new Map<WorkflowNodeId, WorkflowReference[]>();
+
+  for (const use of workflowReferenceUses(draft.conditions, draft.actions)) {
+    const reference = missing.get(`${use.kind}:${use.id}`);
+    const id = reference === undefined ? null : nodeIdForPath(use.path);
+
+    if (reference === undefined || id === null) {
+      continue;
+    }
+
+    const existing = byNode.get(id);
+
+    // One node can name two missing ids — a tag condition listing two removed
+    // tags — and the badge counts them, so they accumulate rather than replace.
+    if (existing === undefined) {
+      byNode.set(id, [reference]);
+    } else if (!existing.includes(reference)) {
+      existing.push(reference);
     }
   }
 
-  return true;
+  return byNode;
 }
 
-/**
- * Whether `edges` is exactly the chain `nodes` describes.
- *
- * Ids are not compared — they are derived from the endpoints, and a renderer
- * that supplies its own is not thereby wrong. The endpoints and their order are
- * the whole content of an edge here.
- */
-function edgesMatchNodes(graph: WorkflowGraph): boolean {
-  const expected = chainEdges(graph.nodes);
+function conditionTestResult(
+  test: WorkflowTestResponse | null,
+  index: number,
+): NodeTestResult | null {
+  const result = test?.conditions.find((candidate) => candidate.index === index);
 
-  if (graph.edges.length !== expected.length) {
-    return false;
-  }
+  return result === undefined
+    ? null
+    : { kind: 'condition', held: result.held, reason: result.reason };
+}
 
-  return expected.every((edge, index) => {
-    const actual = graph.edges[index];
+function actionTestResult(test: WorkflowTestResponse | null, index: number): NodeTestResult | null {
+  const result = test?.actions.find((candidate) => candidate.index === index);
 
-    return actual?.source === edge.source && actual.target === edge.target;
-  });
+  return result === undefined
+    ? null
+    : { kind: 'action', outcome: result.outcome, describes: result.describes };
 }
 
 // ---------------------------------------------------------------------------
-// Editing — the operations that keep the chain a chain
+// Mutations — each takes a draft and returns a draft
 // ---------------------------------------------------------------------------
 
 /**
- * Inserts a condition at `index` among the existing conditions.
+ * Appends a blank condition of `type`.
  *
- * Rewiring a chain around an insertion is the one piece of canvas editing that
- * is easy to get quietly wrong, so it lives here with the round-trip tests
- * rather than inside a component: every operation below rebuilds the edge list
- * from the node order, which makes an orphaned or duplicated edge unrepresentable
- * instead of merely unlikely.
- *
- * An index past the end appends, matching `Array.prototype.splice`.
+ * The blank shape comes from `builder.ts`, which already owns it and already
+ * tests it. A second set of defaults here would be the same rule written twice.
  */
-export function insertCondition(
-  graph: WorkflowGraph,
-  condition: WorkflowCondition,
-  index: number,
-): WorkflowGraph {
-  const node: WorkflowGraphNode = { kind: 'condition', id: nodeId(graph.nextSeq), condition };
-
-  return rebuild(
-    graph,
-    { conditions: spliced(nodesOfKind(graph, 'condition'), node, index) },
-    graph.nextSeq + 1,
-  );
+export function addCondition(draft: WorkflowDraft, type: WorkflowConditionType): WorkflowDraft {
+  return { ...draft, conditions: [...draft.conditions, blankCondition(type)] };
 }
 
-/** Inserts an action at `index` among the existing actions. */
-export function insertAction(
-  graph: WorkflowGraph,
-  action: WorkflowAction,
-  index: number,
-): WorkflowGraph {
-  const node: WorkflowGraphNode = { kind: 'action', id: nodeId(graph.nextSeq), action };
-
-  return rebuild(
-    graph,
-    { actions: spliced(nodesOfKind(graph, 'action'), node, index) },
-    graph.nextSeq + 1,
-  );
+/** Appends a blank action of `type`, from `builder.ts`'s shapes. */
+export function addAction(
+  draft: WorkflowDraft,
+  type: WorkflowActionType,
+  vocabulary: WorkflowVocabulary,
+): WorkflowDraft {
+  return { ...draft, actions: [...draft.actions, blankAction(type, vocabulary)] };
 }
 
 /**
- * Removes a node and closes the chain over the gap.
+ * Removes the condition or action a node stands for.
  *
- * Removing the trigger is refused rather than allowed-and-reported: every
- * workflow has exactly one and there is no editing state in which having none is
- * a step towards anything. An unknown id is a no-op — a double-click on delete
- * should not be an error.
+ * The trigger cannot be removed — every workflow has exactly one — and an index
+ * that is out of range is a no-op rather than an error, so a double-click on
+ * delete after the array already shrank does nothing instead of throwing.
  */
-export function removeNode(graph: WorkflowGraph, id: WorkflowNodeId): WorkflowGraph {
-  const node = graph.nodes.find((candidate) => candidate.id === id);
+export function removeNode(draft: WorkflowDraft, id: WorkflowNodeId): WorkflowDraft {
+  const parsed = parseNodeId(id);
 
-  if (node === undefined || node.kind === 'trigger') {
-    return graph;
+  if (parsed === null || parsed.kind === 'trigger') {
+    return draft;
   }
 
-  const remaining = nodesOfKind(graph, node.kind).filter((candidate) => candidate.id !== id);
+  if (parsed.kind === 'condition') {
+    return parsed.index >= draft.conditions.length
+      ? draft
+      : { ...draft, conditions: withoutIndex(draft.conditions, parsed.index) };
+  }
 
-  return rebuild(
-    graph,
-    node.kind === 'condition' ? { conditions: remaining } : { actions: remaining },
-    graph.nextSeq,
-  );
+  return parsed.index >= draft.actions.length
+    ? draft
+    : { ...draft, actions: withoutIndex(draft.actions, parsed.index) };
 }
 
 /**
- * Moves a node to `indexWithinKind` — a position **among the nodes of its own
- * kind**, not a position on the canvas.
+ * Replaces what a node holds.
  *
- * The distinction matters and the name carries it, because the two coincide only
- * when there are no conditions: in a graph of one trigger, two conditions and
- * three actions, dropping an action "just below the trigger" is canvas position
- * 1 but `indexWithinKind` 0. The caller converts; a renderer's drop index passed
- * through raw would move the right node to the wrong place with no error.
- *
- * Moving between kinds is not a move this grammar has, so an out-of-range index
- * is clamped into the node's own band rather than refused — the supervisor gets
- * the nearest legal position and `draftFromGraph` never sees a
- * `condition_after_action` shape at all. The trigger does not move.
+ * `value`'s kind has to match the node's, and it is checked rather than trusted:
+ * the three `type` vocabularies are disjoint, so a trigger handed to a condition
+ * node is detectable here instead of at the API's refusal. A mismatch — or an
+ * index past the end — returns the draft **unchanged**, the same no-op
+ * `removeNode` gives, so a detail panel holding a stale id cannot half-apply an
+ * edit.
  */
-export function moveNode(
-  graph: WorkflowGraph,
+export function replaceNode(
+  draft: WorkflowDraft,
   id: WorkflowNodeId,
-  indexWithinKind: number,
-): WorkflowGraph {
-  const node = graph.nodes.find((candidate) => candidate.id === id);
+  value: WorkflowTrigger | WorkflowCondition | WorkflowAction,
+): WorkflowDraft {
+  const parsed = parseNodeId(id);
 
-  if (node === undefined || node.kind === 'trigger') {
-    return graph;
+  if (parsed === null) {
+    return draft;
   }
 
-  const sameKind = nodesOfKind(graph, node.kind);
-  const from = sameKind.findIndex((candidate) => candidate.id === id);
-  const to = clamp(indexWithinKind, 0, sameKind.length - 1);
-
-  if (from === to) {
-    return graph;
+  if (parsed.kind === 'trigger') {
+    return isTrigger(value) ? { ...draft, trigger: value } : draft;
   }
 
-  const reordered = spliced(
-    sameKind.filter((candidate) => candidate.id !== id),
-    node,
-    to,
-  );
+  if (parsed.kind === 'condition') {
+    return isCondition(value) && parsed.index < draft.conditions.length
+      ? { ...draft, conditions: withIndex(draft.conditions, parsed.index, value) }
+      : draft;
+  }
 
-  return rebuild(
-    graph,
-    node.kind === 'condition' ? { conditions: reordered } : { actions: reordered },
-    graph.nextSeq,
-  );
+  return isAction(value) && parsed.index < draft.actions.length
+    ? { ...draft, actions: withIndex(draft.actions, parsed.index, value) }
+    : draft;
 }
 
 /**
- * Replaces the trigger a node carries.
+ * Reorders the action list. Drag-to-reorder and the keyboard move controls both
+ * land here, so there is one implementation of "what a move means".
  *
- * Kind-specific rather than one generic `updateNode`, so a caller cannot hand a
- * condition to the trigger node. Ids are opaque, though, so an id naming a node
- * of another kind is still reachable — a detail panel holding a stale id after a
- * remove is the realistic path — and that returns the graph **unchanged**, the
- * same no-op `removeNode` and `moveNode` give an unknown id. Returning a fresh
- * object with the edit dropped would re-render the canvas and snap the field
- * back with nothing to explain it.
+ * Action order is execution order (0009), which is why this exists for actions
+ * and not for conditions: reordering an AND changes nothing a supervisor could
+ * observe, so offering the gesture would only invite a pointless diff.
  */
-export function updateTriggerNode(
-  graph: WorkflowGraph,
-  id: WorkflowNodeId,
-  trigger: WorkflowTrigger,
-): WorkflowGraph {
-  const node = graph.nodes.find((candidate) => candidate.id === id);
+export function moveAction(draft: WorkflowDraft, from: number, to: number): WorkflowDraft {
+  const count = draft.actions.length;
 
-  return node?.kind === 'trigger' ? replaceNode(graph, { ...node, trigger }) : graph;
+  if (from < 0 || from >= count) {
+    return draft;
+  }
+
+  const target = clamp(to, 0, count - 1);
+
+  if (from === target) {
+    return draft;
+  }
+
+  const moved = draft.actions[from];
+
+  if (moved === undefined) {
+    return draft;
+  }
+
+  const rest = withoutIndex(draft.actions, from);
+
+  return { ...draft, actions: [...rest.slice(0, target), moved, ...rest.slice(target)] };
 }
 
-/** Replaces the condition a node carries. Unchanged for an id of another kind. */
-export function updateConditionNode(
-  graph: WorkflowGraph,
-  id: WorkflowNodeId,
-  condition: WorkflowCondition,
-): WorkflowGraph {
-  const node = graph.nodes.find((candidate) => candidate.id === id);
+// ---------------------------------------------------------------------------
+// Node ids
+// ---------------------------------------------------------------------------
 
-  return node?.kind === 'condition' ? replaceNode(graph, { ...node, condition }) : graph;
+export function conditionNodeId(index: number): WorkflowNodeId {
+  return `condition:${String(index)}` as WorkflowNodeId;
 }
 
-/** Replaces the action a node carries. Unchanged for an id of another kind. */
-export function updateActionNode(
-  graph: WorkflowGraph,
-  id: WorkflowNodeId,
-  action: WorkflowAction,
-): WorkflowGraph {
-  const node = graph.nodes.find((candidate) => candidate.id === id);
-
-  return node?.kind === 'action' ? replaceNode(graph, { ...node, action }) : graph;
+export function actionNodeId(index: number): WorkflowNodeId {
+  return `action:${String(index)}` as WorkflowNodeId;
 }
 
-/** The nodes of one kind, in the order they appear in `nodes`. */
-export function nodesOfKind<K extends WorkflowNodeKind>(
-  graph: WorkflowGraph,
-  kind: K,
-): readonly Extract<WorkflowGraphNode, { kind: K }>[] {
-  return graph.nodes.filter(
-    (node): node is Extract<WorkflowGraphNode, { kind: K }> => node.kind === kind,
-  );
+/**
+ * The node an API error path names. `conditions.2.tagIds` → `condition:2`.
+ *
+ * The path format is the contract's, not this module's: `workflowReferenceUses`
+ * writes it and `translateWorkflowFailure` puts it in `workflow_reference_broken`'s
+ * `details[].path`. Anything else — a field on the workflow itself, a shape a
+ * future endpoint invents — returns `null` rather than guessing at a node,
+ * because highlighting the wrong one is worse than highlighting none.
+ */
+export function nodeIdForPath(path: string): WorkflowNodeId | null {
+  const [collection, rawIndex] = path.split('.');
+
+  if (rawIndex === undefined) {
+    return null;
+  }
+
+  const index = Number(rawIndex);
+
+  if (!Number.isInteger(index) || index < 0) {
+    return null;
+  }
+
+  if (collection === 'conditions') {
+    return conditionNodeId(index);
+  }
+
+  return collection === 'actions' ? actionNodeId(index) : null;
+}
+
+/** A node id back into the kind and index it encodes. */
+export function parseNodeId(
+  id: WorkflowNodeId,
+): { kind: 'trigger'; index: null } | { kind: 'condition' | 'action'; index: number } | null {
+  if (id === TRIGGER_NODE_ID) {
+    return { kind: 'trigger', index: null };
+  }
+
+  const [kind, rawIndex] = id.split(':');
+  const index = Number(rawIndex);
+
+  if (!Number.isInteger(index) || index < 0) {
+    return null;
+  }
+
+  if (kind === 'condition' || kind === 'action') {
+    return { kind, index };
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
 
-function nodeId(seq: number): WorkflowNodeId {
-  return `n${String(seq)}`;
+/**
+ * The three `type` vocabularies are disjoint, which is what lets `replaceNode`
+ * take one union and still refuse a mismatch.
+ */
+function isCondition(
+  value: WorkflowTrigger | WorkflowCondition | WorkflowAction,
+): value is WorkflowCondition {
+  return (WORKFLOW_CONDITION_TYPES as readonly string[]).includes(value.type);
 }
 
-function edgeId(source: WorkflowNodeId, target: WorkflowNodeId): string {
-  return `${source}->${target}`;
+function isAction(
+  value: WorkflowTrigger | WorkflowCondition | WorkflowAction,
+): value is WorkflowAction {
+  return (WORKFLOW_ACTION_TYPES as readonly string[]).includes(value.type);
+}
+
+function isTrigger(
+  value: WorkflowTrigger | WorkflowCondition | WorkflowAction,
+): value is WorkflowTrigger {
+  return !isCondition(value) && !isAction(value);
 }
 
 /** One edge per adjacent pair. The single place edges are ever constructed. */
@@ -471,64 +537,22 @@ function chainEdges(nodes: readonly WorkflowGraphNode[]): readonly WorkflowGraph
       return [];
     }
 
-    return [{ id: edgeId(previous.id, node.id), source: previous.id, target: node.id }];
+    return [{ id: `${previous.id}->${node.id}`, source: previous.id, target: node.id }];
   });
 }
 
-/**
- * Reassembles the whole chain from its three bands.
- *
- * Every editing operation goes through here rather than splicing `nodes`
- * directly, which is what makes `trigger → conditions → actions` an invariant of
- * the module instead of a rule each operation has to remember. The edge list is
- * rebuilt from the result, so an orphaned or duplicated edge is unrepresentable.
- */
-function rebuild(
-  graph: WorkflowGraph,
-  bands: {
-    readonly conditions?: readonly WorkflowGraphNode[];
-    readonly actions?: readonly WorkflowGraphNode[];
-  },
-  nextSeq: number,
-): WorkflowGraph {
-  const nodes = [
-    ...nodesOfKind(graph, 'trigger'),
-    ...(bands.conditions ?? nodesOfKind(graph, 'condition')),
-    ...(bands.actions ?? nodesOfKind(graph, 'action')),
-  ];
-
-  return { nodes, edges: chainEdges(nodes), nextSeq };
+function positionAt(positions: readonly XYPosition[], index: number): XYPosition {
+  return positions[index] ?? { x: 0, y: index * NODE_PITCH };
 }
 
-/**
- * Swaps one node for another with the same id.
- *
- * Edges key off ids and no id changed, so `edges` is carried by reference rather
- * than rebuilt — a new edge array on every keystroke would remount the canvas's
- * edge layer.
- */
-function replaceNode(graph: WorkflowGraph, node: WorkflowGraphNode): WorkflowGraph {
-  return {
-    ...graph,
-    nodes: graph.nodes.map((candidate) => (candidate.id === node.id ? node : candidate)),
-  };
+function withoutIndex<T>(items: readonly T[], index: number): readonly T[] {
+  return [...items.slice(0, index), ...items.slice(index + 1)];
 }
 
-/** `splice`-style insertion, clamped, without mutating the input. */
-function spliced(
-  nodes: readonly WorkflowGraphNode[],
-  node: WorkflowGraphNode,
-  index: number,
-): readonly WorkflowGraphNode[] {
-  const at = clamp(index, 0, nodes.length);
-
-  return [...nodes.slice(0, at), node, ...nodes.slice(at)];
+function withIndex<T>(items: readonly T[], index: number, value: T): readonly T[] {
+  return [...items.slice(0, index), value, ...items.slice(index + 1)];
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
-}
-
-function invalid(problem: WorkflowGraphProblem): WorkflowGraphRead {
-  return { status: 'invalid', problem };
 }

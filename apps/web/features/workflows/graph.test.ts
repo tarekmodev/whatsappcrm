@@ -3,36 +3,50 @@ import {
   WorkflowCreateInputSchema,
   type WorkflowAction,
   type WorkflowCondition,
+  type WorkflowReference,
   type WorkflowResponse,
+  type WorkflowTestResponse,
   type WorkflowTrigger,
 } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import {
-  draftFromGraph,
-  graphFromDraft,
-  insertAction,
-  insertCondition,
-  moveNode,
-  nodesOfKind,
+  NODE_GAP,
+  NODE_HEIGHT,
+  TRIGGER_NODE_ID,
+  actionNodeId,
+  addAction,
+  addCondition,
+  conditionNodeId,
+  dropIndex,
+  layoutSpine,
+  moveAction,
+  nodeIdForPath,
+  parseNodeId,
   removeNode,
-  updateActionNode,
-  updateConditionNode,
-  updateTriggerNode,
+  replaceNode,
+  toGraph,
   type WorkflowGraph,
-  type WorkflowGraphNode,
-  type WorkflowNodeKind,
+  type WorkflowGraphAnnotations,
+  type WorkflowNodeId,
 } from './graph';
-import { draftFromWorkflow, validateWorkflowDraft, type WorkflowDraft } from './workflow-form';
+import { EMPTY_WORKFLOW_VOCABULARY, type WorkflowVocabulary } from './presentation';
+import {
+  NO_WORKFLOW_ERRORS,
+  draftFromWorkflow,
+  validateWorkflowDraft,
+  type WorkflowDraft,
+} from './workflow-form';
 
 /**
- * The canvas's persistence behaviour, tested without a canvas.
+ * The canvas's projection and mutation layer, tested without a canvas.
  *
- * The acceptance criterion these exist for is "existing workflows created via
- * the old form-dialog editor render correctly on the new canvas with no data
- * loss" — which is a statement about a *round trip*, and so is provable here
- * rather than by opening a browser and squinting at a diff. If
- * `draftFromGraph(graphFromDraft(d))` is not `d` for every shape ADR 0009's
- * grammar allows, the canvas loses supervisor data, whatever it looks like.
+ * TAR-809's Phase A: "nothing about the canvas can be wrong in a way this phase
+ * does not catch." Two things carry that. **No data loss** — a saved workflow
+ * opened on the canvas and saved back unchanged produces the payload it already
+ * had, which is TAR-812's fourth acceptance criterion and is a statement about
+ * pure functions, not about pixels. **Annotations land on the right node** —
+ * every one of them keys on a positional index, so an off-by-one would put a
+ * supervisor's error message on the wrong step.
  */
 
 const TEAM_ID = '0192f002-0000-7000-8000-000000000201';
@@ -155,12 +169,19 @@ const ALL_ACTIONS: readonly WorkflowAction[] = [
   SET_URGENT,
 ];
 
-const CARRIED = { name: 'Escalate stale tickets', isActive: false };
+const VOCABULARY: WorkflowVocabulary = {
+  teams: [],
+  users: [],
+  tags: [
+    { id: TAG_ID, name: 'Escalated', color: '#aa0000' },
+    { id: OTHER_TAG_ID, name: 'VIP', color: '#00aa00' },
+  ],
+};
 
 function draft(overrides: Partial<WorkflowDraft> = {}): WorkflowDraft {
   return {
-    name: CARRIED.name,
-    trigger: { type: 'ticket_created' },
+    name: 'Escalate stale tickets',
+    trigger: CREATED,
     conditions: [],
     actions: [{ type: 'set_priority', priority: 'high' }],
     isActive: false,
@@ -168,146 +189,269 @@ function draft(overrides: Partial<WorkflowDraft> = {}): WorkflowDraft {
   };
 }
 
-/** The draft a graph reads back as, or a failure naming the topology problem. */
-function readBack(graph: WorkflowGraph, carried = CARRIED): WorkflowDraft {
-  const read = draftFromGraph(graph, carried);
-
-  if (read.status !== 'ok') {
-    throw new Error(`expected a readable graph, got: ${read.problem}`);
-  }
-
-  return read.draft;
+function annotations(overrides: Partial<WorkflowGraphAnnotations> = {}): WorkflowGraphAnnotations {
+  return {
+    errors: NO_WORKFLOW_ERRORS,
+    references: [],
+    test: null,
+    vocabulary: EMPTY_WORKFLOW_VOCABULARY,
+    content,
+    ...overrides,
+  };
 }
 
-describe('graphFromDraft', () => {
-  it('lays the workflow out as trigger → conditions → actions, in that order', () => {
-    const graph = graphFromDraft(
-      draft({
-        conditions: [STATUS_IN, OLDER_THAN],
-        actions: [ADD_TAG, SET_PENDING],
-      }),
+function graphOf(source: WorkflowDraft, overrides: Partial<WorkflowGraphAnnotations> = {}) {
+  return toGraph(source, annotations(overrides));
+}
+
+function nodeById(graph: WorkflowGraph, id: WorkflowNodeId) {
+  const node = graph.nodes.find((candidate) => candidate.id === id);
+
+  if (node === undefined) {
+    throw new Error(`no node ${id}`);
+  }
+
+  return node;
+}
+
+describe('toGraph', () => {
+  it('lays the draft out as trigger → conditions → actions, in that order', () => {
+    const graph = graphOf(
+      draft({ conditions: [STATUS_IN, OLDER_THAN], actions: [ADD_TAG, SET_PENDING] }),
     );
 
-    expect(graph.nodes.map((node) => node.kind)).toEqual([
-      'trigger',
-      'condition',
-      'condition',
-      'action',
-      'action',
+    expect(graph.nodes.map((node) => node.id)).toEqual([
+      TRIGGER_NODE_ID,
+      'condition:0',
+      'condition:1',
+      'action:0',
+      'action:1',
     ]);
   });
 
-  it('joins every adjacent pair with exactly one edge and leaves none dangling', () => {
-    const graph = graphFromDraft(
-      draft({ conditions: [STATUS_IN], actions: [ADD_TAG, REASSIGN_TEAM] }),
-    );
+  it('gives every node the index it stands for, and the trigger none', () => {
+    const graph = graphOf(draft({ conditions: [STATUS_IN], actions: [ADD_TAG, SET_PENDING] }));
 
-    expect(graph.edges).toHaveLength(graph.nodes.length - 1);
-    expect(graph.edges.map((edge) => [edge.source, edge.target])).toEqual([
-      [nodeAt(graph, 0).id, nodeAt(graph, 1).id],
-      [nodeAt(graph, 1).id, nodeAt(graph, 2).id],
-      [nodeAt(graph, 2).id, nodeAt(graph, 3).id],
+    expect(graph.nodes.map((node) => [node.kind, node.index])).toEqual([
+      ['trigger', null],
+      ['condition', 0],
+      ['action', 0],
+      ['action', 1],
     ]);
   });
 
-  it('gives a workflow with no conditions a trigger wired straight to its first action', () => {
+  it('joins every adjacent pair with exactly one edge', () => {
+    const graph = graphOf(draft({ conditions: [STATUS_IN], actions: [ADD_TAG, SET_PENDING] }));
+
+    expect(graph.edges).toEqual([
+      { id: 'trigger->condition:0', source: 'trigger', target: 'condition:0' },
+      { id: 'condition:0->action:0', source: 'condition:0', target: 'action:0' },
+      { id: 'action:0->action:1', source: 'action:0', target: 'action:1' },
+    ]);
+  });
+
+  it('wires the trigger straight to the first action when there are no conditions', () => {
     // Empty is legal and common — "every time this trigger fires, do this"
     // (0009 decision 4). The canvas must not invent a placeholder node for it.
-    const graph = graphFromDraft(draft());
+    const graph = graphOf(draft());
 
-    expect(graph.nodes.map((node) => node.kind)).toEqual(['trigger', 'action']);
+    expect(graph.nodes.map((node) => node.id)).toEqual([TRIGGER_NODE_ID, 'action:0']);
     expect(graph.edges).toHaveLength(1);
   });
 
-  it('is a pure function of the draft, so the server and the client build the same graph', () => {
+  it('is a pure function of its arguments, so server and client build the same graph', () => {
     // The hydration guarantee, pinned. A `crypto.randomUUID()` or a module-scope
     // counter would pass every other test here and mismatch on first paint.
     const source = draft({ conditions: [UNASSIGNED], actions: [NOTIFY_SUPERVISORS] });
 
-    expect(graphFromDraft(source)).toEqual(graphFromDraft(source));
+    expect(graphOf(source)).toEqual(graphOf(source));
   });
 
-  it('mints a distinct id for every node', () => {
-    const graph = graphFromDraft(
-      draft({ conditions: [...ALL_CONDITIONS], actions: ALL_ACTIONS.slice(0, 5) }),
-    );
+  it('stacks the spine down one column at the node pitch', () => {
+    const graph = graphOf(draft({ conditions: [STATUS_IN], actions: [ADD_TAG] }));
 
-    expect(new Set(graph.nodes.map((node) => node.id)).size).toBe(graph.nodes.length);
+    expect(graph.nodes.map((node) => node.position)).toEqual([
+      { x: 0, y: 0 },
+      { x: 0, y: NODE_HEIGHT + NODE_GAP },
+      { x: 0, y: 2 * (NODE_HEIGHT + NODE_GAP) },
+    ]);
+  });
+
+  it('summarises every node through presentation.ts', () => {
+    const graph = graphOf(draft({ conditions: [OUT_OF_HOURS], actions: [SET_PENDING] }));
+
+    for (const node of graph.nodes) {
+      expect(node.summary).not.toBe('');
+    }
+
+    expect(nodeById(graph, TRIGGER_NODE_ID).summary).toBe(content.workflows.summaryTriggerCreated);
+  });
+
+  it('leaves a clean draft with no error, no badge and no test result', () => {
+    const graph = graphOf(draft({ conditions: [STATUS_IN] }));
+
+    for (const node of graph.nodes) {
+      expect(node.error).toBeNull();
+      expect(node.brokenReferences).toEqual([]);
+      expect(node.testResult).toBeNull();
+    }
   });
 });
 
-describe('round trip', () => {
+describe('toGraph — annotations land on the right node', () => {
+  it('puts each validation message on the node its index names', () => {
+    // The reason positional identity was the right call: `byCondition` and
+    // `byAction` are index-keyed, so this is a lookup rather than a translation.
+    const source = draft({
+      conditions: [STATUS_IN, OLDER_THAN],
+      actions: [ADD_TAG, SET_PENDING],
+    });
+    const graph = graphOf(source, {
+      errors: {
+        ...NO_WORKFLOW_ERRORS,
+        trigger: 'trigger is wrong',
+        byCondition: { 1: 'second condition is wrong' },
+        byAction: { 0: 'first action is wrong' },
+      },
+    });
+
+    expect(nodeById(graph, TRIGGER_NODE_ID).error).toBe('trigger is wrong');
+    expect(nodeById(graph, 'condition:0').error).toBeNull();
+    expect(nodeById(graph, 'condition:1').error).toBe('second condition is wrong');
+    expect(nodeById(graph, 'action:0').error).toBe('first action is wrong');
+    expect(nodeById(graph, 'action:1').error).toBeNull();
+  });
+
+  it('badges only the nodes that name a reference which no longer resolves', () => {
+    const gone: WorkflowReference = { kind: 'team', id: OTHER_TEAM_ID, name: null, exists: false };
+    const source = draft({
+      conditions: [ASSIGNED_TO_TEAM, OUT_OF_HOURS],
+      actions: [{ type: 'reassign', target: { kind: 'team', teamId: OTHER_TEAM_ID } }],
+    });
+    const graph = graphOf(source, {
+      references: [{ kind: 'team', id: TEAM_ID, name: 'Support', exists: true }, gone],
+    });
+
+    expect(nodeById(graph, 'condition:0').brokenReferences).toEqual([]);
+    expect(nodeById(graph, 'condition:1').brokenReferences).toEqual([]);
+    expect(nodeById(graph, 'action:0').brokenReferences).toEqual([gone]);
+  });
+
+  it('counts two missing ids named by one node', () => {
+    const goneTag: WorkflowReference = { kind: 'tag', id: TAG_ID, name: null, exists: false };
+    const goneOther: WorkflowReference = {
+      kind: 'tag',
+      id: OTHER_TAG_ID,
+      name: null,
+      exists: false,
+    };
+    const graph = graphOf(draft({ conditions: [TICKET_TAGGED] }), {
+      references: [goneTag, goneOther],
+    });
+
+    expect(nodeById(graph, 'condition:0').brokenReferences).toEqual([goneTag, goneOther]);
+  });
+
+  it('puts each dry-run outcome on the node its index names', () => {
+    const test: WorkflowTestResponse = {
+      matched: true,
+      conditions: [
+        { index: 0, type: 'ticket_status', held: true, reason: null },
+        { index: 1, type: 'business_hours', held: false, reason: 'business_hours_unconfigured' },
+      ],
+      actions: [{ index: 0, type: 'set_status', outcome: 'applied', describes: 'Set to pending' }],
+    };
+    const graph = graphOf(
+      draft({ conditions: [STATUS_IN, OUT_OF_HOURS], actions: [SET_PENDING] }),
+      { test },
+    );
+
+    expect(nodeById(graph, 'condition:0').testResult).toEqual({
+      kind: 'condition',
+      held: true,
+      reason: null,
+    });
+    expect(nodeById(graph, 'condition:1').testResult).toEqual({
+      kind: 'condition',
+      held: false,
+      reason: 'business_hours_unconfigured',
+    });
+    expect(nodeById(graph, 'action:0').testResult).toEqual({
+      kind: 'action',
+      outcome: 'applied',
+      describes: 'Set to pending',
+    });
+  });
+
+  it('leaves an unreported node without a test result rather than guessing', () => {
+    // `WorkflowTestResponse.actions` is empty when the workflow did not match, so
+    // "no entry" is a real and common case, not a malformed response.
+    const test: WorkflowTestResponse = {
+      matched: false,
+      conditions: [{ index: 0, type: 'ticket_status', held: false, reason: null }],
+      actions: [],
+    };
+    const graph = graphOf(draft({ conditions: [STATUS_IN], actions: [SET_PENDING] }), { test });
+
+    expect(nodeById(graph, 'action:0').testResult).toBeNull();
+  });
+});
+
+describe('no data loss', () => {
   it.each(ALL_TRIGGERS.map((trigger) => [trigger.type, trigger] as const))(
-    'preserves the %s trigger',
+    'renders a %s trigger without disturbing the draft',
     (_type, trigger) => {
       const source = draft({ trigger });
 
-      expect(readBack(graphFromDraft(source))).toEqual(source);
+      graphOf(source);
+
+      expect(source.trigger).toEqual(trigger);
     },
   );
 
   it.each(ALL_CONDITIONS.map((condition) => [describeCase(condition), condition] as const))(
-    'preserves the %s condition',
+    'renders a %s condition as exactly one node',
     (_label, condition) => {
-      const source = draft({ conditions: [condition] });
+      const graph = graphOf(draft({ conditions: [condition] }));
 
-      expect(readBack(graphFromDraft(source))).toEqual(source);
+      expect(nodeById(graph, 'condition:0').index).toBe(0);
+      expect(graph.nodes.filter((node) => node.kind === 'condition')).toHaveLength(1);
     },
   );
 
   it.each(ALL_ACTIONS.map((action) => [describeCase(action), action] as const))(
-    'preserves the %s action',
+    'renders a %s action as exactly one node',
     (_label, action) => {
-      const source = draft({ actions: [action] });
+      const graph = graphOf(draft({ actions: [action] }));
 
-      expect(readBack(graphFromDraft(source))).toEqual(source);
+      expect(nodeById(graph, 'action:0').index).toBe(0);
+      expect(graph.nodes.filter((node) => node.kind === 'action')).toHaveLength(1);
     },
   );
 
-  it('preserves a workflow holding every condition and the full action list at once', () => {
-    // The caps are 10 conditions and 5 actions; this is 9 and 5, so it is also
-    // the widest workflow a supervisor can actually save.
+  it('gives the widest workflow the caps allow one node per element', () => {
+    // The caps are 10 conditions and 5 actions; this is 9 and 5.
     const source = draft({
       trigger: { type: 'ticket_unresolved_for', minutes: 43_200 },
       conditions: [...ALL_CONDITIONS],
       actions: ALL_ACTIONS.slice(0, 5),
     });
+    const graph = graphOf(source);
 
-    expect(readBack(graphFromDraft(source))).toEqual(source);
-  });
-
-  it('preserves action order, which is execution order', () => {
-    const ordered: readonly WorkflowAction[] = [
-      { type: 'set_status', status: 'open' },
-      { type: 'add_ticket_tag', tagId: TAG_ID },
-      { type: 'set_priority', priority: 'urgent' },
-    ];
-
-    expect(readBack(graphFromDraft(draft({ actions: [...ordered] }))).actions).toEqual(ordered);
-  });
-
-  it('preserves condition order even though conditions are an unordered AND', () => {
-    // Not a semantic requirement — an AND does not care. It is an audit-log one:
-    // a load/edit-nothing/save must not write a reshuffled definition that reads
-    // as a real change.
-    const ordered = [OUT_OF_HOURS, STATUS_IN, TICKET_TAGGED];
-
-    expect(readBack(graphFromDraft(draft({ conditions: ordered }))).conditions).toEqual(ordered);
+    expect(graph.nodes).toHaveLength(1 + ALL_CONDITIONS.length + 5);
+    expect(graph.edges).toHaveLength(graph.nodes.length - 1);
   });
 
   it('carries a saved workflow to the same API payload it already had', () => {
-    // The acceptance criterion end to end: an existing workflow, opened on the
-    // canvas, changed in no way and saved, produces the definition it started
-    // with — through the same `validateWorkflowDraft` the form dialogs submit.
+    // TAR-812's fourth acceptance criterion, end to end: an existing workflow,
+    // opened on the canvas, changed in no way, and submitted through the same
+    // `validateWorkflowDraft` the form dialogs use.
     const workflow = savedWorkflow();
     const opened = draftFromWorkflow(workflow);
-    const saved = validateWorkflowDraft(
-      readBack(graphFromDraft(opened), {
-        name: opened.name,
-        isActive: opened.isActive,
-      }),
-      content,
-    );
+
+    graphOf(opened, { references: workflow.references });
+
+    const saved = validateWorkflowDraft(opened, content);
 
     expect(saved.status).toBe('valid');
     expect(saved.status === 'valid' && saved.input).toEqual(
@@ -321,360 +465,196 @@ describe('round trip', () => {
     );
   });
 
-  it('does not let the graph re-arm a workflow the list switched off', () => {
-    // `isActive` lives on the draft and never on a node, so there is no node a
-    // supervisor could nudge that would change it. Pinned because the form has
-    // the same rule and it is the one mistake here that writes to real tickets.
-    const graph = graphFromDraft(draft({ isActive: false }));
+  it('never lets the canvas re-arm a workflow the list switched off', () => {
+    // `isActive` is not on the canvas at all (TAR-809 — the mapping table), so
+    // there is no node a supervisor could nudge that would change it, and no
+    // mutation here writes it.
+    const source = draft({ isActive: false });
+    const edited = moveAction(addCondition(source, 'business_hours'), 0, 0);
 
-    expect(readBack(graph, { name: CARRIED.name, isActive: false }).isActive).toBe(false);
+    expect(edited.isActive).toBe(false);
   });
 });
 
-describe('draftFromGraph', () => {
-  it('reads the chain from the node order, and says so when the edges disagree', () => {
-    // The module's one source-of-truth rule, pinned from both sides. An earlier
-    // revision walked the edges here while every editing operation rebuilt them
-    // from `nodes`, so a graph like this one read one way before an edit and the
-    // other way after it — the saved order depending on whether the supervisor
-    // happened to touch anything first.
-    const graph = graphFromDraft(draft({ actions: [SET_PENDING, SET_URGENT] }));
-    const trigger = nodeAt(graph, 0);
-    const first = nodeAt(graph, 1);
-    const second = nodeAt(graph, 2);
+describe('mutations', () => {
+  it('appends a blank condition from builder.ts', () => {
+    const edited = addCondition(draft(), 'ticket_status');
 
-    expect(
-      draftFromGraph(
-        {
-          ...graph,
-          edges: [
-            { id: 'a', source: trigger.id, target: second.id },
-            { id: 'b', source: second.id, target: first.id },
-          ],
-        },
-        CARRIED,
-      ),
-    ).toEqual({ status: 'invalid', problem: 'edges_out_of_sync' });
+    expect(edited.conditions).toEqual([{ type: 'ticket_status', operator: 'in', values: [] }]);
   });
 
-  it('cannot be made to save one order before an edit and another after it', () => {
-    // The regression the rule above exists for, stated as behaviour: whatever a
-    // stale edge set does, it must not be that inserting an unrelated third
-    // action silently swaps the two the supervisor already had.
-    const graph = graphFromDraft(draft({ actions: [SET_PENDING, SET_URGENT] }));
-    const stale: WorkflowGraph = {
-      ...graph,
-      edges: [
-        { id: 'a', source: nodeAt(graph, 0).id, target: nodeAt(graph, 2).id },
-        { id: 'b', source: nodeAt(graph, 2).id, target: nodeAt(graph, 1).id },
-      ],
-    };
+  it('appends a blank action from builder.ts', () => {
+    const edited = addAction(draft({ actions: [] }), 'add_ticket_tag', VOCABULARY);
 
-    const before = draftFromGraph(stale, CARRIED);
-    const after = draftFromGraph(insertAction(stale, ADD_TAG, 2), CARRIED);
-
-    expect(before.status).toBe('invalid');
-    expect(after.status === 'ok' && after.draft.actions).toEqual([
-      SET_PENDING,
-      SET_URGENT,
-      ADD_TAG,
-    ]);
+    expect(edited.actions).toEqual([{ type: 'add_ticket_tag', tagId: TAG_ID }]);
   });
 
-  it('hands back the node ids behind each condition and action, in draft order', () => {
-    // `validateWorkflowDraft` reports `byCondition` / `byAction` by index, and a
-    // canvas renders by id. Without these the only mapping is a second reading of
-    // the order at the call site, which is the thing the module rules out.
-    const graph = graphFromDraft(
-      draft({ conditions: [STATUS_IN, OLDER_THAN], actions: [ADD_TAG, SET_PENDING] }),
+  it('removes the condition a node stands for and renumbers the rest', () => {
+    const source = draft({ conditions: [STATUS_IN, OLDER_THAN, OUT_OF_HOURS] });
+    const edited = removeNode(source, conditionNodeId(1));
+
+    expect(edited.conditions).toEqual([STATUS_IN, OUT_OF_HOURS]);
+    expect(nodeById(graphOf(edited), 'condition:1').summary).toBe(
+      nodeById(graphOf(source), 'condition:2').summary,
     );
-    const read = draftFromGraph(graph, CARRIED);
-
-    expect(read.status).toBe('ok');
-
-    if (read.status !== 'ok') {
-      return;
-    }
-
-    expect(read.conditionIds).toEqual(nodesOfKind(graph, 'condition').map((node) => node.id));
-    expect(read.actionIds).toEqual(nodesOfKind(graph, 'action').map((node) => node.id));
-    expect(read.actionIds).toHaveLength(read.draft.actions.length);
   });
 
-  it('refuses a graph with no trigger', () => {
-    const graph = graphFromDraft(draft());
+  it('removes the action a node stands for', () => {
+    const source = draft({ actions: [ADD_TAG, SET_PENDING, SET_URGENT] });
 
-    expect(draftFromGraph({ ...graph, nodes: graph.nodes.slice(1), edges: [] }, CARRIED)).toEqual({
-      status: 'invalid',
-      problem: 'missing_trigger',
-    });
-  });
-
-  it('refuses a graph with two triggers', () => {
-    const graph = graphFromDraft(draft());
-    const trigger = nodeAt(graph, 0);
-
-    expect(
-      draftFromGraph({ ...graph, nodes: [...graph.nodes, { ...trigger, id: 'extra' }] }, CARRIED),
-    ).toEqual({ status: 'invalid', problem: 'multiple_triggers' });
-  });
-
-  it('refuses a graph whose head is not the trigger', () => {
-    const graph = graphFromDraft(draft());
-
-    expect(
-      draftFromGraph({ ...graph, nodes: [...graph.nodes].reverse(), edges: [] }, CARRIED),
-    ).toEqual({ status: 'invalid', problem: 'trigger_not_first' });
-  });
-
-  it('refuses a condition ordered below an action', () => {
-    const graph = graphFromDraft(draft({ conditions: [STATUS_IN] }));
-    const trigger = nodeAt(graph, 0);
-    const condition = nodeAt(graph, 1);
-    const action = nodeAt(graph, 2);
-
-    expect(
-      draftFromGraph({ ...graph, nodes: [trigger, action, condition], edges: [] }, CARRIED),
-    ).toEqual({ status: 'invalid', problem: 'condition_after_action' });
-  });
-
-  it('refuses a chain missing an edge', () => {
-    const graph = graphFromDraft(draft({ actions: [SET_PENDING, SET_URGENT] }));
-
-    expect(draftFromGraph({ ...graph, edges: graph.edges.slice(0, 1) }, CARRIED)).toEqual({
-      status: 'invalid',
-      problem: 'edges_out_of_sync',
-    });
-  });
-
-  it('refuses an edge pointing at a node that is not in the graph', () => {
-    const graph = graphFromDraft(draft());
-
-    expect(
-      draftFromGraph(
-        { ...graph, edges: [{ id: 'x', source: nodeAt(graph, 0).id, target: 'gone' }] },
-        CARRIED,
-      ),
-    ).toEqual({ status: 'invalid', problem: 'edges_out_of_sync' });
-  });
-
-  it('accepts edges whose ids a renderer supplied, since ids carry no meaning', () => {
-    const graph = graphFromDraft(draft());
-    const renamed = graph.edges.map((edge, index) => ({
-      ...edge,
-      id: `renderer-${String(index)}`,
-    }));
-
-    expect(draftFromGraph({ ...graph, edges: renamed }, CARRIED).status).toBe('ok');
-  });
-
-  it('leaves an incomplete workflow to the form rather than reporting it here', () => {
-    // No actions is invalid, but it is `validateWorkflowDraft`'s to say so — the
-    // graph is a perfectly good chain and this module owns topology only.
-    const graph = graphFromDraft(draft({ actions: [] }));
-    const read = draftFromGraph(graph, CARRIED);
-
-    expect(read.status).toBe('ok');
-    expect(validateWorkflowDraft(readBack(graph), content)).toMatchObject({
-      status: 'invalid',
-      errors: { actions: content.workflows.actionsRequiredError },
-    });
-  });
-});
-
-describe('editing', () => {
-  it('inserts a condition between the trigger and the actions', () => {
-    const graph = insertCondition(graphFromDraft(draft()), STATUS_IN, 0);
-
-    expect(graph.nodes.map((node) => node.kind)).toEqual(['trigger', 'condition', 'action']);
-    expect(readBack(graph).conditions).toEqual([STATUS_IN]);
-  });
-
-  it('inserts a condition at the requested position among the existing ones', () => {
-    const graph = insertCondition(
-      graphFromDraft(draft({ conditions: [STATUS_IN, OLDER_THAN] })),
-      OUT_OF_HOURS,
-      1,
-    );
-
-    expect(readBack(graph).conditions).toEqual([STATUS_IN, OUT_OF_HOURS, OLDER_THAN]);
-  });
-
-  it('appends when the index is past the end', () => {
-    const graph = insertCondition(graphFromDraft(draft()), STATUS_IN, 99);
-
-    expect(readBack(graph).conditions).toEqual([STATUS_IN]);
-  });
-
-  it('inserts an action at the requested position, below every condition', () => {
-    const graph = insertAction(
-      graphFromDraft(draft({ conditions: [STATUS_IN], actions: [SET_PENDING] })),
-      ADD_TAG,
-      0,
-    );
-
-    expect(graph.nodes.map((node) => node.kind)).toEqual([
-      'trigger',
-      'condition',
-      'action',
-      'action',
-    ]);
-    expect(readBack(graph).actions).toEqual([ADD_TAG, SET_PENDING]);
-  });
-
-  it('gives every inserted node an id that collides with nothing already there', () => {
-    let graph = graphFromDraft(draft({ conditions: [STATUS_IN] }));
-
-    graph = removeNode(graph, nodeAt(graph, 1).id);
-    graph = insertCondition(graph, OLDER_THAN, 0);
-    graph = insertCondition(graph, OUT_OF_HOURS, 0);
-
-    expect(new Set(graph.nodes.map((node) => node.id)).size).toBe(graph.nodes.length);
-  });
-
-  it('closes the chain over a removed node', () => {
-    const source = graphFromDraft(draft({ conditions: [STATUS_IN, OLDER_THAN] }));
-    const graph = removeNode(source, nodeAt(source, 1).id);
-
-    expect(readBack(graph).conditions).toEqual([OLDER_THAN]);
-    expect(graph.edges).toHaveLength(graph.nodes.length - 1);
+    expect(removeNode(source, actionNodeId(0)).actions).toEqual([SET_PENDING, SET_URGENT]);
   });
 
   it('refuses to remove the trigger', () => {
-    const source = graphFromDraft(draft());
+    const source = draft();
 
-    expect(removeNode(source, nodeAt(source, 0).id)).toBe(source);
+    expect(removeNode(source, TRIGGER_NODE_ID)).toBe(source);
   });
 
-  it('ignores an unknown id rather than erroring, so a double delete is harmless', () => {
-    const source = graphFromDraft(draft());
+  it('ignores a remove for an index that is already gone', () => {
+    const source = draft({ conditions: [STATUS_IN] });
 
-    expect(removeNode(source, 'gone')).toBe(source);
+    expect(removeNode(source, conditionNodeId(4))).toBe(source);
   });
 
-  it('reorders actions within the action band', () => {
-    const source = graphFromDraft(draft({ actions: [ADD_TAG, SET_PENDING, SET_URGENT] }));
-    const moved = moveNode(source, kindAt(source, 'action', 2).id, 0);
+  it('replaces what each kind of node holds', () => {
+    const source = draft({ conditions: [STATUS_IN], actions: [ADD_TAG] });
 
-    expect(readBack(moved).actions).toEqual([SET_URGENT, ADD_TAG, SET_PENDING]);
-  });
-
-  it('reorders conditions without disturbing the actions below them', () => {
-    const source = graphFromDraft(
-      draft({
-        conditions: [STATUS_IN, OLDER_THAN],
-        actions: [ADD_TAG, SET_PENDING],
-      }),
-    );
-    const moved = moveNode(source, kindAt(source, 'condition', 1).id, 0);
-    const read = readBack(moved);
-
-    expect(read.conditions).toEqual([OLDER_THAN, STATUS_IN]);
-    expect(read.actions).toEqual([ADD_TAG, SET_PENDING]);
-  });
-
-  it('clamps a drag that would carry an action above the conditions', () => {
-    // The supervisor gets the nearest legal position instead of a refusal, and
-    // `draftFromGraph` never sees `condition_after_action` at all.
-    const source = graphFromDraft(
-      draft({ conditions: [STATUS_IN], actions: [ADD_TAG, SET_PENDING] }),
-    );
-    const moved = moveNode(source, kindAt(source, 'action', 1).id, -5);
-
-    expect(moved.nodes.map((node) => node.kind)).toEqual([
-      'trigger',
-      'condition',
-      'action',
-      'action',
+    expect(replaceNode(source, TRIGGER_NODE_ID, UNRESOLVED_FOR).trigger).toEqual(UNRESOLVED_FOR);
+    expect(replaceNode(source, conditionNodeId(0), OUT_OF_HOURS).conditions).toEqual([
+      OUT_OF_HOURS,
     ]);
-    expect(readBack(moved).actions).toEqual([SET_PENDING, ADD_TAG]);
+    expect(replaceNode(source, actionNodeId(0), SET_URGENT).actions).toEqual([SET_URGENT]);
   });
 
-  it('does not move the trigger', () => {
-    const source = graphFromDraft(draft());
+  it('returns the draft unchanged when the value is the wrong kind for the node', () => {
+    // The three `type` vocabularies are disjoint, so this is detectable here
+    // rather than at the API's refusal. A stale id from a detail panel is the
+    // realistic path, and a half-applied edit would be worse than none.
+    const source = draft({ conditions: [STATUS_IN], actions: [ADD_TAG] });
 
-    expect(moveNode(source, nodeAt(source, 0).id, 1)).toBe(source);
+    expect(replaceNode(source, TRIGGER_NODE_ID, OUT_OF_HOURS)).toBe(source);
+    expect(replaceNode(source, conditionNodeId(0), SET_URGENT)).toBe(source);
+    expect(replaceNode(source, actionNodeId(0), CREATED)).toBe(source);
   });
 
-  it('replaces what a node carries without changing the chain', () => {
-    const source = graphFromDraft(draft({ conditions: [STATUS_IN], actions: [ADD_TAG] }));
-    const trigger = nodeAt(source, 0);
-    const condition = nodeAt(source, 1);
-    const action = nodeAt(source, 2);
+  it('returns the draft unchanged when the index is past the end', () => {
+    const source = draft({ conditions: [STATUS_IN] });
 
-    let graph = updateTriggerNode(source, trigger.id, UNRESOLVED_FOR);
-    graph = updateConditionNode(graph, condition.id, OUT_OF_HOURS);
-    graph = updateActionNode(graph, action.id, SET_URGENT);
+    expect(replaceNode(source, conditionNodeId(9), OUT_OF_HOURS)).toBe(source);
+    expect(replaceNode(source, actionNodeId(9), SET_URGENT)).toBe(source);
+  });
 
-    expect(graph.edges).toEqual(source.edges);
-    expect(readBack(graph)).toEqual(
-      draft({
-        trigger: UNRESOLVED_FOR,
-        conditions: [OUT_OF_HOURS],
-        actions: [SET_URGENT],
-      }),
+  it('reorders actions, which is execution order', () => {
+    const source = draft({ actions: [ADD_TAG, SET_PENDING, SET_URGENT] });
+
+    expect(moveAction(source, 2, 0).actions).toEqual([SET_URGENT, ADD_TAG, SET_PENDING]);
+    expect(moveAction(source, 0, 2).actions).toEqual([SET_PENDING, SET_URGENT, ADD_TAG]);
+  });
+
+  it('clamps a move past the end and ignores one from nowhere', () => {
+    const source = draft({ actions: [ADD_TAG, SET_PENDING] });
+
+    expect(moveAction(source, 0, 9).actions).toEqual([SET_PENDING, ADD_TAG]);
+    expect(moveAction(source, 5, 0)).toBe(source);
+    expect(moveAction(source, 1, 1)).toBe(source);
+  });
+
+  it('leaves every other field of the draft alone', () => {
+    const source = draft({ conditions: [STATUS_IN], actions: [ADD_TAG] });
+    const edited = removeNode(addCondition(source, 'business_hours'), conditionNodeId(0));
+
+    expect(edited.name).toBe(source.name);
+    expect(edited.trigger).toEqual(source.trigger);
+    expect(edited.actions).toEqual(source.actions);
+  });
+
+  it('keeps the draft valid through a long editing session', () => {
+    let edited = draft({ actions: [SET_PENDING] });
+
+    edited = addCondition(edited, 'ticket_status');
+    edited = addCondition(edited, 'business_hours');
+    edited = replaceNode(edited, conditionNodeId(0), STATUS_IN);
+    edited = addAction(edited, 'set_priority', VOCABULARY);
+    edited = moveAction(edited, 1, 0);
+    edited = removeNode(edited, conditionNodeId(1));
+
+    expect(edited.conditions).toEqual([STATUS_IN]);
+    expect(edited.actions.map((action) => action.type)).toEqual(['set_priority', 'set_status']);
+    expect(graphOf(edited).edges).toHaveLength(graphOf(edited).nodes.length - 1);
+  });
+});
+
+describe('nodeIdForPath', () => {
+  it('maps the contract`s reference paths to their nodes', () => {
+    expect(nodeIdForPath('conditions.2.tagIds')).toBe('condition:2');
+    expect(nodeIdForPath('conditions.0.teamId')).toBe('condition:0');
+    expect(nodeIdForPath('actions.1.target.userId')).toBe('action:1');
+    expect(nodeIdForPath('actions.0.tagId')).toBe('action:0');
+  });
+
+  it('returns null for a path that names no node', () => {
+    // Highlighting the wrong node is worse than highlighting none, so anything
+    // unrecognised — a field on the workflow itself, a shape a future endpoint
+    // invents — declines rather than guesses.
+    expect(nodeIdForPath('name')).toBeNull();
+    expect(nodeIdForPath('trigger.minutes')).toBeNull();
+    expect(nodeIdForPath('conditions')).toBeNull();
+    expect(nodeIdForPath('conditions.x.tagIds')).toBeNull();
+    expect(nodeIdForPath('conditions.-1.tagIds')).toBeNull();
+    expect(nodeIdForPath('')).toBeNull();
+  });
+
+  it('agrees with the ids toGraph mints, which is the whole point', () => {
+    const graph = graphOf(draft({ conditions: [ASSIGNED_TO_TEAM], actions: [ADD_TAG] }));
+
+    expect(nodeById(graph, nodeIdForPath('conditions.0.teamId') ?? TRIGGER_NODE_ID).kind).toBe(
+      'condition',
+    );
+    expect(nodeById(graph, nodeIdForPath('actions.0.tagId') ?? TRIGGER_NODE_ID).kind).toBe(
+      'action',
     );
   });
+});
 
-  it('leaves the edge array identical on an update, so the canvas does not remount it', () => {
-    const source = graphFromDraft(draft());
-    const graph = updateTriggerNode(source, nodeAt(source, 0).id, STATUS_CHANGED);
+describe('parseNodeId', () => {
+  it('round-trips every id toGraph produces', () => {
+    expect(parseNodeId(TRIGGER_NODE_ID)).toEqual({ kind: 'trigger', index: null });
+    expect(parseNodeId(conditionNodeId(3))).toEqual({ kind: 'condition', index: 3 });
+    expect(parseNodeId(actionNodeId(0))).toEqual({ kind: 'action', index: 0 });
+  });
+});
 
-    expect(graph.edges).toBe(source.edges);
+describe('layout', () => {
+  it('stacks n nodes down one column and nothing across', () => {
+    expect(layoutSpine(3)).toEqual([
+      { x: 0, y: 0 },
+      { x: 0, y: NODE_HEIGHT + NODE_GAP },
+      { x: 0, y: 2 * (NODE_HEIGHT + NODE_GAP) },
+    ]);
   });
 
-  it('returns the graph unchanged when an update names a node of another kind', () => {
-    // Ids are opaque, so a detail panel holding a stale id after a remove can
-    // reach this. Returning a fresh object with the edit dropped would re-render
-    // the canvas and snap the field back with nothing to explain it.
-    const source = graphFromDraft(draft({ conditions: [STATUS_IN] }));
-    const triggerId = nodeAt(source, 0).id;
-    const conditionId = nodeAt(source, 1).id;
-    const actionId = nodeAt(source, 2).id;
-
-    expect(updateTriggerNode(source, conditionId, SLA_BREACHED)).toBe(source);
-    expect(updateConditionNode(source, actionId, OUT_OF_HOURS)).toBe(source);
-    expect(updateActionNode(source, triggerId, ADD_TAG)).toBe(source);
+  it('returns nothing for an empty or negative count rather than throwing', () => {
+    expect(layoutSpine(0)).toEqual([]);
+    expect(layoutSpine(-1)).toEqual([]);
   });
 
-  it('returns the graph unchanged when an update names an id that is gone', () => {
-    const source = graphFromDraft(draft());
+  it('turns a drop position back into the slot it is nearest', () => {
+    const pitch = NODE_HEIGHT + NODE_GAP;
 
-    expect(updateTriggerNode(source, 'gone', SLA_BREACHED)).toBe(source);
-    expect(updateConditionNode(source, 'gone', OUT_OF_HOURS)).toBe(source);
-    expect(updateActionNode(source, 'gone', ADD_TAG)).toBe(source);
+    expect(dropIndex(0, 3)).toBe(0);
+    expect(dropIndex(pitch, 3)).toBe(1);
+    expect(dropIndex(2 * pitch, 3)).toBe(2);
+    // Past halfway into the next slot, the node moves — which is what the
+    // gesture looks like it should do.
+    expect(dropIndex(pitch * 0.6, 3)).toBe(1);
+    expect(dropIndex(pitch * 0.4, 3)).toBe(0);
   });
 
-  it('moves by an index within the kind, not by a position on the canvas', () => {
-    // Canvas position 1 in this graph is "just under the trigger", which for an
-    // action is `indexWithinKind` 0. The two differ whenever conditions exist,
-    // and the caller is the one that converts.
-    const source = graphFromDraft(
-      draft({
-        conditions: [STATUS_IN, OLDER_THAN],
-        actions: [ADD_TAG, SET_PENDING, SET_URGENT],
-      }),
-    );
-    const moved = moveNode(source, kindAt(source, 'action', 2).id, 1);
-
-    expect(readBack(moved).actions).toEqual([ADD_TAG, SET_URGENT, SET_PENDING]);
-  });
-
-  it('keeps the chain readable through a long editing session', () => {
-    let graph = graphFromDraft(draft({ actions: [SET_PENDING] }));
-
-    graph = insertCondition(graph, STATUS_IN, 0);
-    graph = insertCondition(graph, TICKET_TAGGED, 0);
-    graph = insertAction(graph, ADD_TAG, 0);
-    graph = removeNode(graph, kindAt(graph, 'condition', 0).id);
-    graph = moveNode(graph, kindAt(graph, 'action', 0).id, 1);
-    graph = insertAction(graph, NOTIFY_USER, 1);
-
-    const read = readBack(graph);
-
-    expect(read.conditions).toEqual([STATUS_IN]);
-    expect(read.actions).toEqual([SET_PENDING, NOTIFY_USER, ADD_TAG]);
-    expect(graph.edges).toHaveLength(graph.nodes.length - 1);
+  it('clamps a drop outside the action band and copes with an empty one', () => {
+    expect(dropIndex(-500, 3)).toBe(0);
+    expect(dropIndex(9_000, 3)).toBe(2);
+    expect(dropIndex(120, 0)).toBe(0);
   });
 });
 
@@ -699,31 +679,6 @@ function savedWorkflow(): WorkflowResponse {
     createdAt: '2026-01-05T09:00:00.000Z',
     updatedAt: '2026-02-11T14:30:00.000Z',
   };
-}
-
-/**
- * Indexing under `noUncheckedIndexedAccess`, failing with the index rather than
- * with `Cannot read properties of undefined` so a broken chain names itself.
- */
-function nodeAt(graph: WorkflowGraph, index: number): WorkflowGraphNode {
-  const node = graph.nodes[index];
-
-  if (node === undefined) {
-    throw new Error(`expected a node at ${String(index)}, found ${String(graph.nodes.length)}`);
-  }
-
-  return node;
-}
-
-/** The same, for the nth node of one kind. */
-function kindAt(graph: WorkflowGraph, kind: WorkflowNodeKind, index: number): WorkflowGraphNode {
-  const node = nodesOfKind(graph, kind)[index];
-
-  if (node === undefined) {
-    throw new Error(`expected a ${kind} at ${String(index)}`);
-  }
-
-  return node;
 }
 
 function describeCase(value: WorkflowCondition | WorkflowAction): string {
