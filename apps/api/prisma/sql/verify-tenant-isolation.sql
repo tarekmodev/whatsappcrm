@@ -44,9 +44,10 @@
 --               table returns zero rows. With the GUC set, each tenant sees its
 --               own rows and none of the other's. Writing another tenant's
 --               `tenant_id` is rejected; updating and deleting its rows match
---               nothing. `webhook_events`, `webhook_event_replays` and
---               `tenant_signups` are unreachable by grant. The system role sees
---               across tenants, which is what it is for.
+--               nothing. `webhook_events`, `webhook_event_replays`,
+--               `tenant_signups`, `platform_settings` and
+--               `platform_setting_changes` are unreachable by grant. The system
+--               role sees across tenants, which is what it is for.
 --
 -- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74), one in
 -- each of the five auth tables — `teams`, `invites`, `invite_teams`, `sessions`,
@@ -1043,13 +1044,14 @@ BEGIN
 
     RAISE NOTICE 'ok: GUC cleared to the empty string -> 0 rows';
 
-    -- 3g. `webhook_events`, `webhook_event_replays`, `tenant_signups` and
-    -- `lifecycle_events` carry no policy by design, so on all four the grant is
-    -- the enforcement. The app role must not be able to read any of them at all.
+    -- 3g. `webhook_events`, `webhook_event_replays`, `tenant_signups`,
+    -- `lifecycle_events`, `platform_settings` and `platform_setting_changes`
+    -- carry no policy by design, so on all six the grant is the enforcement. The
+    -- app role must not be able to read any of them at all.
     --
     -- Asserted here rather than left to phase 1b, which only proves the negative
     -- — "no privilege on an unprotected table" also passes for a table that was
-    -- never created. These four are named, so a grant added by hand or an
+    -- never created. These six are named, so a grant added by hand or an
     -- `app-roles.sql` branch dropped in a refactor fails by name.
     BEGIN
         EXECUTE 'SELECT count(*) FROM "public"."webhook_events"';
@@ -1096,17 +1098,43 @@ BEGIN
             RAISE NOTICE 'ok: lifecycle_events unreachable by the app role (no grant)';
     END;
 
+    -- TAR-811. Platform-wide configuration and its history. Neither carries
+    -- `tenant_id` at all, so — unlike `lifecycle_events` above — neither looks
+    -- scoped to anything reading the catalog, and phase 1a skips both without
+    -- naming them. `platform_settings` holds the Meta app secret encrypted at
+    -- rest, so an accidental grant here would put every tenant's connection one
+    -- SELECT away from the ciphertext of a platform credential.
+    BEGIN
+        EXECUTE 'SELECT count(*) FROM "public"."platform_settings"';
+        RAISE EXCEPTION 'app role can read platform_settings — it holds no policy and must hold no grant';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: platform_settings unreachable by the app role (no grant)';
+    END;
+
+    BEGIN
+        EXECUTE 'SELECT count(*) FROM "public"."platform_setting_changes"';
+        RAISE EXCEPTION 'app role can read platform_setting_changes — it holds no policy and must hold no grant';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: platform_setting_changes unreachable by the app role (no grant)';
+    END;
+
     -- 3i. The append-only trails stay append-only for `whatsappcrm_system` too
-    -- (TAR-403, TAR-94). Both tables are the record of an operator acting on
-    -- production state, and `SystemPrisma` is the credential a mistake would run
-    -- under — so the grant withholds UPDATE and DELETE from it, and a re-run of
-    -- `app-roles.sql` that lost that branch has to fail here rather than in a
-    -- compliance review.
+    -- (TAR-403, TAR-94, TAR-811). All three tables are the record of an operator
+    -- acting on production state, and `SystemPrisma` is the credential a mistake
+    -- would run under — so the grant withholds UPDATE and DELETE from it, and a
+    -- re-run of `app-roles.sql` that lost that branch has to fail here rather
+    -- than in a compliance review.
+    --
+    -- `platform_settings` is deliberately **not** in this list: it is mutable by
+    -- design, because an operator's write is an upsert and "revert to
+    -- environment" is a DELETE. Only its history is append-only.
     --
     -- Read as privileges rather than attempted as statements: an UPDATE matching
     -- no rows succeeds, so executing one would prove nothing about a table this
     -- fixture leaves empty.
-    FOREACH trail IN ARRAY ARRAY['lifecycle_events', 'webhook_event_replays'] LOOP
+    FOREACH trail IN ARRAY ARRAY['lifecycle_events', 'webhook_event_replays', 'platform_setting_changes'] LOOP
         FOREACH priv IN ARRAY ARRAY['UPDATE', 'DELETE'] LOOP
             IF has_table_privilege('whatsappcrm_system', format('"public".%I', trail), priv) THEN
                 RAISE EXCEPTION 'system role holds % on %, which is append-only', priv, trail;
