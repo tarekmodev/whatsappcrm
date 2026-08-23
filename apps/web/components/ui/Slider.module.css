@@ -11,6 +11,26 @@
   gap: var(--space-3);
 }
 
+/*
+ * `layout="block"`: the readout above a full-width control rather than beside
+ * it. Ordered here rather than in the DOM, so the markup stays one shape and the
+ * value is read out of the same place whichever face a caller asked for.
+ */
+.slider[data-layout='block'] {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.slider[data-layout='block'] .value {
+  order: -1;
+  min-inline-size: 0;
+  font-size: var(--font-size-body-lg);
+  font-weight: var(--font-weight-strong);
+  color: var(--color-on-surface);
+  text-align: start;
+}
+
 .control {
   position: relative;
   display: flex;
@@ -21,10 +41,20 @@
   min-block-size: var(--size-touch-target);
 }
 
-.track {
+/*
+ * The layer a rail is drawn in, whether that rail is this component's own or one
+ * a caller handed over as `trackSlot`. Placement only: a slot sets its own
+ * height and its own paint, and inherits `--slider-ratio` so it can line
+ * something up with the knob using the same arithmetic `.fill` uses.
+ */
+.rail {
   position: absolute;
   inset-inline: 0;
   inset-block-start: 50%;
+  translate: 0 -50%;
+}
+
+.track {
   block-size: var(--size-slider-track);
   border-radius: var(--radius-pill);
   /*
@@ -41,7 +71,6 @@
    * follows the pill and does not change the rail's height.
    */
   box-shadow: inset 0 0 0 var(--border-hairline) var(--color-border);
-  translate: 0 -50%;
 }
 
 .fill {

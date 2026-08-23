@@ -1,0 +1,11 @@
+.count {
+  font-size: var(--font-size-caption);
+  color: var(--color-on-surface-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Past the cap. The words already say so — the colour only makes it findable. */
+.count[data-over='true'] {
+  color: var(--color-danger);
+  font-weight: var(--font-weight-medium);
+}
