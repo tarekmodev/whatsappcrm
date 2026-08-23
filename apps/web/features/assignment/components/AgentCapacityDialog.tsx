@@ -78,7 +78,7 @@ export function AgentCapacityDialog({
     onClose();
   }, [content, nextLimit, onClose, selected, showToast, workspaceDefault]);
 
-  const { submit, isPending, formError, requestId, errorCode } = useActionForm({
+  const { submit, isPending, formError, requestId, errorCode, clearError } = useActionForm({
     perform,
     onSuccess,
   });
@@ -165,6 +165,13 @@ export function AgentCapacityDialog({
 
                   setUserId(event.target.value);
                   setLimitError(undefined);
+                  // Every failure on screen was about the agent being left
+                  // behind: a `not_found` for an account deleted underneath the
+                  // picker, or a range refusal against that agent's number. Kept
+                  // on screen it would read as a verdict on the agent just
+                  // picked, and `not_found` would go on blocking a submit that
+                  // now has a different subject.
+                  clearError();
 
                   // The form re-reads from the agent it now describes. Carrying
                   // the previous agent's number across would let a supervisor
@@ -187,6 +194,9 @@ export function AgentCapacityDialog({
               onDraftChange={(next) => {
                 setDraft(next);
                 setLimitError(undefined);
+                // Same reason the client-side error goes: the server refused the
+                // value that was there, and this is no longer that value.
+                clearError();
               }}
             />
           )}

@@ -399,6 +399,66 @@ describe('AgentCapacityDialog', () => {
     expect(limitField()).toBeDisabled();
   });
 
+  /**
+   * A `not_found` is a verdict on the agent it was sent for. Left on screen after
+   * the supervisor picks somebody else it reads as one on the new agent — and
+   * because it also blocks the submit, the dialog would refuse a save it has no
+   * reason to refuse.
+   */
+  it('drops a blocking refusal when the supervisor picks a different agent', async () => {
+    renderDialog();
+
+    updateAgentCapacityAction.mockResolvedValue({
+      status: 'error',
+      message: 'That agent no longer exists.',
+      requestId: 'req-4',
+      code: 'not_found',
+    });
+
+    typeLimit('4');
+    submit();
+
+    await waitFor(() => {
+      expect(screen.getByText(content.assignment.raiseLimitNotFound)).toBeInTheDocument();
+    });
+
+    fireEvent.change(fieldByLabel(content.assignment.raiseLimitAgentLabel), {
+      target: { value: LIANG_ID },
+    });
+
+    expect(screen.queryByText(content.assignment.raiseLimitNotFound)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: content.assignment.raiseLimitSubmit })).toBeEnabled();
+  });
+
+  /**
+   * The server refused a number; this is no longer that number. A field error that
+   * outlives the value it was about marks a value nobody has judged yet.
+   */
+  it('drops a server field error once the value it was about is retyped', async () => {
+    renderDialog();
+
+    updateAgentCapacityAction.mockResolvedValue({
+      status: 'error',
+      message: 'maxConcurrentTickets must be between 1 and 1000.',
+      requestId: 'req-5',
+      code: 'validation_failed',
+    });
+
+    typeLimit('4');
+    submit();
+
+    await waitFor(() => {
+      expect(limitField()).toHaveAttribute('aria-invalid', 'true');
+    });
+
+    typeLimit('5');
+
+    expect(
+      screen.queryByText('maxConcurrentTickets must be between 1 and 1000.'),
+    ).not.toBeInTheDocument();
+    expect(limitField()).not.toHaveAttribute('aria-invalid', 'true');
+  });
+
   it('says out loud when the picker holds only the first page of agents', () => {
     renderDialog(vi.fn(), true);
 

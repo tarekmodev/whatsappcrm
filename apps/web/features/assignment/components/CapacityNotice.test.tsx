@@ -114,10 +114,12 @@ describe('CapacityNotice', () => {
 
   /**
    * A permitted caller the console cannot read limits for is not the same absence
-   * as a refused one: telling a supervisor to ask a supervisor is nonsense, so the
-   * notice states the consequence and offers nothing.
+   * as a refused one, and neither of the other two sentences survives here:
+   * telling a supervisor to ask a supervisor is nonsense, and describing what
+   * raising a limit does is a promise about a control this reader has not been
+   * given. Its own sentence, and still no button.
    */
-  it('does not tell a permitted caller to go and ask somebody else', () => {
+  it('says why there is nothing to change, rather than borrowing another reader’s sentence', () => {
     render(
       <CapacityNotice
         atCapacityCount={2}
@@ -126,11 +128,27 @@ describe('CapacityNotice', () => {
       />,
     );
 
-    expect(screen.getByText(content.assignment.capacityNoticeConsequence)).toBeInTheDocument();
+    expect(screen.getByText(content.assignment.capacityNoticeUnavailable)).toBeInTheDocument();
     expect(
       screen.queryByText(content.assignment.capacityNoticeAskSupervisor),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(content.assignment.capacityNoticeConsequence),
+    ).not.toBeInTheDocument();
     expect(trigger()).not.toBeInTheDocument();
+  });
+
+  /** The count is the fact, and it is worth knowing to a reader who cannot act on it. */
+  it('keeps the count when the limits cannot be read', () => {
+    render(
+      <CapacityNotice
+        atCapacityCount={2}
+        isFilteredToCapacity={false}
+        remedy={capacityRemedy(true, null)}
+      />,
+    );
+
+    expect(screen.getByText(content.assignment.capacityNoticeCount(2))).toBeInTheDocument();
   });
 
   /**

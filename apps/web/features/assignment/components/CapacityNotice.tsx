@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Cluster } from '@/components/layout/Cluster';
 import { Notice } from '@/components/ui/Notice';
-import { useContent } from '@/lib/content';
+import { useContent, type Content } from '@/lib/content';
 import type { CapacityRemedy } from '../capacity';
 import { LazyAgentCapacityDialog } from './flagged-dialogs.lazy';
 import styles from './CapacityNotice.module.css';
@@ -62,12 +62,9 @@ export function CapacityNotice({
                 : content.assignment.capacityNoticeCount(atCapacityCount)}
             </span>{' '}
             {/* The reader who cannot act still gets the fact above, and a
-                sentence naming who can — never a disabled button, per 0001. */}
-            <span>
-              {remedy.kind === 'denied'
-                ? content.assignment.capacityNoticeAskSupervisor
-                : content.assignment.capacityNoticeConsequence}
-            </span>
+                sentence naming what they can do instead — never a disabled
+                button, per 0001. */}
+            <span>{remedySentence(remedy, content)}</span>
           </span>
 
           {remedy.kind === 'edit' ? (
@@ -97,4 +94,24 @@ export function CapacityNotice({
       ) : null}
     </>
   );
+}
+
+/**
+ * The sentence that follows the count: one per remedy, because the three are not
+ * interchangeable and two of them are only true for their own reader.
+ *
+ * Exhaustive over the union rather than a pair of ternaries, so a fourth remedy
+ * cannot quietly inherit somebody else's sentence — which is exactly how the
+ * `unavailable` reader spent #235 being told what raising a limit would do from
+ * a notice that had no limit to offer.
+ */
+function remedySentence(remedy: CapacityRemedy, content: Content): string {
+  switch (remedy.kind) {
+    case 'denied':
+      return content.assignment.capacityNoticeAskSupervisor;
+    case 'unavailable':
+      return content.assignment.capacityNoticeUnavailable;
+    case 'edit':
+      return content.assignment.capacityNoticeConsequence;
+  }
 }

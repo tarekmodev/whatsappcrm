@@ -1868,6 +1868,19 @@ export const content = {
      * the queue is stuck is what tells somebody whether to wait or to escalate.
      */
     capacityNoticeAskSupervisor: 'Ask an admin or a supervisor to raise an agent’s limit.',
+    /**
+     * Replaces the sentence above for a reader who may act but whose console
+     * cannot read the limits right now — `GET /v1/assignment-settings`
+     * unreachable, or a workspace with no agents to tune (`capacityRemedy`'s
+     * `unavailable`).
+     *
+     * Neither of the other two sentences is true here: the consequence line
+     * describes raising a limit from a control this reader has not been given,
+     * and telling a supervisor to ask a supervisor is nonsense. So this one
+     * states the fact and names the way round it that still works.
+     */
+    capacityNoticeUnavailable:
+      'This console cannot read agent limits right now, so there is no limit to change from here. These tickets can still be assigned by hand.',
 
     /**
      * "Change", not "Raise". The field accepts the whole contract range and the
