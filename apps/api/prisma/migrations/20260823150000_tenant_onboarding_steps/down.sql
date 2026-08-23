@@ -1,0 +1,44 @@
+-- Reverses 20260823150000_tenant_onboarding_steps.
+--
+-- Exact: the forward migration created one table, one unique index, two foreign
+-- keys and one RLS policy, and altered nothing that already existed. Dropping
+-- the table takes its primary key, its unique index, both foreign keys and the
+-- policy with it, so the single statement below is the whole reversal. Nothing
+-- else in the schema references the table — no foreign key points at it — so
+-- this cannot fail on a dependency.
+--
+-- ⚠️ Roll the application back first. At this migration's version
+-- `PATCH /api/v1/tenant/onboarding/steps/{stepId}` upserts here and
+-- `GET /api/v1/tenant/onboarding` reads here, so dropping the table under a
+-- running instance turns both into 500s and `OnboardingBoundary` renders the
+-- console's error state. That fails in the safe direction — no wrong answer is
+-- served, and nothing outside `/onboarding` is affected — but it is still an
+-- alarm nobody needs during a rollback.
+--
+-- ⚠️ **The skips are destroyed.** Every step a tenant had put off reverts to
+-- `pending` when the table comes back, and there is no other copy: TAR-832
+-- decision 5 deliberately files no `audit_logs` row for a skip, so nothing else
+-- in the database records that one happened. This is acceptable rather than
+-- merely survivable, and it is why the table was allowed a plain `DROP` instead
+-- of an expand → migrate → contract sequence: a re-shown checklist step is one
+-- click to skip again, and no derived state, report or billing figure reads
+-- these rows. Nothing `completed` is at risk at all — completion is derived from
+-- the tenant's WABA, invites and branding rows, none of which this touches.
+--
+-- Export first if an environment's skips matter:
+--
+--     \copy (SELECT * FROM tenant_onboarding_steps ORDER BY tenant_id, step_id) TO 'skips.csv' CSV HEADER
+--
+-- **After this runs**, re-run `pnpm db:roles`. The grants and the
+-- `system_unrestricted` policy for a table that no longer exists are removed
+-- with it, but `app-roles.sql` is the file that decides what the two roles hold,
+-- and leaving it un-run after a schema change is how the two drift.
+--
+-- Re-runnable: the one statement is `IF EXISTS`. No function, type or sequence
+-- was created by the forward file, so there is nothing else to drop.
+
+SET LOCAL lock_timeout = '3s';
+
+-- Takes its primary key, its unique index, both foreign keys and the
+-- `tenant_isolation` policy with it.
+DROP TABLE IF EXISTS "public"."tenant_onboarding_steps";
