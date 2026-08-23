@@ -165,15 +165,22 @@ export function AgentCapacityDialog({
 
                   setUserId(event.target.value);
                   setLimitError(undefined);
+
                   /*
-                   * The server's refusal was about the agent who just left the
-                   * form. `useActionForm` only clears on the next submit, and a
-                   * `forbidden` or `not_found` disables the button — so without
-                   * this the dialog insists an agent is gone after the
-                   * supervisor has already picked somebody else, with no way
-                   * back but a reload.
+                   * The refusal was about the agent who just left the form.
+                   * `useActionForm` only clears on the next submit and
+                   * `not_found` disables the button, so without this the dialog
+                   * insists an agent is gone after the supervisor has already
+                   * picked somebody else, with no way back but a reload.
+                   *
+                   * Not `forbidden`, which is about the session rather than the
+                   * agent: nobody's name makes the permission come back, so
+                   * clearing it would re-enable a submit that can only refuse
+                   * the same way again.
                    */
-                  clearError();
+                  if (errorCode !== 'forbidden') {
+                    clearError();
+                  }
 
                   // The form re-reads from the agent it now describes. Carrying
                   // the previous agent's number across would let a supervisor
@@ -196,10 +203,20 @@ export function AgentCapacityDialog({
               onDraftChange={(next) => {
                 setDraft(next);
                 setLimitError(undefined);
-                // Same reason the client-side error goes: the server refused a
-                // value that is no longer in the field. Leaving it would keep
-                // `aria-invalid` and a stale message on a number nobody typed.
-                clearError();
+
+                /*
+                 * Only the refusal that was about the value. Leaving it would
+                 * keep `aria-invalid` and a stale message on a number nobody
+                 * typed — the same reason `limitError` goes beside it.
+                 *
+                 * The two blocking codes outlive a retype for the reason they
+                 * block at all: neither a new number nor a new name answers a
+                 * missing agent or a missing permission, so clearing either
+                 * would re-enable a submit that refuses identically.
+                 */
+                if (errorCode === 'validation_failed') {
+                  clearError();
+                }
               }}
             />
           )}
