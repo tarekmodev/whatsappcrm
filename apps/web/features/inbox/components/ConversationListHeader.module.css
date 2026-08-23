@@ -53,17 +53,11 @@
 
 /*
  * The tick reserves its box on every entry and only paints on the current one,
- * so opening the panel does not show two labels at two different indents.
+ * so opening the panel does not show two labels at two different indents. It
+ * started here and now lives beside `menuItem`, because the reference marks its
+ * views and assignee menus the same way — a second copy is how the two indents
+ * come to differ.
  */
 .tick {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  inline-size: var(--size-icon-sm);
-  color: var(--color-accent);
-  visibility: hidden;
-}
-
-.tick[data-current='true'] {
-  visibility: visible;
+  composes: menuTick from '../../../components/ui/MenuButton.module.css';
 }

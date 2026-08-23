@@ -230,10 +230,13 @@ export function MenuButton({
       </button>
 
       {/*
-        Dropped from the DOM when closed rather than hidden. A popup has no
-        entry transition to protect — unlike the drawer — and leaving links in
-        the tree behind `inert` is one attribute away from a set of tab stops
-        nobody can see.
+        Dropped from the DOM when closed rather than hidden. The panel does have
+        an *entrance* — see `menuPanelEnter` — but an entrance plays on a node
+        that has just been added, and only an *exit* would need one kept around
+        to play out. It has none, by the reference's own reading: a dismissed
+        menu is the reader having already decided, and leaving links in the tree
+        behind `inert` to animate them away is one attribute away from a set of
+        tab stops nobody can see.
       */}
       {isOpen ? (
         <div
