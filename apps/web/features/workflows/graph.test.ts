@@ -301,10 +301,13 @@ describe('round trip', () => {
     // with — through the same `validateWorkflowDraft` the form dialogs submit.
     const workflow = savedWorkflow();
     const opened = draftFromWorkflow(workflow);
-    const saved = validateWorkflowDraft(readBack(graphFromDraft(opened), {
-      name: opened.name,
-      isActive: opened.isActive,
-    }), content);
+    const saved = validateWorkflowDraft(
+      readBack(graphFromDraft(opened), {
+        name: opened.name,
+        isActive: opened.isActive,
+      }),
+      content,
+    );
 
     expect(saved.status).toBe('valid');
     expect(saved.status === 'valid' && saved.input).toEqual(
@@ -329,33 +332,82 @@ describe('round trip', () => {
 });
 
 describe('draftFromGraph', () => {
-  it('reads the chain from its edges rather than from the node array', () => {
-    // The two agree in every graph the editing operations build, so the only way
-    // to prove which one is read is to make them disagree.
-    const graph = graphFromDraft(
-      draft({ actions: [SET_PENDING, SET_URGENT] }),
-    );
+  it('reads the chain from the node order, and says so when the edges disagree', () => {
+    // The module's one source-of-truth rule, pinned from both sides. An earlier
+    // revision walked the edges here while every editing operation rebuilt them
+    // from `nodes`, so a graph like this one read one way before an edit and the
+    // other way after it — the saved order depending on whether the supervisor
+    // happened to touch anything first.
+    const graph = graphFromDraft(draft({ actions: [SET_PENDING, SET_URGENT] }));
     const trigger = nodeAt(graph, 0);
     const first = nodeAt(graph, 1);
     const second = nodeAt(graph, 2);
-    const rewired: WorkflowGraph = {
+
+    expect(
+      draftFromGraph(
+        {
+          ...graph,
+          edges: [
+            { id: 'a', source: trigger.id, target: second.id },
+            { id: 'b', source: second.id, target: first.id },
+          ],
+        },
+        CARRIED,
+      ),
+    ).toEqual({ status: 'invalid', problem: 'edges_out_of_sync' });
+  });
+
+  it('cannot be made to save one order before an edit and another after it', () => {
+    // The regression the rule above exists for, stated as behaviour: whatever a
+    // stale edge set does, it must not be that inserting an unrelated third
+    // action silently swaps the two the supervisor already had.
+    const graph = graphFromDraft(draft({ actions: [SET_PENDING, SET_URGENT] }));
+    const stale: WorkflowGraph = {
       ...graph,
-      nodes: [trigger, first, second],
       edges: [
-        { id: 'a', source: trigger.id, target: second.id },
-        { id: 'b', source: second.id, target: first.id },
+        { id: 'a', source: nodeAt(graph, 0).id, target: nodeAt(graph, 2).id },
+        { id: 'b', source: nodeAt(graph, 2).id, target: nodeAt(graph, 1).id },
       ],
     };
 
-    expect(readBack(rewired).actions).toEqual([SET_URGENT, SET_PENDING]);
+    const before = draftFromGraph(stale, CARRIED);
+    const after = draftFromGraph(insertAction(stale, ADD_TAG, 2), CARRIED);
+
+    expect(before.status).toBe('invalid');
+    expect(after.status === 'ok' && after.draft.actions).toEqual([
+      SET_PENDING,
+      SET_URGENT,
+      ADD_TAG,
+    ]);
+  });
+
+  it('hands back the node ids behind each condition and action, in draft order', () => {
+    // `validateWorkflowDraft` reports `byCondition` / `byAction` by index, and a
+    // canvas renders by id. Without these the only mapping is a second reading of
+    // the order at the call site, which is the thing the module rules out.
+    const graph = graphFromDraft(
+      draft({ conditions: [STATUS_IN, OLDER_THAN], actions: [ADD_TAG, SET_PENDING] }),
+    );
+    const read = draftFromGraph(graph, CARRIED);
+
+    expect(read.status).toBe('ok');
+
+    if (read.status !== 'ok') {
+      return;
+    }
+
+    expect(read.conditionIds).toEqual(nodesOfKind(graph, 'condition').map((node) => node.id));
+    expect(read.actionIds).toEqual(nodesOfKind(graph, 'action').map((node) => node.id));
+    expect(read.actionIds).toHaveLength(read.draft.actions.length);
   });
 
   it('refuses a graph with no trigger', () => {
     const graph = graphFromDraft(draft());
 
-    expect(
-      draftFromGraph({ ...graph, nodes: graph.nodes.slice(1), edges: [] }, CARRIED),
-    ).toEqual({ status: 'invalid', problem: 'missing_trigger' });
+    expect(draftFromGraph({ ...graph, nodes: graph.nodes.slice(1), edges: [] }, CARRIED)).toEqual({
+      status: 'invalid',
+      problem: 'missing_trigger',
+    });
   });
 
   it('refuses a graph with two triggers', () => {
@@ -363,95 +415,35 @@ describe('draftFromGraph', () => {
     const trigger = nodeAt(graph, 0);
 
     expect(
-      draftFromGraph(
-        { ...graph, nodes: [...graph.nodes, { ...trigger, id: 'extra' }] },
-        CARRIED,
-      ),
+      draftFromGraph({ ...graph, nodes: [...graph.nodes, { ...trigger, id: 'extra' }] }, CARRIED),
     ).toEqual({ status: 'invalid', problem: 'multiple_triggers' });
   });
 
-  it('refuses a graph with something wired above the trigger', () => {
+  it('refuses a graph whose head is not the trigger', () => {
     const graph = graphFromDraft(draft());
-    const trigger = nodeAt(graph, 0);
-    const action = nodeAt(graph, 1);
 
     expect(
-      draftFromGraph(
-        { ...graph, edges: [{ id: 'e', source: action.id, target: trigger.id }] },
-        CARRIED,
-      ),
+      draftFromGraph({ ...graph, nodes: [...graph.nodes].reverse(), edges: [] }, CARRIED),
     ).toEqual({ status: 'invalid', problem: 'trigger_not_first' });
   });
 
-  it('refuses a fork', () => {
-    const graph = graphFromDraft(draft({ actions: [SET_PENDING, SET_URGENT] }));
+  it('refuses a condition ordered below an action', () => {
+    const graph = graphFromDraft(draft({ conditions: [STATUS_IN] }));
     const trigger = nodeAt(graph, 0);
-    const first = nodeAt(graph, 1);
-    const second = nodeAt(graph, 2);
+    const condition = nodeAt(graph, 1);
+    const action = nodeAt(graph, 2);
 
     expect(
-      draftFromGraph(
-        {
-          ...graph,
-          edges: [
-            { id: 'a', source: trigger.id, target: first.id },
-            { id: 'b', source: trigger.id, target: second.id },
-          ],
-        },
-        CARRIED,
-      ),
-    ).toEqual({ status: 'invalid', problem: 'forked' });
+      draftFromGraph({ ...graph, nodes: [trigger, action, condition], edges: [] }, CARRIED),
+    ).toEqual({ status: 'invalid', problem: 'condition_after_action' });
   });
 
-  it('refuses a join', () => {
-    const graph = graphFromDraft(draft({ actions: [SET_PENDING, SET_URGENT] }));
-    const trigger = nodeAt(graph, 0);
-    const first = nodeAt(graph, 1);
-    const second = nodeAt(graph, 2);
-
-    expect(
-      draftFromGraph(
-        {
-          ...graph,
-          edges: [
-            { id: 'a', source: trigger.id, target: first.id },
-            { id: 'b', source: first.id, target: second.id },
-            { id: 'c', source: trigger.id, target: second.id },
-          ],
-        },
-        CARRIED,
-      ),
-    ).toEqual({ status: 'invalid', problem: 'forked' });
-  });
-
-  it('refuses a cycle instead of walking it forever', () => {
-    const graph = graphFromDraft(draft({ actions: [SET_PENDING, SET_URGENT] }));
-    const trigger = nodeAt(graph, 0);
-    const first = nodeAt(graph, 1);
-    const second = nodeAt(graph, 2);
-
-    expect(
-      draftFromGraph(
-        {
-          ...graph,
-          edges: [
-            { id: 'a', source: trigger.id, target: first.id },
-            { id: 'b', source: first.id, target: second.id },
-            { id: 'c', source: second.id, target: first.id },
-          ],
-        },
-        CARRIED,
-      ),
-    ).toEqual({ status: 'invalid', problem: 'cycle' });
-  });
-
-  it('refuses a node the chain never reaches', () => {
-    // A dropped node the supervisor can see but the save would silently skip.
+  it('refuses a chain missing an edge', () => {
     const graph = graphFromDraft(draft({ actions: [SET_PENDING, SET_URGENT] }));
 
     expect(draftFromGraph({ ...graph, edges: graph.edges.slice(0, 1) }, CARRIED)).toEqual({
       status: 'invalid',
-      problem: 'disconnected',
+      problem: 'edges_out_of_sync',
     });
   });
 
@@ -460,30 +452,20 @@ describe('draftFromGraph', () => {
 
     expect(
       draftFromGraph(
-        { ...graph, edges: [...graph.edges, { id: 'x', source: nodeAt(graph, 1).id, target: 'gone' }] },
+        { ...graph, edges: [{ id: 'x', source: nodeAt(graph, 0).id, target: 'gone' }] },
         CARRIED,
       ),
-    ).toEqual({ status: 'invalid', problem: 'disconnected' });
+    ).toEqual({ status: 'invalid', problem: 'edges_out_of_sync' });
   });
 
-  it('refuses a condition wired below an action', () => {
-    const graph = graphFromDraft(draft({ conditions: [STATUS_IN] }));
-    const trigger = nodeAt(graph, 0);
-    const condition = nodeAt(graph, 1);
-    const action = nodeAt(graph, 2);
+  it('accepts edges whose ids a renderer supplied, since ids carry no meaning', () => {
+    const graph = graphFromDraft(draft());
+    const renamed = graph.edges.map((edge, index) => ({
+      ...edge,
+      id: `renderer-${String(index)}`,
+    }));
 
-    expect(
-      draftFromGraph(
-        {
-          ...graph,
-          edges: [
-            { id: 'a', source: trigger.id, target: action.id },
-            { id: 'b', source: action.id, target: condition.id },
-          ],
-        },
-        CARRIED,
-      ),
-    ).toEqual({ status: 'invalid', problem: 'condition_after_action' });
+    expect(draftFromGraph({ ...graph, edges: renamed }, CARRIED).status).toBe('ok');
   });
 
   it('leaves an incomplete workflow to the form rather than reporting it here', () => {
@@ -515,11 +497,7 @@ describe('editing', () => {
       1,
     );
 
-    expect(readBack(graph).conditions).toEqual([
-      STATUS_IN,
-      OUT_OF_HOURS,
-      OLDER_THAN,
-    ]);
+    expect(readBack(graph).conditions).toEqual([STATUS_IN, OUT_OF_HOURS, OLDER_THAN]);
   });
 
   it('appends when the index is past the end', () => {
@@ -555,9 +533,7 @@ describe('editing', () => {
   });
 
   it('closes the chain over a removed node', () => {
-    const source = graphFromDraft(
-      draft({ conditions: [STATUS_IN, OLDER_THAN] }),
-    );
+    const source = graphFromDraft(draft({ conditions: [STATUS_IN, OLDER_THAN] }));
     const graph = removeNode(source, nodeAt(source, 1).id);
 
     expect(readBack(graph).conditions).toEqual([OLDER_THAN]);
@@ -577,9 +553,7 @@ describe('editing', () => {
   });
 
   it('reorders actions within the action band', () => {
-    const source = graphFromDraft(
-      draft({ actions: [ADD_TAG, SET_PENDING, SET_URGENT] }),
-    );
+    const source = graphFromDraft(draft({ actions: [ADD_TAG, SET_PENDING, SET_URGENT] }));
     const moved = moveNode(source, kindAt(source, 'action', 2).id, 0);
 
     expect(readBack(moved).actions).toEqual([SET_URGENT, ADD_TAG, SET_PENDING]);
@@ -623,9 +597,7 @@ describe('editing', () => {
   });
 
   it('replaces what a node carries without changing the chain', () => {
-    const source = graphFromDraft(
-      draft({ conditions: [STATUS_IN], actions: [ADD_TAG] }),
-    );
+    const source = graphFromDraft(draft({ conditions: [STATUS_IN], actions: [ADD_TAG] }));
     const trigger = nodeAt(source, 0);
     const condition = nodeAt(source, 1);
     const action = nodeAt(source, 2);
@@ -649,6 +621,43 @@ describe('editing', () => {
     const graph = updateTriggerNode(source, nodeAt(source, 0).id, STATUS_CHANGED);
 
     expect(graph.edges).toBe(source.edges);
+  });
+
+  it('returns the graph unchanged when an update names a node of another kind', () => {
+    // Ids are opaque, so a detail panel holding a stale id after a remove can
+    // reach this. Returning a fresh object with the edit dropped would re-render
+    // the canvas and snap the field back with nothing to explain it.
+    const source = graphFromDraft(draft({ conditions: [STATUS_IN] }));
+    const triggerId = nodeAt(source, 0).id;
+    const conditionId = nodeAt(source, 1).id;
+    const actionId = nodeAt(source, 2).id;
+
+    expect(updateTriggerNode(source, conditionId, SLA_BREACHED)).toBe(source);
+    expect(updateConditionNode(source, actionId, OUT_OF_HOURS)).toBe(source);
+    expect(updateActionNode(source, triggerId, ADD_TAG)).toBe(source);
+  });
+
+  it('returns the graph unchanged when an update names an id that is gone', () => {
+    const source = graphFromDraft(draft());
+
+    expect(updateTriggerNode(source, 'gone', SLA_BREACHED)).toBe(source);
+    expect(updateConditionNode(source, 'gone', OUT_OF_HOURS)).toBe(source);
+    expect(updateActionNode(source, 'gone', ADD_TAG)).toBe(source);
+  });
+
+  it('moves by an index within the kind, not by a position on the canvas', () => {
+    // Canvas position 1 in this graph is "just under the trigger", which for an
+    // action is `indexWithinKind` 0. The two differ whenever conditions exist,
+    // and the caller is the one that converts.
+    const source = graphFromDraft(
+      draft({
+        conditions: [STATUS_IN, OLDER_THAN],
+        actions: [ADD_TAG, SET_PENDING, SET_URGENT],
+      }),
+    );
+    const moved = moveNode(source, kindAt(source, 'action', 2).id, 1);
+
+    expect(readBack(moved).actions).toEqual([ADD_TAG, SET_URGENT, SET_PENDING]);
   });
 
   it('keeps the chain readable through a long editing session', () => {
@@ -707,11 +716,7 @@ function nodeAt(graph: WorkflowGraph, index: number): WorkflowGraphNode {
 }
 
 /** The same, for the nth node of one kind. */
-function kindAt(
-  graph: WorkflowGraph,
-  kind: WorkflowNodeKind,
-  index: number,
-): WorkflowGraphNode {
+function kindAt(graph: WorkflowGraph, kind: WorkflowNodeKind, index: number): WorkflowGraphNode {
   const node = nodesOfKind(graph, kind)[index];
 
   if (node === undefined) {
