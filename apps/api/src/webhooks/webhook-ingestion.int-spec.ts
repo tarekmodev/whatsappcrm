@@ -1,6 +1,8 @@
 import { createHmac } from 'node:crypto';
 import type { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { PLATFORM_SETTINGS } from '../platform-settings/platform-settings.registry';
+import type { PlatformSettingsService } from '../platform-settings/platform-settings.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { MESSAGE_CREATED_EVENT, MESSAGE_STATUS_CHANGED_EVENT } from '../events/domain-events';
 import type { PrismaClient } from '../generated/prisma/client';
@@ -109,6 +111,22 @@ const CONFIG = {
   get: (key: string) => ENV[key],
   getOrThrow: (key: string) => ENV[key],
 } as unknown as ConfigService;
+
+/**
+ * The two Meta secrets as `WebhookIngestService` now reads them (TAR-816):
+ * through `PlatformSettingsService`, which resolves a managed key from its
+ * database row and falls back to the environment variable. This fixture holds no
+ * `platform_settings` rows, so every key here resolves from `ENV` — which is
+ * the point: the whole feature must be a no-op for an environment that has
+ * written none.
+ */
+const PLATFORM_SETTINGS_FROM_ENV = {
+  get: (key: string) => {
+    const envVar = PLATFORM_SETTINGS.find((setting) => setting.key === key)?.envVar;
+
+    return envVar === undefined ? null : ((ENV[envVar] as string | undefined) ?? null);
+  },
+} as unknown as PlatformSettingsService;
 
 interface InboundOptions {
   readonly phoneNumberId?: string;
@@ -259,7 +277,7 @@ describe('WhatsApp webhook ingestion, end to end', () => {
     const queue = { enqueue } as unknown as QueueService;
 
     repository = new WebhookEventsRepository(systemPrisma);
-    ingest = new WebhookIngestService(CONFIG, repository, queue);
+    ingest = new WebhookIngestService(CONFIG, PLATFORM_SETTINGS_FROM_ENV, repository, queue);
     processor = new WhatsAppEventProcessor(
       CONFIG,
       repository,

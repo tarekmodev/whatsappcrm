@@ -688,6 +688,19 @@ enum IdempotencyKeyState {
   @@map("idempotency_key_state")
 }
 
+/// What a `platform_setting_changes` row records (TAR-816).
+///
+/// `set` covers both the first write of a key and every later one:
+/// `previous_fingerprint` is what tells them apart, and a separate `created`
+/// value would say the same thing twice. `cleared` is the delete that reverts a
+/// key to its environment fallback.
+enum PlatformSettingChangeAction {
+  set
+  cleared
+
+  @@map("platform_setting_change_action")
+}
+
 /// Who an `audit_logs` row is attributed to (TAR-166). `actor_user_id` alone
 /// could not say: NULL there meant both "the platform acted" and "nothing
 /// recorded who", and those are different answers to the question this table
@@ -3554,6 +3567,107 @@ model WebhookEventReplay {
   /// asks before replaying it again, and what a reviewer asks afterwards.
   @@index([webhookEventId, replayedAt])
   @@map("webhook_event_replays")
+}
+
+/// The current value of a platform-managed configuration key (TAR-816, against
+/// TAR-811's contract). Platform-scoped like `plans` and `webhook_events`: these
+/// are the platform's own Meta app credentials, singular and shared by every
+/// tenant, so there is no `tenant_id` and no per-tenant override.
+///
+/// **Absence is the "unset" state.** A key with no row here resolves from its
+/// environment variable, which is what keeps an environment that never opens the
+/// admin console behaving exactly as it did before this table existed. There is
+/// no empty-string value and nothing is backfilled on deploy — an operator's
+/// first write is what opts an environment onto the database path.
+///
+/// **Every value is encrypted, including the ones that are not secret.** One
+/// column and one code path means there is no way to write a secret into a clear
+/// column by mistake, and encrypting a public Meta app id costs one AES call per
+/// refresh rather than per read. Which keys exist and which of them are secret
+/// lives in `platform-settings.registry.ts` and never in a row — a row edit must
+/// not be able to reclassify a secret as public, and a row whose `key` is not in
+/// the registry is ignored on load.
+///
+/// No RLS policy and no grant for `whatsappcrm_app`: the table has no
+/// `tenant_id` for a policy to compare against, so the grant is the enforcement,
+/// exactly as on `webhook_events` and `tenant_signups`. `PlatformSetting` is
+/// `system-only` in `tenant-scope.extension.ts` so a tenant-side call names the
+/// cause rather than failing with SQLSTATE 42501.
+model PlatformSetting {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// The registry key, e.g. `whatsapp.app_secret`. The natural key — the uuid
+  /// exists only for convention. Never renamed: a rename orphans the row.
+  key String @unique
+
+  /// `v1.<iv>.<tag>.<ct>` from `AesGcmCipher`, bound to `platform_setting:<key>`
+  /// as AAD. Binding to the key rather than to `id` means a delete-then-recreate
+  /// of the same key still decrypts, while a ciphertext copied from another key's
+  /// row does not — the two are read by different code paths with different
+  /// exposure.
+  valueEncrypted String @map("value_encrypted")
+
+  /// First 8 hex characters of SHA-256 of the plaintext. Lets the console show
+  /// that two environments hold the same secret without decrypting either, and
+  /// lets `platform_setting_changes` reference a value it does not store.
+  ///
+  /// Safe to publish only because every key that reaches this table carries a
+  /// write-time length floor — an 8-hex prefix of a low-entropy value is offline
+  /// guessable. The floor lives in the registry.
+  fingerprint String @db.Char(8)
+
+  /// The **label** half of the `PLATFORM_ADMIN_TOKEN` entry that authenticated
+  /// the write, never the secret half — the same value `audit_logs.actor_label`
+  /// carries for an operator action (TAR-166).
+  updatedByLabel String @map("updated_by_label")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  /// No index beyond the unique one on `key`. The table is bounded by the
+  /// registry — single-digit rows — and the whole snapshot is read at once.
+  @@map("platform_settings")
+}
+
+/// Append-only history of platform-setting changes (TAR-816). One row per write
+/// or clear.
+///
+/// **Why this is not an `audit_logs` row.** `audit_logs.tenant_id` is NOT NULL
+/// with a foreign key to `tenants`, and `AuditService.record` takes it from
+/// `tenantContext.requireTenantId()`. A platform credential belongs to no
+/// tenant. Making that column nullable would touch the `tenant_isolation`
+/// policy, the `audit_logs_actor_attribution` CHECK, four indexes and every
+/// query on the platform's most safety-critical table — for one writer.
+///
+/// **No previous value is stored, in any form.** Fingerprints only. The trade is
+/// deliberate: it forecloses a one-click rollback, and in exchange each secret
+/// exists in exactly one row in the database. An operator reverting re-enters
+/// the value, which — given its origin is the Meta app dashboard — is a lookup
+/// rather than a loss.
+model PlatformSettingChange {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Deliberately **not** a foreign key to `platform_settings.key`: the history
+  /// has to survive the `DELETE` that a `cleared` row records.
+  key String
+
+  action PlatformSettingChangeAction
+
+  /// Null on the first `set` of a key.
+  previousFingerprint String? @map("previous_fingerprint") @db.Char(8)
+
+  /// Null on `cleared`.
+  newFingerprint String? @map("new_fingerprint") @db.Char(8)
+
+  /// The label half of the `PLATFORM_ADMIN_TOKEN` entry, never the secret half.
+  actorLabel String @map("actor_label")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// "What has happened to this key, newest first" — the only question this
+  /// table is read for. `created_at` descending is the sort the endpoint issues.
+  @@index([key, createdAt(sort: Desc)])
+  @@map("platform_setting_changes")
 }
 
 /// Replay protection for unsafe POSTs that cause external side effects

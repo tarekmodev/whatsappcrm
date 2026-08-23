@@ -44,9 +44,10 @@
 --               table returns zero rows. With the GUC set, each tenant sees its
 --               own rows and none of the other's. Writing another tenant's
 --               `tenant_id` is rejected; updating and deleting its rows match
---               nothing. `webhook_events`, `webhook_event_replays` and
---               `tenant_signups` are unreachable by grant. The system role sees
---               across tenants, which is what it is for.
+--               nothing. `webhook_events`, `webhook_event_replays`,
+--               `tenant_signups`, `platform_settings` and
+--               `platform_setting_changes` are unreachable by grant. The system
+--               role sees across tenants, which is what it is for.
 --
 -- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74), one in
 -- each of the five auth tables — `teams`, `invites`, `invite_teams`, `sessions`,
@@ -1082,6 +1083,26 @@ BEGIN
             RAISE NOTICE 'ok: tenant_signups unreachable by the app role (no grant)';
     END;
 
+    -- TAR-816. The platform's own Meta app credentials, encrypted, and the
+    -- append-only trail of who changed them. Neither carries a `tenant_id` at
+    -- all, so neither could carry a policy — the grant is the whole of the
+    -- enforcement, and a tenant connection has no business reading either.
+    BEGIN
+        EXECUTE 'SELECT count(*) FROM "public"."platform_settings"';
+        RAISE EXCEPTION 'app role can read platform_settings — it holds no policy and must hold no grant';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: platform_settings unreachable by the app role (no grant)';
+    END;
+
+    BEGIN
+        EXECUTE 'SELECT count(*) FROM "public"."platform_setting_changes"';
+        RAISE EXCEPTION 'app role can read platform_setting_changes — it holds no policy and must hold no grant';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: platform_setting_changes unreachable by the app role (no grant)';
+    END;
+
     -- ADR 0009 Amendment 1 ruling 2. This one is the newest and the easiest to
     -- get wrong, because unlike the two above it *does* carry `tenant_id`: it
     -- looks scoped and is not. Dropping the policy without dropping the grant
@@ -1106,7 +1127,7 @@ BEGIN
     -- Read as privileges rather than attempted as statements: an UPDATE matching
     -- no rows succeeds, so executing one would prove nothing about a table this
     -- fixture leaves empty.
-    FOREACH trail IN ARRAY ARRAY['lifecycle_events', 'webhook_event_replays'] LOOP
+    FOREACH trail IN ARRAY ARRAY['lifecycle_events', 'webhook_event_replays', 'platform_setting_changes'] LOOP
         FOREACH priv IN ARRAY ARRAY['UPDATE', 'DELETE'] LOOP
             IF has_table_privilege('whatsappcrm_system', format('"public".%I', trail), priv) THEN
                 RAISE EXCEPTION 'system role holds % on %, which is append-only', priv, trail;

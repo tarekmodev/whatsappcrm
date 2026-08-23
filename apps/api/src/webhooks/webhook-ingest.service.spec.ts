@@ -1,5 +1,7 @@
 import { createHmac } from 'node:crypto';
 import type { ConfigService } from '@nestjs/config';
+import { PLATFORM_SETTINGS } from '../platform-settings/platform-settings.registry';
+import type { PlatformSettingsService } from '../platform-settings/platform-settings.service';
 import { PROCESS_WEBHOOK_EVENT_JOB, WEBHOOKS_QUEUE } from '../queue/queue.constants';
 import type { QueueService } from '../queue/queue.service';
 import type { WebhookEventsRepository } from './webhook-events.repository';
@@ -24,6 +26,25 @@ function sign(body: Buffer): string {
   return `sha256=${createHmac('sha256', APP_SECRET).update(body).digest('hex')}`;
 }
 
+/**
+ * The two Meta secrets as the service now reads them (TAR-816): through
+ * `PlatformSettingsService`, which resolves a managed key from its database row
+ * and falls back to the environment variable.
+ *
+ * The stub resolves from the same map the config stub does, through the
+ * registry's own key → variable mapping, so a case that omits a variable
+ * exercises the unconfigured path exactly as it did before the migration.
+ */
+function platformSettingsFrom(env: Record<string, unknown>): PlatformSettingsService {
+  const envVarByKey = new Map<string, string>(
+    PLATFORM_SETTINGS.map((setting) => [setting.key, setting.envVar]),
+  );
+
+  return {
+    get: (key: string) => (env[envVarByKey.get(key) ?? ''] as string | undefined) ?? null,
+  } as unknown as PlatformSettingsService;
+}
+
 describe('WebhookIngestService', () => {
   let store: jest.Mock;
   let enqueue: jest.Mock;
@@ -45,6 +66,7 @@ describe('WebhookIngestService', () => {
 
     return new WebhookIngestService(
       config,
+      platformSettingsFrom(env),
       { store } as unknown as WebhookEventsRepository,
       { enqueue } as unknown as QueueService,
     );

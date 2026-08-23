@@ -100,6 +100,18 @@ const MODEL_POLICIES = {
    * `SystemPrisma`, confined to one repository method that takes a `tenantId`.
    */
   LifecycleEvent: 'system-only',
+  /**
+   * The platform's own managed configuration (TAR-816) and the trail of who
+   * changed it. Neither carries `tenant_id` at all — these are the platform's
+   * Meta app credentials, singular and shared by every tenant — so no policy
+   * could apply and the app role is granted nothing on either. Refusing here
+   * means a tenant-side call that reached for the wrong client gets a message
+   * naming the cause rather than a permission failure three frames deeper.
+   * `PlatformSettingsRepository` is the only class that touches them, on
+   * `SystemPrisma`.
+   */
+  PlatformSetting: 'system-only',
+  PlatformSettingChange: 'system-only',
 } as const satisfies Partial<Record<Prisma.ModelName, string>>;
 
 /**

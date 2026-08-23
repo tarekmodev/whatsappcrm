@@ -19,6 +19,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { RequestLoggingMiddleware } from './observability/request-logging.middleware';
 import { PeopleModule } from './people/people.module';
+import { PlatformSettingsModule } from './platform-settings/platform-settings.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
 import { RbacModule } from './rbac/rbac.module';
@@ -53,6 +54,10 @@ import { WorkflowsModule } from './workflows/workflows.module';
     TenantContextModule,
     ObservabilityModule,
     PrismaModule,
+    // Before every module that reads a managed value (TAR-816). Global, so
+    // nothing below has to import it; declared here so the boot-time snapshot
+    // load is visible in the order the modules initialise.
+    PlatformSettingsModule,
     QueueModule,
     AuditModule,
     // Before `RbacModule`, which binds `PRINCIPAL_SOURCE` to the session source

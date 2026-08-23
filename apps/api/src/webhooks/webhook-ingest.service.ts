@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Prisma } from '../generated/prisma/client';
+import { PlatformSettingsService } from '../platform-settings/platform-settings.service';
 import { PROCESS_WEBHOOK_EVENT_JOB, WEBHOOKS_QUEUE } from '../queue/queue.constants';
 import { QueueService } from '../queue/queue.service';
 import type { ProcessWebhookEventJob } from './webhook-jobs';
@@ -33,6 +34,7 @@ export class WebhookIngestService {
 
   constructor(
     private readonly config: ConfigService,
+    private readonly settings: PlatformSettingsService,
     private readonly events: WebhookEventsRepository,
     private readonly queue: QueueService,
   ) {}
@@ -41,11 +43,19 @@ export class WebhookIngestService {
    * Meta's `GET` handshake. Returns the challenge to echo, and throws otherwise
    * — the caller must never echo on a mismatch, since echoing is what registers
    * the URL.
+   *
+   * Still synchronous after TAR-816, and that is the constraint the whole
+   * platform-settings design was shaped around: `PlatformSettingsService.get`
+   * answers from an in-memory snapshot, so making the verify token
+   * operator-managed changed neither this signature nor the caller's.
    */
   verifyHandshake(candidateToken: string, challenge: string): string {
-    const expected = this.config.get<string>('WHATSAPP_WEBHOOK_VERIFY_TOKEN');
+    const expected = this.settings.get('whatsapp.webhook_verify_token');
 
-    if (expected === undefined || expected.length === 0) {
+    if (expected === null || expected.length === 0) {
+      // The environment variable is still the name in the error: it is what an
+      // operator sets in an environment that has never opened the admin console,
+      // and it remains the fallback for one that has.
       throw new WebhookChannelNotConfiguredError('WHATSAPP_WEBHOOK_VERIFY_TOKEN');
     }
 
@@ -69,9 +79,12 @@ export class WebhookIngestService {
     rawBody: Buffer | undefined,
     signatureHeader: unknown,
   ): Promise<IngestOutcome> {
-    const appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    // Read from the snapshot, not the database: this runs on every inbound Meta
+    // delivery, before the signature check, on a public route that is exempt
+    // from throttling. A round trip here would be one per delivery.
+    const appSecret = this.settings.get('whatsapp.app_secret');
 
-    if (appSecret === undefined || appSecret.length === 0) {
+    if (appSecret === null || appSecret.length === 0) {
       throw new WebhookChannelNotConfiguredError('WHATSAPP_APP_SECRET');
     }
 

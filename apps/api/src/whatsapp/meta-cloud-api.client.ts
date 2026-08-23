@@ -6,6 +6,7 @@ import type {
   WhatsAppBusinessVerificationStatus,
   WhatsAppQualityRating,
 } from '@whatsappcrm/contracts';
+import { PlatformSettingsService } from '../platform-settings/platform-settings.service';
 import {
   MetaAuthenticationError,
   MetaRateLimitedError,
@@ -20,6 +21,20 @@ import {
  * often enough that status alone misclassifies it as a permanent rejection.
  */
 const AUTHENTICATION_CODES = new Set([0, 3, 10, 190, 200, 299]);
+
+/**
+ * The environment variable behind each Embedded Signup setting, for the refusal
+ * message (TAR-816).
+ *
+ * The message names the variable rather than the setting key on purpose: an
+ * environment that has never opened the admin console has no row, so the
+ * variable is what an operator sets — and for one that has, it is still the
+ * fallback and still the name they will grep their configuration for.
+ */
+const ENV_VAR_FOR_SIGNUP_KEY = {
+  'meta.app_id': 'META_APP_ID',
+  'whatsapp.app_secret': 'WHATSAPP_APP_SECRET',
+} as const;
 
 /**
  * Meta's throttling codes. `4` is the app-level limit, `80007` the business
@@ -378,7 +393,10 @@ interface GraphRequestOptions {
 export class MetaCloudApiClient {
   private readonly logger = new Logger(MetaCloudApiClient.name);
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly settings: PlatformSettingsService,
+  ) {}
 
   async sendText(command: SendTextCommand): Promise<SentMessage> {
     return this.send(command.phoneNumberId, command.accessToken, {
@@ -580,8 +598,8 @@ export class MetaCloudApiClient {
       { method: 'GET' },
       {
         query: new URLSearchParams({
-          client_id: this.requireConfigured('META_APP_ID'),
-          client_secret: this.requireConfigured('WHATSAPP_APP_SECRET'),
+          client_id: this.requireConfigured('meta.app_id'),
+          client_secret: this.requireConfigured('whatsapp.app_secret'),
           code: command.code,
         }),
       },
@@ -738,26 +756,31 @@ export class MetaCloudApiClient {
   /**
    * A configured value the signup flow cannot proceed without.
    *
-   * `META_APP_ID` and `WHATSAPP_APP_SECRET` are both optional in the env schema
-   * so an environment that does not use the channel still boots (0002, amendment
-   * 2). Absent, this refuses **before** the call rather than sending
-   * `client_id=undefined` — which Meta answers with a rejection that reads like
-   * a bad code and would send the tenant round the flow again for a
+   * Read from `PlatformSettingsService` since TAR-816, so an operator can
+   * change either without a redeploy. Both remain optional — the environment is
+   * the fallback and an environment that does not use the channel still boots
+   * (0002, amendment 2). Absent, this refuses **before** the call rather than
+   * sending `client_id=undefined` — which Meta answers with a rejection that
+   * reads like a bad code and would send the tenant round the flow again for a
    * configuration problem only an operator can fix.
    *
    * `MetaRequestRejectedError` because it is permanent and retrying cannot help,
    * with `status` 0 to say the client refused rather than Meta — the same shape
-   * `assertMetaMediaUrl` already uses. The name of the variable is named; its
-   * value is not, and never is.
+   * `assertMetaMediaUrl` already uses. The **environment variable** is named,
+   * because that is what an operator sets when there is no row and it is the
+   * name they will search their configuration for; the value is not named, and
+   * never is.
    */
-  private requireConfigured(name: 'META_APP_ID' | 'WHATSAPP_APP_SECRET'): string {
-    const value = this.config.get<string>(name);
+  private requireConfigured(key: 'meta.app_id' | 'whatsapp.app_secret'): string {
+    const value = this.settings.get(key);
 
-    if (value === undefined || value.length === 0) {
+    if (value === null || value.length === 0) {
       throw new MetaRequestRejectedError(0, {
         code: null,
         subcode: null,
-        message: `Embedded Signup is not configured on this environment: ${name} is not set`,
+        message:
+          'Embedded Signup is not configured on this environment: ' +
+          `${ENV_VAR_FOR_SIGNUP_KEY[key]} is not set`,
         traceId: null,
       });
     }
@@ -785,11 +808,11 @@ export class MetaCloudApiClient {
    * same variable, so a caller holding a token has one.
    */
   private signed(accessToken: string, params: Record<string, string>): URLSearchParams {
-    const appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    const appSecret = this.settings.get('whatsapp.app_secret');
 
     return new URLSearchParams({
       ...params,
-      ...(appSecret === undefined || appSecret.length === 0
+      ...(appSecret === null || appSecret.length === 0
         ? {}
         : { appsecret_proof: createHmac('sha256', appSecret).update(accessToken).digest('hex') }),
     });

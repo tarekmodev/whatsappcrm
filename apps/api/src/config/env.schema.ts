@@ -1,5 +1,6 @@
 import { VolumePolicySchema } from '@whatsappcrm/contracts';
 import { z } from 'zod';
+import { AES_256_KEY_BYTES } from '../common/security/aes-gcm.cipher';
 import { parsePlatformAdminCredentials } from '../common/security/platform-admin-credentials';
 
 /**
@@ -595,29 +596,82 @@ const envShape = z.object({
   WORKFLOW_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1_000).default(60_000),
 
   // ---------------------------------------------------------------------------
-  // WhatsApp Cloud API (TAR-20)
+  // Secret storage (TAR-39, extended by TAR-816)
   // ---------------------------------------------------------------------------
 
   /**
-   * AES-256-GCM key for the per-WABA access token, base64-encoded — 32 bytes,
-   * which `openssl rand -base64 32` produces.
+   * The AES-256-GCM key every secret this platform stores is encrypted under,
+   * base64-encoded — 32 bytes, which `openssl rand -base64 32` produces.
    *
-   * Optional here and **absent means every WhatsApp connection and every send is
-   * refused**, on the same reasoning as `PLATFORM_ADMIN_TOKEN`: an environment
-   * that was never given a key must not fall back to storing the most sensitive
-   * credential in the schema in clear text. Requiring it outright would instead
-   * stop the API booting in every environment that does not use the channel,
-   * which trades a loud, local failure for a global one.
+   * **One key, deliberately.** It covers the per-WABA access token, the
+   * per-number registration PIN, and since TAR-816 every row in
+   * `platform_settings`. Two keys would mean two rotation procedures and an
+   * environment that boots with WhatsApp working and platform settings broken.
+   *
+   * Optional here and **absent means every WhatsApp connection, every send and
+   * every platform-setting write is refused**, on the same reasoning as
+   * `PLATFORM_ADMIN_TOKEN`: an environment that was never given a key must not
+   * fall back to storing the most sensitive credentials in the schema in clear
+   * text. Requiring it outright would instead stop the API booting in every
+   * environment that does not use the channel, which trades a loud, local
+   * failure for a global one.
    *
    * It is a key, not a password, so it is checked for length rather than
    * strength — 32 bytes from a CSPRNG, held in the platform's secret store.
-   * Rotating it needs the tokens re-encrypted; see `whatsapp-credential.cipher.ts`,
-   * whose payloads carry a version tag for exactly that reason.
+   * Rotating it needs every encrypted row re-encrypted; see
+   * `common/security/aes-gcm.cipher.ts`, whose payloads carry a version tag for
+   * exactly that reason.
+   */
+  SECRETS_ENCRYPTION_KEY: z
+    .string()
+    .refine(isBase64EncodedKey, 'Must be 32 bytes of base64 (openssl rand -base64 32)')
+    .optional(),
+
+  /**
+   * **Deprecated alias for `SECRETS_ENCRYPTION_KEY`**, accepted for one release
+   * (TAR-816).
+   *
+   * The variable arrived when the WhatsApp access token was the only secret in
+   * the schema. It is the same 32 bytes under the new name, so the rename is a
+   * configuration change and needs no re-encryption — but a deployed
+   * environment should not have to edit its environment group in the same
+   * window as the code, so both names resolve through
+   * `readSecretsEncryptionKey` until the alias is deleted.
+   *
+   * Setting both to **different** values fails the boot: half the readers would
+   * take one key and half the other, and the rows written in between would be
+   * unreadable by whichever of them was wrong.
    */
   WHATSAPP_TOKEN_ENCRYPTION_KEY: z
     .string()
     .refine(isBase64EncodedKey, 'Must be 32 bytes of base64 (openssl rand -base64 32)')
     .optional(),
+
+  // ---------------------------------------------------------------------------
+  // Platform settings (TAR-816)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * How often `PlatformSettingsService` reloads its in-memory snapshot from
+   * `platform_settings`, and therefore the **upper bound on how long a value
+   * written on one instance takes to reach the others**.
+   *
+   * The writing instance applies its own write immediately; this is the number
+   * the admin console quotes to an operator for everybody else. Thirty seconds
+   * matches `SLA_SWEEP_INTERVAL_MS` and `WEBHOOK_SWEEP_INTERVAL_MS`, the
+   * interval this codebase already treats as prompt enough, and is chosen for
+   * that consistency rather than measured (TAR-811, risk 3). If it proves slow,
+   * the fix is Redis pub/sub invalidation on the existing connection, which
+   * does not change the snapshot design.
+   *
+   * Configurable mainly so a test can make a refresh observable without waiting
+   * out a real interval.
+   */
+  PLATFORM_SETTINGS_REFRESH_MS: z.coerce.number().int().min(1_000).default(30_000),
+
+  // ---------------------------------------------------------------------------
+  // WhatsApp Cloud API (TAR-20)
+  // ---------------------------------------------------------------------------
 
   /**
    * Meta's Graph API origin. Configurable so tests and a local stub can point
@@ -867,6 +921,28 @@ export const envSchema = envShape.superRefine((env, ctx) => {
     }
   }
 
+  // TAR-816: the rename is a configuration change, not a re-encryption — which
+  // holds only while both names mean the same 32 bytes. Two different values is
+  // an environment where `readSecretsEncryptionKey` takes one and a reader that
+  // has not been migrated takes the other, and the rows written under the wrong
+  // one are unrecoverable. Refusing to boot turns that into a failed deploy the
+  // previous instance keeps serving through.
+  if (
+    env.SECRETS_ENCRYPTION_KEY !== undefined &&
+    env.WHATSAPP_TOKEN_ENCRYPTION_KEY !== undefined &&
+    env.SECRETS_ENCRYPTION_KEY !== env.WHATSAPP_TOKEN_ENCRYPTION_KEY
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['SECRETS_ENCRYPTION_KEY'],
+      message:
+        'differs from WHATSAPP_TOKEN_ENCRYPTION_KEY, which is its deprecated alias. They name ' +
+        'the same key, so set one or set both identically — two values would make half the ' +
+        'encrypted rows in this environment unreadable. Drop WHATSAPP_TOKEN_ENCRYPTION_KEY once ' +
+        'SECRETS_ENCRYPTION_KEY carries the value.',
+    });
+  }
+
   if (env.AUTH_STUB_ENABLED === AUTH_STUB_ON && env.NODE_ENV === 'production') {
     ctx.addIssue({
       code: 'custom',
@@ -882,11 +958,8 @@ export type Env = z.infer<typeof envSchema>;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 export type DeployEnv = (typeof DEPLOY_ENVS)[number];
 
-/** The key length AES-256 requires, in bytes. */
-export const WHATSAPP_TOKEN_KEY_BYTES = 32;
-
 /**
- * True when `value` is base64 that decodes to exactly `WHATSAPP_TOKEN_KEY_BYTES`.
+ * True when `value` is base64 that decodes to exactly `AES_256_KEY_BYTES`.
  *
  * The round-trip is what makes this a real check: `Buffer.from(…, 'base64')`
  * ignores every character outside the alphabet rather than failing, so a
@@ -897,5 +970,5 @@ export const WHATSAPP_TOKEN_KEY_BYTES = 32;
 function isBase64EncodedKey(value: string): boolean {
   const decoded = Buffer.from(value, 'base64');
 
-  return decoded.length === WHATSAPP_TOKEN_KEY_BYTES && decoded.toString('base64') === value;
+  return decoded.length === AES_256_KEY_BYTES && decoded.toString('base64') === value;
 }

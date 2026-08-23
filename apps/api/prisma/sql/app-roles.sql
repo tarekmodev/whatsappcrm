@@ -256,6 +256,31 @@ BEGIN
             CONTINUE;
         END IF;
 
+        IF t.relname = 'platform_setting_changes' THEN
+            -- The trail for a platform-setting write or clear (TAR-816). The
+            -- fifth table with no RLS policy, and for the plainest reason of the
+            -- five: it has no `tenant_id` at all, because a platform credential
+            -- belongs to no tenant.
+            --
+            -- **`whatsappcrm_app` is granted nothing**, as on every table in
+            -- this branch and the two in the CASE below. The grant replaces the
+            -- policy, and `PlatformSettingChange` is `system-only` in
+            -- `tenant-scope.extension.ts` so a tenant-side call names the cause
+            -- rather than failing with SQLSTATE 42501.
+            --
+            -- Neither role gets UPDATE or DELETE, including SystemPrisma. Who
+            -- changed the platform's Meta app secret is a record of an operator
+            -- action on production state, and SystemPrisma is the credential a
+            -- mistake would run under. `platform_setting_changes_append_only`
+            -- closes the half this cannot: the table owner is bound by neither.
+            EXECUTE format(
+                'GRANT SELECT, INSERT ON TABLE "public".%I TO "whatsappcrm_system"',
+                t.relname
+            );
+
+            CONTINUE;
+        END IF;
+
         -- SystemPrisma reaches everything, including the tables that carry no
         -- policy. That is what it is for.
         EXECUTE format(
@@ -279,7 +304,7 @@ BEGIN
                 -- TAR-49; writing to either table stays SystemPrisma's job.
                 EXECUTE format('GRANT SELECT ON TABLE "public".%I TO "whatsappcrm_app"', t.relname);
 
-            WHEN 'webhook_events', 'tenant_signups' THEN
+            WHEN 'webhook_events', 'tenant_signups', 'platform_settings' THEN
                 -- Both are written before the tenant is known, so neither can
                 -- carry a policy: there is nothing for one to compare against.
                 -- TAR-94's `webhook_event_replays` is handled above, on the same
@@ -298,6 +323,17 @@ BEGIN
                 --                    `system-only` in tenant-scope.extension.ts
                 --                    so a tenant-side call names the cause
                 --                    instead of failing with SQLSTATE 42501.
+                --   platform_settings
+                --                    TAR-816. The platform's own Meta app
+                --                    credentials, encrypted, with no tenant_id
+                --                    for a policy to compare against. A tenant
+                --                    connection has no business reading the
+                --                    ciphertext, the fingerprint or the change
+                --                    stamp. UPDATE and DELETE stay with
+                --                    SystemPrisma because a setting is current
+                --                    state, not a trail — the append-only half
+                --                    is `platform_setting_changes`, handled
+                --                    above.
                 NULL;
 
             ELSE

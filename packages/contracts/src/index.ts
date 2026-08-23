@@ -25,6 +25,7 @@ export * from './users';
 
 // --- Platform administration ------------------------------------------------
 export * from './admin';
+export * from './platform-settings';
 
 // --- Routing and assignment -------------------------------------------------
 export * from './assignment';

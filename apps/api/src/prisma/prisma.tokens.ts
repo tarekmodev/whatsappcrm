@@ -13,6 +13,14 @@ export type { TenantPrisma } from './tenant-scope.extension';
  * and platform reporting. Anything else belongs on `TenantPrisma`, and a sixth
  * call site needs a justification in review.
  *
+ * **The sixth is `PlatformSettingsRepository`** (TAR-816), and its justification
+ * is written where it can be checked against the code — at the top of that
+ * class. In short: `platform_settings` and `platform_setting_changes` carry no
+ * `tenant_id`, so `TenantPrisma` refuses them outright and the app role holds no
+ * grant on either; the reads are a bounded set of platform-scoped rows keyed by
+ * a code-owned allowlist; and the access is confined to that one class. A
+ * seventh still needs a justification in review.
+ *
  * A distinct client rather than a flag on `TenantPrisma` on purpose: a flag is
  * one typo away from being set, is invisible at the injection site, and cannot
  * be grepped for. This can — `SYSTEM_PRISMA` appears in the constructor of
