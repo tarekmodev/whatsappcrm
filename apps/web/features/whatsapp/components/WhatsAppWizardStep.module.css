@@ -1,0 +1,60 @@
+/*
+ * Shared by the four step bodies. One module rather than four, because a step's
+ * body is the same three shapes every time — a line of copy, a status heading, a
+ * row of controls — and four copies of that is how they drift apart.
+ */
+
+.intro {
+  margin: 0;
+  max-inline-size: var(--measure-body);
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+/* The line above a `Notice` that names what the notice is about. A paragraph and
+   not a heading: the step already owns the only heading in this region, and a
+   second one would put a rung on the document outline for a sentence. */
+.statusHeading {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-tight);
+}
+
+/*
+ * Controls wrap rather than shrink: two buttons side by side at 320px would each
+ * be narrower than their own label.
+ */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/* Full width where the screen is narrow enough that a hugging button is a small
+   target, and content width from there up. */
+.actions > * {
+  flex: 1 1 auto;
+}
+
+@media (min-width: 30rem) {
+  .actions > * {
+    flex: 0 0 auto;
+  }
+}
+
+/*
+ * The skeleton's stand-in for a step's primary action: the same minimum target,
+ * inline padding and radius as `Button`, with the real label measured invisibly
+ * inside — so the swap from placeholder to button moves nothing at any width.
+ */
+.actionPlaceholder {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-4);
+  background-color: var(--color-skeleton-base);
+  border-radius: var(--radius-md);
+}

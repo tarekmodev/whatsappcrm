@@ -13,6 +13,33 @@ export const CHATBOT_PERMISSIONS = {
 } as const satisfies Record<string, Permission>;
 
 /**
+ * The five cards on the chatbot surface, named once (TAR-813).
+ *
+ * Here rather than typed into the markup, because the pipeline rail links to
+ * four of them by fragment and moves focus to their headings: an id that only
+ * exists as two string literals in two files is an id that stops matching the
+ * first time one of them is renamed, and a dead fragment link fails silently.
+ */
+export const CHATBOT_SECTION_IDS = {
+  pipeline: 'chatbot-pipeline',
+  sources: 'chatbot-sources',
+  eligibility: 'chatbot-eligibility',
+  confidence: 'chatbot-confidence',
+  handoff: 'chatbot-handoff',
+} as const;
+
+/**
+ * How many sources one status scan reads when counting the health strip.
+ *
+ * `CursorPageQuerySchema` caps a page at 100 and no list endpoint publishes a
+ * total, so a count past this is reported as `100+` rather than as a number the
+ * console would be inventing. A knowledge base is an FAQ and a policy set — tens
+ * of documents — so in practice one page holds every pending and failed source
+ * a tenant has, and the capped form is the honest edge rather than the norm.
+ */
+export const SOURCE_HEALTH_SCAN_LIMIT = 100;
+
+/**
  * How many knowledge base entries one page of the table holds.
  *
  * The table's skeleton draws exactly this many rows, so the swap from loading to

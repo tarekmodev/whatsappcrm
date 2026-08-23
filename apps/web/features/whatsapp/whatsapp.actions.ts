@@ -2,11 +2,17 @@
 
 import { unstable_rethrow } from 'next/navigation';
 import {
+  CONVERSATION_SORT_DEFAULT,
   WhatsAppEmbeddedSignupInputSchema,
+  WhatsAppPhoneNumberParamsSchema,
   type ConnectedWhatsAppBusinessAccountResponse,
+  type WhatsAppPhoneNumberRegistrationResponse,
 } from '@whatsappcrm/contracts';
-import { connectWhatsAppBusinessAccount } from '@/lib/api/whatsapp';
+import { listConversations } from '@/lib/api/conversations';
+import { connectWhatsAppBusinessAccount, registerWhatsAppPhoneNumber } from '@/lib/api/whatsapp';
+import { runAction } from '@/lib/actions/run-action';
 import { assertPermission, PermissionDeniedError } from '@/lib/session/session';
+import type { ActionResult } from '@/lib/actions/result';
 import {
   connectFailure,
   connectFailureFromError,
@@ -90,3 +96,93 @@ function toFailureReport(error: unknown): WhatsAppConnectFailureReport {
 
   return report;
 }
+
+/**
+ * Registering the connected number for sending — the wizard's third step
+ * (TAR-814, over TAR-170's route).
+ *
+ * `runAction` rather than the hand-rolled sequence above, because this one is an
+ * ordinary mutation: there is no single-use code to race, so it can afford the
+ * assert-validate-perform-map shape every other action in the app uses.
+ * `revalidate` is `null` — the wizard is a client island with no server render
+ * to invalidate, and re-rendering the settings route behind it would change
+ * nothing on screen.
+ *
+ * **A refused registration comes back as `success`.** The route answers `200`
+ * with the outcome in `registrationFailureReason`, so the reason is data the
+ * step renders and not an error the action swallows; only a genuine 4xx/5xx —
+ * an id naming nothing, a lost permission, a deactivated tenant — takes the
+ * error arm.
+ */
+export async function registerWhatsAppNumberAction(
+  input: unknown,
+): Promise<ActionResult<WhatsAppPhoneNumberRegistrationResponse>> {
+  return runAction({
+    permission: 'channel:manage',
+    parser: WhatsAppPhoneNumberParamsSchema,
+    input,
+    perform: ({ whatsappAccountId }) => registerWhatsAppPhoneNumber(whatsappAccountId),
+    revalidate: null,
+    label: 'WhatsApp number registration',
+  });
+}
+
+/**
+ * Whether anything has reached the connected number yet — the wizard's fourth
+ * step.
+ *
+ * ## Why this is a read of the inbox and not a send
+ *
+ * TAR-814 asks the wizard to prove the round trip without adding a backend
+ * route, and there is no route that could send one: `POST
+ * /v1/conversations/{id}/messages` is addressed to a **conversation**, and a
+ * conversation exists only once a customer has written in. Cloud API is built
+ * that way — a business cannot open a thread with free-form text, only with an
+ * approved template, and a freshly connected WABA has none. So the honest test
+ * is the direction that works: the reader messages their own number from
+ * WhatsApp, and this looks for the thread it created.
+ *
+ * A thread on that number proves the whole chain end to end — Meta's webhook
+ * reached us, the routing key resolved, the tenant scoping held — which is more
+ * than a send would have proved. Replying to it is then one press in the inbox,
+ * inside the service window the inbound message just opened.
+ *
+ * ## `conversation:read`, and one page
+ *
+ * The narrower of the two inbox permissions, because that is what this needs; a
+ * principal holding `channel:manage` is an admin and holds both. `scope: 'all'`
+ * is silently narrowed by the API for anyone without `conversation:read_all`,
+ * which is the correct degradation — a narrower view can still contain the
+ * thread.
+ *
+ * One page of the newest threads and no paging. The message being looked for was
+ * sent seconds ago, so it is at the front by construction; walking the whole
+ * inbox to find an older one would answer a question nobody asked.
+ */
+export async function findWhatsAppInboundAction(
+  input: unknown,
+): Promise<ActionResult<{ readonly hasInbound: boolean }>> {
+  return runAction({
+    permission: 'conversation:read',
+    parser: WhatsAppPhoneNumberParamsSchema,
+    input,
+    perform: async ({ whatsappAccountId }) => {
+      const page = await listConversations({
+        scope: 'all',
+        limit: INBOUND_CHECK_PAGE_SIZE,
+        sort: CONVERSATION_SORT_DEFAULT,
+      });
+
+      return {
+        hasInbound: page.items.some(
+          (conversation) => conversation.whatsappAccountId === whatsappAccountId,
+        ),
+      };
+    },
+    revalidate: null,
+    label: 'WhatsApp inbound check',
+  });
+}
+
+/** The newest threads. Enough to find one sent moments ago, and no more. */
+const INBOUND_CHECK_PAGE_SIZE = 25;

@@ -1,8 +1,7 @@
 /*
- * What is left after TAR-710: the form's own frame, its measure and its two
- * columns belong to `SettingsForm` and `Field`, and the switch and the slider
- * belong to `Switch` and `Slider`. Only the two rules that are genuinely this
- * screen's are still here.
+ * What is genuinely this form's. The frame, the measure and the two columns
+ * belong to `SettingsForm` and `Field`; the switch, the slider and the chips
+ * belong to their own components.
  */
 
 /* A turn count is two digits; a full-width field for it invites a wrong answer. */

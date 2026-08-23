@@ -55,6 +55,12 @@ export function SectionCard({
   const heading = (
     <Heading
       id={headingId}
+      // A card with an `id` is a card something links to, and a fragment link
+      // scrolls a heading into view without moving focus to it — so a keyboard
+      // reader lands at the top of the page they just left. `-1` keeps it out of
+      // the tab order and makes `focus()` legal, which is what an in-page rail
+      // needs to send somebody to the card they picked (TAR-813).
+      tabIndex={headingId === undefined ? undefined : -1}
       className={cx(styles.heading, isTitleVisible ? undefined : styles.headingHidden)}
     >
       {title}

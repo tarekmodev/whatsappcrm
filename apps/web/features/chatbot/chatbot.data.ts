@@ -3,7 +3,7 @@ import 'server-only';
 import { cache } from 'react';
 import type { AiConfigResponse, KnowledgeDocumentListItem } from '@whatsappcrm/contracts';
 import { getAiConfig, listKnowledgeDocuments } from '@/lib/api/ai';
-import { KNOWLEDGE_DOCUMENTS_PAGE_SIZE } from './constants';
+import { KNOWLEDGE_DOCUMENTS_PAGE_SIZE, SOURCE_HEALTH_SCAN_LIMIT } from './constants';
 import type { KnowledgeListParams } from './knowledge-params';
 
 /**
@@ -61,4 +61,53 @@ export async function loadKnowledgeDocuments(
   });
 
   return { documents: page.items, hasMoreDocuments: page.nextCursor !== null };
+}
+
+/**
+ * How many sources are ready, indexing and failed — the three counts the health
+ * strip and the pipeline rail are drawn from (TAR-813).
+ *
+ * **One count is exact and two are floors, and the difference is published.**
+ * `indexedDocumentCount` is a real total the readiness payload already carries.
+ * Nothing publishes a total for the other two: `GET /knowledge-documents` is
+ * keyset-paginated and answers with items and a cursor, so the honest way to
+ * count them without a new endpoint is to read one page of each and say `100+`
+ * when the cursor says there is another. A knowledge base is tens of documents,
+ * so that edge is rare — but a strip that rendered `100` for a tenant with 340
+ * failed sources would be a number the console made up.
+ *
+ * Two extra requests on a page that is already `force-dynamic`, issued together
+ * with the configuration read rather than after it. `cache()` for the same
+ * reason `loadChatbotConfig` has it: the rail and the strip sit in different
+ * boundaries and must not disagree about how many sources failed.
+ */
+export const loadSourceHealth = cache(async function loadSourceHealth(): Promise<SourceHealth> {
+  const [config, indexing, failed] = await Promise.all([
+    loadChatbotConfig(),
+    listKnowledgeDocuments({ limit: SOURCE_HEALTH_SCAN_LIMIT, status: 'pending' }),
+    listKnowledgeDocuments({ limit: SOURCE_HEALTH_SCAN_LIMIT, status: 'failed' }),
+  ]);
+
+  return {
+    readyCount: config.readiness.indexedDocumentCount,
+    indexingCount: indexing.items.length,
+    failedCount: failed.items.length,
+    isIndexingCapped: indexing.nextCursor !== null,
+    isFailedCapped: failed.nextCursor !== null,
+  };
+});
+
+export interface SourceHealth {
+  /** Exact: the API publishes it as `readiness.indexedDocumentCount`. */
+  readonly readyCount: number;
+  readonly indexingCount: number;
+  readonly failedCount: number;
+  /** True when the count is a floor — another page matched, so it renders as `N+`. */
+  readonly isIndexingCapped: boolean;
+  readonly isFailedCapped: boolean;
+}
+
+/** Whether the tenant has any source at all, which is what decides if the strip is drawn. */
+export function hasAnySources(health: SourceHealth): boolean {
+  return health.readyCount + health.indexingCount + health.failedCount > 0;
 }
