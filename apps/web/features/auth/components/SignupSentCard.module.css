@@ -1,0 +1,25 @@
+/*
+ * The same two rules `AuthOutcomeCard` uses, and they are copied rather than
+ * imported because a CSS Module cannot export a class to another module file.
+ * They are three lines each; the alternative — a shared module imported for two
+ * declarations — is a dependency between two cards that are otherwise
+ * independent.
+ */
+
+.detail {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+/*
+ * Stacked and full width, so the primary action is the widest thing on the card
+ * and both clear the 44px target on a phone. Once the resend is exhausted the
+ * remaining button becomes the primary one and is the only thing here, which is
+ * why the container is a column that works with one child as well as two.
+ */
+.actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-3);
+}

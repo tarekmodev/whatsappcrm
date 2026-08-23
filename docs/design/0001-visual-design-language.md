@@ -981,6 +981,56 @@ The tab is a real link and the active tab is in the URL, for the same reason the
 are. Below the breakpoint the summary panel stacks above the tabbed area rather than
 sitting beside it.
 
+### Stepped setup flows (TAR-814)
+
+`Stepper` + `StepperStep` is the frame for work with a **real dependency chain** in it —
+step 3 cannot be attempted until step 2 has happened. The WhatsApp connect wizard
+(`features/whatsapp/components/WhatsAppConnectWizard.tsx`) is the instance it was built
+for and the worked example.
+
+**It is not the third way of listing things.** Three patterns look alike from a distance
+and are answers to different questions:
+
+| Pattern     | Use when                                           | Shape                                            |
+| ----------- | -------------------------------------------------- | ------------------------------------------------ |
+| `Tabs`      | Several views of the same thing, in any order      | One visible at a time, chosen by the reader      |
+| A checklist | Independent jobs that happen to be listed together | All open, any order, each skippable — onboarding |
+| `Stepper`   | One job whose parts depend on the ones before them | One open at a time, order fixed, none skippable  |
+
+The onboarding checklist is deliberately **not** a stepper: an admin may invite agents
+before connecting a number, and drawing that as blocked would be a lie about the product.
+
+**The four statuses are the whole vocabulary**: `done`, `current`, `upcoming`, `error`.
+
+- `error` implies open. A step that failed is the one the reader has to deal with, so it
+  takes `aria-current="step"` exactly as `current` does.
+- There is no fifth for "in flight". A step mid-request is still `current`, and the
+  pending state belongs on the control the reader just pressed (`Button isPending`) — a
+  marker saying it too would say it in a place nobody is looking.
+- **A step nobody can reach is never `error`.** Deriving that correctly is the point of
+  keeping the machine in a pure module (`features/whatsapp/wizard.ts`, with its own test)
+  rather than inside the component: a red marker beside work that has not started sends
+  somebody looking for a problem that is not theirs yet.
+
+**Every status is server-derived, never asserted.** A step is `done` because the API said
+the thing happened, on the same reasoning `contracts/onboarding.ts` gives for its own
+checklist. A step a client could mark done makes the flow decoration rather than a
+description of the workspace.
+
+**Anatomy.** A `progressbar` above the list carrying the same sentence the visible count
+shows (`aria-valuetext`, not a bare percentage); then an `<ol role="list">`, one `<li>`
+per step. Each row is a marker in the gutter — a numeral, a tick, or an alert glyph, all
+`aria-hidden` — a title, a one-line summary that is present whatever the status, and a
+`Badge` carrying **the status in words**. The rail between markers is reinforcement only.
+The open step's body appears under it and fades in over `--duration-fast`; a closed step
+shows its summary and keeps its controls out of the tab order.
+
+**A done step still says what it produced.** The summary is where — "Connected to Northwind
+Traders", "Sending from +966501234567" — so a flow resumed a day later is checkable at a
+glance without reopening anything. And when every step is done the list **stays on
+screen**: TAR-36's rule for the onboarding checklist holds here too, because a
+congratulation that swallows the list takes the way back with it.
+
 ### The inbox
 
 Four regions inside the console frame, owned by `InboxLayout`, and the one route on the
@@ -1239,6 +1289,7 @@ space:
 | A row's actions           | `RowActions` — see "Row actions" for the ladder                                         |
 | An action the list shares | `Notice variant="quiet"` above the table, one `Button` — see "A remedy above the queue" |
 | Tabs                      | `Tabs`                                                                                  |
+| A stepped setup flow      | `Stepper` + `StepperStep` — see "Stepped setup flows"                                   |
 | A filter row              | `FilterBar`                                                                             |
 | Filter pills              | `FilterPills`                                                                           |
 | A search filter           | `SearchField`                                                                           |
