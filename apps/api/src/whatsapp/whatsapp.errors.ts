@@ -32,7 +32,9 @@ export abstract class WhatsAppError extends Error {
 }
 
 /**
- * Thrown when `WHATSAPP_TOKEN_ENCRYPTION_KEY` is absent.
+ * Thrown when `SECRETS_ENCRYPTION_KEY` is absent — under either name, since
+ * `WHATSAPP_TOKEN_ENCRYPTION_KEY` remains a deprecated alias for one release
+ * (TAR-816).
  *
  * This is the fail-closed half of making the key optional: an environment that
  * was never given one refuses to connect a WABA and refuses to send, rather than
@@ -40,9 +42,14 @@ export abstract class WhatsAppError extends Error {
  */
 export class WhatsAppEncryptionUnavailableError extends WhatsAppError {
   constructor() {
+    // Names the current variable, not the alias. The same key also backs
+    // `platform_settings`, whose own error names `SECRETS_ENCRYPTION_KEY` — and
+    // two halves of one key telling an operator to set different variables is
+    // how a migration window gets extended by a support ticket.
     super(
-      'The WhatsApp channel is disabled in this environment: WHATSAPP_TOKEN_ENCRYPTION_KEY is not ' +
-        'configured, so a per-WABA access token can be neither stored nor read.',
+      'The WhatsApp channel is disabled in this environment: SECRETS_ENCRYPTION_KEY is not ' +
+        'configured (nor its deprecated alias WHATSAPP_TOKEN_ENCRYPTION_KEY), so a per-WABA ' +
+        'access token can be neither stored nor read.',
     );
   }
 }

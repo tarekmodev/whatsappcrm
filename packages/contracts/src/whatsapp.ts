@@ -728,12 +728,13 @@ export type MessageTemplateAdminPage = z.infer<typeof MessageTemplateAdminPageSc
  *
  * ## Why this endpoint exists at all
  *
- * The console reads `NEXT_PUBLIC_META_APP_ID` and
+ * The console used to read `NEXT_PUBLIC_META_APP_ID` and
  * `NEXT_PUBLIC_META_EMBEDDED_SIGNUP_CONFIG_ID`, which Next.js inlines into the
  * browser bundle **at build time**. TAR-816 makes the API's copy of those two
- * values operator-editable at runtime; without this endpoint that is a setting
- * which appears to save and changes nothing, because the browser is still
- * holding whatever was compiled in on the last deploy.
+ * values operator-editable at runtime; without this endpoint that would be a
+ * setting which appears to save and changes nothing, because the browser would
+ * still be holding whatever was compiled in on the last deploy. Both variables
+ * are gone, and this is what replaced them.
  *
  * ## Why it is safe to publish
  *

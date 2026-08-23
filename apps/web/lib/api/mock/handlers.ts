@@ -97,6 +97,7 @@ import {
   type CannedResponseListResponse,
   type CannedResponseResponse,
   type ConnectedWhatsAppBusinessAccountResponse,
+  type WhatsAppEmbeddedSignupConfigResponse,
   type ContactResponse,
   type ConversationResponse,
   type CursorPage,
@@ -683,6 +684,12 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/auth\/password-reset\/confirm$/,
     permission: null,
     handle: confirmPasswordReset,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/whatsapp\/embedded-signup\/config$/,
+    permission: 'channel:manage',
+    handle: readEmbeddedSignupConfig,
   },
   {
     method: 'POST',
@@ -2540,6 +2547,22 @@ function toOnboardingResponse(checklist: MockOnboardingChecklist): OnboardingChe
  * one.
  */
 export const MOCK_EXPIRED_SIGNUP_CODE = 'expired';
+
+/**
+ * `GET /v1/whatsapp/embedded-signup/config` — the ids the connect wizard needs
+ * (TAR-816).
+ *
+ * Answers a configured deployment, because that is what makes the wizard's first
+ * step reachable in mock mode. The unconfigured state is covered where it is
+ * cheaper to reach — `WhatsAppConnectWizard.test.tsx` passes the prop directly.
+ *
+ * The ids are obvious fixtures rather than plausible ones: nothing here reaches
+ * Meta, and a real-looking app id sitting in a mock invites somebody to wonder
+ * whose it is.
+ */
+function readEmbeddedSignupConfig(): WhatsAppEmbeddedSignupConfigResponse {
+  return { appId: '1000000000000001', configId: '2000000000000002', graphApiVersion: 'v23.0' };
+}
 
 /**
  * `POST /v1/whatsapp/business-accounts` — the tenant-facing connection.

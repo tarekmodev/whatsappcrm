@@ -2,7 +2,10 @@
 
 import { useCallback } from 'react';
 import Script from 'next/script';
-import type { ConnectedWhatsAppBusinessAccountResponse } from '@whatsappcrm/contracts';
+import type {
+  ConnectedWhatsAppBusinessAccountResponse,
+  WhatsAppEmbeddedSignupConfigResponse,
+} from '@whatsappcrm/contracts';
 import { Button } from '@/components/ui/Button';
 import { ButtonLink } from '@/components/ui/ButtonLink';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -51,7 +54,20 @@ import styles from './WhatsAppConnectWizard.module.css';
  * Meta's SDK is loaded here, which is what keeps it to this page: `next/script`
  * mounts with the component, so no other route pays for it or exposes it.
  */
-export function WhatsAppConnectWizard() {
+export interface WhatsAppConnectWizardProps {
+  /**
+   * Meta's app id, configuration id and Graph version, read from the API by the
+   * server component that renders this one (TAR-816).
+   *
+   * A prop rather than a `webEnv` read: those were `NEXT_PUBLIC_*` constants
+   * inlined into the bundle at build time, so an operator changing the app id
+   * through the admin surface would have seen it save and change nothing here
+   * until the next deploy.
+   */
+  config: WhatsAppEmbeddedSignupConfigResponse;
+}
+
+export function WhatsAppConnectWizard({ config }: WhatsAppConnectWizardProps) {
   const content = useContent();
   const copy = content.whatsapp.wizard;
   const { showToast } = useToast();
@@ -69,7 +85,7 @@ export function WhatsAppConnectWizard() {
     [content, showToast],
   );
 
-  const wizard = useWhatsAppWizard({ onConnected });
+  const wizard = useWhatsAppWizard({ onConnected, config });
 
   if (!wizard.signup.isConfigured) {
     // No Meta app on this deployment. An explanation and a way forward, rather

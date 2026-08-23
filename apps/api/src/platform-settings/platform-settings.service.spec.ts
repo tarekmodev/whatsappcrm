@@ -33,6 +33,9 @@ const APP_ID = '1234567890123456';
 
 const ACTOR = 'ops-alice';
 
+/** What the database stamps on a row it has just written. */
+const WRITTEN_AT = new Date('2026-08-23T10:00:00.000Z');
+
 function fingerprintOf(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 8);
 }
@@ -70,7 +73,7 @@ function build(options: {
   const config = { get: (name: string) => env[name] } as unknown as ConfigService;
 
   const listAll = jest.fn().mockResolvedValue(options.rows ?? []);
-  const set = jest.fn().mockResolvedValue(undefined);
+  const set = jest.fn().mockResolvedValue(WRITTEN_AT);
   const clear = jest.fn().mockResolvedValue(true);
 
   const repository = {
@@ -412,6 +415,125 @@ describe('PlatformSettingsService', () => {
       expect(harness.service.get('meta.app_id')).toBe(APP_ID);
       harness.service.onModuleDestroy();
     });
+
+    it('reports the value it just wrote, even when the reload cannot confirm it', async () => {
+      // The write committed. Reporting the pre-write view would tell the operator
+      // their save did not take while it is committed and about to be live
+      // platform-wide — and TAR-817's confirmation reads exactly these fields.
+      jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+      const harness = await started({});
+
+      harness.listAll.mockRejectedValue(new Error('connection reset by peer'));
+
+      const view = await harness.service.set('meta.app_id', APP_ID, ACTOR);
+
+      expect(view).toMatchObject({
+        source: 'database',
+        isSet: true,
+        value: APP_ID,
+        fingerprint: fingerprintOf(APP_ID),
+        updatedAt: WRITTEN_AT.toISOString(),
+        updatedByLabel: ACTOR,
+      });
+      // And the instance serves it, rather than waiting for a refresh to succeed.
+      expect(harness.service.get('meta.app_id')).toBe(APP_ID);
+      harness.service.onModuleDestroy();
+    });
+
+    it('reports the revert it just made, even when the reload cannot confirm it', async () => {
+      jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+      const harness = await started({
+        env: { WHATSAPP_APP_SECRET: ENV_APP_SECRET },
+        rows: [row('whatsapp.app_secret', ROW_APP_SECRET)],
+      });
+
+      harness.listAll.mockRejectedValue(new Error('connection reset by peer'));
+
+      const view = await harness.service.clear('whatsapp.app_secret', ACTOR);
+
+      expect(view).toMatchObject({ source: 'environment', isSet: true });
+      expect(harness.service.get('whatsapp.app_secret')).toBe(ENV_APP_SECRET);
+      harness.service.onModuleDestroy();
+    });
+
+    it('logs the boot load failure at error, not warn', async () => {
+      // An instance that came up unable to read the table is serving every key
+      // from the environment — for a rotated secret, the superseded one — and
+      // that must not wait out ten quiet ticks to become visible.
+      const error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+      const harness = build({ env: { WHATSAPP_APP_SECRET: ENV_APP_SECRET } });
+
+      harness.listAll.mockRejectedValue(new Error('connection refused'));
+      await harness.service.onModuleInit();
+
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled();
+      harness.service.onModuleDestroy();
+    });
+  });
+
+  describe('overlapping reloads', () => {
+    it('does not let an older read overwrite a newer one', async () => {
+      // A timer tick issues its `listAll()`; a write commits and reloads while
+      // that read is still outstanding. If the older result landed last, `get()`
+      // would serve the superseded secret until the next tick — contradicting the
+      // one property the synchronous-`get()` design is justified by.
+      jest.useFakeTimers();
+
+      try {
+        const harness = build({ env: { PLATFORM_SETTINGS_REFRESH_MS: 1_000 } });
+
+        await harness.service.onModuleInit();
+
+        let releaseStaleRead: (rows: StoredPlatformSetting[]) => void = () => undefined;
+        const staleRead = new Promise<StoredPlatformSetting[]>((resolve) => {
+          releaseStaleRead = resolve;
+        });
+
+        // The tick's read: started before the write, carrying the pre-write row
+        // set, and deliberately left outstanding.
+        harness.listAll.mockReturnValueOnce(staleRead);
+        jest.advanceTimersByTime(1_000);
+
+        // The write's own read, which sees the committed row.
+        harness.listAll.mockResolvedValue([row('meta.app_id', APP_ID)]);
+        const write = harness.service.set('meta.app_id', APP_ID, ACTOR);
+
+        releaseStaleRead([]);
+        await write;
+
+        expect(harness.service.get('meta.app_id')).toBe(APP_ID);
+        harness.service.onModuleDestroy();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('skips a timer tick while a reload is already running, rather than queueing one', async () => {
+      jest.useFakeTimers();
+
+      try {
+        const harness = build({ env: { PLATFORM_SETTINGS_REFRESH_MS: 1_000 } });
+
+        await harness.service.onModuleInit();
+        expect(harness.listAll).toHaveBeenCalledTimes(1);
+
+        // A read that never resolves stands in for a slow database.
+        harness.listAll.mockReturnValue(new Promise(() => undefined));
+
+        await jest.advanceTimersByTimeAsync(5_000);
+
+        // One tick got through and is still outstanding; the other four skipped.
+        expect(harness.listAll).toHaveBeenCalledTimes(2);
+        harness.service.onModuleDestroy();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe('the refresh timer', () => {
@@ -424,11 +546,15 @@ describe('PlatformSettingsService', () => {
         await harness.service.onModuleInit();
         expect(harness.listAll).toHaveBeenCalledTimes(1);
 
-        jest.advanceTimersByTime(3_000);
+        // `…Async` so each reload settles before the next tick fires. The
+        // synchronous form would have every tick land while the first read is
+        // still in flight, which the skip below is there to absorb — a real
+        // 30-second interval against a healthy read is not that case.
+        await jest.advanceTimersByTimeAsync(3_000);
         expect(harness.listAll).toHaveBeenCalledTimes(4);
 
         harness.service.onModuleDestroy();
-        jest.advanceTimersByTime(3_000);
+        await jest.advanceTimersByTimeAsync(3_000);
         expect(harness.listAll).toHaveBeenCalledTimes(4);
       } finally {
         jest.useRealTimers();

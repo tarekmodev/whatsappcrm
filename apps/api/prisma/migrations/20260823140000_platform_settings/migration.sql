@@ -1,78 +1,95 @@
--- Database-backed platform settings (TAR-816, against TAR-811's contract).
+-- Runtime-editable platform configuration, encrypted at rest (TAR-811, TAR-815).
 --
 -- `META_APP_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and
 -- `META_EMBEDDED_SIGNUP_CONFIG_ID` are boot-time environment variables today,
--- which means changing one is a redeploy of the platform. These two tables are
--- where an operator-managed override lives instead, with the environment kept as
--- the fallback.
+-- validated in `src/config/env.schema.ts` and read per use through
+-- `ConfigService`. TAR-800 asks for an operator to be able to change them from
+-- the admin console without a redeploy. These two tables are where that change
+-- is stored; the architecture that reads them is TAR-811's, and TAR-816 builds
+-- it.
 --
 -- ---------------------------------------------------------------------------
--- The shape, and the four decisions inside it
+-- The one thing to understand before reading the DDL
 -- ---------------------------------------------------------------------------
 --
---   1. **Database overrides environment, never the reverse.** Absence of a row
---      *is* the unset state, so an environment that never opens the admin
---      console behaves byte-identically to how it did before this migration.
---      Nothing is backfilled — see the note at the bottom.
+-- **Resolution order is: database row → environment variable → unset.** The
+-- environment is the fallback; this table is the override. Chosen over the
+-- reverse deliberately, and it is what makes this migration safe to ship on its
+-- own: until an operator writes the first row, every key resolves from the
+-- environment exactly as it does today, so an empty `platform_settings` *is*
+-- the pre-migration behaviour rather than a degraded version of it.
 --
---   2. **Every value is encrypted, including the public ones.** One column and
---      one code path, so there is no clear column a secret can be written into
---      by mistake. The Meta app id is not a secret and is encrypted anyway; that
---      costs one AES call per snapshot refresh, not per read.
---
---   3. **Sensitivity is not a column.** Which keys exist, which of them are
---      secret and what a write must validate against all live in
---      `platform-settings.registry.ts`. A row whose `key` is not in that
---      registry is ignored on load — which is what makes the allowlist closed,
---      and what stops a rogue row introducing a managed key.
---
---   4. **History stores fingerprints, never values.** `platform_setting_changes`
---      records that a key changed, from which fingerprint to which, and by whom.
---      It does not retain the old secret, so each secret exists in exactly one
---      row in this database.
+-- That is also why there is **no backfill** — see the closing section.
 --
 -- ---------------------------------------------------------------------------
--- Grants — required, and easy to miss
+-- Why two tables rather than columns on one
+-- ---------------------------------------------------------------------------
+--
+-- `platform_settings` is mutable: one row per key, upserted and deleted.
+-- `platform_setting_changes` is append-only history. They are separate because
+-- the history has to survive a `DELETE` of the setting — a "revert to
+-- environment" is precisely the event worth recording, and a child row with a
+-- foreign key would be deleted by the very action it documents. Hence `key` as
+-- a plain column in the history table, with no FK.
+--
+-- Neither is an `audit_logs` row. `audit_logs.tenant_id` is NOT NULL with an FK
+-- to `tenants`, and a Meta app credential belongs to no tenant. Making that
+-- column nullable would touch the `tenant_isolation` policy, the
+-- `audit_logs_actor_attribution` CHECK, four indexes and every existing query
+-- on the platform's most safety-critical table — for one writer. TAR-811
+-- rejected that as disproportionate, on the reasoning that already gave
+-- `webhook_event_replays` and `lifecycle_events` tables of their own.
+--
+-- ---------------------------------------------------------------------------
+-- Grants are the enforcement, and they are not in this file
 -- ---------------------------------------------------------------------------
 --
 -- Neither table carries `tenant_id`, so neither can carry a `tenant_isolation`
--- policy: there is nothing for one to compare against. On both, as on
--- `webhook_events`, `tenant_signups` and `webhook_event_replays`, **the grant is
--- the enforcement** — `whatsappcrm_app` is granted nothing at all.
--- `app-roles.sql` is updated in the same change and **must be re-run after this
--- migration**, or `verify-tenant-isolation.sql` fails on it. A new table has no
--- grants and no policy until it does.
+-- policy and neither is protected by one. What protects them is that
+-- `whatsappcrm_app` is granted **nothing at all** on either — the same posture
+-- as `webhook_events`, `tenant_signups`, `lifecycle_events` and
+-- `webhook_event_replays`.
+--
+-- ⚠️ **Re-run `pnpm db:roles` after applying this migration.** A new table has
+-- no grants until it does, and `app-roles.sql` in this same change carries the
+-- branch that keeps it that way for the app role. `verify-tenant-isolation.sql`
+-- names both tables in phase 3g, so a forgotten re-run or a lost branch fails
+-- by name rather than quietly.
 --
 -- ---------------------------------------------------------------------------
 -- Impact and risk
 -- ---------------------------------------------------------------------------
 --
---   Duration     Milliseconds. Two empty tables, one enum, one unique index and
---                one composite index. Nothing existing is read or rewritten.
---   Locks        ACCESS EXCLUSIVE on the new tables, which no session can be
---                holding. Nothing existing is altered, so no lock is taken on a
---                table that is being read.
---   Blocking     Nil.
+--   Duration     Milliseconds. Two empty tables, one enum, two indexes, three
+--                CHECK constraints and one trigger function. Nothing existing
+--                is read, rewritten or locked.
+--   Locks        ACCESS EXCLUSIVE on the two new tables, which no session can
+--                be holding. Nothing else is touched — there are no foreign
+--                keys out of these tables, so no existing table is locked at
+--                all. `lock_timeout` is set below for consistency with the
+--                surrounding migrations rather than because there is anything
+--                here to queue behind.
+--   Blocking     Nil. No existing relation is referenced.
 --   Data loss    None. Purely additive.
---   Rollback     `down.sql` beside this file. There is nothing to preserve: an
---                empty `platform_settings` means every key resolves from the
---                environment, which is the pre-migration behaviour exactly.
+--   Rollback     `down.sql` beside this file. A clean, complete reversal —
+--                read its header for what it destroys.
 --
 -- Additive and idempotent: every statement is guarded, so applying this to a
--- fresh database, to one at the previous version, or twice in a row all succeed.
+-- fresh database, to one at the previous version, or twice in a row all
+-- succeed.
 
 SET LOCAL lock_timeout = '3s';
 
 -- ---------------------------------------------------------------------------
--- 1. The change action
+-- 1. The change verb
 -- ---------------------------------------------------------------------------
 --
--- `set` covers the first write of a key and every later one — `previous_fingerprint`
--- is what distinguishes them, and a separate `created` value would say the same
--- thing twice. `cleared` is the delete that reverts a key to its environment
--- fallback.
+-- Two labels, because a managed key has exactly two states an operator can put
+-- it in. `cleared` means "revert to environment", not "delete the setting": the
+-- key stays managed and keeps resolving, from the environment variable behind
+-- it. An enum rather than a boolean so the history reads as what happened.
 --
--- `CREATE TYPE` has no `IF NOT EXISTS` form, so it is guarded on the catalog.
+-- `CREATE TYPE` has no `IF NOT EXISTS` form, so the guard is explicit.
 
 DO $$
 BEGIN
@@ -87,16 +104,29 @@ END
 $$;
 
 -- ---------------------------------------------------------------------------
--- 2. The current value, one row per managed key
+-- 2. platform_settings — the current value of one managed key
 -- ---------------------------------------------------------------------------
 --
--- `key` is the natural key and the only access path; the uuid primary key exists
--- for convention with every other model. There is no `is_secret`, no
--- `visibility` and no role column — see decision 3 above.
+-- `key` is the natural key; `id` exists because every other model in this schema
+-- has one. The unique index on `key` is the only access path, and the table is
+-- bounded by the code registry at single-digit rows, so nothing else is
+-- warranted — no index on `updated_at`, no index on `updated_by_label`.
 --
--- `value_encrypted` is never null. "No value" is the absence of a row, not an
--- empty string, so there is exactly one representation of unset and no code path
--- that has to treat two of them alike.
+-- **What is deliberately absent: `is_secret`, `visibility`, and any role or
+-- scope column.** Which keys are manageable at all, and whether a key's value
+-- may ever leave the API in plaintext, come from the code registry
+-- (`src/platform-settings/platform-settings.registry.ts`) and from nowhere
+-- else. Sensitivity in a row is sensitivity a row edit can change, and
+-- reclassifying `whatsapp.app_secret` as public is not an edit anyone should be
+-- one UPDATE away from. A row whose `key` is not in the registry is ignored on
+-- load and logged at `warn` — that read, not this DDL, is where the allowlist is
+-- enforced.
+--
+-- TAR-815's acceptance criterion asks whether the access-control model needs
+-- per-key visibility metadata here. It does not, and not because it was skipped:
+-- TAR-811 settled the question by removing it. No endpoint returns a `secret`
+-- plaintext to anybody, there is no reveal action and no role that unlocks one,
+-- so there is no read-visibility distinction left for a column to express.
 
 CREATE TABLE IF NOT EXISTS "public"."platform_settings" (
     "id" UUID NOT NULL,
@@ -111,43 +141,117 @@ CREATE TABLE IF NOT EXISTS "public"."platform_settings" (
 );
 
 COMMENT ON TABLE "public"."platform_settings" IS
-    'TAR-816. Operator-managed overrides for platform-wide configuration, one row per key. '
-    'No tenant_id and no RLS policy: these are the platform''s own credentials, not any '
-    'tenant''s. Reachable through SystemPrisma alone — the app role holds no grant, which is '
-    'what replaces the policy. Absence of a row means the key resolves from its environment '
-    'variable.';
+    'TAR-811. One row per managed platform configuration key, holding a runtime override for '
+    'a boot-time environment variable. Resolution order is row -> environment -> unset, so an '
+    'empty table is the pre-migration behaviour and not a degraded one. No tenant_id and no '
+    'RLS policy; reachable through SystemPrisma alone, because the app role holds no grant. '
+    'Which keys are manageable, and which are secret, live in the code registry and never in '
+    'a column here.';
 
 COMMENT ON COLUMN "public"."platform_settings"."key" IS
-    'The registry key, e.g. whatsapp.app_secret. A row whose key is absent from '
-    'platform-settings.registry.ts is ignored on load and logged at warn — that is what '
-    'enforces the allowlist, and it is why this column has no CHECK constraint listing the '
-    'keys: adding one is a code change, not a migration.';
+    'The registry key, e.g. whatsapp.app_secret. The natural key — the uuid is convention. '
+    'Never renamed: a rename orphans the row, because the registry looks the value up by this '
+    'string. A key not in the registry is ignored on load and logged at warn.';
 
 COMMENT ON COLUMN "public"."platform_settings"."value_encrypted" IS
-    'AES-256-GCM, payload format v1.<iv>.<tag>.<ct>, AAD platform_setting:<key>. Every value '
-    'is encrypted including the non-secret ones, so there is no clear column a secret could be '
-    'written into by mistake.';
+    'v1.<iv>.<tag>.<ct>, base64url, AES-256-GCM under SECRETS_ENCRYPTION_KEY, with '
+    'platform_setting:<key> as AAD — byte-identical to the format WhatsAppCredentialCipher '
+    'already writes. EVERY value is encrypted, including the non-secret ones: one column and '
+    'one code path means there is no clear column a secret can be written into by mistake. '
+    'Never null; "no value" is the absence of a row.';
 
 COMMENT ON COLUMN "public"."platform_settings"."fingerprint" IS
-    'First 8 hex characters of SHA-256 of the plaintext. Lets the console show that two '
-    'environments hold the same secret without decrypting either. Safe to publish only because '
-    'every key carries a write-time length floor in the registry.';
+    'First 8 hex characters of SHA-256(plaintext), written with the value. Lets an operator '
+    'answer "do staging and production hold the same secret" without decrypting either, and '
+    'lets platform_setting_changes reference a value it deliberately does not store. An 8-hex '
+    'prefix is offline-guessable for a low-entropy plaintext, which is why the registry puts a '
+    'min(32) write floor on both secret keys.';
 
 COMMENT ON COLUMN "public"."platform_settings"."updated_by_label" IS
     'The label half of the PLATFORM_ADMIN_TOKEN entry that authenticated the write, never the '
-    'secret half. Same value audit_logs.actor_label carries for an operator action (TAR-166).';
+    'secret half. The same rule audit_logs.actor_label and webhook_event_replays.actor_label '
+    'follow.';
 
+-- Prisma emits this name for `@unique` on the model; keeping it is what stops
+-- `migrate dev` proposing to drop and recreate the index as drift.
 CREATE UNIQUE INDEX IF NOT EXISTS "platform_settings_key_key"
     ON "public"."platform_settings"("key");
 
+-- The AAD binds a payload to `platform_setting:<key>`, so the *shape* of a key
+-- is load-bearing rather than cosmetic. This is a shape guard and explicitly
+-- **not** the allowlist — the registry is the allowlist, enforced at the read.
+-- What it buys is that a typo written straight into the database fails at the
+-- INSERT rather than becoming a row that silently never loads.
+--
+-- Bounded at 64 characters on the same reasoning as `plans_key_format`: a key is
+-- an identifier a person types into a code file, not free text.
+--
+-- Guarded with DROP/ADD rather than `IF NOT EXISTS`, which `ADD CONSTRAINT` has
+-- no form of. Both tables are empty at this point, so the validating scan is
+-- free.
+
+ALTER TABLE "public"."platform_settings"
+    DROP CONSTRAINT IF EXISTS "platform_settings_key_format";
+
+ALTER TABLE "public"."platform_settings"
+    ADD CONSTRAINT "platform_settings_key_format" CHECK (
+        "key" ~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$' AND length("key") <= 64
+    );
+
+-- The fingerprint is lowercase hex, exactly 8 characters. `char(8)` pads a short
+-- value with spaces rather than rejecting it, and a space is not a hex digit, so
+-- this catches the truncation the type does not.
+
+ALTER TABLE "public"."platform_settings"
+    DROP CONSTRAINT IF EXISTS "platform_settings_fingerprint_format";
+
+ALTER TABLE "public"."platform_settings"
+    ADD CONSTRAINT "platform_settings_fingerprint_format" CHECK (
+        "fingerprint" ~ '^[0-9a-f]{8}$'
+    );
+
+-- The one constraint here that earns its keep.
+--
+-- This column is the only place a platform secret is stored, and the failure
+-- worth designing against is not a corrupted ciphertext — GCM's auth tag already
+-- catches that on the way out — but a **plaintext** value reaching the column: a
+-- write path that forgot to encrypt, a hand-run UPDATE during an incident, a
+-- restore from a fixture written before the cipher existed. None of those fail
+-- on their own; they succeed, and the next read decrypts a value that was never
+-- encrypted into an error nobody connects back to the write.
+--
+-- The envelope shape is the cheapest thing that rejects all of them. A raw Meta
+-- app id (`1234567890`), a raw app secret (32 hex characters) and an empty
+-- string all fail it.
+--
+-- Version-agnostic on the tag (`v[0-9]+`) so a future cipher version is not
+-- blocked by this file; specific on the three base64url segments, which is the
+-- part doing the work. A future envelope with a genuinely different shape
+-- changes this constraint in its own migration — a deliberate cost, paid to
+-- avoid a column that accepts plaintext.
+
+ALTER TABLE "public"."platform_settings"
+    DROP CONSTRAINT IF EXISTS "platform_settings_value_envelope";
+
+ALTER TABLE "public"."platform_settings"
+    ADD CONSTRAINT "platform_settings_value_envelope" CHECK (
+        "value_encrypted" ~ '^v[0-9]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+    );
+
 -- ---------------------------------------------------------------------------
--- 3. The history
+-- 3. platform_setting_changes — append-only history
 -- ---------------------------------------------------------------------------
 --
--- `key` is deliberately not a foreign key to `platform_settings.key`: the whole
--- point of a `cleared` row is that the setting it names has just been deleted,
--- and a reference would either block that delete or cascade the trail away with
--- it.
+-- **No previous value is stored, in any form.** Fingerprints only. That
+-- forecloses a one-click rollback, and in exchange each secret exists in exactly
+-- one row in the database rather than accumulating a tail of superseded copies
+-- nobody is tracking. An operator reverting re-enters the value — and since the
+-- value's origin is the Meta app dashboard, that is a lookup, not a loss.
+--
+-- `key` is a plain column, not a foreign key, so the history survives the
+-- `DELETE` a `cleared` entry records. That also means a row here can name a key
+-- that no longer exists in the registry, which is correct: what an operator did
+-- last year is still what they did.
 
 CREATE TABLE IF NOT EXISTS "public"."platform_setting_changes" (
     "id" UUID NOT NULL,
@@ -162,37 +266,78 @@ CREATE TABLE IF NOT EXISTS "public"."platform_setting_changes" (
 );
 
 COMMENT ON TABLE "public"."platform_setting_changes" IS
-    'TAR-816. Append-only, one row per platform-setting write or clear. Not an audit_logs row: '
-    'audit_logs.tenant_id is NOT NULL with an FK to tenants, and a platform credential belongs '
-    'to no tenant. Stores fingerprints and actor labels, never values — so each secret exists '
-    'in exactly one row in this database.';
+    'TAR-811. Append-only, one row per platform setting write or revert. Records that a key '
+    'changed, when, and by whom — never what it changed to. Fingerprints only, so the history '
+    'is safe to read and each secret exists in exactly one row in the database. No FK to '
+    'platform_settings: the history must survive the DELETE a cleared entry documents. '
+    'Reachable through SystemPrisma alone, which holds SELECT and INSERT and neither UPDATE '
+    'nor DELETE.';
 
 COMMENT ON COLUMN "public"."platform_setting_changes"."previous_fingerprint" IS
-    'Null on the first set of a key. Never a value: reverting means re-entering the secret, '
-    'which given its origin is the Meta app dashboard is a lookup rather than a loss.';
+    'The fingerprint the key held before this change. Null on the first set for a key, and on '
+    'a clear of a key that held no row. Deliberately not constrained against action: a no-op '
+    'revert is a real thing an operator can do and is worth recording as one.';
+
+COMMENT ON COLUMN "public"."platform_setting_changes"."new_fingerprint" IS
+    'The fingerprint the key holds after this change. Null on cleared, which '
+    'platform_setting_changes_fingerprints enforces.';
 
 CREATE INDEX IF NOT EXISTS "platform_setting_changes_key_created_at_idx"
     ON "public"."platform_setting_changes"("key", "created_at" DESC);
+
+-- "What has happened to this key, most recent first" is the only query this
+-- table is read by, and the index above keeps it a backwards index scan.
+
+-- Makes the verb and the fingerprints agree with each other, in the shape
+-- `audit_logs_actor_attribution` established: a `set` produced a value, a
+-- `cleared` did not.
+--
+-- The `CASE` has no `ELSE` on purpose, and that is the loose end worth naming:
+-- an arm that matches nothing evaluates to NULL, and a CHECK treats NULL as
+-- satisfied. With exactly two labels in the enum both are covered — but adding a
+-- third label silently widens this constraint rather than failing, so the enum's
+-- doc comment in `schema.prisma` points back here.
+
+ALTER TABLE "public"."platform_setting_changes"
+    DROP CONSTRAINT IF EXISTS "platform_setting_changes_fingerprints";
+
+ALTER TABLE "public"."platform_setting_changes"
+    ADD CONSTRAINT "platform_setting_changes_fingerprints" CHECK (
+        CASE "action"
+            WHEN 'set'     THEN "new_fingerprint" IS NOT NULL
+            WHEN 'cleared' THEN "new_fingerprint" IS NULL
+        END
+    );
+
+-- Same hex guard as on `platform_settings.fingerprint`, on both nullable
+-- columns. NULL is permitted; a short or non-hex value is not.
+
+ALTER TABLE "public"."platform_setting_changes"
+    DROP CONSTRAINT IF EXISTS "platform_setting_changes_fingerprint_format";
+
+ALTER TABLE "public"."platform_setting_changes"
+    ADD CONSTRAINT "platform_setting_changes_fingerprint_format" CHECK (
+        ("previous_fingerprint" IS NULL OR "previous_fingerprint" ~ '^[0-9a-f]{8}$')
+        AND ("new_fingerprint" IS NULL OR "new_fingerprint" ~ '^[0-9a-f]{8}$')
+    );
 
 -- ---------------------------------------------------------------------------
 -- 4. Append-only, enforced against the owner too
 -- ---------------------------------------------------------------------------
 --
--- The grants in `app-roles.sql` give `whatsappcrm_system` SELECT and INSERT on
--- the history and withhold UPDATE and DELETE, which closes every application
--- path. This closes the other one: the table owner is bound by neither grant,
--- and the owner is the credential a psql session runs as at 2 a.m. — which is
--- exactly the situation this trail exists to record rather than to be edited
--- during.
+-- The grants in `app-roles.sql` give `whatsappcrm_system` SELECT and INSERT and
+-- withhold UPDATE and DELETE, which closes every application path. This closes
+-- the other one: the table owner is bound by neither grant, and the owner is the
+-- credential a psql session runs as at 2 a.m. — which is exactly the situation
+-- this trail exists to record rather than to be edited during.
 --
--- The same shape and the same SQLSTATE as `lifecycle_events_append_only` and
--- `webhook_event_replays_append_only`. DELETE is deliberately not blocked: no
--- foreign key reaches these rows, but a retention sweep is a legitimate future
--- operation and blocking it here would be a promise this table should not make
--- on a policy's behalf. UPDATE is the operation that would rewrite history.
+-- The same shape and SQLSTATE as `lifecycle_events_append_only` and
+-- `webhook_event_replays_append_only`, with no permitted-update exception
+-- because there is no column here to settle later.
 --
--- `platform_settings` itself takes no such trigger: it is current state, and
--- every write to it is an UPDATE by design.
+-- DELETE is left to the grants, matching both of those tables. The trigger
+-- covers the owner on UPDATE alone, which is the mutation that rewrites history
+-- in place; a DELETE at least leaves a gap somebody can notice.
 
 CREATE OR REPLACE FUNCTION "public"."platform_setting_changes_forbid_update"()
     RETURNS trigger
@@ -208,7 +353,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION "public"."platform_setting_changes_forbid_update"() IS
-    'TAR-816. Raises TN002 on any UPDATE of platform_setting_changes, including by the table '
+    'TAR-811. Raises TN002 on any UPDATE of platform_setting_changes, including by the table '
     'owner. The grants withhold UPDATE from both application roles; this is the half they '
     'cannot cover.';
 
@@ -221,14 +366,46 @@ CREATE TRIGGER "platform_setting_changes_append_only"
     EXECUTE FUNCTION "public"."platform_setting_changes_forbid_update"();
 
 -- ---------------------------------------------------------------------------
--- Backfill strategy: none, deliberately
+-- 5. Backfill: none, deliberately
 -- ---------------------------------------------------------------------------
 --
--- Copying `WHATSAPP_APP_SECRET` and the three keys beside it out of the
--- environment into encrypted rows on deploy would move every environment onto
--- the database path on day one, with no operator having chosen it — and would
--- put a second copy of a live secret into this database with nobody aware of it.
+-- Both tables start empty, and no existing environment value is copied into
+-- them — not by this migration, not by a follow-up data migration, and not by
+-- the API at boot.
 --
--- The tables start empty. Every key resolves from its environment variable until
--- an operator writes the first row, and `DELETE`ing that row puts it back. The
--- absence of a backfill is what makes this migration a no-op for behaviour.
+-- The obvious alternative is to read `WHATSAPP_APP_SECRET` and friends out of
+-- the environment on first boot and write encrypted rows, so the admin console
+-- opens with the current values already in it. That is rejected for two
+-- reasons, and both matter more than the convenience:
+--
+--   1. **It moves every environment onto the database path on day one**, with no
+--      operator having chosen it. Resolution order is row → environment, so the
+--      moment a row exists the environment variable behind it stops having any
+--      effect. An operator editing Render's environment group would then be
+--      editing a value nothing reads, with nothing to tell them so. Keeping the
+--      table empty means the first *write* is what opts an environment in — a
+--      deliberate act, by someone who is looking at the screen that explains it.
+--
+--   2. **It puts a second copy of a live secret in the database**, in an
+--      environment where nobody asked for one and nobody knows it is there. The
+--      blast radius of a database compromise should not grow as a side effect of
+--      a deploy.
+--
+-- The migration path for an operator who *does* want a value managed is
+-- therefore: open the admin console, read the current value from the Meta app
+-- dashboard (not from the running environment), and write it. The screen shows
+-- `source: environment` before that and `source: database` after, so the state
+-- is legible at every point.
+--
+-- Two consequences worth stating, since they are the price of this choice:
+--
+--   * Every environment keeps its environment variables set. This feature makes
+--     them a fallback; it does not retire them. Removing `WHATSAPP_APP_SECRET`
+--     from Render because "it is in the database now" removes the break-glass
+--     channel that exists for when the row is wrong.
+--   * `WHATSAPP_WEBHOOK_VERIFY_TOKEN` values already in environment groups
+--     predate the registry's `min(32)` write floor and may be shorter. They are
+--     shown with a fingerprint like any other value, and an 8-hex fingerprint
+--     over a low-entropy plaintext is guessable offline. Those environments
+--     should rotate the token through the new surface — a runbook note, not a
+--     code change, and flagged here so it is not discovered the other way round.

@@ -11,19 +11,18 @@ import { RequirePermission } from '../rbac/require-permission.decorator';
  *
  * ## Why this exists
  *
- * `apps/web/lib/config/env.ts` reads `NEXT_PUBLIC_META_APP_ID` and
+ * `apps/web` used to read `NEXT_PUBLIC_META_APP_ID` and
  * `NEXT_PUBLIC_META_EMBEDDED_SIGNUP_CONFIG_ID`, which Next.js inlines into the
  * browser bundle **at build time**. TAR-816 makes the API's copy of both
  * operator-editable at runtime; without an endpoint the console can read, that
- * is a setting which appears to save and changes nothing, because the browser is
- * still holding what was compiled in at the last deploy. This is the single most
- * likely way this feature ships "working" and is not.
+ * would be a setting which appears to save and changes nothing, because the
+ * browser would still be holding what was compiled in at the last deploy. That
+ * is the single most likely way this feature ships "working" and is not.
  *
- * The console is not switched over in this change. TAR-814 is rebuilding the
- * WhatsApp connect surface and would collide with an edit to the same call site,
- * so the endpoint lands first and `apps/web` moves off `webEnv.metaAppId` in one
- * place once that work settles — TAR-811's own sequencing note, which either
- * order satisfies and concurrent edits do not.
+ * Both `NEXT_PUBLIC_*` variables are gone, and `WhatsAppSections` — a server
+ * component on a `force-dynamic` route — reads this endpoint and hands the
+ * values to the client-only wizard as a prop. An operator's edit therefore
+ * lands on the next page load rather than the next deploy.
  *
  * ## Authentication
  *

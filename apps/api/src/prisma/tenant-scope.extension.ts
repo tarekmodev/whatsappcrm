@@ -101,16 +101,27 @@ const MODEL_POLICIES = {
    */
   LifecycleEvent: 'system-only',
   /**
-   * The platform's own managed configuration (TAR-816) and the trail of who
-   * changed it. Neither carries `tenant_id` at all — these are the platform's
-   * Meta app credentials, singular and shared by every tenant — so no policy
-   * could apply and the app role is granted nothing on either. Refusing here
-   * means a tenant-side call that reached for the wrong client gets a message
-   * naming the cause rather than a permission failure three frames deeper.
-   * `PlatformSettingsRepository` is the only class that touches them, on
-   * `SystemPrisma`.
+   * Platform-wide configuration, encrypted at rest (TAR-811). Singular values
+   * that belong to no tenant — the Meta app id and app secret, the webhook
+   * verify token — so the table carries no `tenant_id` and no policy could
+   * apply, and the app role is granted nothing on it. Read by
+   * `PlatformSettingsService` into an in-memory snapshot and written by the
+   * admin console, both on `SystemPrisma`.
+   *
+   * Refusing here matters more than on the tables above, because this is the one
+   * a tenant-facing feature has an honest reason to want: the WhatsApp connect
+   * surface needs the Meta app id, and reaching for it through `TenantPrisma`
+   * would be the obvious mistake. It gets a message naming the cause instead of
+   * SQLSTATE 42501 — and the right answer, `GET /v1/whatsapp/embedded-signup/
+   * config`, which serves the two public values from the snapshot.
    */
   PlatformSetting: 'system-only',
+  /**
+   * The change history for the table above (TAR-811). Unreachable for the same
+   * reason, and append-only on top of it: `app-roles.sql` withholds UPDATE and
+   * DELETE from `SystemPrisma` too, and `platform_setting_changes_append_only`
+   * refuses an UPDATE from the table owner.
+   */
   PlatformSettingChange: 'system-only',
 } as const satisfies Partial<Record<Prisma.ModelName, string>>;
 

@@ -669,11 +669,16 @@ No error body renders the submitted value. A refusal states the rule instead:
 ### The console's half
 
 `GET /api/v1/whatsapp/embedded-signup/config` serves `meta.app_id`,
-`meta.embedded_signup_config_id` and the pinned `META_GRAPH_API_VERSION` to the console, which
-otherwise reads the two ids from `NEXT_PUBLIC_*` constants Next.js inlines into the bundle at build
-time — so a runtime edit would change nothing a browser can see. It is a session-authenticated
-tenant route requiring `channel:manage`, not part of this admin surface, and it carries no secret:
-what completes the Embedded Signup exchange is `whatsapp.app_secret`, which never leaves the API.
+`meta.embedded_signup_config_id` and the pinned `META_GRAPH_API_VERSION` to the console. It is what
+makes an edit to either id actually reach a browser: the console used to read them from
+`NEXT_PUBLIC_*` constants Next.js inlines into the bundle at build time, so a runtime edit would
+have changed nothing anyone could see until the next deploy. Both variables are gone —
+`WhatsAppSections`, a server component on a `force-dynamic` route, reads this endpoint and hands
+the values to the connect wizard as a prop, so an operator's change lands on the next page load.
+
+It is a session-authenticated tenant route requiring `channel:manage`, not part of this admin
+surface, and it carries no secret: what completes the Embedded Signup exchange is
+`whatsapp.app_secret`, which never leaves the API.
 
 ## Verification
 

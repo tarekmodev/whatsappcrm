@@ -103,6 +103,26 @@ export class PlatformSettingsService implements OnModuleInit, OnModuleDestroy {
   private timer: NodeJS.Timeout | null = null;
   private consecutiveRefreshFailures = 0;
 
+  /**
+   * Reloads run one at a time, in call order.
+   *
+   * Two can otherwise overlap — a timer tick issues its `listAll()`, a write
+   * arrives and reloads while that read is still outstanding — and the older
+   * result can land last, reinstating the pre-write row set. `get()` on this
+   * instance would then serve the superseded secret until the next tick, which
+   * contradicts the "effective on the writing instance by the time it answers"
+   * property the whole synchronous-`get()` design is justified by. It would also
+   * count one outage twice against the escalation threshold.
+   *
+   * Serialising rather than joining the in-flight load, because a write must
+   * observe its own commit: a read that *started* before the commit is not an
+   * acceptable answer for the reload that follows it, however recent it is.
+   */
+  private reloadChain: Promise<unknown> = Promise.resolve();
+
+  /** True while a reload is running, so a timer tick can skip rather than queue. */
+  private reloading = false;
+
   constructor(
     private readonly config: ConfigService,
     private readonly repository: PlatformSettingsRepository,
@@ -116,13 +136,24 @@ export class PlatformSettingsService implements OnModuleInit, OnModuleDestroy {
    * unresolved key, and starts the refresh timer.
    */
   async onModuleInit(): Promise<void> {
-    await this.reload();
+    // `atBoot` so this one failure logs at `error` immediately. Every later tick
+    // stays rate-limited — but an instance that came up unable to read the table
+    // is serving every key from the environment, which for a rotated secret is
+    // the superseded one, and that must not wait five minutes to be visible.
+    await this.reload({ atBoot: true });
 
     const interval = this.config.get<number>('PLATFORM_SETTINGS_REFRESH_MS') ?? 30_000;
 
     // `unref` so a pending tick cannot hold the process open: a settings refresh
     // is never the reason to delay a shutdown.
-    this.timer = setInterval(() => void this.reload(), interval);
+    this.timer = setInterval(() => {
+      // Skipped rather than queued while one is running: a tick that waits out a
+      // slow read has nothing to add by the time it gets its turn, and queueing
+      // them would turn a slow database into a backlog.
+      if (!this.reloading) {
+        void this.reload();
+      }
+    }, interval);
     this.timer.unref();
   }
 
@@ -170,6 +201,12 @@ export class PlatformSettingsService implements OnModuleInit, OnModuleDestroy {
    * every other instance picks it up within `PLATFORM_SETTINGS_REFRESH_MS`. That
    * bound is what the admin console quotes to the operator, and it is the reason
    * this feature needs no restart.
+   *
+   * **If that reload fails, the write still happened**, so the snapshot is
+   * updated from what was committed rather than left holding the previous value.
+   * Reporting the pre-write view would tell the operator their save did not take
+   * while it is committed and about to be live platform-wide — and TAR-817's
+   * confirmation reads exactly the fields that would be wrong.
    */
   async set(key: string, value: string, actorLabel: string): Promise<PlatformSettingView> {
     const definition = this.require(key);
@@ -189,14 +226,23 @@ export class PlatformSettingsService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    await this.repository.set({
+    const fingerprint = fingerprintOf(parsed.data);
+    const updatedAt = await this.repository.set({
       key: definition.key,
       valueEncrypted: this.encrypt(definition.key, parsed.data),
-      fingerprint: fingerprintOf(parsed.data),
+      fingerprint,
       actorLabel,
     });
 
-    await this.reload();
+    if (!(await this.reload())) {
+      this.apply(definition.key, {
+        value: parsed.data,
+        source: 'database',
+        fingerprint,
+        updatedAt,
+        updatedByLabel: actorLabel,
+      });
+    }
 
     return this.view(definition);
   }
@@ -207,12 +253,19 @@ export class PlatformSettingsService implements OnModuleInit, OnModuleDestroy {
    * Idempotent: clearing a key that has no row reports the same state it
    * already had. The console's affordance for this is "Revert to environment",
    * which is the only thing that makes database-overrides-environment visible.
+   *
+   * A failed reload is handled as it is on `set`: the delete committed, so the
+   * key resolves from its environment variable now, and that is what is reported
+   * rather than the database value that is gone.
    */
   async clear(key: string, actorLabel: string): Promise<PlatformSettingView> {
     const definition = this.require(key);
 
     await this.repository.clear(definition.key, actorLabel);
-    await this.reload();
+
+    if (!(await this.reload())) {
+      this.apply(definition.key, this.resolveOne(definition, undefined));
+    }
 
     return this.view(definition);
   }
@@ -236,7 +289,11 @@ export class PlatformSettingsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Reads every stored override and rebuilds the snapshot.
+   * Reads every stored override and rebuilds the snapshot, one reload at a time.
+   *
+   * Returns whether **this call's own read** applied, which is what the write
+   * paths branch on — a `false` there means the value is committed but the
+   * snapshot has not caught up, and they install what they wrote.
    *
    * **A failure keeps the previous snapshot.** At boot that is the
    * environment-seeded one, which is the pre-feature behaviour — a settings
@@ -244,13 +301,43 @@ export class PlatformSettingsService implements OnModuleInit, OnModuleDestroy {
    * carries working values. On a later tick it is the last good load, because
    * staleness on a value that has not changed is strictly better than losing it.
    */
-  private async reload(): Promise<void> {
+  private reload(options: { atBoot?: boolean } = {}): Promise<boolean> {
+    // Chained rather than fired concurrently, so results apply in call order and
+    // a write's reload always issues its `listAll()` after the commit it follows.
+    // `load` never rejects, so the chain cannot break.
+    const next = this.reloadChain.then(() => this.load(options.atBoot ?? false));
+
+    this.reloadChain = next;
+
+    return next;
+  }
+
+  private async load(atBoot: boolean): Promise<boolean> {
+    this.reloading = true;
+
     try {
       this.snapshot = this.resolve(await this.repository.listAll());
       this.consecutiveRefreshFailures = 0;
+
+      return true;
     } catch (error: unknown) {
-      this.reportRefreshFailure(error);
+      this.reportRefreshFailure(error, atBoot);
+
+      return false;
+    } finally {
+      this.reloading = false;
     }
+  }
+
+  /**
+   * Replaces one key's entry, leaving the rest of the snapshot alone.
+   *
+   * Only ever called after a committed write whose reload could not confirm it —
+   * see `set`. The snapshot is replaced rather than mutated so a reader holding
+   * the previous map is unaffected mid-request.
+   */
+  private apply(key: string, resolved: ResolvedSetting): void {
+    this.snapshot = new Map(this.snapshot).set(key, resolved);
   }
 
   /**
@@ -260,13 +347,28 @@ export class PlatformSettingsService implements OnModuleInit, OnModuleDestroy {
    * Rate-limited rather than logged per tick: a database outage would otherwise
    * emit a line every `PLATFORM_SETTINGS_REFRESH_MS` for as long as it lasts,
    * and the signal that matters is "still failing", not "failed again".
+   *
+   * **The boot load is the exception and logs `error` on the first attempt.** An
+   * instance that came up unable to read the table serves every key from the
+   * environment — for a key an operator has rotated through the admin surface,
+   * that is the superseded value — and waiting out ten quiet ticks before saying
+   * so is five minutes of a credential nobody knows is stale.
    */
-  private reportRefreshFailure(error: unknown): void {
+  private reportRefreshFailure(error: unknown, atBoot: boolean): void {
     this.consecutiveRefreshFailures += 1;
 
     const interval = this.config.get<number>('PLATFORM_SETTINGS_REFRESH_MS') ?? 30_000;
     const escalateEvery = Math.max(1, Math.ceil(REFRESH_FAILURE_ESCALATION_MS / interval));
     const reason = error instanceof Error ? error.message : 'unknown error';
+
+    if (atBoot) {
+      this.logger.error(
+        `Could not load the platform settings snapshot at boot: ${reason}. Every managed key is ` +
+          'resolving from its environment variable, so a value an operator has changed through ' +
+          'the admin surface is not in effect on this instance. Retrying on the refresh timer.',
+      );
+      return;
+    }
 
     if (this.consecutiveRefreshFailures === 1) {
       this.logger.warn(

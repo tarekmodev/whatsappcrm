@@ -1,8 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ConnectedWhatsAppBusinessAccountResponse } from '@whatsappcrm/contracts';
-import { webEnv } from '@/lib/config/env';
+import type {
+  ConnectedWhatsAppBusinessAccountResponse,
+  WhatsAppEmbeddedSignupConfigResponse,
+} from '@whatsappcrm/contracts';
 import {
   CANCEL_EVENT,
   ERROR_EVENT,
@@ -101,6 +103,16 @@ export type MetaSdkStatus = 'loading' | 'ready' | 'unavailable';
 
 export interface UseEmbeddedSignupOptions {
   onConnected: (account: ConnectedWhatsAppBusinessAccountResponse) => void;
+  /**
+   * The Meta app id, configuration id and Graph version, read from the API on
+   * the server that rendered this page (TAR-816).
+   *
+   * Passed in rather than read from `webEnv` because those were
+   * `NEXT_PUBLIC_*` constants Next.js inlines at build time: once an operator
+   * can change the app id at runtime through the admin surface, a value compiled
+   * into the bundle is a setting that appears to save and changes nothing here.
+   */
+  config: WhatsAppEmbeddedSignupConfigResponse;
 }
 
 export interface UseEmbeddedSignup {
@@ -125,7 +137,10 @@ function freshAttempt(): Attempt {
   return { code: null, signup: null, isSettled: false };
 }
 
-export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): UseEmbeddedSignup {
+export function useEmbeddedSignup({
+  onConnected,
+  config,
+}: UseEmbeddedSignupOptions): UseEmbeddedSignup {
   const [state, setState] = useState<EmbeddedSignupState>({ status: 'idle' });
   const [sdkStatus, setSdkStatus] = useState<MetaSdkStatus>('loading');
   const attemptRef = useRef<Attempt>(freshAttempt());
@@ -282,23 +297,26 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
   const initialiseSdk = useCallback((): boolean => {
     const sdk = window.FB;
 
-    if (sdk === undefined || webEnv.metaAppId === null) {
+    if (sdk === undefined || config.appId === null) {
       return false;
     }
 
     sdk.init({
-      appId: webEnv.metaAppId,
+      appId: config.appId,
       autoLogAppEvents: true,
       // No `<fb:*>` tags on this page, and parsing the DOM for them is work with
       // nothing to find.
       xfbml: false,
-      version: webEnv.metaGraphApiVersion,
+      version: config.graphApiVersion,
     });
 
     setSdkStatus('ready');
 
     return true;
-  }, []);
+    // `config.appId` and `config.graphApiVersion` rather than `config`: the
+    // object identity changes on every server render, and re-running `FB.init`
+    // for an unchanged app id would reset the SDK under a live run.
+  }, [config.appId, config.graphApiVersion]);
 
   /**
    * Readiness is a fact about `window.FB`, not about the load event.
@@ -350,7 +368,7 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
   const start = useCallback((): void => {
     const sdk = window.FB;
 
-    if (sdk === undefined || webEnv.metaEmbeddedSignupConfigId === null) {
+    if (sdk === undefined || config.configId === null) {
       setSdkStatus('unavailable');
       setState({ status: 'failed', report: connectFailure('sdk_unavailable') });
       return;
@@ -385,13 +403,13 @@ export function useEmbeddedSignup({ onConnected }: UseEmbeddedSignupOptions): Us
 
       attemptRef.current.code = code;
       submitIfReady();
-    }, embeddedSignupLoginOptions(webEnv.metaEmbeddedSignupConfigId));
-  }, [clearAttemptTimer, fail, submitIfReady]);
+    }, embeddedSignupLoginOptions(config.configId));
+  }, [clearAttemptTimer, config.configId, fail, submitIfReady]);
 
   return {
     state,
     sdkStatus,
-    isConfigured: webEnv.metaAppId !== null && webEnv.metaEmbeddedSignupConfigId !== null,
+    isConfigured: config.appId !== null && config.configId !== null,
     onSdkLoad,
     onSdkError,
     start,

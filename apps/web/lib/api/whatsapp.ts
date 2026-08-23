@@ -2,8 +2,10 @@ import 'server-only';
 
 import {
   ConnectedWhatsAppBusinessAccountResponseSchema,
+  WhatsAppEmbeddedSignupConfigResponseSchema,
   WhatsAppPhoneNumberRegistrationResponseSchema,
   type ConnectedWhatsAppBusinessAccountResponse,
+  type WhatsAppEmbeddedSignupConfigResponse,
   type WhatsAppEmbeddedSignupInput,
   type WhatsAppPhoneNumberRegistrationResponse,
 } from '@whatsappcrm/contracts';
@@ -28,6 +30,36 @@ import { authenticatedRequest } from '@/lib/api/authenticated';
  * queue.
  */
 const WHATSAPP_BUSINESS_ACCOUNTS_PATH = '/v1/whatsapp/business-accounts';
+
+/**
+ * `GET /api/v1/whatsapp/embedded-signup/config` — the two Meta ids and the
+ * Graph version `FB.init` and `FB.login` need (TAR-816).
+ *
+ * **Read from the API rather than from `webEnv`, and that is the whole point.**
+ * These used to be `NEXT_PUBLIC_META_APP_ID` and
+ * `NEXT_PUBLIC_META_EMBEDDED_SIGNUP_CONFIG_ID`, which Next.js inlines into the
+ * browser bundle at build time — so once TAR-816 made the API's copy editable at
+ * runtime, an operator changing the app id would have seen it save and change
+ * nothing here until the next deploy. The values now come down with the page.
+ *
+ * `null` for either id means this deployment has no Meta app configured, which
+ * is a real state rather than a fault: the connect surface says so instead of
+ * offering a button that cannot work.
+ *
+ * Neither id is a secret — both reach the browser by design, as they always
+ * did. What turns a signup code into a token is `whatsapp.app_secret`, which
+ * lives on the API and has no representation in any response.
+ */
+const EMBEDDED_SIGNUP_CONFIG_PATH = '/v1/whatsapp/embedded-signup/config';
+
+export async function getEmbeddedSignupConfig(): Promise<WhatsAppEmbeddedSignupConfigResponse> {
+  const response = await authenticatedRequest({
+    method: 'GET',
+    path: EMBEDDED_SIGNUP_CONFIG_PATH,
+  });
+
+  return WhatsAppEmbeddedSignupConfigResponseSchema.parse(response);
+}
 
 export async function connectWhatsAppBusinessAccount(
   input: WhatsAppEmbeddedSignupInput,

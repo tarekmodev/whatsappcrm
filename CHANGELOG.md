@@ -190,8 +190,11 @@ change.
   `platform_setting_changes` records who changed what, storing fingerprints and never values, and
   is append-only against the table owner as well as both application roles. Neither table is
   reachable by the tenant connection at all. `GET /api/v1/whatsapp/embedded-signup/config` is the
-  console's half, so a runtime edit to the app id reaches the browser on the next page load
-  rather than the next deploy. `SECRETS_ENCRYPTION_KEY` is the scope-accurate name for
+  console's half, and `NEXT_PUBLIC_META_APP_ID`, `NEXT_PUBLIC_META_EMBEDDED_SIGNUP_CONFIG_ID` and
+  `NEXT_PUBLIC_META_GRAPH_API_VERSION` are gone with it — the connect wizard's ids now arrive with
+  the page instead of being compiled into the bundle, so a runtime edit to the app id reaches the
+  browser on the next page load rather than the next deploy. `SECRETS_ENCRYPTION_KEY` is the
+  scope-accurate name for
   `WHATSAPP_TOKEN_ENCRYPTION_KEY`, which stays a deprecated alias for one release — the same 32
   bytes, so the rename needs no re-encryption, and setting both to different values fails the
   boot.

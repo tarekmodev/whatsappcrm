@@ -1,3 +1,4 @@
+import { getEmbeddedSignupConfig } from '@/lib/api/whatsapp';
 import { Stack } from '@/components/layout/Stack';
 import { SectionCard } from '@/components/ui/SectionCard';
 import { LazyBoundary } from '@/components/ui/LazyBoundary';
@@ -22,8 +23,24 @@ import { LazyWhatsAppConnectWizard } from './whatsapp-widgets.lazy';
  * `deferUntilVisible` is deliberately off: this wizard is the page's only content
  * and sits at the top of it, so there is no scroll to wait for and waiting would
  * only make the first step late.
+ *
+ * ## Why this reads Meta's ids here
+ *
+ * The wizard is client-only, and the ids it needs used to be `NEXT_PUBLIC_*`
+ * constants Next.js inlined into the bundle at build time. TAR-816 made the
+ * API's copy operator-editable at runtime, which made a compiled-in copy a
+ * setting that appears to save and changes nothing. So this component — a server
+ * component, on a `force-dynamic` route — reads them from the API and hands them
+ * down, and an operator's edit lands on the next page load rather than the next
+ * deploy.
+ *
+ * A failure here reaches the page's `SectionErrorBoundary`, which is the right
+ * blast radius: without the ids there is no wizard to draw, and the boundary
+ * says so without taking the rest of the settings shell with it.
  */
-export function WhatsAppSections() {
+export async function WhatsAppSections() {
+  const config = await getEmbeddedSignupConfig();
+
   return (
     <Stack gap="5">
       <SectionCard
@@ -32,7 +49,7 @@ export function WhatsAppSections() {
         description={content.whatsapp.wizard.description}
       >
         <LazyBoundary fallback={<WhatsAppConnectWizardSkeleton />}>
-          <LazyWhatsAppConnectWizard />
+          <LazyWhatsAppConnectWizard config={config} />
         </LazyBoundary>
       </SectionCard>
     </Stack>

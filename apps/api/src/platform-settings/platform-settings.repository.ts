@@ -92,15 +92,19 @@ export class PlatformSettingsRepository {
    *
    * `upsert` on the unique `key`, so a repeat write is an update rather than a
    * constraint violation, and the whole operation is idempotent on (key, value).
+   *
+   * Returns the row's `updated_at`, which is the database's own stamp rather
+   * than a clock reading taken here. The caller needs it to report the write
+   * accurately even when the reload that follows cannot confirm it.
    */
-  async set(write: PlatformSettingWrite): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
+  set(write: PlatformSettingWrite): Promise<Date> {
+    return this.prisma.$transaction(async (tx) => {
       const previous = await tx.platformSetting.findUnique({
         where: { key: write.key },
         select: { fingerprint: true },
       });
 
-      await tx.platformSetting.upsert({
+      const stored = await tx.platformSetting.upsert({
         where: { key: write.key },
         create: {
           key: write.key,
@@ -113,7 +117,7 @@ export class PlatformSettingsRepository {
           fingerprint: write.fingerprint,
           updatedByLabel: write.actorLabel,
         },
-        select: { id: true },
+        select: { updatedAt: true },
       });
 
       await tx.platformSettingChange.create({
@@ -126,6 +130,8 @@ export class PlatformSettingsRepository {
         },
         select: { id: true },
       });
+
+      return stored.updatedAt;
     });
   }
 
