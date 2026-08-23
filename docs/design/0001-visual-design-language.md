@@ -101,6 +101,14 @@ this document that changed on 2026-08-23 came from their `:root` and
 literals, so "we took these from the file" is a claim the suite checks rather than a
 sentence in a document.
 
+**One caveat on the counts anywhere in this document.** `reqta-crm-design.html` as attached
+is clipped at 262144 bytes, mid-`<script>`. Both token blocks sit in its first 30 lines and
+are complete, so every _ported value_ is verifiable and is verified — but any count of how
+often the reference _uses_ something was read off that clipped copy and is a **lower
+bound**. That is why the radius steps below are described as the clusters its declarations
+fall into rather than as a tally. `reqta-admin-design.html` is complete, and its token block
+is byte-identical to the CRM one, which is the claim that actually mattered.
+
 ### What the reference supplies, and was taken
 
 | Layer         | Ported                                                                          |
@@ -108,14 +116,15 @@ sentence in a document.
 | Colour, light | All 6 greys, the 4 status hues and their tints, the accent and its two tints    |
 | Colour, dark  | The same set from `[data-theme="dark"]`, with the alpha tints composited to hex |
 | Elevation     | Both shadows, per theme — the reference re-states them for the dark ground      |
-| Radius        | The four clusters its 348 radius declarations fall into                         |
-| Body face     | Manrope, and IBM Plex Sans Arabic for `[lang                                    | ='ar']` |
+| Radius        | The four clusters its radius declarations fall into                             |
+| Decoration    | `--violet`, as the platform value for `--color-brand-decor`                     |
+| Body face     | Manrope, and IBM Plex Sans Arabic for `[lang\|='ar']`                           |
 
 ### What the reference does not supply
 
 **It has a colour token layer and no other.** Its spacing, type and size values are inline
-literals in markup: 27 distinct font sizes between 7px and 34px, most of its body copy at
-10.5–12.5px, and no scale connecting them. Porting that is not porting a scale — it is
+literals in markup: more than two dozen distinct font sizes between 7px and 34px, most of
+its body copy at 10.5–12.5px, and no scale connecting them. Porting that is not porting a scale — it is
 copying a mock, and it would put text below the readable floor on every screen. The
 spacing scale and the type scale therefore stay as this document ruled them, and a screen
 that wants to match the reference's _density_ does it by choosing lower steps of an
@@ -327,7 +336,7 @@ Light grey canvas, white cards, hairline borders.
 
 **Hover and press move in the same direction, and which direction that is depends on the
 theme.** The reference's own hover answer is the canvas (`background:var(--bg)`, 47 of its
-61 hover declarations), so a row on a card dips toward the page behind it — and in its dark
+hover declarations), so a row on a card dips toward the page behind it — and in its dark
 theme the page is _darker_ than a card, where in its light theme it is lighter. A press is
 one step further along the same line, never a different colour;
 `--color-surface-active` exists so it is not `--color-surface-selected`, which would make
@@ -443,9 +452,9 @@ stylesheet.
   Nothing spaces itself off the grid.
 - **Radius**: read off the reference, which is markedly rounder than what preceded it.
   `--radius-sm` 6px for a tight inline mark, `--radius-md` 8px for controls — the
-  reference's default, 79 of its declarations — `--radius-lg` 12px for cards,
+  reference's default and its most common by a wide margin — `--radius-lg` 12px for cards,
   `--radius-xl` 14px for a panel that frames a whole region, `--radius-pill` for pills
-  and avatars. The four steps are the four clusters its 348 radius declarations fall into.
+  and avatars. The four steps are the clusters its radius declarations fall into.
 - **Elevation**: three soft, low shadows — `--shadow-raised` for a card,
   `--shadow-overlay` for a popover, `--shadow-modal` for a dialog. There is no fourth.
   They are declared **inside the theme blocks**, because the reference re-states both of
@@ -958,7 +967,9 @@ a brand panel filling the rest.
 - **Brand panel** — `--color-rail`, the dark region that frames the console when somebody is
   signed in, carrying the product name at display size, one line of positioning, and a
   motif of a disc, a ring and a rounded square. The ring is the only thing drawn in
-  `--color-brand-decor`; the motif is in flow below the copy, never behind it, because
+  `--color-brand-decor` — a role a tenant owns and the platform now also declares, so the
+  motif survives a workspace that has never chosen a colour; the motif is in flow below the
+  copy, never behind it, because
   that colour is the tenant's and no contrast guarantee can be made about it. The panel
   is `aria-hidden`: the lockup beside the form is the accessible spelling of the name,
   and announcing the workspace twice before the heading is worse than announcing it once.

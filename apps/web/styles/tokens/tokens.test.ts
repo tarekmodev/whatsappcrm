@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { brandCssVariables, contrastRatio } from '@whatsappcrm/contracts';
+import { BRAND_TOKEN_NAMES, brandCssVariables, contrastRatio } from '@whatsappcrm/contracts';
 
 /**
  * The contrast guarantees `docs/design/0001-visual-design-language.md` publishes,
@@ -505,6 +505,7 @@ describe('the Reqta port', () => {
       '--color-border': '#252b38', // dark `--border`
       '--color-on-surface': '#f2f4f8', // dark `--text`
       '--color-on-surface-muted': '#98a2b3', // dark `--muted`
+      '--color-on-neutral-subtle': '#cdd5e0', // dark `--ink`
       // Both are the reference's, one role along: see `primitives.css` on why
       // the dark accent is its hover step.
       '--color-accent': '#818cf8', // dark `--primary-hov`
@@ -588,6 +589,32 @@ describe('the Reqta port', () => {
       expect(token('light', `--color-on-${tone}-subtle`)).not.toBe(ink);
     },
   );
+});
+
+/**
+ * Every tenant-owned role has a platform value underneath it.
+ *
+ * The seven names in `BRAND_TOKEN_NAMES` are *overrides*. A component reads them
+ * unconditionally, so each needs a declaration in this layer for the case where no
+ * tenant block is emitted at all — which is now the normal case for a workspace
+ * that has never chosen a colour (`brandStyleSheet`).
+ *
+ * Six of the seven always had one. `--color-brand-decor` did not: it existed only
+ * because the tenant block was emitted on every request, and the moment that
+ * stopped, the ring in `AuthBrandPanel` resolved to an invalid `border` shorthand
+ * — which resets the whole shorthand, so `border-style` fell to its initial
+ * `none` and the shape painted nothing on `/login`, `/signup` and `/verify`.
+ *
+ * A missing custom property fails silently by design: a `var()` with no fallback
+ * is invalid at computed-value time rather than an error. This is the assertion
+ * that makes it loud.
+ */
+describe('the tenant-owned roles', () => {
+  describe.each(THEMES)('%s theme', (theme) => {
+    it.each(BRAND_TOKEN_NAMES)('%s has a platform value to fall back to', (role) => {
+      expect(token(theme, role)).toMatch(/^#[0-9a-f]{6}$/);
+    });
+  });
 });
 
 /**

@@ -21,7 +21,7 @@
   --color-surface-sunken: var(--palette-grey-100);
   /*
    * The reference's own hover answer, and it is the canvas: `background:var(--bg)`
-   * is what 47 of its 61 hover declarations say. A row on a card dips to the
+   * is what the large majority of its hover declarations say. A row on a card dips to the
    * colour of the page behind it.
    */
   --color-surface-hover: var(--palette-grey-25);
@@ -64,6 +64,16 @@
   --color-accent-subtle: var(--palette-indigo-50);
   --color-on-accent: var(--palette-white);
   --color-on-accent-subtle: var(--palette-indigo-600);
+  /*
+   * The seventh tenant-owned role, and the only one that had no platform value
+   * until TAR-801 — it existed solely because `brandStyleSheet` emitted it on
+   * every request. Once that block stopped being emitted for a tenant on the
+   * defaults, `AuthBrandPanel`’s ring resolved to an invalid `border` shorthand
+   * and painted nothing. A role a component reads unconditionally needs a value
+   * here unconditionally; the tenant’s block overrides it, as it does the other
+   * six.
+   */
+  --color-brand-decor: var(--palette-violet-500);
 
   /* --- Status ------------------------------------------------------------- */
   /*
@@ -75,8 +85,9 @@
    * reference draws `--green` on `--green-bg`, which is 2.49:1, and the same
    * shortfall on three of its five tones. Only the text moved, to the next step
    * of the same family — see `primitives.css`, which carries the measurement for
-   * each. `neutral` is the one tone whose reference pair already cleared AA
-   * (9.49:1) and it is ported untouched.
+   * each. `neutral` is the one tone whose reference pair already cleared AA — 9.49:1
+   * here and 9.45:1 in the dark theme, where the text is the reference’s own dark
+   * `--ink` — so it is ported untouched in **both** themes.
    */
   --color-neutral-subtle: var(--palette-grey-100);
   --color-on-neutral-subtle: var(--palette-grey-700);
@@ -180,6 +191,14 @@
 [data-theme='dark'] {
   --color-canvas: var(--palette-night-950);
   --color-surface: var(--palette-night-900);
+  /*
+   * The same hex as `--color-surface`, which is what the reference does — it has
+   * one card colour per theme and no second. Every consumer (`MenuButton`,
+   * `CannedResponsePicker`, the chart readout, `StickySaveBar`) carries a border
+   * and a shadow, so nothing disappears; but the role carries no information in
+   * this theme, and whether it should is TAR-803’s to decide rather than to
+   * inherit by accident.
+   */
   --color-surface-raised: var(--palette-night-900);
   --color-surface-sunken: var(--palette-night-950);
   /*
@@ -226,6 +245,7 @@
   --color-accent-subtle: var(--palette-indigo-900);
   --color-on-accent: var(--palette-night-950);
   --color-on-accent-subtle: var(--palette-indigo-200);
+  --color-brand-decor: var(--palette-violet-300);
 
   /*
    * The chip tints, one stand-off from the surface for every hue (1.15–1.26:1,
@@ -234,7 +254,7 @@
    * solid pills beside a button quieter than all of them.
    */
   --color-neutral-subtle: var(--palette-night-750);
-  --color-on-neutral-subtle: var(--palette-night-25);
+  --color-on-neutral-subtle: var(--palette-night-300);
   --color-success: var(--palette-green-300);
   --color-success-subtle: var(--palette-green-900);
   --color-on-success-subtle: var(--palette-green-300);

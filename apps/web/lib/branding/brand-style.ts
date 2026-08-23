@@ -63,7 +63,7 @@ const THEME_SELECTORS: Record<BrandTheme, string> = {
  * tenant-owned token or a per-theme step of the tenant's hue — see 0001's
  * "What TAR-801 left open".
  */
-function isPlatformDefault(branding: TenantBranding): boolean {
+export function isPlatformDefault(branding: TenantBranding): boolean {
   return (
     branding.primaryColor === BRANDING_DEFAULTS.primaryColor &&
     branding.accentColor === BRANDING_DEFAULTS.accentColor
