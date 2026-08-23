@@ -72,7 +72,7 @@ export async function TenantSection({ slug, cursor }: { slug: string; cursor?: s
   const stateItems: DetailListItem[] = [
     {
       id: 'status',
-      term: content.tenant.columns.change,
+      term: content.tenant.statusLabel,
       value:
         status === null ? (
           content.tenant.statusUnknown
@@ -88,7 +88,7 @@ export async function TenantSection({ slug, cursor }: { slug: string; cursor?: s
       : [
           {
             id: 'last-changed',
-            term: content.tenant.columns.when,
+            term: content.tenant.lastChangedLabel,
             value: (
               <RelativeTime
                 isoTimestamp={latest.occurredAt}

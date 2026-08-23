@@ -191,6 +191,14 @@ export const content = {
     subtitle: 'Lifecycle state, the trail behind it, and the writes it allows.',
     manage: 'Manage tenant',
 
+    /**
+     * The Lifecycle card's two terms. Its own pair rather than the trail table's
+     * column headers: a `<dt>` names one tenant's current value ("Status"),
+     * while a `<th>` names a column of them ("Change"), and reusing one for the
+     * other reads as a mislabelled row.
+     */
+    statusLabel: 'Status',
+    lastChangedLabel: 'Last changed',
     statusUnknown: 'Not recorded',
     statusUnknownHint:
       'This tenant has no lifecycle rows, so its current status cannot be read from this surface.',

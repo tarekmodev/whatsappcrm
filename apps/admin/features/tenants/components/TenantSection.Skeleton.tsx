@@ -33,8 +33,8 @@ export function TenantSectionSkeleton() {
           <Stack gap="3">
             {/* Two `DetailList` rows: a term and its value, twice. Sized by the
                 copy the real panel puts there, so the card is the same height. */}
-            <SkeletonForText>{content.tenant.columns.change}</SkeletonForText>
-            <SkeletonForText>{content.tenant.columns.when}</SkeletonForText>
+            <SkeletonForText>{content.tenant.statusLabel}</SkeletonForText>
+            <SkeletonForText>{content.tenant.lastChangedLabel}</SkeletonForText>
           </Stack>
           <Notice tone="info" variant="quiet">
             {content.tenant.lifecycleUnknown}
