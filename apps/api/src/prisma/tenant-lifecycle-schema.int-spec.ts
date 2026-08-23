@@ -650,9 +650,16 @@ describe('tenant lifecycle schema', () => {
   });
 
   describe('the tenant entitlements row', () => {
-    /** The published trial shape, and the column default (ADR 0009 decision 6). */
+    /**
+     * The published trial shape, and the column default (ADR 0009 decision 6).
+     *
+     * `channel_whatsapp` joined it in TAR-819 and is not a new grant — every
+     * trial tenant could already connect a WhatsApp number. It has to be in the
+     * default because TAR-821's channel gate fails closed, so this assertion is
+     * what stops the default and that gate drifting apart.
+     */
     const TRIAL_ENTITLEMENTS = {
-      features: ['assignment_rules', 'sla_policies'],
+      features: ['assignment_rules', 'sla_policies', 'channel_whatsapp'],
       limits: {
         seats: 3,
         conversationsPerPeriod: 1000,

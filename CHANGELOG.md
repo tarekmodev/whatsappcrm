@@ -169,6 +169,36 @@ change.
 
 ### Added
 
+- **The schema can hold a channel that is not WhatsApp** (TAR-819) — the data model behind
+  ADR 0013, and the first step of the omnichannel work. WhatsApp is not _a_ channel in this
+  codebase today; it is the only shape a conversation can have, and the hard part is not the
+  account model but identity: `contacts` is keyed on `(tenant_id, phone_e164)` and an
+  Instagram customer has no phone number anywhere in them.
+  Two tables. `channels` is the supertype every connected endpoint gets a row in — kind,
+  routing key, connection status — with provider-specific columns staying on their own table
+  joined on a shared primary key, so `whatsapp_accounts` keeps its WABA reference, its
+  quality rating and its registration state machine, and no credential ever moves onto the
+  parent. `contact_identities` maps `(tenant_id, kind, external_id)` to a contact, so the
+  same customer on two channels is representable — representable only: there is no merge UI
+  and no automatic linking. `contacts.phone_e164` is nullable in consequence and is no longer
+  the identity key, though nothing can create a contact without one until the Instagram
+  inbound path lands.
+  **A channel row takes the id its WhatsApp number already had**, which is what makes the new
+  `conversations.channel_id` a byte-for-byte copy of `whatsapp_account_id` rather than a
+  remap: every id already in a log line, an audit row or a support ticket still resolves, and
+  the eventual column swap is a rename with a parent table above it.
+  Nothing reads any of it yet, deliberately — the migration is additive, every existing write
+  still works unchanged, and rolling the application back over it is a no-op. Three of the
+  four changes ADR 0013 grouped into its second step turned out not to be deployable ahead of
+  the code that satisfies them, so they move to the refactor that follows; that and three
+  other findings are recorded as Amendment 1 on the ADR, which this change also lands in
+  `docs/adr/`.
+  Alongside it, three per-channel plan features (`channel_whatsapp`, `channel_instagram`,
+  `channel_messenger`) and the backfill that makes them safe to read fail-closed later: every
+  existing entitlements row, the column default, the seeded plan catalogue and the
+  operator-provisioned shape all name `channel_whatsapp`, because every tenant could already
+  connect a WhatsApp number and the entitlement only says so.
+
 - **A supervisor can set how much work auto-assignment sends an agent, from the queue where it
   is in the way** (TAR-384) — shipped across TAR-756 (the API) and TAR-757 (the console).
   `users.max_concurrent_tickets` and `tenant_settings.default_max_concurrent_tickets` have been

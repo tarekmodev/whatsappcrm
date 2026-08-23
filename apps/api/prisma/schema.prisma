@@ -260,6 +260,41 @@ enum WhatsappRegistrationStatus {
   @@map("whatsapp_registration_status")
 }
 
+/// Every kind of channel the platform can hold a row for (ADR 0013, decision 1).
+///
+/// Paired with `CHANNEL_KINDS` in `@whatsappcrm/contracts` — same values, same
+/// order. Adding a kind is one `ALTER TYPE ... ADD VALUE` plus the constant,
+/// which is the cheap direction of an enum change; removing one is not, and
+/// nothing should be added here speculatively.
+///
+/// `whatsapp` is the only kind with rows today: every connected number is a
+/// `channels` row of this kind carrying the id its `whatsapp_accounts` row
+/// already had.
+enum ChannelKind {
+  whatsapp
+  instagram
+  messenger
+
+  @@map("channel_kind")
+}
+
+/// Whether a channel is attached and receiving — the same three values
+/// `WhatsappAccountStatus` carries, moved up to the supertype because they are
+/// true of every channel (ADR 0013, decision 1).
+///
+/// Deliberately **not** a widening of `WhatsappAccountStatus`: that type still
+/// exists and `whatsapp_accounts.status` still uses it until TAR-820 collapses
+/// the two. Sendability is a third axis and stays per-provider — see
+/// `WhatsappRegistrationStatus` for why a number can be `connected` here and
+/// `unregistered` there at the same time.
+enum ChannelStatus {
+  connected
+  disconnected
+  error
+
+  @@map("channel_status")
+}
+
 enum MessageTemplateStatus {
   pending
   approved
@@ -808,10 +843,12 @@ model Tenant {
   inviteTeams              InviteTeam[]
   teams                    Team[]
   teamMembers              TeamMember[]
+  channels                 Channel[]
   whatsappBusinessAccounts WhatsappBusinessAccount[]
   whatsappAccounts         WhatsappAccount[]
   messageTemplates         MessageTemplate[]
   contacts                 Contact[]
+  contactIdentities        ContactIdentity[]
   tags                     Tag[]
   contactTags              ContactTag[]
   customFieldDefs          CustomFieldDef[]
@@ -1020,7 +1057,19 @@ model TenantEntitlements {
   /// The default is 0009's published trial shape — defensible rather than
   /// measured, and a column default so provisioning inserts a row without
   /// restating it. TAR-397 owns the real figures.
-  entitlements Json @default("{\"features\":[\"assignment_rules\",\"sla_policies\"],\"limits\":{\"seats\":3,\"conversationsPerPeriod\":1000,\"whatsappNumbers\":1,\"teams\":2,\"knowledgeDocuments\":10}}")
+  ///
+  /// `channel_whatsapp` joined it in TAR-819 and is **not** a new grant: every
+  /// trial tenant could already connect a WhatsApp number, and the entitlement
+  /// only names what was always true. It has to be here because TAR-821's
+  /// channel gate is fail-closed — a default without it would refuse WhatsApp
+  /// connect for every tenant provisioned after this migration. See
+  /// `20260823140100_channel_entitlement_features` for the other three write
+  /// sites that had to move with it.
+  ///
+  /// `channel_instagram` and `channel_messenger` are deliberately absent: those
+  /// are channels nobody has been sold, and a trial that silently grants them is
+  /// a commercial decision this column default is the wrong place to make.
+  entitlements Json @default("{\"features\":[\"assignment_rules\",\"sla_policies\",\"channel_whatsapp\"],\"limits\":{\"seats\":3,\"conversationsPerPeriod\":1000,\"whatsappNumbers\":1,\"teams\":2,\"knowledgeDocuments\":10}}")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1613,6 +1662,146 @@ model TeamMember {
 }
 
 // ---------------------------------------------------------------------------
+// Channels — TAR-819, ADR 0013
+// ---------------------------------------------------------------------------
+
+/// One connected messaging endpoint, whatever the provider: a WhatsApp number,
+/// an Instagram professional account, a Facebook Page.
+///
+/// ## Class-table inheritance, not a JSONB bag
+///
+/// This is the **supertype**. What every channel has lives here; what only one
+/// provider has stays on its own table, joined on a *shared primary key* —
+/// `whatsapp_accounts.id` is the first of those and holds the WABA reference,
+/// the display phone number, the quality rating and the registration state
+/// machine.
+///
+/// The rejected alternative was one polymorphic table with a `kind`
+/// discriminator and a JSONB `provider_config`. Fewer tables, and it would have
+/// discarded every constraint that currently makes those columns correct —
+/// including the AAD binding on `registration_pin_encrypted`, which is a
+/// security property and not a formatting preference. JSONB in this schema
+/// appears only where the shape is genuinely the provider's
+/// (`message_templates.components`); channel account fields are ours to
+/// constrain.
+///
+/// ## The id is not a new id
+///
+/// A `channels` row for an existing WhatsApp number **takes that number's own
+/// `whatsapp_accounts.id`**. That is what makes the migration a rename with a
+/// parent table above it rather than a remap: `conversations.channel_id` is a
+/// byte-for-byte copy of `conversations.whatsapp_account_id`, and every id
+/// already in a log line, an audit row or a fixture still resolves.
+///
+/// ## What is not here yet
+///
+/// No `whatsapp WhatsappAccount?` back-relation. The shared primary key is a
+/// foreign key from `whatsapp_accounts.id` to this table, and adding it would
+/// refuse every WhatsApp connect until the application writes a `channels` row
+/// first — which is TAR-820's code change, not this additive migration's. The
+/// 1:1 relation lands with it.
+///
+/// **No credential column, ever.** Tokens stay on the provider-specific table
+/// where their AAD binding still means something (ADR 0013, security).
+model Channel {
+  id       String        @id @default(uuid(7)) @db.Uuid
+  tenantId String        @map("tenant_id") @db.Uuid
+  kind     ChannelKind
+  status   ChannelStatus @default(disconnected)
+  /// What an operator sees in a channel list. Display only, and never a lookup
+  /// key. Backfilled from `COALESCE(verified_name, display_phone_number)`.
+  displayName String @map("display_name")
+  /// The provider's own id for this endpoint, and the webhook routing key:
+  /// `phone_number_id` for WhatsApp, the IG professional account id for
+  /// Instagram, the Page id for Messenger.
+  ///
+  /// Unique across tenants **within a kind**, for the reason
+  /// `whatsapp_accounts.phone_number_id` is unique globally today: one Meta app
+  /// serves every tenant, so nothing on an inbound delivery names a tenant
+  /// except the endpoint it arrived on. Scoped by `kind` rather than globally
+  /// because a Page id and an IG account id are different namespaces and a
+  /// collision between them would be a coincidence, not a conflict.
+  ///
+  /// ⚠️ Until TAR-820's contract migration drops `whatsapp_accounts.phone_number_id`
+  /// this value is duplicated there. Two sources of truth for a routing key is
+  /// how a message lands in the wrong tenant's inbox, so the window is
+  /// deliberately short and nothing reads this column during it.
+  routingKey String @map("routing_key")
+  /// When the channel last became `connected`. **NULL on every backfilled row**,
+  /// and that means "never recorded", not "never connected" — no column on
+  /// `whatsapp_accounts` carried this, and `created_at` is when the row was
+  /// written rather than when Meta attached the number. Deriving one from the
+  /// other would put an invention into the first column anyone would trust.
+  connectedAt DateTime? @map("connected_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  /// The inbound routing key — one lookup per delivery, through `SystemPrisma`,
+  /// because nothing on the payload names a tenant yet. Generalises
+  /// `whatsapp_accounts.phone_number_id`'s global unique.
+  @@unique([kind, routingKey])
+  @@unique([tenantId, id])
+  /// "Every Instagram account this tenant has connected" — the channel list, and
+  /// the read a per-kind connect limit would use if one is ever enforced.
+  @@index([tenantId, kind])
+  @@map("channels")
+}
+
+/// Who a contact is **on one kind of channel** (ADR 0013, decision 2).
+///
+/// ## Why this is the hard part
+///
+/// `contacts` is keyed on `(tenant_id, phone_e164)` and every inbound WhatsApp
+/// message resolves through it. Instagram has no phone number — identity there
+/// is a page-scoped IGSID — so a second channel beside the first would either
+/// invent a fake phone number or fork the contact table. This row is the
+/// indirection that makes "the same customer on WhatsApp and Instagram"
+/// representable instead.
+///
+/// It only makes it **representable**. There is no merge UI, no automatic
+/// linking and no dedup heuristic: two identities point at one contact when
+/// something puts them there, and nothing does yet (ADR 0013, open question 3).
+///
+/// ## Scoped by `(tenant, kind)`, not by channel row
+///
+/// A phone number is the same person across every WhatsApp number a tenant
+/// connects, so WhatsApp keeps today's cross-number unification. An IGSID is
+/// already scoped to the IG account that received it, so two connected IG
+/// accounts yield two distinct `external_id` values and cannot collide. One key
+/// serves both, and the per-channel column that would be needed for neither is
+/// not there.
+model ContactIdentity {
+  id        String      @id @default(uuid(7)) @db.Uuid
+  tenantId  String      @map("tenant_id") @db.Uuid
+  contactId String      @map("contact_id") @db.Uuid
+  kind      ChannelKind
+  /// The provider's id for this person on this kind of channel: E.164 for
+  /// WhatsApp, the IGSID for Instagram, the PSID for Messenger.
+  externalId String @map("external_id")
+  /// The profile name the provider attaches to an inbound batch, per channel.
+  /// The same person is "Tarek" on WhatsApp and an @handle on Instagram, and
+  /// `contacts.display_name` can only hold one of them.
+  displayName String?   @map("display_name")
+  lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [tenantId, contactId], references: [tenantId, id], onDelete: Cascade)
+
+  /// The inbound resolution key — one lookup per delivery, replacing
+  /// `(tenant_id, phone_e164)` once TAR-820 routes through it.
+  @@unique([tenantId, kind, externalId])
+  @@unique([tenantId, id])
+  /// "Every channel we know this person on" — the contact detail panel, and what
+  /// a future merge would read. Also the index the composite foreign key needs.
+  @@index([tenantId, contactId])
+  @@map("contact_identities")
+}
+
+// ---------------------------------------------------------------------------
 // WhatsApp channel — TAR-20
 // ---------------------------------------------------------------------------
 
@@ -1775,9 +1964,19 @@ model MessageTemplate {
 model Contact {
   id           String    @id @default(uuid(7)) @db.Uuid
   tenantId     String    @map("tenant_id") @db.Uuid
-  /// E.164, and the natural key for an inbound message: every inbound webhook
-  /// resolves a contact through `(tenant_id, phone_e164)`.
-  phoneE164    String    @map("phone_e164")
+  /// E.164 — the contact's phone number **when one is known**, which is what
+  /// contact search, export and the CRM view read.
+  ///
+  /// Nullable since TAR-819, and no longer the identity key: an Instagram
+  /// contact is an IGSID with no phone number anywhere in it. `contact_identities`
+  /// is where identity lives now, and `(tenant_id, 'whatsapp', phone_e164)`
+  /// there is what `(tenant_id, phone_e164)` was here.
+  ///
+  /// ⚠️ The `@@unique([tenantId, phoneE164])` below is still the live key —
+  /// TAR-820 moves inbound resolution onto `contact_identities` and TAR-819's
+  /// contract migration drops it. Until then every contact still has a phone
+  /// number in practice, because nothing can yet create one without.
+  phoneE164    String?   @map("phone_e164")
   displayName  String?   @map("display_name")
   email        String?   @db.Citext
   locale       String?
@@ -1790,10 +1989,11 @@ model Contact {
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   tags          ContactTag[]
   conversations Conversation[]
   tickets       Ticket[]
+  identities    ContactIdentity[]
 
   @@unique([tenantId, phoneE164])
   @@unique([tenantId, id])
@@ -1867,6 +2067,20 @@ model Conversation {
   id                     String             @id @default(uuid(7)) @db.Uuid
   tenantId               String             @map("tenant_id") @db.Uuid
   whatsappAccountId      String             @map("whatsapp_account_id") @db.Uuid
+  /// The channel this thread belongs to (ADR 0013, decision 1) — a byte-for-byte
+  /// copy of `whatsapp_account_id`, because a `channels` row takes the id its
+  /// `whatsapp_accounts` row already had.
+  ///
+  /// Nullable, and that is the whole reason TAR-819 is additive: the writers
+  /// still set `whatsapp_account_id` alone, so a conversation opened between
+  /// this migration and TAR-820 lands here as NULL and TAR-820's own migration
+  /// backfills it before making the column `NOT NULL`. **Nothing reads it yet.**
+  ///
+  /// The composite foreign key below is `MATCH SIMPLE` (Postgres's default), so
+  /// a NULL `channel_id` skips the check rather than failing it — which is what
+  /// lets today's inserts keep working against a foreign key they know nothing
+  /// about.
+  channelId              String?            @map("channel_id") @db.Uuid
   contactId              String             @map("contact_id") @db.Uuid
   status                 ConversationStatus @default(open)
   assignedUserId         String?            @map("assigned_user_id") @db.Uuid
@@ -1911,6 +2125,7 @@ model Conversation {
 
   tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   whatsappAccount WhatsappAccount @relation(fields: [tenantId, whatsappAccountId], references: [tenantId, id], onDelete: Cascade)
+  channel         Channel?        @relation(fields: [tenantId, channelId], references: [tenantId, id], onDelete: Cascade)
   contact         Contact         @relation(fields: [tenantId, contactId], references: [tenantId, id], onDelete: Cascade)
   assignedUser    User?           @relation(fields: [tenantId, assignedUserId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
   assignedTeam    Team?           @relation(fields: [tenantId, assignedTeamId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
@@ -1922,8 +2137,30 @@ model Conversation {
 
   /// One thread per contact per WhatsApp number.
   @@unique([tenantId, whatsappAccountId, contactId])
+  /// The same rule stated on the channel — one thread per contact per channel —
+  /// and the successor to the constraint above, which TAR-820's contract
+  /// migration drops with the column.
+  ///
+  /// It cannot enforce anything yet: a unique index does not collide NULLs, and
+  /// every row written before TAR-820 has a NULL `channel_id`. The constraint
+  /// above is what holds the invariant during the window; this one is created
+  /// now so that the index is already built and analysed when TAR-820 flips the
+  /// column to `NOT NULL`, rather than being built under a live inbox.
+  @@unique([tenantId, channelId, contactId])
   @@unique([tenantId, id])
   /// The inbox list — the hottest query in the product (TAR-39, index table).
+  ///
+  /// ⚠️ **None of the three inbox indexes below carries `whatsapp_account_id`,
+  /// so none of them is rebuilt by the channel migration** (TAR-819). ADR 0013's
+  /// context section says the column "leads all three hot inbox indexes"; it
+  /// leads none of them. It appears in exactly one index on this table, the
+  /// `(tenant_id, whatsapp_account_id, contact_id)` unique above, and the
+  /// channel work adds a sibling to that one rather than touching these.
+  ///
+  /// That is the safe direction — the measured plans below are not at risk from
+  /// this migration and their baselines are unchanged — but it is a deviation
+  /// from the ADR and is recorded here so the next reader does not go looking
+  /// for a rebuild that never happened.
   @@index([tenantId, status, lastMessageAt(sort: Desc), id(sort: Desc)])
   /// An agent's default view — the `conversation:read` (no `_all`) inbox, which
   /// is the whole difference between an agent and a supervisor (TAR-22).

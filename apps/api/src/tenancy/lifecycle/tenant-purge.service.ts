@@ -81,6 +81,10 @@ export const PURGE_ORDER: readonly string[] = [
 
   // The contact directory.
   'contact_tags',
+  // Before `contacts`, which it holds a composite foreign key into (TAR-819).
+  // Its rows are the only record that a purged tenant ever knew a customer by an
+  // IGSID or a PSID, so they go with everything else rather than being kept.
+  'contact_identities',
   'contacts',
   'custom_field_defs',
   'tags',
@@ -92,10 +96,15 @@ export const PURGE_ORDER: readonly string[] = [
   'invite_teams',
   'teams',
 
-  // The WhatsApp connection, which carries `access_token_encrypted`.
+  // The channel connection, which carries `access_token_encrypted`.
   'message_templates',
   'whatsapp_accounts',
   'whatsapp_business_accounts',
+  // Last of the four, and that is load-bearing in both directions (TAR-819).
+  // `conversations` above holds a foreign key into it today; TAR-820 makes
+  // `whatsapp_accounts.id` a foreign key into it too, so anything that could
+  // reference a channel is already deleted by the time this line runs.
+  'channels',
 
   // Identity. `audit_logs` before `users`: it holds a foreign key into them.
   'audit_logs',

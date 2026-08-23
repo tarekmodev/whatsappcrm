@@ -2921,6 +2921,13 @@ export const content = {
       custom_domain: 'Your own domain',
       advanced_reporting: 'Advanced reporting',
       api_access: 'API access',
+      // The per-channel connect gates (TAR-819). Phrased as the channel rather
+      // than as the entitlement, because that is what a plan card is selling —
+      // and `satisfies Record<PlanFeature, string>` below is why adding a
+      // feature to the contract cannot ship without a label for it.
+      channel_whatsapp: 'WhatsApp channel',
+      channel_instagram: 'Instagram direct messages',
+      channel_messenger: 'Facebook Messenger',
     } satisfies Record<PlanFeature, string>,
     noFeatures: 'The essentials: shared inbox, contacts and tickets.',
 

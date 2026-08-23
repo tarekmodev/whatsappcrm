@@ -44,7 +44,7 @@ Six rules hold across every model. A change that breaks one needs a reason in re
 
 ## Tenancy classification
 
-50 models. **45 are tenant-scoped**: they carry a non-null `tenant_id`, have
+52 models. **47 are tenant-scoped**: they carry a non-null `tenant_id`, have
 `ENABLE`/`FORCE ROW LEVEL SECURITY`, and one `tenant_isolation` policy each. Six are
 not, each deliberately:
 
@@ -509,6 +509,75 @@ look identical in every picker, and conversations routed to one would be invisib
 members of the other. `description` is nullable text; `TeamCreateInput` caps it at 500
 characters, which is the contract's bound to enforce rather than a column type's.
 
+### Channels — TAR-819
+
+The supertype every connected messaging endpoint has a row in, and the contact
+identity that goes with it. ADR 0013 decisions 1 and 2; the schema landed by TAR-819,
+the code that reads it by TAR-820.
+
+```text
+tenants ──< channels                          kind, routing key, connection status
+                └──< conversations            channel_id (nullable until TAR-820)
+
+tenants ──< contacts ──< contact_identities   one per (kind, external id)
+```
+
+#### `channels`
+
+Class-table inheritance: what every channel has lives here, and provider-specific
+columns stay on their own table joined on a **shared primary key**. A WhatsApp
+channel carries the id its [`whatsapp_accounts`](#whatsapp_accounts) row already had
+— which is what makes `conversations.channel_id` an identity copy of
+`whatsapp_account_id` rather than a remap, and what keeps TAR-820's column swap a
+rename.
+
+- **Unique:** `(kind, routing_key)`; `(tenant_id, id)`
+- **Indexes:** `(tenant_id, kind)` — the operator channel list
+- **Owned by:** TAR-819
+
+**`(kind, routing_key)` is the one unique index in this schema that does not lead
+with `tenant_id`**, and it cannot: it is the lookup that runs _before_ a tenant is
+known. One Meta app serves every tenant, so nothing on an inbound delivery names a
+tenant except the endpoint it arrived on. It generalises
+`whatsapp_accounts.phone_number_id`'s global unique, and it is read through
+`SystemPrisma` for the same reason `WhatsAppAccountResolver` is today. Scoped by
+`kind` rather than globally because a Page id and an IG account id are different
+namespaces — a collision between them is a coincidence, not a conflict.
+
+**No credential column, permanently.** Tokens and PINs stay on the provider table,
+where their AAD binding still names the right thing:
+`whatsapp_accounts.registration_pin_encrypted` is bound to `phone_number_id`, and a
+PIN that decrypted under a generic channel id would stop failing when moved between
+two numbers of one WABA.
+
+`connected_at` is NULL on every row the migration backfilled, and that means
+_never recorded_ rather than _never connected_ — no column carried it, and
+`created_at` is when the row was written.
+
+#### `contact_identities`
+
+Who a contact is on one kind of channel. `(tenant_id, kind, external_id)` resolves an
+inbound delivery to a `contact_id`, replacing `(tenant_id, phone_e164)` once TAR-820
+routes through it.
+
+- **Unique:** `(tenant_id, kind, external_id)` — the inbound resolution key;
+  `(tenant_id, id)`
+- **Indexes:** `(tenant_id, contact_id)` — "every channel we know this person on",
+  and the index the composite foreign key needs
+- **Owned by:** TAR-819
+
+Scoped by `(tenant, kind)` rather than by channel row, deliberately. A phone number is
+the same person across every WhatsApp number a tenant connects, so WhatsApp keeps
+today's cross-number unification; an IGSID is already scoped to the IG account that
+received it, so two connected IG accounts cannot collide. One key serves both.
+
+`display_name` is the profile name _that provider_ attached — the same person is a
+name on WhatsApp and an @handle on Instagram, and `contacts.display_name` holds only
+one of them.
+
+It makes "one customer, two channels" **representable and nothing more**: no merge UI,
+no automatic linking, no dedup heuristic (ADR 0013, open question 3).
+
 ### WhatsApp channel — TAR-20 / TAR-52
 
 Meta scopes its WhatsApp objects at **three** levels, and since TAR-52 so does the schema:
@@ -632,11 +701,19 @@ component tree verbatim and is deliberately unvalidated — its shape is Meta's 
 
 #### `contacts`
 
-- **Unique:** `(tenant_id, phone_e164)` — the natural key every inbound webhook resolves a
-  contact through; `(tenant_id, id)`
+- **Unique:** `(tenant_id, phone_e164)` — still the natural key every inbound webhook
+  resolves a contact through; `(tenant_id, id)`
 - **Indexes:** `(tenant_id, created_at DESC, id DESC)`
 - **Check:** `custom_fields` is null or a JSON **object**
-- **Owned by:** TAR-33
+- **Owned by:** TAR-33, `phone_e164` relaxed by TAR-819
+
+**`phone_e164` is nullable since TAR-819 and is no longer the identity key.** An
+Instagram contact is an IGSID with no phone number anywhere in it, so identity moved to
+[`contact_identities`](#contact_identities) and this column stays as the phone number
+_when one is known_ — which is what contact search, export and the CRM view read. The
+unique index above is still the live key: TAR-820 moves inbound resolution across and
+its contract migration drops it. Nothing can create a contact without a number until
+TAR-822, and `ContactResponse.phone` is correspondingly still non-nullable.
 
 `custom_fields` is JSONB keyed by `custom_field_defs.key`, so a tenant adding a field is a
 row insert rather than a migration. A non-null `opted_out_at` blocks outbound sends.
@@ -707,7 +784,8 @@ unique index would need the constraint deferred or a two-pass shuffle.
 
 One thread per contact per WhatsApp number.
 
-- **Unique:** `(tenant_id, whatsapp_account_id, contact_id)`; `(tenant_id, id)`
+- **Unique:** `(tenant_id, whatsapp_account_id, contact_id)`;
+  `(tenant_id, channel_id, contact_id)`; `(tenant_id, id)`
 - **Indexes:**
   - `(tenant_id, status, last_message_at DESC, id DESC)` — the inbox list, the hottest
     query in the product
@@ -715,7 +793,25 @@ One thread per contact per WhatsApp number.
     default view, the `conversation:read` (no `_all`) inbox
   - `(tenant_id, assigned_team_id, status, last_message_at DESC, id DESC)`
   - `(tenant_id, contact_id)`
-- **Owned by:** TAR-20, sort keys added by TAR-80
+- **Owned by:** TAR-20, sort keys added by TAR-80, `channel_id` by TAR-819
+
+**`channel_id` is nullable and nothing reads it yet** (TAR-819). It is a byte-for-byte
+copy of `whatsapp_account_id`, because a [`channels`](#channels) row takes the id its
+`whatsapp_accounts` row already had. Today's writers set `whatsapp_account_id` alone,
+so a thread opened before TAR-820 lands here as NULL — which the composite foreign key
+tolerates, a `MATCH SIMPLE` key skipping its check when any column is NULL. TAR-820
+backfills the stragglers, makes the column `NOT NULL` and drops the one it replaces.
+
+For the same reason `(tenant_id, channel_id, contact_id)` **enforces nothing yet** — a
+unique index does not collide NULLs. The constraint above it is what holds "one thread
+per contact per channel" during the window; this one exists so the index is already
+built and analysed when TAR-820 tightens the column.
+
+**None of the three inbox indexes carries `whatsapp_account_id`, so none of them is
+touched by the channel work.** ADR 0013's context section says the column leads all
+three; it leads none — it appears in exactly one index on this table, the first unique
+above. The measured plans below are therefore unchanged by TAR-819, and
+`channel-schema.int-spec.ts` asserts all five index definitions so that stays checked.
 
 `service_window_expires_at` is Meta's 24-hour customer service window. Past it, only an
 approved template may be sent — so it is a stored column, not a derived value.

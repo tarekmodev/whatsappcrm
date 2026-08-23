@@ -64,7 +64,7 @@ The column default, and what a self-signup tenant starts on:
 
 ```json
 {
-  "features": ["assignment_rules", "sla_policies"],
+  "features": ["assignment_rules", "sla_policies", "channel_whatsapp"],
   "limits": {
     "seats": 3,
     "conversationsPerPeriod": 1000,

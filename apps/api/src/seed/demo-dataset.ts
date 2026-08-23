@@ -371,6 +371,19 @@ function ahead(now: Date, ms: number): Date {
  * migration. `null` means unlimited. Prices are integer minor units against an
  * ISO 4217 code, never a float.
  *
+ * **The three `channel_*` features are the one entry here that is not free to
+ * be wrong** (TAR-819, ADR 0013 decision 4). TAR-821's channel gate fails
+ * closed, so a plan that does not name `channel_whatsapp` is a plan whose
+ * tenants cannot connect the number the product is built around — which in a
+ * seeded environment reads as a broken build rather than as a pricing choice.
+ * Every tier below names it, because every tier can connect WhatsApp today.
+ *
+ * Which tiers get `channel_instagram` and `channel_messenger` **is** a pricing
+ * decision, and this file is where placeholder pricing decisions live: `scale`
+ * has them, on the same reasoning that already gives `scale` every other
+ * feature, and it is what makes a seeded environment able to exercise TAR-822
+ * and TAR-823 at all. TAR-397 settles it with the rest of the figures.
+ *
  * `providerProductId` is left unset — the Polar product ids are outstanding
  * (contract open question 4). The checkout route answers `upstream_unavailable`
  * for a plan with no product id rather than calling Polar with a null, and
@@ -387,7 +400,7 @@ export const DEMO_PLANS: readonly Prisma.PlanCreateManyInput[] = [
     currency: 'USD',
     interval: 'month',
     entitlements: {
-      features: ['assignment_rules', 'sla_policies'],
+      features: ['assignment_rules', 'sla_policies', 'channel_whatsapp'],
       limits: {
         seats: 3,
         conversationsPerPeriod: 1_000,
@@ -412,6 +425,7 @@ export const DEMO_PLANS: readonly Prisma.PlanCreateManyInput[] = [
         'workflows',
         'advanced_reporting',
         'api_access',
+        'channel_whatsapp',
       ],
       limits: {
         seats: 10,
@@ -440,6 +454,9 @@ export const DEMO_PLANS: readonly Prisma.PlanCreateManyInput[] = [
         'ai_chatbot',
         'custom_branding',
         'custom_domain',
+        'channel_whatsapp',
+        'channel_instagram',
+        'channel_messenger',
       ],
       limits: {
         seats: 50,

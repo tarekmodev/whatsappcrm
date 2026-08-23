@@ -96,6 +96,27 @@ A `down.sql` that drops a column or table **destroys the data in it**. Where tha
 unacceptable, the answer is not a better `down.sql`; it is expand → migrate →
 contract, so the destructive step lands in its own separately deployable migration.
 
+## A migration that rewrites every row needs a VACUUM afterwards
+
+`ANALYZE` is not enough, and a migration file cannot do the other half.
+
+An `UPDATE` touching every row of a table clears every bit in its visibility map. Any
+query served by an **Index Only Scan** then falls back to the heap for each row it
+returns — same plan, same index, same index conditions, several times the buffer reads.
+Only a `VACUUM` resets those bits, and `VACUUM` is forbidden inside a transaction block,
+which is what Prisma wraps a migration in. Autovacuum gets there eventually; on a hot
+table, "eventually" is measured in user-visible latency.
+
+So a migration that backfills a whole table states the vacuum in its header as a manual
+step, next to the `app-roles.sql` re-run, and it runs in the same window as the deploy:
+
+```sql
+VACUUM (ANALYZE) "public"."conversations";
+```
+
+`20260823140000_channel_supertype_and_contact_identities` is the worked example, with the
+before/after numbers it was measured against.
+
 ## Before shipping a schema change
 
 Confirm it applies to a brand-new database, to a database one version behind, and
