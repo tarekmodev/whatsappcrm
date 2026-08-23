@@ -126,7 +126,10 @@ export function FlaggedTicketsTable({
           actions.push({
             key: 'capacity',
             label: content.assignment.editCapacity,
-            accessibleName: content.assignment.editCapacityAria(label),
+            // No ticket in the name, unlike `assign` above. The dialog is
+            // workspace-wide, so naming the row would be a promise this control
+            // does not keep — see `editCapacityAria` (TAR-778).
+            accessibleName: content.assignment.editCapacityAria,
             onSelect: () => {
               setIsEditingCapacity(true);
             },
