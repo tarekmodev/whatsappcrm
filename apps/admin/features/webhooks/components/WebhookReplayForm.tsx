@@ -5,13 +5,12 @@ import { IdSchema, type AdminWebhookEventReplayResponse } from '@whatsappcrm/con
 import { Button } from '@/components/ui/Button';
 import { DetailList, type DetailListItem } from '@/components/ui/DetailList';
 import { Field } from '@/components/ui/Field';
-import { FormError } from '@/components/ui/FormError';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { Notice } from '@/components/ui/Notice';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { SectionCard } from '@/components/ui/SectionCard';
 import { TextInput } from '@/components/ui/TextInput';
 import { TextLink } from '@/components/ui/TextLink';
-import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
 import { useActionForm } from '@/lib/hooks/useActionForm';
 import { content } from '~/content/en';
@@ -42,6 +41,16 @@ export function WebhookReplayForm() {
   const [eventId, setEventId] = useState('');
   const [idError, setIdError] = useState<string | undefined>(undefined);
   const [log, setLog] = useState<readonly AdminWebhookEventReplayResponse[]>([]);
+  /**
+   * What the **last submit** did, which is not the same as what the log holds.
+   *
+   * Binding the success notice to `log[0]` meant it rendered whenever the log was
+   * non-empty — so after one good replay, a *failed* second attempt showed the
+   * failure above the field and "Reset for reprocessing…" still sitting below it:
+   * two contradictory verdicts on one submit. This is the attempt, and it is
+   * cleared the moment another one starts.
+   */
+  const [outcome, setOutcome] = useState<AdminWebhookEventReplayResponse | null>(null);
   const fieldRef = useRef<HTMLInputElement>(null);
 
   const perform = useCallback(
@@ -50,6 +59,7 @@ export function WebhookReplayForm() {
   );
 
   const onSuccess = useCallback((replayed: AdminWebhookEventReplayResponse) => {
+    setOutcome(replayed);
     setLog((entries) => [replayed, ...entries]);
     setEventId('');
     // A batch is the normal case, so the caret goes back where the next id is
@@ -62,7 +72,20 @@ export function WebhookReplayForm() {
     onSuccess,
   });
 
-  const latest = log[0];
+  /*
+   * §2.9 puts the API's `404` and `409` on the **field**: the operator is working
+   * a batch, and the thing that is wrong is the id they just typed. `useActionForm`
+   * reports every refusal as a form-level message, so it is moved here — the
+   * `409` verbatim, because it names the status the event is really in and nothing
+   * this console could compose beats that.
+   */
+  const fieldError =
+    idError ??
+    (formError === null
+      ? undefined
+      : requestId === null
+        ? formError
+        : content.errors.withReference(formError, requestId));
 
   return (
     <Stack gap="5">
@@ -92,6 +115,9 @@ export function WebhookReplayForm() {
              * about a *different* id the console never sent anywhere.
              */
             clearError();
+            // The previous attempt's *verdict* goes with it, so a new submit
+            // never renders last time's success beside this time's failure.
+            setOutcome(null);
 
             const candidate = eventId.trim();
 
@@ -113,46 +139,53 @@ export function WebhookReplayForm() {
           }}
         >
           <Stack gap="4">
-            <FormError message={formError} requestId={requestId} />
-            <Cluster gap="3" align="end" className={styles.row}>
-              <div className={styles.field}>
-                <Field
-                  label={content.webhooks.idLabel}
-                  hint={content.webhooks.idHint}
-                  error={idError}
-                  isRequired
-                >
-                  {({ controlId, describedBy, isInvalid }) => (
-                    <TextInput
-                      ref={fieldRef}
-                      id={controlId}
-                      aria-describedby={describedBy}
-                      aria-invalid={isInvalid}
-                      className={styles.mono}
-                      name="webhookEventId"
-                      autoCapitalize="off"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      value={eventId}
-                      onChange={(event) => {
-                        setEventId(event.target.value);
-                        setIdError(undefined);
-                      }}
-                    />
-                  )}
-                </Field>
-              </div>
-              <Button
-                type="submit"
-                variant="primary"
-                isPending={isPending}
-                pendingLabel={content.webhooks.pending}
-              >
-                {content.webhooks.submit}
-              </Button>
-            </Cluster>
+            {/*
+              The submit lives **inside** the field's control row rather than
+              beside the whole field, and that is what keeps the two aligned in
+              every state. `Field` stacks label-and-hint above the control and the
+              error below it, so a button aligned to the field's box lands level
+              with whichever of those happens to be rendered — it dropped by a
+              line the moment the id was invalid. Here it is a sibling of the
+              input, so it sits on the control's line by construction and the
+              error renders under both.
+            */}
+            <Field
+              label={content.webhooks.idLabel}
+              hint={content.webhooks.idHint}
+              error={fieldError}
+              isRequired
+            >
+              {({ controlId, describedBy, isInvalid }) => (
+                <div className={styles.controlRow}>
+                  <TextInput
+                    ref={fieldRef}
+                    id={controlId}
+                    aria-describedby={describedBy}
+                    aria-invalid={isInvalid}
+                    className={styles.mono}
+                    name="webhookEventId"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    value={eventId}
+                    onChange={(event) => {
+                      setEventId(event.target.value);
+                      setIdError(undefined);
+                    }}
+                  />
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    isPending={isPending}
+                    pendingLabel={content.webhooks.pending}
+                  >
+                    {content.webhooks.submit}
+                  </Button>
+                </div>
+              )}
+            </Field>
 
-            {latest === undefined ? null : (
+            {outcome === null ? null : (
               <Stack gap="3">
                 {/*
                   The copy must not overclaim: the API is explicit that
@@ -160,7 +193,7 @@ export function WebhookReplayForm() {
                   reprocessed.
                 */}
                 <Notice tone="success">{content.webhooks.replayedNotice}</Notice>
-                {latest.provider === 'whatsapp' ? null : (
+                {outcome.provider === 'whatsapp' ? null : (
                   <Notice tone="warning">{content.webhooks.providerNotSweptNotice}</Notice>
                 )}
               </Stack>
@@ -175,7 +208,12 @@ export function WebhookReplayForm() {
         description={content.webhooks.logNotSaved}
       >
         {log.length === 0 ? (
-          <p>{content.webhooks.logEmpty}</p>
+          <EmptyState
+            icon="checklist"
+            tone="quiet"
+            title={content.webhooks.logEmptyTitle}
+            description={content.webhooks.logEmpty}
+          />
         ) : (
           <ul className={styles.log}>
             {log.map((entry) => (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { TenantSlugSchema } from '@whatsappcrm/contracts';
 import { Button } from '@/components/ui/Button';
@@ -36,8 +36,14 @@ import styles from './TenantLookup.module.css';
  * The submit is disabled until the field validates against `TenantSlugSchema` —
  * the one legitimate disabled submit here, because the reader fixes it on this
  * screen (spec §2.3).
+ *
+ * The label is hidden, which is `SearchField`'s own default. The card is headed
+ * "Open a tenant" and the placeholder shows a slug, so nothing is lost — and a
+ * visible label above the control would put the two buttons beside it out of line
+ * with the box they act on, because `Field` stacks the label above the control.
+ * It is still the control's accessible name.
  */
-export function TenantLookup() {
+export function TenantLookup({ provisionAction }: { provisionAction?: ReactNode }) {
   const router = useRouter();
   const [slug, setSlug] = useState('');
   const [isNavigating, setIsNavigating] = useState(false);
@@ -63,12 +69,11 @@ export function TenantLookup() {
         router.push(routes.tenant(candidate));
       }}
     >
-      <Cluster gap="3" align="end" className={styles.row}>
+      <Cluster gap="3" align="start" className={styles.row}>
         <div className={styles.field}>
           <SearchField
             name="slug"
             label={content.tenants.slugLabel}
-            isLabelVisible
             placeholder={content.tenants.slugPlaceholder}
             error={error}
             value={slug}
@@ -84,6 +89,9 @@ export function TenantLookup() {
         >
           {content.tenants.open}
         </Button>
+        {/* §2.3 puts this beside the field, not under it: it is the other thing
+            an operator does from this card, not a third row of the same form. */}
+        {provisionAction}
       </Cluster>
     </form>
   );

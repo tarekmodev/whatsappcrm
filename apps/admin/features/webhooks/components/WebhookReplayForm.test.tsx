@@ -155,11 +155,12 @@ describe('WebhookReplayForm', () => {
     typeId(EVENT_ID);
     send();
 
-    expect(
-      await screen.findByText(
-        'This webhook event is processed, not parked, so there is nothing to replay.',
-      ),
-    ).toBeInTheDocument();
+    // On the **field**, and carrying the reference: a field error has no slot of
+    // its own for a request id, so it is appended rather than dropped.
+    const message = await screen.findByText(/This webhook event is processed, not parked/);
+
+    expect(message).toHaveTextContent('Reference req-9.');
+    expect(fieldByLabel(content.webhooks.idLabel)).toHaveAttribute('aria-invalid', 'true');
     expect(fieldByLabel(content.webhooks.idLabel)).toHaveValue(EVENT_ID);
   });
 
@@ -185,5 +186,42 @@ describe('WebhookReplayForm', () => {
     await waitFor(() => {
       expect(screen.queryByText(content.webhooks.notFoundError)).not.toBeInTheDocument();
     });
+  });
+
+  /**
+   * The success notice used to bind to the *log*, so it rendered whenever the log
+   * was non-empty — a failed second attempt showed last time's "Reset for
+   * reprocessing…" beside this time's failure: two contradictory verdicts on one
+   * submit. It is bound to the attempt now.
+   */
+  it('does not leave the previous success beside a new failure', async () => {
+    replayWebhookEventAction.mockResolvedValueOnce({ status: 'success', data: replayed() });
+    renderForm();
+    typeId(EVENT_ID);
+    send();
+    await screen.findByText(content.webhooks.replayedNotice);
+
+    replayWebhookEventAction.mockResolvedValueOnce({
+      status: 'error',
+      message: content.webhooks.notFoundError,
+      requestId: null,
+    });
+    typeId(SECOND_ID);
+    send();
+
+    expect(await screen.findByText(content.webhooks.notFoundError)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText(content.webhooks.replayedNotice)).not.toBeInTheDocument();
+    });
+    // The log still keeps the one that did work.
+    expect(screen.getByText(EVENT_ID)).toBeInTheDocument();
+  });
+
+  /** Quiet, like every other empty state here — not full-weight body text. */
+  it('offers a quiet empty state before anything has been replayed', () => {
+    renderForm();
+
+    expect(screen.getByText(content.webhooks.logEmptyTitle)).toBeInTheDocument();
+    expect(screen.getByText(content.webhooks.logEmpty)).toBeInTheDocument();
   });
 });

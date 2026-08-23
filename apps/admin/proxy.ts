@@ -44,7 +44,7 @@ export function proxy(request: NextRequest): NextResponse {
   // is re-narrowed on the way out by `parseRedirectPath`; nothing trusts it just
   // because this wrote it.
   return NextResponse.redirect(
-    new URL(routes.signIn({ redirectTo: `${pathname}${search}` }), request.nextUrl),
+    new URL(routes.credential({ redirectTo: `${pathname}${search}` }), request.nextUrl),
   );
 }
 

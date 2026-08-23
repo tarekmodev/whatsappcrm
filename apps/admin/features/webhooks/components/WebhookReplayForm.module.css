@@ -4,12 +4,20 @@
   max-inline-size: var(--size-container-md);
 }
 
-.row {
-  inline-size: 100%;
+/*
+ * The control and its submit, on one line. The input takes the slack and the
+ * button shrinks to its label; below the wrap floor the button drops under the
+ * input rather than squeezing it.
+ */
+.controlRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  min-inline-size: 0;
 }
 
-.field {
-  /* The floor at which the row wraps and the button drops below the field. */
+.controlRow > input {
   flex: 1 1 var(--size-field);
   min-inline-size: 0;
 }

@@ -1,7 +1,6 @@
 import {
   TENANT_STATUS_TRANSITIONS,
   type AdminTenantLifecycleEvent,
-  type AdminTenantLifecycleResponse,
   type TenantStatus,
 } from '@whatsappcrm/contracts';
 import type { BadgeTone } from '@/components/ui/Badge';
@@ -13,6 +12,13 @@ import type { BadgeTone } from '@/components/ui/Badge';
  * One module, read from everywhere, the way `apps/web`'s `conversation-chips.ts`
  * is read — the spec (§2.4) asks for exactly that, and the reason is that a tone
  * inlined in a cell is a tone the next cell gets wrong.
+ *
+ * §2.4 also gives the status band a **second**, time-bounded chip — `Trial ends`,
+ * `Grace period ends` or `Purges`, ranked in that order. The helper that picked it
+ * lived here and has been removed: every one of those dates is on
+ * `AdminTenantLifecycleResponse`, which is a *write* response, so nothing on a
+ * freshly loaded screen could ever have supplied one. It returns with the tenant
+ * read that supplies the dates.
  */
 
 /**
@@ -133,67 +139,4 @@ export function tenantWrites(status: TenantStatus | null): TenantWrites {
     canDelete,
     isEmpty: !canSuspend && !canReactivate && !canCancel && !canDelete,
   };
-}
-
-/**
- * The one time-bounded chip the status band may carry beside the status, ranked
- * most-actionable first and shown **only while its date is in the future**
- * (spec §2.4).
- *
- * 0001 budgets a detail header at two chips. Where more than one date applies,
- * the others belong in the Lifecycle list below rather than competing for the
- * glance — so this returns at most one.
- *
- * `now` is a parameter rather than `Date.now()` so a server render and its
- * hydration agree, and so the ranking is testable without faking a clock.
- */
-export const TIME_BOUNDED_DATES = ['trialEndsAt', 'gracePeriodEndsAt', 'purgeAt'] as const;
-export type TimeBoundedDate = (typeof TIME_BOUNDED_DATES)[number];
-
-export function upcomingDate(
-  lifecycle: AdminTenantLifecycleResponse | null,
-  now: number,
-): { readonly kind: TimeBoundedDate; readonly at: string } | null {
-  if (lifecycle === null) {
-    return null;
-  }
-
-  for (const kind of TIME_BOUNDED_DATES) {
-    const at = lifecycle[kind];
-
-    if (at !== null && Date.parse(at) > now) {
-      return { kind, at };
-    }
-  }
-
-  return null;
-}
-
-/**
- * Every non-null date on a lifecycle response, in the order the spec lists them.
- *
- * **A null date renders no row** — a list of "—" is a screen of absences.
- */
-export const LIFECYCLE_DATES = [
-  'trialEndsAt',
-  'gracePeriodEndsAt',
-  'suspendedAt',
-  'cancelledAt',
-  'purgeAt',
-  'deletedAt',
-] as const;
-export type LifecycleDate = (typeof LIFECYCLE_DATES)[number];
-
-export function knownDates(
-  lifecycle: AdminTenantLifecycleResponse | null,
-): readonly { readonly kind: LifecycleDate; readonly at: string }[] {
-  if (lifecycle === null) {
-    return [];
-  }
-
-  return LIFECYCLE_DATES.flatMap((kind) => {
-    const at = lifecycle[kind];
-
-    return at === null ? [] : [{ kind, at }];
-  });
 }

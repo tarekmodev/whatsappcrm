@@ -1,18 +1,21 @@
 .form {
-  /* The field and its button. Bounded so the pair does not stretch across a
-     full-width card, where a very wide input reads as a form field rather than
-     as the one-line lookup this is. */
+  /* The field and the two actions. Bounded so the row does not stretch across a
+     full-width card, where a very wide input reads as a form field rather than as
+     the one-line lookup this is. */
   max-inline-size: var(--size-container-md);
 }
 
 .row {
-  /* Without this a wrapped button sits at the inline start of a new line with a
-     gap above it the field has already spent. */
   inline-size: 100%;
 }
 
+/*
+ * `0 1` rather than `1 1`, and that is the fix for a 240px void: `SearchField`
+ * caps the control itself at `--size-container-sm`, so a wrapper allowed to grow
+ * past that grew while the input did not, and the button was pushed out by the
+ * difference. The wrapper now stops where the control stops.
+ */
 .field {
-  /* The floor at which the row wraps and the button drops below the field. */
-  flex: 1 1 var(--size-field);
+  flex: 0 1 var(--size-container-sm);
   min-inline-size: 0;
 }

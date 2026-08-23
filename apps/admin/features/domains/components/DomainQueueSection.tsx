@@ -21,7 +21,21 @@ import { DomainQueueTable } from './DomainQueueTable';
  * frame — and what lets the same section render on the Tenants screen and on
  * `/domains` without a second copy.
  */
-export async function DomainQueueSection({ status }: { status: AdminDomainStatus }) {
+export async function DomainQueueSection({
+  status,
+  isTitleVisible = true,
+}: {
+  status: AdminDomainStatus;
+  /**
+   * False on `/domains`, where `PageHeader` already says "Domains" and a card
+   * titled "Domain queue" under it is the same thing said twice (spec §2.3). On
+   * `/tenants` the title earns its place — it names the second of two regions.
+   *
+   * The heading stays in the document outline and in the region's accessible
+   * name either way; only the eye loses it.
+   */
+  isTitleVisible?: boolean;
+}) {
   const queue = await attemptRead(async () => await listDomainQueue(status));
 
   if (queue.status === 'credential-refused') {
@@ -37,6 +51,7 @@ export async function DomainQueueSection({ status }: { status: AdminDomainStatus
     <SectionCard
       id="domain-queue"
       title={content.domains.queueHeading}
+      isTitleVisible={isTitleVisible}
       description={content.domains.count(domains.length)}
     >
       <Stack gap="4">

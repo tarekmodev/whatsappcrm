@@ -1,5 +1,5 @@
 import type { AdminTenantLifecycleEvent, CursorPage } from '@whatsappcrm/contracts';
-import { Badge } from '@/components/ui/Badge';
+import { AlertBanner } from '@/components/ui/AlertBanner';
 import { ButtonLink } from '@/components/ui/ButtonLink';
 import { DetailList, type DetailListItem } from '@/components/ui/DetailList';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -14,13 +14,9 @@ import { routes } from '~/lib/routes';
 import { attemptRead } from '~/lib/attempt-read';
 import { listTenantTrail } from '~/lib/api/admin';
 import { CredentialRefused } from '~/features/shell/components/CredentialRefused';
-import {
-  currentStatusOf,
-  latestEventOf,
-  tenantStatusTone,
-  tenantWrites,
-} from '../tenant-presentation';
+import { currentStatusOf, latestEventOf, tenantWrites } from '../tenant-presentation';
 import { ManageTenantMenu } from './ManageTenantMenu';
+import { TenantStatusBand } from './TenantStatusBand';
 import { TenantTrailTable } from './TenantTrailTable';
 
 /**
@@ -30,20 +26,18 @@ import { TenantTrailTable } from './TenantTrailTable';
  *
  * ## Two drifts from the spec, both forced by the API
  *
- * 1. **The `<h1>` is the slug, not the tenant's name.** §2.4 asks for the name
- *    with the slug beneath it. No read on the admin surface returns a name —
- *    `AdminTenantLifecycleEvent` carries none, and the only responses that do are
- *    the writes. A heading assembled from a name this console was never given
- *    would be the one invented thing on the screen.
- * 2. **There is no Lifecycle date list on first load.** §2.4 asks for a
- *    `DetailList` of every non-null date from `AdminTenantLifecycleResponse` —
- *    which is a *write* response. The trail carries no dates at all, so the card
- *    says what it does know and names why the rest is absent rather than
- *    rendering six empty rows.
+ * 1. **The `<h1>` is the slug, not the tenant's name**, drawn as the identifier
+ *    it is. §2.4 asks for the name with the slug beneath it; no read on the admin
+ *    surface returns a name — `AdminTenantLifecycleEvent` carries none, and only
+ *    the writes do. A heading assembled from a name this console was never given
+ *    would be the one invented thing on the screen, so the slot beneath it stays
+ *    empty until there is a name to put in it.
+ * 2. **The status band carries one chip, not two.** §2.4 allows a time-bounded
+ *    chip beside the status; every date it could name is on a *write* response,
+ *    so a freshly loaded screen has none.
  *
- * Both are flagged for the designer check-in. Both close the moment a
- * `GET /admin/tenants/{slug}` lands, which is the same endpoint the tenant list
- * needs.
+ * Both close the moment a `GET /admin/tenants/{slug}` lands, which is the same
+ * endpoint the tenant list needs.
  *
  * ## One read on the newest page, two on any other
  *
@@ -69,21 +63,13 @@ export async function TenantSection({ slug, cursor }: { slug: string; cursor?: s
   const latest = latestEventOf(newest.data.items);
   const writes = tenantWrites(status);
 
-  const stateItems: DetailListItem[] = [
-    {
-      id: 'status',
-      term: content.tenant.statusLabel,
-      value:
-        status === null ? (
-          content.tenant.statusUnknown
-        ) : (
-          <Badge tone={tenantStatusTone(status)} size="md">
-            {content.tenantStatuses[status]}
-          </Badge>
-        ),
-      ...(status === null ? { hint: content.tenant.statusUnknownHint } : {}),
-    },
-    ...(latest === null
+  /*
+   * The status has left this list for the band under the heading (§2.4). What is
+   * left is the one thing the trail *does* tell us beyond the state itself: when
+   * it last moved, and who moved it.
+   */
+  const stateItems: DetailListItem[] =
+    latest === null
       ? []
       : [
           {
@@ -100,30 +86,43 @@ export async function TenantSection({ slug, cursor }: { slug: string; cursor?: s
             // table below.
             hint: latest.actorLabel ?? content.lifecycleActors[latest.actorType],
           },
-        ]),
-  ];
+        ];
 
   return (
     <Stack gap="5">
+      {/*
+        A purged tenant renders in full, and says so above everything else.
+        Omitting its writes is right — the graph has no edge out of `deleted` —
+        but omitting them *silently* leaves a screen whose menu has simply
+        vanished, which is the absence-instead-of-a-statement this console avoids
+        everywhere else.
+
+        The date is dropped rather than invented: `deletedAt` is on a write
+        response this console may never have made.
+      */}
+      {status === 'deleted' ? (
+        <AlertBanner tone="danger" heading={content.tenant.purgedBannerHeading}>
+          {content.tenant.purgedBannerBody(null)}
+        </AlertBanner>
+      ) : null}
+
       <PageHeader
         title={slug}
-        subtitle={content.tenant.subtitle}
+        titleVariant="identifier"
         action={<ManageTenantMenu slug={slug} name={slug} writes={writes} />}
       />
+      <TenantStatusBand status={status} />
 
       <SectionCard id="lifecycle" title={content.tenant.lifecycleHeading}>
         <Stack gap="4">
-          <DetailList items={stateItems} />
+          {stateItems.length === 0 ? null : <DetailList items={stateItems} />}
           {/*
             Said rather than left as an empty card: the dates the spec asks for
             here are only ever returned by a write, so a console that has not made
             one this session genuinely does not have them.
           */}
           <Notice tone="info" variant="quiet">
-            {content.tenant.lifecycleUnknown}
-          </Notice>
-          <Notice tone="info" variant="quiet">
-            {content.tenant.impersonateNotice}
+            {status === null ? content.tenant.statusUnknownHint : content.tenant.lifecycleUnknown}
           </Notice>
         </Stack>
       </SectionCard>

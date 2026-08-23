@@ -10,9 +10,15 @@ import { ADMIN_DOMAIN_QUERY_STATUSES, type AdminDomainStatus } from '@whatsappcr
  * one knows the other.
  */
 export const routes = {
-  /** The credential screen. `?next=` is where the operator was heading. */
-  signIn: (query?: SignInQuery) =>
-    withQuery('/sign-in', { [searchParamKeys.redirectTo]: query?.redirectTo }),
+  /**
+   * The credential screen. `?next=` is where the operator was heading.
+   *
+   * `/credential`, not `/sign-in`, on the screen whose whole premise is that it
+   * is not a sign-in page: there is no account, no password and no session, and a
+   * path that says otherwise is the first thing an operator reads.
+   */
+  credential: (query?: CredentialQuery) =>
+    withQuery('/credential', { [searchParamKeys.redirectTo]: query?.redirectTo }),
   /**
    * Where an operator arrives. Tenants rather than a dashboard, and that is
    * decided by the API rather than by taste: a dashboard would need cross-tenant
@@ -52,7 +58,7 @@ export const searchParamKeys = {
   trailCursor: 'cursor',
 } as const;
 
-export interface SignInQuery {
+export interface CredentialQuery {
   redirectTo?: string;
 }
 
@@ -110,7 +116,7 @@ export function parseRedirectPath(value: string | undefined, fallback: string): 
 
   // The credential screen is not a destination: sending an operator back to the
   // door they just came through would loop them.
-  if (resolved.origin !== REDIRECT_ORIGIN || resolved.pathname === '/sign-in') {
+  if (resolved.origin !== REDIRECT_ORIGIN || resolved.pathname === '/credential') {
     return fallback;
   }
 

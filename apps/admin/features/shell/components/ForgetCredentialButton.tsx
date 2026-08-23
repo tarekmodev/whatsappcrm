@@ -34,7 +34,7 @@ export function ForgetCredentialButton() {
         startTransition(async () => {
           await forgetCredentialAction();
           showToast({ tone: 'success', message: content.credential.forgottenToast });
-          router.replace(routes.signIn());
+          router.replace(routes.credential());
           // Every screen renders on the server from the cookie just deleted, so
           // this navigation's cached payload is stale by definition.
           router.refresh();

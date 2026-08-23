@@ -2,14 +2,12 @@ import { Suspense } from 'react';
 import type { Metadata } from 'next';
 import { SectionCard } from '@/components/ui/SectionCard';
 import { SectionErrorBoundary } from '@/components/ui/SectionErrorBoundary';
-import { Stack } from '@/components/layout/Stack';
 import { PageHeader } from '@/components/shell/PageHeader';
 import { PageShell } from '@/components/shell/PageShell';
 import { firstSearchParam, type RouteSearchParams } from '@/lib/search-params';
 import { content } from '~/content/en';
 import { parseDomainStatus, searchParamKeys } from '~/lib/routes';
-import { TenantsHeaderActions } from '~/features/tenants/components/TenantsHeaderActions';
-import { TenantLookup } from '~/features/tenants/components/TenantLookup';
+import { TenantsLookupCard } from '~/features/tenants/components/TenantsLookupCard';
 import { DomainQueueSection } from '~/features/domains/components/DomainQueueSection';
 import { DomainQueueSectionSkeleton } from '~/features/domains/components/DomainQueueSection.Skeleton';
 
@@ -50,10 +48,7 @@ export default async function TenantsPage({
         title={content.tenants.lookupHeading}
         description={content.tenants.lookupDescription}
       >
-        <Stack gap="4">
-          <TenantLookup />
-          <TenantsHeaderActions />
-        </Stack>
+        <TenantsLookupCard />
       </SectionCard>
 
       <SectionErrorBoundary>

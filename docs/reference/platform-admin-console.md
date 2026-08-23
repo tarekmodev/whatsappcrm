@@ -51,7 +51,9 @@ resolve them against, and provisioning has to work before the first tenant exist
 So "signing in" is presenting a credential, and the screen says so rather than drawing an
 email-and-password form for something that is neither:
 
-1. `/sign-in` takes the secret half of one entry — the part after the `label:`.
+1. `/credential` takes the secret half of one entry — the part after the `label:`. The path
+   says what the screen is: there is no account, no password and no session, so `/sign-in`
+   would be the first thing on it that was untrue.
 2. The console verifies it against `GET /api/v1/admin/domains`, the only read on the whole
    admin surface that names no tenant, and stores it on success.
 3. It is kept in an `httpOnly`, `SameSite=Strict`, `__Host-`-prefixed cookie and read back
@@ -82,13 +84,14 @@ rather than them.
 **A credential refused mid-session is never a silent redirect.** The ordinary cause is the
 token being rotated under an operator mid-incident, and bouncing them to the front door leaves
 them wondering what they did. Every screen renders the same interrupting state with one action
-back to `/sign-in`. Absence of a cookie _is_ an ordinary redirect — `proxy.ts` does it before
+back to `/credential`. Absence of a cookie _is_ an ordinary redirect — `proxy.ts` does it before
 the page renders, carrying `?next=`.
 
 ## The screens
 
 | Path              | What it does                                                             | Behind it                                   |
 | ----------------- | ------------------------------------------------------------------------ | ------------------------------------------- |
+| `/credential`     | Takes the operator token                                                 | `GET /admin/domains` as the probe           |
 | `/tenants`        | Opens a tenant by slug, provisions one, and lists the domain queue       | `GET /admin/domains`, `POST /admin/tenants` |
 | `/tenants/{slug}` | Lifecycle state, the trail with `reason`, and the four per-tenant writes | `GET`/`POST /admin/tenants/{slug}/…`        |
 | `/domains`        | The same domain queue on a route of its own                              | `GET /admin/domains`, the attach pair       |
@@ -167,13 +170,17 @@ Closing the first three needs new API, not new UI. **When `GET /admin/tenants` l
 replaces the lookup card and nothing else** — the domain queue stays where it is, and the
 lookup's field becomes the new table's search box.
 
-Two smaller consequences of the same gap, both visible on `/tenants/{slug}`:
+Three smaller consequences of the same gap, all visible on `/tenants/{slug}`:
 
 - the `<h1>` is the **slug**, not the tenant's name, because no read returns a name;
 - the Lifecycle card carries only what the trail knows. The dates the spec lists
   (`trialEndsAt`, `purgeAt`, …) live on `AdminTenantLifecycleResponse`, which is a _write_
   response, so a console that has not made one this session genuinely does not have them. The
-  card says that rather than rendering six empty rows.
+  card says that rather than rendering six empty rows;
+- the status band carries **one** chip. §2.4 allows a second, time-bounded one — `Trial
+ends`, `Grace period ends`, `Purges` — and every date it could name is on that same write
+  response. The banner on a purged tenant drops its date for the same reason and still says
+  the sentence.
 
 ## Deliberately not built
 
@@ -186,7 +193,7 @@ Two smaller consequences of the same gap, both visible on `/tenants/{slug}`:
 
 The console talks to the real API and **cannot run against the fixture transport**. The mock
 router in `apps/web/lib/api/mock/handlers.ts` resolves a stubbed _tenant principal_ and checks
-a tenant permission for every route, and this surface has neither — so `/sign-in` refuses up
+a tenant permission for every route, and this surface has neither — so `/credential` refuses up
 front with a sentence naming what to change, rather than letting every screen fail with a
 generic message.
 
@@ -206,4 +213,4 @@ pnpm --filter @whatsappcrm/admin run dev   # http://localhost:3002
 ```
 
 Then present `local_dev_only_platform_admin_token_not_a_secret` — the secret half, without
-the `local-dev:` label — at `/sign-in`.
+the `local-dev:` label — at `/credential`.

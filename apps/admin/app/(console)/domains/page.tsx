@@ -33,8 +33,11 @@ export default async function DomainsPage({
     <PageShell>
       <PageHeader title={content.domains.title} />
       <SectionErrorBoundary>
-        <Suspense key={status} fallback={<DomainQueueSectionSkeleton status={status} />}>
-          <DomainQueueSection status={status} />
+        <Suspense
+          key={status}
+          fallback={<DomainQueueSectionSkeleton status={status} isTitleVisible={false} />}
+        >
+          <DomainQueueSection status={status} isTitleVisible={false} />
         </Suspense>
       </SectionErrorBoundary>
     </PageShell>

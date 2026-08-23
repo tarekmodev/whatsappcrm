@@ -26,21 +26,21 @@ export function TenantSectionSkeleton() {
   return (
     <Stack gap="5">
       <LoadingAnnouncement label={content.tenant.loading} />
-      <PageHeader title="\u00a0" subtitle={content.tenant.subtitle} />
+      {/* A non-breaking space, because `PageHeader` takes a string and the slug
+          is not rendered until the section has read it. */}
+      <PageHeader title={'\u00a0'} titleVariant="identifier" />
+      {/* The status band's one chip, at the height it lands at. */}
+      <SkeletonLine width="6rem" height="var(--size-control-sm)" />
 
       <SectionCard id="lifecycle" title={content.tenant.lifecycleHeading}>
         <Stack gap="4">
           <Stack gap="3">
-            {/* Two `DetailList` rows: a term and its value, twice. Sized by the
-                copy the real panel puts there, so the card is the same height. */}
-            <SkeletonForText>{content.tenant.statusLabel}</SkeletonForText>
+            {/* The card's one `DetailList` row \u2014 a term and its value. Sized by
+                the copy the real panel puts there, so it is the same height. */}
             <SkeletonForText>{content.tenant.lastChangedLabel}</SkeletonForText>
           </Stack>
           <Notice tone="info" variant="quiet">
             {content.tenant.lifecycleUnknown}
-          </Notice>
-          <Notice tone="info" variant="quiet">
-            {content.tenant.impersonateNotice}
           </Notice>
         </Stack>
       </SectionCard>

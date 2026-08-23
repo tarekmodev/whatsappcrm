@@ -33,7 +33,7 @@ describe('the credential guard', () => {
 
     expect(response.status).toBe(HTTP_TEMPORARY_REDIRECT);
     expect(response.headers.get('location')).toBe(
-      `${ORIGIN}/sign-in?next=%2Ftenants%2Fnorthwind%3Fcursor%3Dabc`,
+      `${ORIGIN}/credential?next=%2Ftenants%2Fnorthwind%3Fcursor%3Dabc`,
     );
   });
 
@@ -42,7 +42,7 @@ describe('the credential guard', () => {
    * and an operator with no credential can never present one.
    */
   it('does not bounce a request for the credential screen off it', () => {
-    expect(proxy(request('/sign-in')).status).not.toBe(HTTP_TEMPORARY_REDIRECT);
+    expect(proxy(request('/credential')).status).not.toBe(HTTP_TEMPORARY_REDIRECT);
   });
 
   it.each([CREDENTIAL_COOKIE_NAME_SECURE, CREDENTIAL_COOKIE_NAME])(

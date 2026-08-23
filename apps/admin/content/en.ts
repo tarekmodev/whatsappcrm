@@ -66,7 +66,13 @@ export const content = {
 
   // --- The credential -------------------------------------------------------
   credential: {
-    title: 'Platform admin',
+    /**
+     * The **page's** name, not the product's. The brand panel beside it carries
+     * the product; the lockup above the form carries it once more for a screen
+     * reader. Three spellings of one identity on one screen is what a lockup
+     * exists to stop, so this slot says what the screen is for instead.
+     */
+    title: 'Operator credential',
     /**
      * The brand panel's one line. It says what the surface is rather than
      * selling it — an operator console has no audience to persuade, and the
@@ -161,12 +167,18 @@ export const content = {
     attachedToast: (hostname: string) => `${hostname} marked attached`,
     detachedToast: (hostname: string) => `${hostname} marked detached`,
     /**
-     * The button records what the operator did at the edge; it does not do it.
-     * Attaching the hostname and issuing its certificate is a step outside this
-     * console (TAR-416).
+     * The row's button records that a hostname is live at the edge; it does not
+     * put it there. Attaching it and issuing its certificate is a step outside
+     * this console (TAR-416).
+     *
+     * Reworded rather than dropped, and the *notice* is the half that moved: it
+     * used to read "Attaching a hostname … happens there", directly above a
+     * button labelled `Attach`, so the two argued. `Attach`/`Detach` are the
+     * spec's own column labels (§2.3), so the sentence gives way — it now says
+     * what the button *records*, which is the thing that was ambiguous.
      */
     recordOnlyNotice:
-      'These record what you have already done in the hosting dashboard. Attaching a hostname and issuing its certificate happens there — see the custom-domains runbook.',
+      'Marking a domain attached records that it is already live at the edge. Adding the hostname to the web service and issuing its certificate happens in the hosting dashboard — see the custom-domains runbook.',
     /** (spec) The failure names the hostname, because the row may no longer be there. */
     actionFailed: (hostname: string) => `Could not update ${hostname}.`,
     emptyWaitingTitle: 'No domains are waiting',
@@ -180,17 +192,21 @@ export const content = {
   // --- One tenant -----------------------------------------------------------
   tenant: {
     loading: 'Loading tenant',
-    /**
-     * The `<h1>` is the slug. **Drift from the spec, deliberately**: §2.4 asks
-     * for the tenant's *name* with the slug beneath it, and no read on the admin
-     * surface returns a name — `AdminTenantLifecycleEvent` carries none, and the
-     * only responses that do are the writes. A heading assembled from a name this
-     * console has not been given would be the one invented thing on the screen.
-     * Flagged for the designer check-in.
+    /*
+     * The `<h1>` is the **slug**, drawn as the identifier it is, and there is no
+     * subtitle at all.
+     *
+     * §2.4 puts the tenant's *name* in the heading with the slug beneath it. No
+     * read on the admin surface returns a name — `AdminTenantLifecycleEvent`
+     * carries none, and only the writes do — so the slug takes the heading and
+     * the slot beneath it stays **empty**. A sentence describing the page to
+     * somebody already standing on it is not what that slot is for; the name
+     * goes there when a tenant read lands.
      */
-    subtitle: 'Lifecycle state, the trail behind it, and the writes it allows.',
     manage: 'Manage tenant',
 
+    /** Names the status band for assistive technology; the chip carries the value. */
+    bandLabel: 'Lifecycle status',
     /**
      * The Lifecycle card's two terms. Its own pair rather than the trail table's
      * column headers: a `<dt>` names one tenant's current value ("Status"),
@@ -203,13 +219,6 @@ export const content = {
     statusUnknownHint:
       'This tenant has no lifecycle rows, so its current status cannot be read from this surface.',
 
-    /** The one time-bounded chip, ranked most-actionable first (spec §2.4). */
-    chips: {
-      trialEnds: (when: string) => `Trial ends ${when}`,
-      gracePeriodEnds: (when: string) => `Grace period ends ${when}`,
-      purges: (when: string) => `Purges ${when}`,
-    },
-
     lifecycleHeading: 'Lifecycle',
     /**
      * Every date `AdminTenantLifecycleResponse` carries. **A null date renders no
@@ -220,18 +229,21 @@ export const content = {
      */
     lifecycleUnknown:
       'The admin API has no tenant read, so these dates are known only after a write in this session returns them.',
-    dates: {
-      trialEndsAt: 'Trial ends',
-      gracePeriodEndsAt: 'Grace period ends',
-      suspendedAt: 'Suspended',
-      cancelledAt: 'Cancelled',
-      purgeAt: 'Purges',
-      deletedAt: 'Deleted',
-    },
-
-    /** (spec) Every write is omitted, not disabled — the graph forbids every edge out. */
-    purgedBanner: (when: string) =>
-      `This tenant’s data was purged on ${when}. Nothing here can be undone.`,
+    /**
+     * (spec) Above the header on a purged tenant. Every write is omitted rather
+     * than disabled — the graph forbids every edge out of `deleted` — and this is
+     * what says *why*, instead of leaving a screen with a neutral chip and a
+     * silently absent menu.
+     *
+     * The date is dropped when `purgeAt` is unknown, which is the ordinary case:
+     * the dates live on a write response this console may not have made. The
+     * sentence still lands without it.
+     */
+    purgedBannerHeading: 'This tenant’s data was purged',
+    purgedBannerBody: (when: string | null) =>
+      when === null
+        ? 'Nothing here can be undone.'
+        : `It was purged on ${when}. Nothing here can be undone.`,
 
     historyHeading: 'History',
     historyCaption: 'Tenant lifecycle events',
@@ -260,16 +272,23 @@ export const content = {
     /** `unattributed` is what the backfill wrote for pre-existing tenants. */
     backfilled: 'Backfilled',
     occurredAtLabel: 'Recorded',
-
-    /**
-     * Impersonation is in the reference and has no API. **Nothing renders a
-     * control**, disabled or otherwise — a disabled control is still a promise,
-     * and this one is a promise about crossing a tenant boundary (spec §2.10).
-     * The note is prose, not an affordance.
-     */
-    impersonateNotice:
-      'Impersonating a tenant user is in the design reference and is not built: there is no API behind it, and it needs its own audit and security review before there is.',
   },
+
+  /*
+   * Impersonation has no copy here at all, and that is the point.
+   *
+   * §2.10: nothing in this app renders an impersonate control, disabled or
+   * otherwise — a disabled control is still a promise, and this one is a promise
+   * about crossing a tenant boundary. A *notice* is not a control, but it was
+   * a second stacked quiet `Notice` inside the Lifecycle card, which is about
+   * status and dates; two info notices in one card is where a reader stops
+   * reading either.
+   *
+   * The note AC 8 asks for lives in `docs/reference/platform-admin-console.md`
+   * under "Deliberately not built", where the reader who needs it — somebody
+   * wondering why the reference shows a control this console does not — is
+   * actually looking.
+   */
 
   // --- The writes -----------------------------------------------------------
   writes: {
@@ -365,7 +384,16 @@ export const content = {
      * `replayedAt` is when the reset committed, not when it was reprocessed.
      */
     replayedNotice: 'Reset for reprocessing. The sweeper collects it within its next interval.',
+    /**
+     * (spec §2.9) The API's `404` and `409` are **`Field` errors**, not a
+     * form-level one: the operator is working a batch and the thing that is wrong
+     * is the id they just typed, so the message belongs beside the value it is
+     * about. `notFoundError` replaces the API's sentence for the one case where
+     * ours is no worse; the `409` is shown verbatim, because it names the status
+     * the event is really in and nothing this console could compose beats that.
+     */
     notFoundError: 'No stored webhook event has that id.',
+    logEmptyTitle: 'Nothing replayed yet',
 
     /**
      * (spec) An in-memory log of this tab's replays. An operator working a batch
@@ -423,6 +451,13 @@ export const content = {
   } satisfies Record<WebhookEventStatus, string>,
 
   errors: {
+    /**
+     * Appended to a message the API supplied a request id with. A field error
+     * has no slot of its own for one, and losing it would take away the thing
+     * that ties an operator's report to a log line.
+     */
+    withReference: (message: string, requestId: string) =>
+      message + ' Reference ' + requestId + '.',
     heading: 'Something went wrong',
     body: 'We could not load that. Try again in a moment.',
     retry: 'Try again',

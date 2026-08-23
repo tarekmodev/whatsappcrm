@@ -19,11 +19,18 @@ import { DomainQueueTableSkeleton } from './DomainQueueTable';
  *
  * The description is a placeholder, because the count genuinely is not known yet.
  */
-export function DomainQueueSectionSkeleton({ status }: { status: AdminDomainStatus }) {
+export function DomainQueueSectionSkeleton({
+  status,
+  isTitleVisible = true,
+}: {
+  status: AdminDomainStatus;
+  isTitleVisible?: boolean;
+}) {
   return (
     <SectionCard
       id="domain-queue"
       title={content.domains.queueHeading}
+      isTitleVisible={isTitleVisible}
       description={<SkeletonForText>{content.domains.count(6)}</SkeletonForText>}
     >
       <Stack gap="4">

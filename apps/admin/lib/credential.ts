@@ -66,7 +66,7 @@ export async function requireCredential(): Promise<string> {
  * ⚠️ Must be called **outside** a `try`, or the `catch` swallows the navigation.
  */
 export async function redirectToCredentialScreen(): Promise<never> {
-  redirect(routes.signIn({ redirectTo: await intendedPath() }), RedirectType.replace);
+  redirect(routes.credential({ redirectTo: await intendedPath() }), RedirectType.replace);
 }
 
 /**

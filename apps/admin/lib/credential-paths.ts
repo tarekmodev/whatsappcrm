@@ -44,5 +44,5 @@ export const CREDENTIAL_COOKIE_NAMES = [
  * renaming it cannot lock every operator out of the console.
  */
 export function isCredentialPath(pathname: string): boolean {
-  return pathname === routes.signIn();
+  return pathname === routes.credential();
 }

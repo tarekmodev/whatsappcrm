@@ -58,13 +58,13 @@ describe('parseRedirectPath', () => {
    * door they just came through would loop them.
    */
   it('refuses the credential screen itself', () => {
-    expect(parseRedirectPath('/sign-in', FALLBACK)).toBe(FALLBACK);
+    expect(parseRedirectPath('/credential', FALLBACK)).toBe(FALLBACK);
   });
 });
 
 describe('isCredentialPath', () => {
   it('lets the credential form through, or nobody could ever present one', () => {
-    expect(isCredentialPath(routes.signIn())).toBe(true);
+    expect(isCredentialPath(routes.credential())).toBe(true);
   });
 
   it.each([routes.tenants(), routes.domains(), routes.webhooks(), '/'])('gates %s', (pathname) => {

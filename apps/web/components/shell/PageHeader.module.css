@@ -22,3 +22,16 @@
 .action {
   flex: 0 0 auto;
 }
+
+/*
+ * A heading that is a machine identifier rather than a name — the operator
+ * console's tenant slug, which is what an operator pastes into psql next.
+ *
+ * Monospaced for the reason any identifier is: a proportional face makes `l`,
+ * `1` and `I` one shape, and this is a value somebody compares by eye against
+ * another window. It is a variant rather than a caller's class because a
+ * component styles its own internals (0001).
+ */
+.title[data-variant='identifier'] {
+  font-family: var(--font-family-mono);
+}

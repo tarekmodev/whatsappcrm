@@ -2,16 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   TENANT_STATUSES,
   type AdminTenantLifecycleEvent,
-  type AdminTenantLifecycleResponse,
   type TenantStatus,
 } from '@whatsappcrm/contracts';
 import {
   currentStatusOf,
-  knownDates,
   latestEventOf,
   tenantStatusTone,
   tenantWrites,
-  upcomingDate,
 } from './tenant-presentation';
 
 /**
@@ -30,24 +27,6 @@ function event(overrides: Partial<AdminTenantLifecycleEvent> = {}): AdminTenantL
     actorLabel: 'ops-alice',
     occurredAt: '2026-08-23T09:00:00.000Z',
     reason: 'fraud, card chargeback',
-    ...overrides,
-  };
-}
-
-function lifecycle(
-  overrides: Partial<AdminTenantLifecycleResponse> = {},
-): AdminTenantLifecycleResponse {
-  return {
-    id: '0192f00a-0000-7000-8000-00000000e001',
-    slug: 'northwind',
-    name: 'Northwind Support',
-    status: 'active',
-    trialEndsAt: null,
-    gracePeriodEndsAt: null,
-    suspendedAt: null,
-    cancelledAt: null,
-    purgeAt: null,
-    deletedAt: null,
     ...overrides,
   };
 }
@@ -131,55 +110,5 @@ describe('tenantWrites', () => {
    */
   it('does not offer reactivation on a trialing tenant, though the edge is legal', () => {
     expect(tenantWrites('trialing').canReactivate).toBe(false);
-  });
-});
-
-describe('upcomingDate', () => {
-  const NOW = Date.parse('2026-08-23T09:00:00.000Z');
-
-  it('shows nothing when there is no lifecycle read yet', () => {
-    expect(upcomingDate(null, NOW)).toBeNull();
-  });
-
-  /** Only while the date is in the future — a past deadline is history, not a chip. */
-  it('ignores a date that has already passed', () => {
-    expect(upcomingDate(lifecycle({ trialEndsAt: '2026-08-01T00:00:00.000Z' }), NOW)).toBeNull();
-  });
-
-  /**
-   * Most-actionable first, and **one** — 0001 budgets a detail header at two
-   * chips, one of which is the status. The others belong in the list below rather
-   * than competing for the glance.
-   */
-  it('ranks the trial ahead of the grace period and the purge', () => {
-    const upcoming = upcomingDate(
-      lifecycle({
-        trialEndsAt: '2026-09-01T00:00:00.000Z',
-        gracePeriodEndsAt: '2026-08-25T00:00:00.000Z',
-        purgeAt: '2026-10-01T00:00:00.000Z',
-      }),
-      NOW,
-    );
-
-    expect(upcoming?.kind).toBe('trialEndsAt');
-  });
-
-  it('falls through to the next date when the ranked one is absent', () => {
-    const upcoming = upcomingDate(lifecycle({ purgeAt: '2026-10-01T00:00:00.000Z' }), NOW);
-
-    expect(upcoming?.kind).toBe('purgeAt');
-  });
-});
-
-describe('knownDates', () => {
-  /** A null date renders no row — a list of "—" is a screen of absences. */
-  it('drops every date the response does not carry', () => {
-    expect(knownDates(lifecycle({ suspendedAt: '2026-08-20T00:00:00.000Z' }))).toEqual([
-      { kind: 'suspendedAt', at: '2026-08-20T00:00:00.000Z' },
-    ]);
-  });
-
-  it('is empty before any write has returned one', () => {
-    expect(knownDates(null)).toEqual([]);
   });
 });

@@ -148,7 +148,14 @@ export function DeleteTenantDialog({
                   autoCapitalize="off"
                   autoCorrect="off"
                   spellCheck={false}
-                  placeholder={slug}
+                  /*
+                   * **No placeholder.** It used to render the slug itself, which
+                   * put the exact string to type inside the box it must be typed
+                   * into — and removed the deliberateness that is the entire
+                   * justification for a type-to-confirm on the one action that
+                   * destroys customer data on a shortened clock. The label says
+                   * what to type, and the slug is in the `<h1>` behind the scrim.
+                   */
                   value={confirmation}
                   onChange={(event) => {
                     setConfirmation(event.target.value);

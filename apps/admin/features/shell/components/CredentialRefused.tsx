@@ -28,7 +28,7 @@ export function CredentialRefused() {
       title={content.credential.refusedMidSessionTitle}
       description={content.credential.refusedMidSessionBody}
       action={
-        <ButtonLink href={routes.signIn()} variant="primary">
+        <ButtonLink href={routes.credential()} variant="primary">
           {content.credential.refusedMidSessionAction}
         </ButtonLink>
       }
