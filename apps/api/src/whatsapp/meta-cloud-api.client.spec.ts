@@ -1115,6 +1115,75 @@ describe('MetaCloudApiClient', () => {
       });
     });
 
+    describe('registerPhoneNumber', () => {
+      const REGISTER = {
+        phoneNumberId: PHONE_NUMBER_ID,
+        accessToken: BUSINESS_TOKEN,
+        pin: '000042',
+      };
+
+      it("posts to the number's register edge with the messaging product and the PIN", async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { success: true }));
+
+        await expect(client.registerPhoneNumber(REGISTER)).resolves.toBeUndefined();
+
+        const [url, init] = callArgs();
+
+        expect(url.startsWith(`${BASE_URL}/${VERSION}/${PHONE_NUMBER_ID}/register`)).toBe(true);
+        expect(init.method).toBe('POST');
+        expect(init.headers).toMatchObject({ authorization: `Bearer ${BUSINESS_TOKEN}` });
+        expect(JSON.parse(init.body as string)).toEqual({
+          messaging_product: 'whatsapp',
+          // Leading zeros are significant, and a number type would make this 42.
+          pin: '000042',
+        });
+      });
+
+      it('keeps the PIN out of the query string, which is what a failure logs', async () => {
+        fetchMock.mockResolvedValue(metaResponds(200, { success: true }));
+
+        await client.registerPhoneNumber(REGISTER);
+
+        const [url] = callArgs();
+
+        expect(url).not.toContain('000042');
+      });
+
+      it('refuses to claim a registration Meta did not acknowledge', async () => {
+        // A number reported as registered that Meta did not accept is a number
+        // whose every send will fail, recorded as if it could send.
+        fetchMock.mockResolvedValue(metaResponds(200, { success: false }));
+
+        await expect(client.registerPhoneNumber(REGISTER)).rejects.toBeInstanceOf(
+          MetaUnavailableError,
+        );
+      });
+
+      it('leaves a refusal as a rejection for the caller to interpret', async () => {
+        // The client is a transport: what "Meta refused this number" means for
+        // the row is the registration service's decision, not this one's.
+        fetchMock.mockResolvedValue(
+          metaResponds(400, {
+            error: { message: 'Phone number already registered', code: 133_016 },
+          }),
+        );
+
+        await expect(client.registerPhoneNumber(REGISTER)).rejects.toBeInstanceOf(
+          MetaRequestRejectedError,
+        );
+      });
+
+      it('reports a rejected token as an authentication failure', async () => {
+        fetchMock.mockResolvedValue(
+          metaResponds(401, { error: { message: 'Invalid OAuth access token', code: 190 } }),
+        );
+
+        await expect(client.registerPhoneNumber(REGISTER)).rejects.toBeInstanceOf(
+          MetaAuthenticationError,
+        );
+      });
+    });
+
     describe('appsecret_proof', () => {
       it.each([
         [
@@ -1128,6 +1197,15 @@ describe('MetaCloudApiClient', () => {
         [
           'subscribeApp',
           () => client.subscribeApp({ wabaId: WABA_ID, accessToken: BUSINESS_TOKEN }),
+        ],
+        [
+          'registerPhoneNumber',
+          () =>
+            client.registerPhoneNumber({
+              phoneNumberId: PHONE_NUMBER_ID,
+              accessToken: BUSINESS_TOKEN,
+              pin: '000042',
+            }),
         ],
       ])('proves the app secret on %s, which Meta may require', async (_name, call) => {
         // Meta accepts the proof whether or not "Require App Secret" is on, and

@@ -145,6 +145,22 @@ export const AUDIT_ACTIONS = {
    */
   whatsappBusinessAccountConnected: 'whatsapp.business_account.connected',
   /**
+   * A phone number registered for Cloud API sending, and the attempt that failed
+   * (TAR-170). Registration sends a credential this platform generated to Meta
+   * and is what makes a number able to message a business's customers, so both
+   * outcomes are audited — the failure especially, because a number that
+   * silently cannot send is the state that story exists to make visible.
+   *
+   * The metadata carries the phone number id, the WABA id, whether this was the
+   * initial attempt or a retry, the published reason, and Meta's own numeric
+   * code and `fbtrace_id` — the handle a support ticket with Meta is opened on.
+   * **Never the PIN**, encrypted or not, and never Meta's free-text message,
+   * which describes this app's grant and this app's configuration rather than
+   * anything a tenant can act on.
+   */
+  whatsappPhoneNumberRegistered: 'whatsapp.phone_number.registered',
+  whatsappPhoneNumberRegistrationFailed: 'whatsapp.phone_number.registration_failed',
+  /**
    * The custom-domain lifecycle (TAR-29). Audited because a verified hostname
    * decides where invite and password-reset links are **mailed** —
    * `TenantLinkService.primaryHostname()` builds them from the primary domain —

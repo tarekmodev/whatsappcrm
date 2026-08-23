@@ -633,6 +633,10 @@ POST   /api/v1/whatsapp/business-accounts    → ConnectedWhatsAppBusinessAccoun
 GET    /api/v1/whatsapp/message-templates    → CursorPage<MessageTemplateAdminResponse>
                                                                       channel:manage
                                                                       added by amendment 8
+POST   /api/v1/whatsapp/phone-numbers/{whatsappAccountId}/registration
+                                             → WhatsAppPhoneNumberRegistrationResponse
+                                                                      channel:manage · 200
+                                                                      added by amendment 12
 
 # Tickets                                                                 TAR-21/25/32
 GET    /api/v1/tickets                       → CursorPage<TicketResponse>  ticket:read
@@ -2048,3 +2052,109 @@ the host. Any cache in front of them, at the edge or in the web tier's `fetch`, 
 the hostname in its key. A cache keyed on the URL alone is a direct cross-tenant leak. v1
 does not cache: `HostTenantGuard`'s own "not cached, deliberately" rule applies for the same
 reason, and TAR-41's Redis is where a keyed cache with an invalidation path can be added.
+
+### Amendment 12 — phone-number registration and its PIN (TAR-170)
+
+Amendment 2 connected a WABA and deferred one Cloud API call, and the gap it left is the
+one a tenant notices first: a number connected through Embedded Signup **receives and
+cannot send**. Cloud API requires `POST /{phone-number-id}/register` with
+`messaging_product: whatsapp` and a six-digit `pin` before a number may send. Tarek ruled on
+2026-08-22 that the platform generates and stores that PIN, encrypted at rest exactly as the
+access token is.
+
+**The PIN has to be durable before it reaches Meta, and that is what decides the call site.**
+Every other Meta call in the signup flow happens _before_ the transaction, precisely so a
+failure leaves no row and no stored credential. Registration cannot follow that rule: it
+sends a credential this platform invented, so a register that succeeded against a commit
+that then failed would strand a secret on Meta's side that nobody here can reproduce. So it
+runs as a synchronous follow-up step **after** `connect()` commits, in the same request —
+not inside the transaction, which would hold a Postgres connection and a WABA-wide advisory
+lock at the mercy of `META_GRAPH_API_TIMEOUT_MS`, and not in a queue, because the tenant is
+standing in the console watching the connection finish and seeing the outcome is the point.
+
+**Registration never fails the connection.** The endpoint still answers `201`/`200` with
+`ConnectedWhatsAppBusinessAccountResponse`; the outcome rides in four new per-number fields.
+A number that could not be registered still receives, and the tenant keeps a working inbound
+channel with a stated reason against the number — a far better trade than discarding the
+connection over a failure that is usually transient and always retryable. Numbers are
+attempted in order, and a `rate_limited` or `upstream_unavailable` stops the whole step:
+both mean Meta is not answering, so continuing spends the rest of the request finding that
+out again. A per-number refusal does not stop it. The operator paste-token path registers
+nothing — the same argument amendment 2 made for the webhook subscription — so its rows land
+`unregistered` and the retry route is how they become sendable.
+
+**A second axis, not a wider `status`.** `whatsapp_accounts` gains
+`registration_status` (`unregistered | pending | registered | failed`),
+`registration_pin_encrypted`, `registration_failure_reason`, `registered_at` and
+`registration_attempted_at`. `WhatsappAccountStatus` keeps its meaning: a number can be
+`connected` and `unregistered` at once, and one enum cannot say that. `unregistered` and
+`failed` are kept apart because the default for a row that predates this must not read as a
+Meta rejection that never happened.
+
+**The PIN is a credential of the same class as the access token**: same AES-256-GCM
+construction, same `WHATSAPP_TOKEN_ENCRYPTION_KEY`, same `v1.<iv>.<tag>.<ciphertext>`
+payload. Its AAD is the **`phone_number_id`**, not the `waba_id`, because two numbers under
+one WABA are registered independently and a PIN moved between them must fail to
+authenticate — which is why `WhatsAppAccessTokenCipher` is now `WhatsAppCredentialCipher`
+and its parameter is `boundTo`. The PIN is read back only to re-register, appears in no
+response schema, no log line and no audit row, and one projection in the codebase selects
+its column. An undecryptable PIN is treated as no PIN: a fresh one is generated and
+registration proceeds, because `WhatsAppTokenUndecryptableError`'s "re-connect the business
+account" is the repair for the token and not for this.
+
+**Retry is a second caller, not a second implementation.**
+
+```
+POST   /api/v1/whatsapp/phone-numbers/{whatsappAccountId}/registration
+                                          → WhatsAppPhoneNumberRegistrationResponse
+                                                                   channel:manage · 200
+```
+
+`{whatsappAccountId}` is **our** uuid — what the connect response publishes as
+`accounts[].id` — so tenant isolation makes another tenant's id absent rather than
+forbidden, and the answer is `not_found`. No body and no `Idempotency-Key`: there is no
+spent code to protect, and the operation is idempotent by construction — the same stored PIN
+reused, and a number that already reads `registered` short-circuits before Meta is touched.
+
+**A registration failure answers `200`, not `4xx`/`5xx`.** The call did what it was asked and
+the outcome rides in `registrationFailureReason`. This is forced rather than stylistic: on
+the first attempt the failure _cannot_ be an error envelope, because the connection succeeded
+and the response is the connection, so using one on retry would make the console parse the
+same fact two ways. `rate_limited` and `upstream_unavailable` therefore appear as reasons in
+a `200` body rather than as the platform error codes of the same name — a deliberate
+departure, confined to this field.
+
+The vocabulary is `already_registered`, `pin_rejected`, `credential_rejected`,
+`rate_limited`, `upstream_unavailable`, `rejected`, published in `whatsapp.ts` because it
+travels in a resource body. `MetaAuthenticationError` → `credential_rejected`,
+`MetaRateLimitedError` → `rate_limited`, `MetaUnavailableError` → `upstream_unavailable`, and
+**every `MetaRequestRejectedError` → `rejected`** until Meta's numeric codes for
+already-registered and PIN-mismatch are confirmed against a live app. That is fail-honest: an
+unmapped rejection recorded as `rejected` sends someone to the audit row, where Meta's code
+and `fbtrace_id` are; guessing `pin_rejected` would send them to reset a PIN that was never
+the problem. `already_registered` is still written — by the local short-circuit, from state
+this platform holds. A reason read back that this build does not model reads as `rejected`,
+so a rollback across an addition to the vocabulary is a display change, not a parse failure.
+
+**Concurrency.** Each attempt takes `pg_advisory_xact_lock` in its own
+`whatsapp-registration:` namespace, claims the row as `pending`, commits, calls Meta, and
+writes the outcome **only while the row still reads `pending`**. The lease on
+`registration_attempted_at` — one `META_GRAPH_API_TIMEOUT_MS` — is what distinguishes an
+attempt in flight from one that died, and the compare-and-set is what stops a slow loser
+downgrading a `registered` row to `failed`. A registration that succeeded but whose outcome
+write was lost leaves the row `pending` and the number able to send; the next retry
+re-registers with the **same** PIN, which is why reuse is a hard requirement rather than a
+convenience.
+
+**Audited both ways.** `whatsapp.phone_number.registered` and
+`whatsapp.phone_number.registration_failed`, with `targetType: 'whatsapp_account'` and
+metadata carrying the phone number id, the WABA id, whether it was the initial attempt or a
+retry, the published reason, and Meta's numeric code and `fbtrace_id`. Never the PIN, and
+never Meta's free-text message.
+
+**Open, and verified at implementation time rather than asserted here:** Meta's numeric codes
+for already-registered and PIN-mismatch (until then, `rejected`); whether re-registering an
+already-registered number under a _different_ PIN succeeds, which decides whether the
+undecryptable-PIN path recovers or only fails more clearly; and whether `appsecret_proof` is
+accepted on this endpoint, which registration inherits from amendment 2's open item rather
+than adding.

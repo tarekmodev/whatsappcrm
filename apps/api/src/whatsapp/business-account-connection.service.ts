@@ -9,7 +9,7 @@ import { TenantContextService } from '../common/tenant-context/tenant-context.se
 import type { Prisma } from '../generated/prisma/client';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
 import { isUniqueViolationOn } from '../prisma/unique-violation';
-import { WhatsAppAccessTokenCipher } from './access-token.cipher';
+import { WhatsAppCredentialCipher } from './whatsapp-credential.cipher';
 import { WhatsAppIdentityTakenError } from './whatsapp.errors';
 
 /**
@@ -48,6 +48,14 @@ const WABA_PROJECTION = {
   updatedAt: true,
 } as const;
 
+/**
+ * The columns a connected number's response is built from.
+ *
+ * It widened by the four registration fields when TAR-170 landed, and by four
+ * only: `registration_pin_encrypted` is **not** among them and must not be. The
+ * PIN is a credential of the same class as the access token, and this projection
+ * feeds a response mapper — the one place it could escape from.
+ */
 const ACCOUNT_PROJECTION = {
   id: true,
   whatsappBusinessAccountId: true,
@@ -56,6 +64,10 @@ const ACCOUNT_PROJECTION = {
   verifiedName: true,
   qualityRating: true,
   status: true,
+  registrationStatus: true,
+  registrationFailureReason: true,
+  registeredAt: true,
+  registrationAttemptedAt: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -117,7 +129,7 @@ export class WhatsAppBusinessAccountConnectionService {
   constructor(
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
     private readonly tenantContext: TenantContextService,
-    private readonly cipher: WhatsAppAccessTokenCipher,
+    private readonly cipher: WhatsAppCredentialCipher,
     private readonly audit: AuditService,
   ) {}
 

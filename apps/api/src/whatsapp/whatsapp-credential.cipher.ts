@@ -22,10 +22,12 @@ const VERSION = 'v1';
 const SEPARATOR = '.';
 
 /**
- * Encrypts the per-WABA access token at rest (TAR-39, security). It is the most
- * sensitive column in the schema: it authorises sending WhatsApp messages as the
- * customer's own business, so a leak is a leak of their brand rather than of
- * ours.
+ * Encrypts the WhatsApp channel's stored credentials at rest (TAR-39,
+ * security): the per-WABA access token, which authorises sending messages as
+ * the customer's own business, and the per-number registration PIN (TAR-170),
+ * which is what re-registering a number for sending needs. Both are secrets
+ * this platform holds on a customer's behalf, and a leak of either is a leak of
+ * their brand rather than of ours.
  *
  * ## The construction
  *
@@ -47,12 +49,19 @@ const SEPARATOR = '.';
  *
  * ## Additional authenticated data
  *
- * Every payload is bound to the WABA it belongs to by passing Meta's `waba_id`
- * as AAD. That closes something the encryption alone does not: anyone with write
- * access to the database — a compromised support tool, a careless backup restore
- * — could otherwise copy one tenant's ciphertext into another tenant's row and
- * have the platform send messages with a credential it was never given. With the
- * id bound in, that row simply fails to decrypt.
+ * Every payload is bound to the row it belongs to by passing that row's Meta id
+ * as AAD — `waba_id` for an access token, which lives on the WABA, and
+ * `phone_number_id` for a registration PIN, which lives on the number. That
+ * closes something the encryption alone does not: anyone with write access to
+ * the database — a compromised support tool, a careless backup restore — could
+ * otherwise copy one tenant's ciphertext into another tenant's row and have the
+ * platform send messages with a credential it was never given. With the id bound
+ * in, that row simply fails to decrypt.
+ *
+ * The binding is per **row**, not per business account, which is why the
+ * parameter is `boundTo` rather than a WABA id: two numbers under one WABA are
+ * registered independently and hold independent PINs, so a PIN moved between
+ * them must fail to decrypt just as a token moved between tenants does.
  *
  * ## What it deliberately does not do
  *
@@ -65,25 +74,26 @@ const SEPARATOR = '.';
  *     CSPRNG. Stretching a high-entropy secret buys nothing.
  */
 @Injectable()
-export class WhatsAppAccessTokenCipher {
+export class WhatsAppCredentialCipher {
   constructor(private readonly config: ConfigService) {}
 
-  /** True when this environment can store and read tokens at all. */
+  /** True when this environment can store and read credentials at all. */
   get isConfigured(): boolean {
     return this.config.get<string>('WHATSAPP_TOKEN_ENCRYPTION_KEY') !== undefined;
   }
 
   /**
-   * `wabaId` is Meta's id for the business account this token belongs to. It is
-   * the additional authenticated data — authenticated but not encrypted — and
-   * the same value must be supplied on the way back out. See the note above for
+   * `boundTo` is Meta's id for the row this credential belongs to — `waba_id`
+   * for an access token, `phone_number_id` for a registration PIN. It is the
+   * additional authenticated data — authenticated but not encrypted — and the
+   * same value must be supplied on the way back out. See the note above for
    * what that binding buys.
    */
-  encrypt(plaintext: string, wabaId: string): string {
+  encrypt(plaintext: string, boundTo: string): string {
     const iv = randomBytes(IV_BYTES);
     const cipher = createCipheriv('aes-256-gcm', this.key(), iv, { authTagLength: TAG_BYTES });
 
-    cipher.setAAD(Buffer.from(wabaId, 'utf8'));
+    cipher.setAAD(Buffer.from(boundTo, 'utf8'));
 
     const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
 
@@ -105,11 +115,11 @@ export class WhatsAppAccessTokenCipher {
    * handed an oracle, and none of the three implies a different action for an
    * operator: re-connect the WABA.
    */
-  decrypt(payload: string, wabaId: string): string {
+  decrypt(payload: string, boundTo: string): string {
     const parts = payload.split(SEPARATOR);
 
     if (parts.length !== 4 || parts[0] !== VERSION) {
-      throw new WhatsAppTokenUndecryptableError(wabaId);
+      throw new WhatsAppTokenUndecryptableError(boundTo);
     }
 
     const [, iv, tag, ciphertext] = parts as [string, string, string, string];
@@ -119,7 +129,7 @@ export class WhatsAppAccessTokenCipher {
         authTagLength: TAG_BYTES,
       });
 
-      decipher.setAAD(Buffer.from(wabaId, 'utf8'));
+      decipher.setAAD(Buffer.from(boundTo, 'utf8'));
       decipher.setAuthTag(Buffer.from(tag, 'base64url'));
 
       return Buffer.concat([
@@ -133,7 +143,7 @@ export class WhatsAppAccessTokenCipher {
         throw error;
       }
 
-      throw new WhatsAppTokenUndecryptableError(wabaId);
+      throw new WhatsAppTokenUndecryptableError(boundTo);
     }
   }
 

@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ApiExceptionFilter } from '../common/errors/api-exception.filter';
 import { PlatformAdminGuard } from '../tenancy/admin/platform-admin.guard';
 import { TenancyModule } from '../tenancy/tenancy.module';
-import { WhatsAppAccessTokenCipher } from './access-token.cipher';
+import { WhatsAppCredentialCipher } from './whatsapp-credential.cipher';
 import { AdminWhatsAppController } from './admin/admin-whatsapp.controller';
 import { WhatsAppBusinessAccountConnectionService } from './business-account-connection.service';
 import { WhatsAppBusinessAccountsController } from './business-accounts.controller';
@@ -13,6 +13,8 @@ import { MessageTemplateQueryService } from './message-template-query.service';
 import { MessageTemplateSyncService } from './message-template-sync.service';
 import { MessageTemplatesController } from './message-templates.controller';
 import { MetaCloudApiClient } from './meta-cloud-api.client';
+import { WhatsAppPhoneNumberRegistrationController } from './phone-number-registration.controller';
+import { WhatsAppPhoneNumberRegistrationService } from './phone-number-registration.service';
 import { WhatsAppCredentialResolver } from './whatsapp-credential.resolver';
 import { WhatsAppMediaService } from './whatsapp-media.service';
 import { WhatsAppSenderService } from './whatsapp-sender.service';
@@ -50,9 +52,17 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
  * projection, the ordering and cursor, the component derivation, the exclusion
  * predicate — is shared as a module, so the split duplicates no behaviour.
  *
- * `WhatsAppAccessTokenCipher` and `WhatsAppCredentialResolver` stay **private**.
+ * `WhatsAppCredentialCipher` and `WhatsAppCredentialResolver` stay **private**.
  * They are the only two places a Meta access token is encrypted or decrypted,
  * and the value of that property is entirely in nobody else being able to.
+ *
+ * `WhatsAppPhoneNumberRegistrationService` stays **private** for the same
+ * reason (TAR-170). It is the only place the registration PIN is generated,
+ * encrypted, read back or sent to Meta, and it has exactly two callers — the
+ * signup flow, which registers automatically, and
+ * `WhatsAppPhoneNumberRegistrationController`, which retries. Both are in this
+ * module, and a third caller from outside it would be a second place a
+ * credential this platform invented could be handled.
  *
  * ## Layering
  *
@@ -76,15 +86,17 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
   controllers: [
     AdminWhatsAppController,
     WhatsAppBusinessAccountsController,
+    WhatsAppPhoneNumberRegistrationController,
     MessageTemplatesController,
     MessageTemplateAdministrationController,
   ],
   providers: [
-    WhatsAppAccessTokenCipher,
+    WhatsAppCredentialCipher,
     WhatsAppCredentialResolver,
     MetaCloudApiClient,
     WhatsAppBusinessAccountConnectionService,
     WhatsAppEmbeddedSignupService,
+    WhatsAppPhoneNumberRegistrationService,
     MessageTemplateSyncService,
     MessageTemplateQueryService,
     MessageTemplateAdministrationService,

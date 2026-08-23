@@ -67,6 +67,67 @@ export const WhatsAppQualityRatingSchema = z.enum(WHATSAPP_QUALITY_RATINGS);
 export const WHATSAPP_ACCOUNT_STATUSES = ['connected', 'disconnected', 'error'] as const;
 export const WhatsAppAccountStatusSchema = z.enum(WHATSAPP_ACCOUNT_STATUSES);
 
+/**
+ * Whether a number may **send**, which registration is what decides.
+ *
+ * A deliberate second axis to `WhatsAppAccountStatusSchema`: a number can be
+ * `connected` (attached, receiving inbound messages) and `unregistered` (unable
+ * to send a single one) at the same time, and one enum cannot say that. Cloud
+ * API requires `POST /{phone-number-id}/register` before a number may send, and
+ * a number that never got it receives normally and refuses every send — the
+ * silent-inbox failure this axis exists to make visible (TAR-170, 0002
+ * amendment 12).
+ *
+ *   * `unregistered` — never attempted. Every number connected before this
+ *     shipped, and every number attached through the operator paste-token path.
+ *   * `pending` — an attempt is in flight, or one died without an answer.
+ *   * `registered` — Meta accepted it. The number may send.
+ *   * `failed` — Meta answered and refused. `registrationFailureReason` says why.
+ *
+ * `unregistered` and `failed` are kept apart because the default for a
+ * pre-existing row must not read as a Meta rejection that never happened, and
+ * the console's copy for the two differs: "set up sending" against "sending
+ * failed: …".
+ */
+export const WHATSAPP_REGISTRATION_STATUSES = [
+  'unregistered',
+  'pending',
+  'registered',
+  'failed',
+] as const;
+export const WhatsAppRegistrationStatusSchema = z.enum(WHATSAPP_REGISTRATION_STATUSES);
+
+/**
+ * Why the last registration attempt did not leave the number able to send.
+ *
+ * Published here rather than in `error-codes.ts` because these travel in a
+ * resource body, not in an error envelope: a failed registration answers `200`
+ * on both the connect route and the retry route, carrying the outcome as a
+ * field. One vocabulary, one parser, and the same six strings whether the
+ * failure happened on the first attempt or on a retry (0002, amendment 12).
+ *
+ * A value read back from storage that this build does not recognise is reported
+ * as `rejected` — the same fail-honest rule the Meta client applies to statuses
+ * it does not model, and what makes a rollback across an addition here safe.
+ */
+export const WHATSAPP_REGISTRATION_FAILURE_REASONS = [
+  /** Registered already, by us or elsewhere. Nothing to do, or a support conversation. */
+  'already_registered',
+  /** Meta refused the PIN — the number carries a two-step-verification PIN we do not hold. */
+  'pin_rejected',
+  /** The stored access token is expired, revoked, or lacks the permission. Re-connect the WABA. */
+  'credential_rejected',
+  /** Meta is throttling us. The number is unchanged; retry later. */
+  'rate_limited',
+  /** Meta did not answer usefully — timeout, 5xx, unparseable body. Retry later. */
+  'upstream_unavailable',
+  /** Meta answered and refused for a reason this build does not model. */
+  'rejected',
+] as const;
+export const WhatsAppRegistrationFailureReasonSchema = z.enum(
+  WHATSAPP_REGISTRATION_FAILURE_REASONS,
+);
+
 /** One connected phone number, child of a WABA. */
 export const WhatsAppAccountResponseSchema = z.object({
   id: IdSchema,
@@ -83,6 +144,22 @@ export const WhatsAppAccountResponseSchema = z.object({
   verifiedName: z.string().nullable(),
   qualityRating: WhatsAppQualityRatingSchema.nullable(),
   status: WhatsAppAccountStatusSchema,
+  /**
+   * Whether this number may send, and why not when it may not. Four fields
+   * rather than one because "never attempted" and "Meta refused, here is the
+   * reason, at this time" are different facts and the console acts on each of
+   * them differently (0002, amendment 12).
+   *
+   * **No PIN field, here or anywhere.** The registration PIN is a credential of
+   * the same class as the access token: encrypted at rest, read back only to
+   * re-register, and published by nothing. `contract.test.ts` asserts it.
+   */
+  registrationStatus: WhatsAppRegistrationStatusSchema,
+  registrationFailureReason: WhatsAppRegistrationFailureReasonSchema.nullable(),
+  /** When Meta last accepted this number. Set on every success, never cleared. */
+  registeredAt: TimestampSchema.nullable(),
+  /** When an attempt last started, successful or not. */
+  registrationAttemptedAt: TimestampSchema.nullable(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });
@@ -364,6 +441,51 @@ export const ConnectedWhatsAppBusinessAccountResponseSchema =
     accounts: z.array(WhatsAppAccountResponseSchema),
   });
 
+/** Names one connected phone number by **our** id — never Meta's. */
+export const WhatsAppPhoneNumberParamsSchema = z.object({
+  whatsappAccountId: IdSchema,
+});
+
+/**
+ * `POST /api/v1/whatsapp/phone-numbers/{whatsappAccountId}/registration` — try
+ * registering this number for sending again (TAR-170, 0002 amendment 12).
+ *
+ * The id is the one the connect response already published as `accounts[].id`,
+ * not Meta's `phone_number_id`: tenant isolation makes another tenant's id
+ * indistinguishable from absent, so it answers `not_found` rather than
+ * `forbidden`. It is not nested under the WABA, because a number names exactly
+ * one business account and the send path already resolves it that way.
+ *
+ * No request body, and no `Idempotency-Key`. Unlike the connect endpoint there
+ * is no spent code to protect, and the operation is idempotent by construction:
+ * the same stored PIN, the same Meta call, and a number that already reads
+ * `registered` short-circuits before Meta is touched.
+ *
+ * ## A registration failure answers 200
+ *
+ * Not `4xx`/`5xx`. The call did what it was asked — it attempted registration
+ * and recorded the outcome — and the outcome rides in
+ * `registrationFailureReason`. This is forced rather than stylistic: on the
+ * first attempt the failure *cannot* be an error envelope, because the
+ * connection succeeded and the response is the connection. Using one here would
+ * make the console parse the same fact two ways. `rate_limited` and
+ * `upstream_unavailable` therefore appear as reasons in a `200` body rather
+ * than as the platform error codes of the same name — a deliberate departure,
+ * confined to this field.
+ *
+ * Genuine errors are still errors: `not_found` for an id that names nothing
+ * reachable, `forbidden` without `channel:manage`, `tenant_inactive` for a
+ * deactivated tenant.
+ */
+export const WhatsAppPhoneNumberRegistrationResponseSchema = z.object({
+  whatsappAccountId: IdSchema,
+  phoneNumberId: MetaPhoneNumberIdSchema,
+  registrationStatus: WhatsAppRegistrationStatusSchema,
+  registrationFailureReason: WhatsAppRegistrationFailureReasonSchema.nullable(),
+  registeredAt: TimestampSchema.nullable(),
+  registrationAttemptedAt: TimestampSchema.nullable(),
+});
+
 /**
  * `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts/{wabaId}/template-sync`
  * — pull this WABA's templates from Meta and reconcile them.
@@ -561,6 +683,14 @@ export type WhatsAppBusinessVerificationStatus = z.infer<
 export type WhatsAppBusinessAccountResponse = z.infer<typeof WhatsAppBusinessAccountResponseSchema>;
 export type WhatsAppQualityRating = z.infer<typeof WhatsAppQualityRatingSchema>;
 export type WhatsAppAccountStatus = z.infer<typeof WhatsAppAccountStatusSchema>;
+export type WhatsAppRegistrationStatus = z.infer<typeof WhatsAppRegistrationStatusSchema>;
+export type WhatsAppRegistrationFailureReason = z.infer<
+  typeof WhatsAppRegistrationFailureReasonSchema
+>;
+export type WhatsAppPhoneNumberParams = z.infer<typeof WhatsAppPhoneNumberParamsSchema>;
+export type WhatsAppPhoneNumberRegistrationResponse = z.infer<
+  typeof WhatsAppPhoneNumberRegistrationResponseSchema
+>;
 export type WhatsAppAccountResponse = z.infer<typeof WhatsAppAccountResponseSchema>;
 export type MessageTemplateStatus = z.infer<typeof MessageTemplateStatusSchema>;
 export type MessageTemplateHeaderFormat = z.infer<typeof MessageTemplateHeaderFormatSchema>;

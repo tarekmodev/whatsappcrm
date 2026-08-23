@@ -307,6 +307,16 @@ export interface SubscribeAppCommand {
   accessToken: string;
 }
 
+export interface RegisterPhoneNumberCommand {
+  phoneNumberId: string;
+  accessToken: string;
+  /**
+   * Six digits as a **string**: leading zeros are significant, and `000042` in a
+   * number type would silently become `42` and be refused by Meta.
+   */
+  pin: string;
+}
+
 /**
  * Meta's CDN hosts that a media URL may point at.
  *
@@ -674,6 +684,54 @@ export class MetaCloudApiClient {
       // subscription we cannot claim was made, and claiming it is how a tenant
       // ends up with a connected WABA and a silent inbox.
       throw new MetaUnavailableError(200, null, 'the app subscription was not acknowledged');
+    }
+  }
+
+  /**
+   * Registers one phone number for Cloud API use, which is what makes it able to
+   * **send** (TAR-170, 0002 amendment 12).
+   *
+   * A number that was never registered receives normally and refuses every send,
+   * which is why this is part of connecting rather than a setting somebody finds
+   * later.
+   *
+   * Returns nothing: Meta answers `{ "success": true }` and there is no id to
+   * carry. A 200 saying anything else is a registration this platform cannot
+   * claim was made, and claiming it is how a tenant ends up believing a number
+   * can send when it cannot — the same reasoning as `subscribeApp` above.
+   *
+   * **The PIN goes in the JSON body, never in the query string.** `path` and the
+   * query are split in `request()` precisely so a failure's log line cannot
+   * carry a secret, and `classify()` logs `path`.
+   *
+   * No new error class: the four this client already raises are the vocabulary,
+   * and `classify()` maps this call exactly as it maps every other. What a
+   * rejection *means for the row* is the registration service's decision, not
+   * this transport's.
+   */
+  async registerPhoneNumber(command: RegisterPhoneNumberCommand): Promise<void> {
+    const payload = await this.request(
+      `${command.phoneNumberId}/register`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messaging_product: 'whatsapp', pin: command.pin }),
+      },
+      {
+        accessToken: command.accessToken,
+        // Signed for the same reason the three signup calls above are: this runs
+        // on the business integration system user token, and the proof verifies
+        // whether or not the app is configured to require it.
+        query: this.signed(command.accessToken, {}),
+      },
+    );
+
+    if (asRecord(payload)?.success !== true) {
+      throw new MetaUnavailableError(
+        200,
+        null,
+        'the phone number registration was not acknowledged',
+      );
     }
   }
 

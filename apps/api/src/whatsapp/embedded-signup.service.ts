@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PhoneE164Schema } from '@whatsappcrm/contracts';
+import { PhoneE164Schema, type WhatsAppRegistrationFailureReason } from '@whatsappcrm/contracts';
 import {
   WhatsAppBusinessAccountConnectionService,
   type ConnectBusinessAccountResult,
@@ -7,6 +7,10 @@ import {
 } from './business-account-connection.service';
 import { MetaCloudApiClient, type MetaPhoneNumber } from './meta-cloud-api.client';
 import { MetaAuthenticationError, MetaRequestRejectedError } from './meta-cloud-api.errors';
+import {
+  WhatsAppPhoneNumberRegistrationService,
+  type NumberRegistrationState,
+} from './phone-number-registration.service';
 import { WhatsAppSignupFailedError } from './whatsapp.errors';
 
 /**
@@ -16,6 +20,16 @@ import { WhatsAppSignupFailedError } from './whatsapp.errors';
  * the one case where re-running the flow faster is the fix.
  */
 const CODE_EXPIRED_SUBCODE = 36007;
+
+/**
+ * The two registration failures that say "Meta is not answering us right now"
+ * rather than "Meta refused this number". Continuing past either spends the rest
+ * of the request on calls that will fail the same way.
+ */
+const STOPS_THE_LOOP: ReadonlySet<WhatsAppRegistrationFailureReason> = new Set([
+  'rate_limited',
+  'upstream_unavailable',
+]);
 
 /**
  * Which Meta call failed, which is what decides the published reason. Every
@@ -38,10 +52,16 @@ export interface ConnectViaEmbeddedSignupCommand {
  *
  * Exchange the code, read the WABA back with the token it produced, list that
  * WABA's numbers, subscribe this app to its webhooks — and only then open the
- * transaction. Every Meta call happens **before**
+ * transaction. Every Meta call that can fail the connection happens **before**
  * `WhatsAppBusinessAccountConnectionService.connect()` is entered, so a failure
  * at any of them leaves no WABA row and no stored credential to clean up: there
  * was never a transaction to leave one in.
+ *
+ * Registration is the one exception, and it is on the other side of the
+ * transaction for a reason `registerForSending` sets out below: it is the only
+ * call that sends Meta a credential this platform invented, so that credential
+ * has to be durable before it goes. It also cannot fail the connection, which is
+ * what keeps the "before the transaction" rule meaningful for everything else.
  *
  * `connect()` itself is untouched by this path. Its advisory lock, its
  * encryption, its audit row and its idempotency on `wabaId` are the same ones
@@ -77,6 +97,7 @@ export class WhatsAppEmbeddedSignupService {
   constructor(
     private readonly meta: MetaCloudApiClient,
     private readonly connection: WhatsAppBusinessAccountConnectionService,
+    private readonly registration: WhatsAppPhoneNumberRegistrationService,
   ) {}
 
   async connect(command: ConnectViaEmbeddedSignupCommand): Promise<ConnectBusinessAccountResult> {
@@ -143,13 +164,135 @@ export class WhatsAppEmbeddedSignupService {
 
     // From here on the request is a connection like any other, and the service
     // that owns it does not learn that a signup produced it.
-    return this.connection.connect({
+    const connected = await this.connection.connect({
       wabaId: account.wabaId,
       name: account.name ?? undefined,
       accessToken: token.accessToken,
       verificationStatus: account.verificationStatus ?? undefined,
       phoneNumbers,
     });
+
+    return this.registerForSending(connected, token.accessToken);
+  }
+
+  /**
+   * Registers every number this connection attached, so a tenant who has just
+   * finished Embedded Signup can send without doing anything else (TAR-170,
+   * 0002 amendment 12).
+   *
+   * ## Why this one Meta call is after the transaction
+   *
+   * Every other call in this flow happens before `connect()` precisely so a
+   * failure leaves no row and no stored credential. Registration cannot follow
+   * that rule, because it sends a credential this platform *invents*: if it
+   * succeeded and the commit then failed, Meta would hold a PIN nobody else has,
+   * and the number would be registered under a secret this platform cannot
+   * reproduce. So the PIN has to be durable before it reaches Meta, which puts
+   * this call on the other side of the transaction from all the others.
+   *
+   * It is not in a queue either. The tenant is standing in the console watching
+   * the connection complete, and being able to see the outcome is the entire
+   * point of the status field.
+   *
+   * ## Registration never fails the request
+   *
+   * The connection succeeded. A number that could not be registered can still
+   * receive, and the tenant keeps a working inbound channel with "sending
+   * unavailable" against the number and a reason they can act on — which is a
+   * far better answer than discarding the connection over a failure that is
+   * usually transient and always retryable. Nothing thrown below reaches the
+   * caller.
+   *
+   * ## Why a throttle or an outage stops the loop
+   *
+   * Both mean Meta is not answering right now, so continuing spends what is left
+   * of the request on calls that will fail identically. Numbers not reached stay
+   * `unregistered` and are retryable from the console. A per-number refusal is
+   * different — Meta answered, quickly, about that number — so the loop carries
+   * on. The list is already bounded at 20 by the connection input schema.
+   */
+  private async registerForSending(
+    connected: ConnectBusinessAccountResult,
+    accessToken: string,
+  ): Promise<ConnectBusinessAccountResult> {
+    const states = new Map<string, NumberRegistrationState>();
+
+    for (const number of connected.businessAccount.accounts) {
+      const state = await this.registerOne(number.id, number.phoneNumberId, accessToken);
+
+      if (state === null) {
+        break;
+      }
+
+      states.set(number.id, state);
+
+      if (
+        state.registrationFailureReason !== null &&
+        STOPS_THE_LOOP.has(state.registrationFailureReason)
+      ) {
+        this.logger.warn(
+          `Registration stopped after phone number ${number.phoneNumberId} reported ` +
+            `${state.registrationFailureReason}; the remaining numbers stay unregistered and are ` +
+            'retryable.',
+        );
+        break;
+      }
+    }
+
+    return {
+      ...connected,
+      businessAccount: {
+        ...connected.businessAccount,
+        accounts: connected.businessAccount.accounts.map((number) => {
+          const state = states.get(number.id);
+
+          return state === undefined
+            ? number
+            : {
+                ...number,
+                registrationStatus: state.registrationStatus,
+                registrationFailureReason: state.registrationFailureReason,
+                registeredAt: state.registeredAt,
+                registrationAttemptedAt: state.registrationAttemptedAt,
+              };
+        }),
+      },
+    };
+  }
+
+  /**
+   * `null` when the attempt could not be made at all — a database failure, or a
+   * fault in the registration service.
+   *
+   * Swallowed rather than propagated for the reason above: the connection has
+   * committed, and turning a successful signup into a 500 would tell the tenant
+   * their WABA is not connected when it is. It is logged at `warn` with the
+   * number it concerns, which is what an operator needs to find it; the number
+   * stays `unregistered` and the retry route is how it is picked up.
+   *
+   * **The error's class is logged, not its message.** The statement this can
+   * fail on is the one that writes `registration_pin_encrypted`, and a Prisma
+   * validation error quotes the arguments it refused — so interpolating the
+   * message here is a path for credential material to reach a log line. The
+   * class plus the phone number id is what an operator acts on; the error itself
+   * is re-thrown by nothing and reproduced from the retry route.
+   */
+  private async registerOne(
+    whatsappAccountId: string,
+    phoneNumberId: string,
+    accessToken: string,
+  ): Promise<NumberRegistrationState | null> {
+    return this.registration
+      .register({ whatsappAccountId, accessToken, attempt: 'initial' })
+      .catch((error: unknown) => {
+        this.logger.warn(
+          `Registering phone number ${phoneNumberId} for sending could not be attempted: ` +
+            `${error instanceof Error ? error.name : 'an unknown failure'}. The number stays ` +
+            'unregistered and is retryable.',
+        );
+
+        return null;
+      });
   }
 
   /**

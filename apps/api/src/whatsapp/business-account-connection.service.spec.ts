@@ -3,7 +3,7 @@ import { AuditService } from '../audit/audit.service';
 import { TenantContextService } from '../common/tenant-context/tenant-context.service';
 import { Prisma } from '../generated/prisma/client';
 import type { TenantPrisma } from '../prisma/prisma.tokens';
-import type { WhatsAppAccessTokenCipher } from './access-token.cipher';
+import type { WhatsAppCredentialCipher } from './whatsapp-credential.cipher';
 import {
   WhatsAppBusinessAccountConnectionService,
   type ConnectBusinessAccountCommand,
@@ -116,7 +116,7 @@ describe('WhatsAppBusinessAccountConnectionService', () => {
     service = new WhatsAppBusinessAccountConnectionService(
       prisma,
       tenantContext,
-      cipher as unknown as WhatsAppAccessTokenCipher,
+      cipher as unknown as WhatsAppCredentialCipher,
       // The real one: the shape of the row it writes is precisely what the
       // assertions below are about.
       new AuditService(tenantContext),

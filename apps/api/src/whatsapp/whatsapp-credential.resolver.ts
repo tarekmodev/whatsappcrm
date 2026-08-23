@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { TENANT_PRISMA, type TenantPrisma } from '../prisma/prisma.tokens';
-import { WhatsAppAccessTokenCipher } from './access-token.cipher';
+import { WhatsAppCredentialCipher } from './whatsapp-credential.cipher';
 import {
   WhatsAppAccountNotFoundError,
   WhatsAppBusinessAccountNotFoundError,
@@ -56,7 +56,7 @@ export interface PhoneNumberCredentials extends BusinessAccountCredentials {
 export class WhatsAppCredentialResolver {
   constructor(
     @Inject(TENANT_PRISMA) private readonly prisma: TenantPrisma,
-    private readonly cipher: WhatsAppAccessTokenCipher,
+    private readonly cipher: WhatsAppCredentialCipher,
   ) {}
 
   /** By our own id for the WABA row — what an internal caller holding a foreign key has. */
