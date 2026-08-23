@@ -457,7 +457,7 @@ pnpm db:seed
 ```
 
 Two tenants, reachable at `northwind.app.localhost:3000` and `southwind.app.localhost:3000`.
-`northwind` is the one to work in: five agents across the three roles, two teams, two
+`northwind` is the one to work in: five users across the three roles, two teams, two
 WhatsApp numbers under two business accounts, five approved-and-pending templates, four
 contacts, five threads and their messages, three tickets with one already overdue, and a
 subscription with usage counters. `southwind` is small and exists to be **absent** — every
