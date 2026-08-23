@@ -93,11 +93,23 @@ const bodyFont = Figtree({
  *
  * `next/font` preloads by default, which would put an Arabic download on the
  * critical path of every English visitor — the overwhelming majority — for a face
- * their document never references. The `@font-face` is still emitted and still
- * self-hosted; it is only the `<link rel="preload">` that is dropped, so an
- * Arabic reader gets the face on first paint through `display: 'swap'` instead
- * of ahead of it. The family is reached only from the `[lang='ar']` branch in
- * `styles/tokens/primitives.css`, so an English document never requests it.
+ * almost none of them will render a glyph of. The `@font-face` is still emitted
+ * and still self-hosted; it is only the `<link rel="preload">` that is dropped,
+ * so an Arabic reader gets the face on first paint through `display: 'swap'`
+ * instead of ahead of it.
+ *
+ * What an English document actually fetches, since this is easy to state wrongly:
+ * the family is reached from the `[lang='ar']` branch in `styles/tokens/semantic.css`
+ * (and applied by the `[lang]` rule in `styles/base.css`), so it is requested
+ * exactly when an element carrying `lang="ar"` is *painted*. With the switch off
+ * that is never — no toggle, no such element, zero Arabic files. With it on it is
+ * the toggle's own endonym, `العربية`, which costs **one** weight rather than the
+ * set: at load on a small screen, where the drawer's panel is laid out off-canvas,
+ * and on first open of the account menu on a large one. The full set arrives only
+ * for a console actually reading Arabic.
+ *
+ * None of that is on the critical path, which is what `preload: false` buys and
+ * why it survives the endonym.
  *
  * Both subsets, not just `arabic`: an Arabic console still shows Latin — a
  * customer's email address, a product name, a phone number — and a face covering
@@ -112,11 +124,7 @@ const arabicFont = IBM_Plex_Sans_Arabic({
 });
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const [theme, locale, branding] = await Promise.all([
-    readTheme(),
-    readLocale(),
-    readBranding(),
-  ]);
+  const [theme, locale, branding] = await Promise.all([readTheme(), readLocale(), readBranding()]);
 
   return (
     <html
