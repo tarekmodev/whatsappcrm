@@ -97,6 +97,14 @@
 --      numbers and the reason. `VACUUM` is forbidden inside a transaction block
 --      and Prisma wraps a migration in one.
 --
+-- ℹ️ **A seeded environment will show `channels` and `contact_identities` empty,
+-- and that is not a fault.** `pnpm db:seed` runs *after* `migrate deploy`, so the
+-- WhatsApp numbers and contacts it writes postdate this backfill and get no rows
+-- here. Nothing reads either table before TAR-820, and TAR-820's migration
+-- re-runs this backfill block verbatim — which picks them up along with
+-- everything else written during the window. A developer who wants them sooner
+-- can re-run the section 6 block by hand; it is idempotent.
+--
 -- Additive and idempotent: every statement is guarded, so applying this to a
 -- fresh database, to one at the previous version, or twice in a row all succeed.
 
@@ -379,6 +387,28 @@ COMMENT ON COLUMN "public"."contacts"."phone_e164" IS
 -- no-op, which is the worst failure available here. The same toggle, for the
 -- same reason, is in `20260811120000_conversations_last_message_at_not_null`.
 --
+-- ⚠️ **The toggle covers the tables these statements READ, not only the ones
+-- they write.** `FORCE` binds the table owner, and the owner is the role a
+-- migration runs as — `20260815120000_branding_and_custom_domains` states it
+-- outright: "the migration owner is **not** exempt from FORCE". So a `SELECT`
+-- from `whatsapp_accounts` or `contacts` with FORCE on returns **zero rows**,
+-- and `INSERT … SELECT` then inserts nothing and reports success. Reproduced on
+-- `postgres:16-alpine` with a non-superuser owner and this policy copied
+-- verbatim: source table holds 1 row, the owner reads 0, the insert reports 0.
+--
+-- That failure is invisible in the environments most likely to run this.
+-- `docker-compose.yml` connects as the container's initdb superuser and
+-- `render.yaml` records that a managed instance's migration owner is one too,
+-- and a superuser bypasses RLS outright — so the toggles are inert there and no
+-- test can distinguish a correct list from an incomplete one. The list is
+-- therefore maintained by rule rather than by observation: **every table named
+-- inside this block, in any clause, appears in the toggle.**
+-- `20260810160000_whatsapp_business_account_entity` and
+-- `20260816150100_reporting_attribution_backfill` both toggle tables they only
+-- read, for exactly this reason. `channel_backfill_toggles_every_table_it_reads`
+-- in `channel-schema.int-spec.ts` checks the rule against this file's text and
+-- the live catalog, since nothing else can.
+--
 -- Safe inline: DDL is transactional in Postgres, this migration holds ACCESS
 -- EXCLUSIVE on these tables for its whole duration so no other session can read
 -- them while FORCE is off, and an abort — including the RAISE below — rolls the
@@ -392,10 +422,57 @@ DECLARE
     identity_rows     bigint;
     conversation_rows bigint;
     orphan_rows       bigint;
+    expected_channels bigint;
+    expected_ids      bigint;
 BEGIN
+    -- Written to.
     EXECUTE 'ALTER TABLE "public"."channels" NO FORCE ROW LEVEL SECURITY';
     EXECUTE 'ALTER TABLE "public"."contact_identities" NO FORCE ROW LEVEL SECURITY';
     EXECUTE 'ALTER TABLE "public"."conversations" NO FORCE ROW LEVEL SECURITY';
+    -- Read from. Just as necessary — see the warning above.
+    EXECUTE 'ALTER TABLE "public"."whatsapp_accounts" NO FORCE ROW LEVEL SECURITY';
+    EXECUTE 'ALTER TABLE "public"."contacts" NO FORCE ROW LEVEL SECURITY';
+
+    -- The precondition, asserted rather than assumed, and **before** anything
+    -- reads a row.
+    --
+    -- A missing entry above cannot be caught by counting rows afterwards: the
+    -- counts would be read through the same blindfold, both sides would come
+    -- back 0, and `0 = 0` passes. Measured — on a database owned by a
+    -- non-superuser, with `whatsapp_accounts` and `contacts` left FORCEd, the
+    -- backfill inserted nothing, the row-count checks below agreed with it, and
+    -- the migration committed clean.
+    --
+    -- The catalog is the one thing RLS cannot hide. This reads it, so it is true
+    -- everywhere: under a superuser owner, where the toggles are inert and no
+    -- behavioural test can tell a complete list from an empty one, it still
+    -- fails loudly on a table someone forgot.
+    IF EXISTS (
+        SELECT 1
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public'
+           AND c.relforcerowsecurity
+           AND c.relname IN (
+               'channels', 'contact_identities', 'conversations',
+               'whatsapp_accounts', 'contacts'
+           )
+    ) THEN
+        RAISE EXCEPTION
+            'the backfill still has FORCE ROW LEVEL SECURITY on %; with FORCE on and no '
+            'app.tenant_id set it would read and write zero rows and report success',
+            (
+                SELECT string_agg(c.relname, ', ' ORDER BY c.relname)
+                  FROM pg_class c
+                  JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = 'public'
+                   AND c.relforcerowsecurity
+                   AND c.relname IN (
+                       'channels', 'contact_identities', 'conversations',
+                       'whatsapp_accounts', 'contacts'
+                   )
+            );
+    END IF;
 
     -- 6a. One channel per connected WhatsApp number, **reusing its id**.
     --
@@ -482,7 +559,41 @@ BEGIN
 
     GET DIAGNOSTICS conversation_rows = ROW_COUNT;
 
-    -- 6d. The assertion that makes 6c meaningful. Every conversation now names a
+    -- 6d. Did 6a and 6b actually reach every row?
+    --
+    -- The second half of the guard the toggle assertion above starts. That one
+    -- covers the case where the source table is *hidden*; this one covers a
+    -- source that is visible but was silently narrowed — a predicate that
+    -- excludes more than it means to, a join that drops rows, a conflict target
+    -- that swallows them. An empty `channels` otherwise commits cleanly on a
+    -- database whose `conversations` table happens to be empty too: 6e below
+    -- would find no orphans, the deploy would pass, and the first thing to
+    -- notice would be TAR-820's foreign key.
+    --
+    -- Equality, not "greater than zero". A fresh database legitimately has zero
+    -- of both, and both sides being zero is a pass; one side being short by any
+    -- amount is not.
+    SELECT count(*) INTO expected_channels FROM "public"."whatsapp_accounts";
+    SELECT count(*) INTO expected_ids
+      FROM "public"."contacts" WHERE "phone_e164" IS NOT NULL;
+
+    IF (SELECT count(*) FROM "public"."channels") <> expected_channels THEN
+        RAISE EXCEPTION
+            'channels holds % row(s) for % whatsapp_accounts row(s); the backfill in 6a '
+            'did not reach every number',
+            (SELECT count(*) FROM "public"."channels"), expected_channels;
+    END IF;
+
+    IF (SELECT count(*) FROM "public"."contact_identities" WHERE "kind" = 'whatsapp')
+       <> expected_ids THEN
+        RAISE EXCEPTION
+            'contact_identities holds % whatsapp row(s) for % contact(s) with a phone '
+            'number; the backfill in 6b did not reach every contact',
+            (SELECT count(*) FROM "public"."contact_identities" WHERE "kind" = 'whatsapp'),
+            expected_ids;
+    END IF;
+
+    -- 6e. The assertion that makes 6c meaningful. Every conversation now names a
     -- channel row, because every `whatsapp_account_id` was a `whatsapp_accounts`
     -- id and 6a gave each of those a channel under the same id. If that is ever
     -- false the foreign key in section 7 would raise anyway — but it would raise
@@ -504,6 +615,8 @@ BEGIN
     EXECUTE 'ALTER TABLE "public"."channels" FORCE ROW LEVEL SECURITY';
     EXECUTE 'ALTER TABLE "public"."contact_identities" FORCE ROW LEVEL SECURITY';
     EXECUTE 'ALTER TABLE "public"."conversations" FORCE ROW LEVEL SECURITY';
+    EXECUTE 'ALTER TABLE "public"."whatsapp_accounts" FORCE ROW LEVEL SECURITY';
+    EXECUTE 'ALTER TABLE "public"."contacts" FORCE ROW LEVEL SECURITY';
 
     RAISE NOTICE 'channels: % row(s); contact_identities: % row(s); conversations.channel_id: % row(s)',
         channel_rows, identity_rows, conversation_rows;

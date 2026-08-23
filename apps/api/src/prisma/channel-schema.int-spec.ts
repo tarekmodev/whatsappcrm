@@ -310,36 +310,29 @@ describe('channel schema', () => {
    * migration's own header, checked rather than asserted.
    *
    * It runs as the **owner** over `DATABASE_URL`, not as either application
-   * role: the block toggles `FORCE ROW LEVEL SECURITY`, which needs ownership,
-   * and it needs to for the reason the migration explains — with FORCE on and no
-   * `app.tenant_id` set, its `conversations` UPDATE would match zero rows and
-   * report success. The same connection `db-rollback.int-spec.ts` uses, for the
-   * same reason.
+   * role, because the block issues `ALTER TABLE … FORCE ROW LEVEL SECURITY` and
+   * that needs ownership. The same connection `db-rollback.int-spec.ts` uses.
+   *
+   * ⚠️ **These tests cannot prove the FORCE toggle is complete, and nothing
+   * here can.** `docker-compose.yml` connects as the container's initdb
+   * superuser, and a superuser bypasses RLS outright — so the toggles are inert
+   * against this database and the backfill would pass identically with the list
+   * empty. `channel_backfill_toggles_every_table_it_reads` below is the guard
+   * that covers it, by checking the block's text against the catalog rather than
+   * by running anything.
    */
   describe('the backfill', () => {
-    /** Where the block starts in `migration.sql`, and where it ends. */
-    const BACKFILL_ANCHOR = 'DO $$\nDECLARE\n    channel_rows      bigint;';
-
     let backfill: string;
 
     beforeAll(() => {
-      const file = join(
-        __dirname,
-        '../../prisma/migrations/20260823140000_channel_supertype_and_contact_identities/migration.sql',
+      backfill = extractDoBlock(
+        '20260823140000_channel_supertype_and_contact_identities',
+        // The block is identified by its DECLARE list.
+        'DO $$\nDECLARE\n    channel_rows      bigint;',
+        'The backfill block was not found in the channel migration. It is identified by its ' +
+          'DECLARE list; if that changed, update the anchor here rather than deleting this ' +
+          'test — it is the only thing that runs the backfill over data.',
       );
-      const sql = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
-      const start = sql.indexOf(BACKFILL_ANCHOR);
-
-      if (start === -1) {
-        throw new Error(
-          'The backfill block was not found in the channel migration. It is identified by its ' +
-            'DECLARE list; if that changed, update BACKFILL_ANCHOR here rather than deleting ' +
-            'this test — it is the only thing that runs the backfill over data.',
-        );
-      }
-
-      const end = sql.indexOf('\n$$;', start);
-      backfill = sql.slice(start, end + '\n$$;'.length);
     });
 
     beforeEach(async () => {
@@ -466,14 +459,195 @@ describe('channel schema', () => {
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
-          AND c.relname IN ('channels', 'contact_identities', 'conversations')
+          AND c.relname IN ('channels', 'contact_identities', 'contacts',
+                            'conversations', 'whatsapp_accounts')
         ORDER BY c.relname
       `;
 
       expect(rows).toEqual([
         { relname: 'channels', forced: true },
         { relname: 'contact_identities', forced: true },
+        { relname: 'contacts', forced: true },
         { relname: 'conversations', forced: true },
+        { relname: 'whatsapp_accounts', forced: true },
+      ]);
+    });
+
+    /**
+     * The guard for the defect this test file could not otherwise see.
+     *
+     * `FORCE ROW LEVEL SECURITY` binds the **table owner**, and the owner is the
+     * role a migration runs as. A `SELECT` from a FORCE-RLS table with no
+     * `app.tenant_id` set therefore returns zero rows for the migration too — so
+     * `INSERT … SELECT` inserts nothing and reports success. Reproduced on
+     * `postgres:16-alpine` with a non-superuser owner and this schema's policy
+     * copied verbatim: source holds 1 row, owner reads 0, insert reports 0.
+     *
+     * The original block toggled only the three tables it **writes** and left
+     * `whatsapp_accounts` and `contacts`, which it reads, FORCEd.
+     *
+     * Nothing that executes SQL can catch that here: `docker-compose.yml`
+     * connects as the initdb superuser and `render.yaml` records that a managed
+     * instance's migration owner is one as well, and a superuser bypasses RLS
+     * entirely. So this asserts the **rule** instead — every table the block
+     * names that has FORCE enabled must also appear in a `NO FORCE` toggle
+     * inside it — against the migration's own text and the live catalog. That is
+     * checkable everywhere, and it is the invariant a future edit would break.
+     */
+    it('toggles every FORCE-RLS table it reads, not only the ones it writes', async () => {
+      const named = new Set(
+        [...backfill.matchAll(/"public"\."([a-z_]+)"/g)].map((match) => match[1] as string),
+      );
+      const toggled = new Set(
+        [
+          ...backfill.matchAll(/ALTER TABLE "public"\."([a-z_]+)" NO FORCE ROW LEVEL SECURITY/g),
+        ].map((match) => match[1] as string),
+      );
+
+      // Sanity on the regexes themselves: a block that named nothing would pass
+      // the assertion below vacuously.
+      expect(named.size).toBeGreaterThanOrEqual(5);
+      expect(toggled.size).toBeGreaterThanOrEqual(5);
+
+      const forced = await systemPrisma.$queryRaw<{ relname: string }[]>`
+        SELECT c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relforcerowsecurity
+      `;
+      const forcedNames = new Set(forced.map((row) => row.relname));
+
+      const unprotected = [...named]
+        .filter((table) => forcedNames.has(table) && !toggled.has(table))
+        .sort();
+
+      expect(unprotected).toEqual([]);
+    });
+  });
+
+  /**
+   * The fifth entitlement write site (`20260823140100_channel_entitlement_features`
+   * section 3), extracted and run the same way as the backfill above.
+   *
+   * ADR 0013 decision 4 names four write sites. `plans.entitlements` is a fifth
+   * and it is the one that makes the other four durable:
+   * `SubscriptionSyncService.copyEntitlements` **replaces**
+   * `tenant_entitlements.entitlements` wholesale from `plans.entitlements` on
+   * every subscription event naming a plan. A catalogue row seeded before this
+   * release therefore overwrites the tenant backfill with an array that has no
+   * `channel_whatsapp` — and once TAR-821's fail-closed gate lands, that is
+   * WhatsApp connect refused for a paying tenant on the next webhook.
+   *
+   * Seed data cannot cover it: `db:seed` is in neither `preDeployCommand`.
+   */
+  describe('the plan catalogue backfill', () => {
+    const PLAN_ID = '81981981-8198-7819-8819-819819819c01';
+
+    const LIMITS = {
+      seats: 3,
+      conversationsPerPeriod: 1000,
+      whatsappNumbers: 1,
+      teams: 2,
+      knowledgeDocuments: 10,
+    };
+
+    let planBackfill: string;
+
+    beforeAll(() => {
+      planBackfill = extractDoBlock(
+        '20260823140100_channel_entitlement_features',
+        'DO $$\nDECLARE\n    updated bigint;\nBEGIN\n    UPDATE "public"."plans"',
+        'The plan-catalogue backfill was not found in the entitlement migration. It is the ' +
+          'DO block whose UPDATE targets plans; if it moved, update the anchor here rather ' +
+          'than deleting this test — it is the only thing that covers the fifth write site.',
+      );
+    });
+
+    beforeEach(async () => {
+      await systemPrisma.plan.deleteMany({ where: { id: PLAN_ID } });
+    });
+
+    afterAll(async () => {
+      await systemPrisma.plan.deleteMany({ where: { id: PLAN_ID } });
+    });
+
+    it('appends channel_whatsapp to a plan seeded before this release', async () => {
+      await systemPrisma.plan.create({
+        data: {
+          id: PLAN_ID,
+          key: 'tar819fixture',
+          name: 'TAR-819 fixture plan',
+          priceMinorUnits: 2900,
+          entitlements: { features: ['assignment_rules', 'sla_policies'], limits: LIMITS },
+        },
+      });
+
+      await withOwner((client) => client.query(planBackfill));
+
+      const plan = await systemPrisma.plan.findUnique({
+        where: { id: PLAN_ID },
+        select: { entitlements: true },
+      });
+
+      expect((plan?.entitlements as { features: string[] }).features).toEqual([
+        'assignment_rules',
+        'sla_policies',
+        'channel_whatsapp',
+      ]);
+    });
+
+    it('covers a retired plan, which is the one nobody is watching', async () => {
+      // `is_active` governs what may be bought. `copyEntitlements` reads the row
+      // the subscription names, so a tenant sitting on a withdrawn plan is
+      // exactly the tenant a filtered backfill would strand.
+      await systemPrisma.plan.create({
+        data: {
+          id: PLAN_ID,
+          key: 'tar819fixture',
+          name: 'TAR-819 retired plan',
+          priceMinorUnits: 2900,
+          isActive: false,
+          entitlements: { features: ['assignment_rules'], limits: LIMITS },
+        },
+      });
+
+      await withOwner((client) => client.query(planBackfill));
+
+      const plan = await systemPrisma.plan.findUnique({
+        where: { id: PLAN_ID },
+        select: { entitlements: true },
+      });
+
+      expect((plan?.entitlements as { features: string[] }).features).toContain('channel_whatsapp');
+    });
+
+    it('leaves a plan that already names it alone, twice over', async () => {
+      await systemPrisma.plan.create({
+        data: {
+          id: PLAN_ID,
+          key: 'tar819fixture',
+          name: 'TAR-819 fixture plan',
+          priceMinorUnits: 2900,
+          entitlements: {
+            features: ['channel_whatsapp', 'assignment_rules'],
+            limits: LIMITS,
+          },
+        },
+      });
+
+      await withOwner((client) => client.query(planBackfill));
+      await withOwner((client) => client.query(planBackfill));
+
+      const plan = await systemPrisma.plan.findUnique({
+        where: { id: PLAN_ID },
+        select: { entitlements: true },
+      });
+
+      // Order preserved and no duplicate: the append is conditional, so applying
+      // the migration twice is a no-op rather than a row with two copies.
+      expect((plan?.entitlements as { features: string[] }).features).toEqual([
+        'channel_whatsapp',
+        'assignment_rules',
       ]);
     });
   });
@@ -663,6 +837,28 @@ describe('channel schema', () => {
     });
   });
 });
+
+/**
+ * One `DO $$ … $$;` block, lifted out of a migration file **as shipped**.
+ *
+ * Running the statements that were released, rather than a paraphrase of them,
+ * is the whole point: a paraphrase drifts, and these blocks are also what
+ * TAR-820's migration re-runs verbatim. `anchor` is matched literally and the
+ * block ends at the first `\n$$;` after it.
+ */
+function extractDoBlock(migration: string, anchor: string, missing: string): string {
+  const file = join(__dirname, '../../prisma/migrations', migration, 'migration.sql');
+  const sql = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+  const start = sql.indexOf(anchor);
+
+  if (start === -1) {
+    throw new Error(missing);
+  }
+
+  const end = sql.indexOf('\n$$;', start);
+
+  return sql.slice(start, end + '\n$$;'.length);
+}
 
 /**
  * One connection as the migration's own role — the table owner — for the

@@ -24,14 +24,39 @@
 --   * `UNCAPPED_ENTITLEMENTS` in `apps/api/src/entitlements/plan-limits.service.ts`
 --   * `operatorEntitlements()` in `apps/api/src/tenancy/tenant-provisioning.service.ts`
 --
--- The other two are data, and are this file:
+-- The other two are data, and are sections 1 and 2 of this file:
 --
 --   * every existing `tenant_entitlements.entitlements` row
 --   * the column default that every future self-signup row takes, which is also
 --     what the self-signup provisioning path relies on rather than restating
 --
--- The `demo-dataset.ts` plan rows are the fifth, and they are seed data rather
--- than a migration — they move in the same commit.
+-- ---------------------------------------------------------------------------
+-- The fifth site, which the ADR's list of four does not name
+-- ---------------------------------------------------------------------------
+--
+-- **`plans.entitlements`, in section 3.** Without it section 1 does not survive
+-- the next billing event.
+--
+-- `SubscriptionSyncService.copyEntitlements` **replaces**
+-- `tenant_entitlements.entitlements` wholesale from `plans.entitlements`, inside
+-- the transaction that applies a subscription — that is decision 4 of the
+-- billing contract, and it is what makes a purchased plan's limits take effect
+-- immediately. So a `plans` row seeded before this release overwrites section 1's
+-- backfill with an array that has no `channel_whatsapp`, and the tenant loses a
+-- capability nobody removed. Once TAR-821's fail-closed gate lands, that is
+-- WhatsApp connect refused for a paying tenant on the next webhook Polar sends —
+-- precisely the day-one breakage decision 4 counts write sites to prevent.
+--
+-- The `demo-dataset.ts` plan rows carry the same three features and move in this
+-- commit, but seed data cannot stand in for this: `db:seed` is in neither
+-- `preDeployCommand` in `render.yaml`, so an environment carrying `plans` rows
+-- from before this release is never re-seeded.
+--
+-- `20260822130000_billing_polar_provider_ids` is the precedent and argues the
+-- same case in its own section 3 — it reshapes existing `plans.entitlements`
+-- rows in a migration rather than through the seed, on the grounds that decision
+-- 4 copies them into `tenant_entitlements`, and notes that the contract's delta
+-- list did not name them either.
 --
 -- ---------------------------------------------------------------------------
 -- Why only `channel_whatsapp`
@@ -59,19 +84,20 @@
 -- ---------------------------------------------------------------------------
 --
 --   Duration     Milliseconds. One row per tenant, and the table holds one row
---                per tenant.
---   Locks        ROW EXCLUSIVE on `tenant_entitlements` for the UPDATE, and
---                ACCESS EXCLUSIVE for the `SET DEFAULT`, which is catalog-only
---                and does not rewrite the table.
---   Blocking     Nil in practice. Nothing writes this table on a request path;
---                its writers are provisioning and the lifecycle sweep.
---   Data loss    None. The update appends to a JSONB array and rewrites no other
+--                per tenant; the plan catalogue is a handful of rows.
+--   Locks        ROW EXCLUSIVE on `tenant_entitlements` and `plans` for the two
+--                UPDATEs, and ACCESS EXCLUSIVE for the `SET DEFAULT`, which is
+--                catalog-only and does not rewrite the table.
+--   Blocking     Nil in practice. Nothing writes either table on a request path;
+--                their writers are provisioning, the subscription sync and the
+--                lifecycle sweep.
+--   Data loss    None. Both updates append to a JSONB array and rewrite no other
 --                key — `jsonb_set` on `features` alone, not a replacement of the
 --                document.
 --   Rollback     `down.sql` beside this file. It removes the same value from the
---                same rows and restores the previous default.
+--                same rows in both tables and restores the previous default.
 --
--- Idempotent: both statements are conditional, so a fresh database, one at the
+-- Idempotent: every statement is conditional, so a fresh database, one at the
 -- previous version, and a second application all reach the same state.
 
 SET LOCAL lock_timeout = '3s';
@@ -131,3 +157,46 @@ $$;
 ALTER TABLE "public"."tenant_entitlements"
     ALTER COLUMN "entitlements"
     SET DEFAULT '{"features":["assignment_rules","sla_policies","channel_whatsapp"],"limits":{"seats":3,"conversationsPerPeriod":1000,"whatsappNumbers":1,"teams":2,"knowledgeDocuments":10}}';
+
+-- ---------------------------------------------------------------------------
+-- 3. The plan catalogue
+-- ---------------------------------------------------------------------------
+--
+-- The fifth write site, and the one that makes section 1 durable rather than
+-- true-until-the-next-webhook. The header has the reasoning; the statement is
+-- section 1's, with two differences.
+--
+-- **No FORCE toggle.** `plans` is one of the six tables with no
+-- `tenant_isolation` policy — a platform-wide catalogue, the same rows for every
+-- tenant, and `20260810140000_tenant_isolation_rls` names it as a deliberate
+-- exception. There is nothing to toggle and nothing hiding rows from this
+-- UPDATE.
+--
+-- **Every plan, including inactive ones.** A tenant sitting on a retired plan is
+-- exactly the tenant whose entitlements nobody is watching, and
+-- `copyEntitlements` reads the row the subscription names rather than the row
+-- the catalogue is currently selling. `is_active` is about what may be bought,
+-- not about what is in force.
+--
+-- `plans_entitlements_shape` still applies to the result: it asserts `features`
+-- is an array and the five limit keys are present, both of which survive an
+-- append to `features` alone.
+
+DO $$
+DECLARE
+    updated bigint;
+BEGIN
+    UPDATE "public"."plans"
+       SET "entitlements" = jsonb_set(
+               "entitlements"::jsonb,
+               '{features}',
+               ("entitlements"::jsonb -> 'features') || '"channel_whatsapp"'::jsonb
+           )
+     WHERE jsonb_typeof("entitlements"::jsonb -> 'features') = 'array'
+       AND NOT ("entitlements"::jsonb -> 'features' @> '"channel_whatsapp"'::jsonb);
+
+    GET DIAGNOSTICS updated = ROW_COUNT;
+
+    RAISE NOTICE 'channel_whatsapp added to % plan row(s)', updated;
+END
+$$;

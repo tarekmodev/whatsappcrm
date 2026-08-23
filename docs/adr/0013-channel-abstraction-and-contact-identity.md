@@ -22,16 +22,25 @@
 ## Context and Problem
 
 WhatsApp is not _a_ channel in this codebase; it is the only shape a conversation
-can have. `conversations.whatsapp_account_id` is `NOT NULL`, sits in the thread's
-natural key `@@unique([tenantId, whatsappAccountId, contactId])`, and leads all
-three hot inbox indexes. 81 references across 23 non-test files.
+can have. `conversations.whatsapp_account_id` is `NOT NULL` and sits in the
+thread's natural key `@@unique([tenantId, whatsappAccountId, contactId])` — the
+only index on the table that carries it. 81 references across 23 non-test files.
+
+It is the column that decides **thread ownership**, not the column the inbox
+**reads through**: the three hot inbox indexes key on
+`(tenant_id, …, last_message_at DESC, id DESC)` and never mention it. An earlier
+draft of this ADR said the column "leads all three hot inbox indexes"; that was
+wrong, and Amendment 1.1 records how it was checked.
 
 Two constraints decide this ADR:
 
-1. **Thread ownership.** Every inbox query, both assignment-scope indexes, and
-   `WhatsAppAccountResolver` route through `whatsapp_account_id`. TAR-808 AC1
-   ("WhatsApp itself runs through the new abstraction, no behavior regression")
-   is exactly this column.
+1. **Thread ownership.** `whatsapp_account_id` is what makes a thread a WhatsApp
+   thread: it is in the natural key, it is the parent every conversation
+   cascades from, and `WhatsAppAccountResolver` routes sends and webhooks
+   through it. The assignment-scope inbox indexes do not carry it — the inbox
+   lists a tenant's threads, not an account's. TAR-808 AC1 ("WhatsApp itself
+   runs through the new abstraction, no behavior regression") is exactly this
+   column.
 2. **Contact identity.** `contacts` is `@@unique([tenantId, phone_e164])`,
    `NOT NULL`. Instagram has no phone number — identity is a page-scoped IGSID.
    **This, not the account model, is the hard part**, and it is what a "second
@@ -388,40 +397,78 @@ branch is per-kind.
 (`InboundMediaRef` above); storage, checksum, dedup and retention are
 channel-agnostic already.
 
-## Migration strategy — the handoff to TAR-819
+## Migration strategy — the handoff to TAR-819 and TAR-820
 
-Expand / migrate / contract, three migrations, each independently deployable:
+**Two migrations, not three.** The original draft called for expand / migrate /
+contract, "each independently deployable". Only the expand step is: three of
+migrate's four changes refuse a write the running application still makes, so a
+standalone migrate release is an outage rather than a migration. Migrate and
+contract are therefore one migration, and it ships in the same release as
+TAR-820's writers. Amendment 1.2 has the per-change reasoning.
 
-1. **Expand.** Create `channels` and `contact_identities`. Insert one `channels`
-   row per `whatsapp_accounts` row **reusing that row's `id`**,
-   `kind = 'whatsapp'`, `routing_key = phone_number_id`,
-   `display_name = COALESCE(verified_name, display_phone_number)`, `status`
-   copied. Insert one `contact_identities` row per contact
-   (`kind = 'whatsapp'`, `external_id = phone_e164`). Add
-   `conversations.channel_id` nullable and copy from `whatsapp_account_id`. Add
-   `ChannelKind`/`ChannelStatus` to `packages/contracts`. Backfill the four
-   entitlement write sites from Decision 4. **No application code reads the new
-   columns** — that is this migration's acceptance criterion.
-2. **Migrate.** `conversations.channel_id` `NOT NULL`; new unique
-   `(tenant_id, channel_id, contact_id)`; the three inbox indexes rebuilt on
-   `channel_id`; `contacts.phone_e164` nullable; `whatsapp_accounts.id` becomes
-   FK to `channels.id`.
-3. **Contract.** Drop `conversations.whatsapp_account_id`, drop
-   `whatsapp_accounts.phone_number_id`, drop the old indexes and the old unique
-   on `contacts`. This lands with TAR-820, not before — TAR-820's "no dual code
-   path left behind" is what makes it safe.
+### 1. Expand — TAR-819, shipped additive
+
+Create `channels` and `contact_identities`. Insert one `channels` row per
+`whatsapp_accounts` row **reusing that row's `id`**, `kind = 'whatsapp'`,
+`routing_key = phone_number_id`,
+`display_name = COALESCE(verified_name, display_phone_number)`, `status` copied.
+Insert one `contact_identities` row per contact (`kind = 'whatsapp'`,
+`external_id = phone_e164`). Add `conversations.channel_id` nullable and copy
+from `whatsapp_account_id`. Create the successor unique
+`(tenant_id, channel_id, contact_id)` **now**, while it is empty and cold, so
+TAR-820 flips a built-and-analysed index rather than building one under a live
+inbox. `contacts.phone_e164` `DROP NOT NULL` — additive, and moved here from the
+old step 2, since relaxing a constraint refuses no write. Add
+`ChannelKind`/`ChannelStatus` to `packages/contracts`. Backfill the entitlement
+write sites from Decision 4. **No application code reads the new columns** —
+that is this migration's acceptance criterion.
+
+Requires a manual `VACUUM (ANALYZE) "public"."conversations"` after applying —
+see Amendment 1.3.
+
+### 2. Migrate + contract — TAR-820, same release as its writers
+
+Every change here is gated on TAR-820's code being deployed in the same release:
+
+- **Re-run the expand migration's backfill block, verbatim and first.** Expand's
+  backfills are a point-in-time snapshot; rows written between the two releases
+  are not tracked forward, and no trigger keeps them in step (a trigger would be
+  a second writer for TAR-820 to remove, for a table nothing reads). This is
+  three backfills, not one, and the order is load-bearing: `channels` rows for
+  numbers connected during the window, then `contact_identities` rows for
+  contacts created during it, then `conversations.channel_id` for threads opened
+  during it. The block is idempotent by construction — `ON CONFLICT DO NOTHING`
+  on both inserts, `WHERE channel_id IS NULL` on the update — so re-running it is
+  safe and is the only correct way to do this.
+- `conversations.channel_id` `NOT NULL`.
+- `whatsapp_accounts.id` becomes an FK to `channels.id`. **Implementation
+  constraint:** the connect path must write the `channels` row and the
+  `whatsapp_accounts` row in one transaction, channel first. Today it writes the
+  account row alone, after the Graph API calls have already succeeded — adding
+  the FK without that change fails the connect at its last step, with Meta-side
+  state already committed.
+- Drop `conversations.whatsapp_account_id`, drop
+  `whatsapp_accounts.phone_number_id`, drop the old unique
+  `(tenant_id, whatsapp_account_id, contact_id)` and the old unique on
+  `contacts`. TAR-820's "no dual code path left behind" is what makes this safe.
+
+**No index rebuild.** `whatsapp_account_id` is in exactly one index on
+`conversations` — the natural-key unique — and the migration adds a sibling to
+that one rather than rebuilding anything. The three inbox indexes are untouched
+by this work in either release (Amendment 1.1).
 
 RLS: both new tables are tenant-scoped and take the standard `tenant_isolation`
 policy plus a `tenant-scope.extension.ts` classification. Neither is
 `system-only`. `ChannelResolver` reads `channels` through `SystemPrisma` for the
 same documented reason `WhatsAppAccountResolver` does today.
 
-**Index note for TAR-819:** the three `conversations` indexes carry measured
-`EXPLAIN` numbers in their doc comments (3 094 buffers → 6, 39 333
-rows-removed-by-filter → 0 on 120 000 conversations). Rebuilding them on
-`channel_id` must preserve column order exactly; those numbers are the regression
-baseline, and `conversations_tenant_assigned_user_inbox_idx` keeps its explicit
-`map` name because Prisma's generated name exceeds Postgres's 63-character limit.
+**Index note, still binding:** the three `conversations` inbox indexes carry
+measured `EXPLAIN` numbers in their doc comments (3 094 buffers → 6, 39 333
+rows-removed-by-filter → 0 on 120 000 conversations). Nothing in TAR-819 or
+TAR-820 rebuilds them, but they remain the regression baseline for any work that
+does, column order included, and
+`conversations_tenant_assigned_user_inbox_idx` keeps its explicit `map` name
+because Prisma's generated name exceeds Postgres's 63-character limit.
 
 ## Meta credentials — finding, and what still needs the spike
 
@@ -524,8 +571,12 @@ Estimates are deliberately absent.
 
 ## Amendment 1 — TAR-819 implementation findings
 
-**Author**: Database Specialist. **Date**: 2026-08-23. **Status**: proposed —
-raised for the Architect's acceptance, not resolved locally.
+**Author**: Database Specialist. **Date**: 2026-08-23.
+**Status**: **accepted** by the Architect, 2026-08-23. All four findings stand;
+1.1 and 1.2 are corrections to the ADR's own text and are folded into Context and
+Migration strategy above, so those sections now read correctly on their own and
+this amendment is the record of why they changed. 1.3 and 1.4 are additions the
+ADR did not cover. Architect's rulings are inline below, marked **Ruling**.
 
 Four things could not be built as the migration strategy above describes them.
 Each is recorded here with what was done instead; nothing in decisions 1–6 is
@@ -553,6 +604,12 @@ claim stays checked.
 
 This is the safe direction, but it means step 2 is smaller than the ADR costs it
 at, and TAR-820 should be re-sized accordingly.
+
+> **Ruling (Architect, 2026-08-23):** confirmed and independently re-checked
+> against `schema.prisma` and every `CREATE INDEX` on `conversations` in the
+> migration history. The ADR was wrong; Context and Migration strategy are
+> corrected above. TAR-820's scope is re-sized: it never owned an index rebuild,
+> and its issue now says so.
 
 ### 2. Three of migrate step 2's four changes cannot deploy independently
 
@@ -582,6 +639,15 @@ same backfill** before it tightens anything. No trigger was added to keep them i
 step: nothing reads the new tables during the window, and a trigger would be a
 second writer for TAR-820 to remove.
 
+> **Ruling (Architect, 2026-08-23):** accepted, and the expand-only split is the
+> right call — a migration that refuses a live write is not a migration. The
+> no-trigger decision is also correct: a trigger buys consistency for a table
+> nothing reads, and charges TAR-820 a removal. Two things this makes binding on
+> TAR-820, both now written into that issue: its migration re-runs the expand
+> backfill block verbatim and first (three backfills, in order), and the connect
+> path writes `channels` before `whatsapp_accounts` in one transaction before the
+> FK is added.
+
 ### 3. `ANALYZE` is not enough after the `conversations` backfill
 
 The expand migration rewrites every `conversations` row. All three inbox indexes
@@ -603,6 +669,20 @@ transaction block and Prisma wraps every migration in one, so
 applying**, alongside the existing `app-roles.sql` re-run. Both are in the
 migration's header.
 
+> **Ruling (Architect, 2026-08-23):** accepted, and this is a better answer than
+> the `ANALYZE` the ADR implied. Two qualifiers for whoever reads the runbook.
+> The regression is **transient, not permanent** — autovacuum resets the
+> visibility map on its own schedule, so a forgotten `VACUUM` degrades the inbox
+> until then rather than forever. And it is **silent**: same plan, same index,
+> same row count, 13x the buffers and no error anywhere. A manual step that fails
+> silently needs a way to answer "did it run", so the runbook step should carry a
+> verification query — `last_vacuum` / `last_autovacuum` from
+> `pg_stat_user_tables` for `conversations`, or an `EXPLAIN (ANALYZE, BUFFERS)`
+> showing `Heap Fetches: 0`. Manual-plus-verification is the right weight at
+> pre-production scale; the breaking point is the first release that applies this
+> to a database with live tenants during business hours, and at that point it
+> becomes a post-deploy job rather than a runbook line.
+
 ### 4. `ContactResponse.phone` was left non-nullable
 
 The column is nullable now; the published response field is not, and widening it
@@ -616,6 +696,22 @@ phone-less contact.
 **For the Architect:** widening `ContactResponse.phone` to nullable belongs in
 TAR-822, in the release where a client can actually receive one. Confirming that
 placement — or moving it earlier — is the open decision.
+
+> **Ruling (Architect, 2026-08-23):** placement confirmed — the widening lands in
+> TAR-822, not here. Widening a published response field is only safe in the
+> release where a consumer can actually receive the null; doing it in an additive
+> schema migration breaks five `apps/web` render sites for no behavioural payoff.
+>
+> One thing to correct in how it is scheduled. The `contact.mapper.ts` throw is
+> an assertion, not error handling: a single phone-less contact anywhere in a
+> page fails the whole `GET /api/v1/contacts` response, and
+> `contact.phone.toLowerCase()` in the web search path is a second crash site.
+> That is exactly right as a tripwire today, and exactly wrong the moment
+> TAR-822's first Instagram contact exists. So the widening is not a task inside
+> TAR-822 that can slip to the end of it — it is a **prerequisite for TAR-822's
+> inbound path**, and must land before the first commit that can create a
+> phone-less contact. TAR-822's issue now carries that as its own acceptance
+> criterion rather than a note in an ADR.
 
 ### Also worth knowing
 
@@ -631,3 +727,92 @@ placement — or moving it earlier — is the open decision.
 - **`PURGE_ORDER` gained both tables.** `contact_identities` before `contacts`,
   `channels` last of the channel block — which is also the position that stays
   correct once TAR-820 makes `whatsapp_accounts.id` a foreign key into it.
+
+> **Ruling (Architect, 2026-08-23):** both accepted as stated.
+> `channels.connected_at` NULL meaning "never recorded" is correct — deriving it
+> from `created_at` would publish a timestamp nobody measured, and any console
+> that renders connection state must treat NULL as unknown rather than as
+> disconnected. The seeded `scale` plan holding `channel_instagram` /
+> `channel_messenger` is fixture data so TAR-822/823 have something to run
+> against; it is not the tiering, and TAR-397 is not bound by it.
+
+---
+
+## Amendment 2 — the fifth entitlement write site
+
+**Author**: Database Specialist, from a Senior Code Reviewer finding on PR #250.
+**Date**: 2026-08-23. **Status**: proposed — raised for the Architect, applied in
+the migration because leaving it out is a defect either way.
+
+**Decision 4's list of four write sites should be five.** It names existing
+`tenant_entitlements` rows, the column default, `TenantProvisioningService` and
+`UNCAPPED_ENTITLEMENTS` / the seed plans. It does not name **`plans.entitlements`**,
+and without it the first four do not survive contact with the billing system.
+
+`SubscriptionSyncService.copyEntitlements` **replaces**
+`tenant_entitlements.entitlements` wholesale from `plans.entitlements`, inside
+the transaction that applies a subscription — that is the billing contract's own
+decision 4, and it is what makes a purchased plan's limits take effect
+immediately. So a catalogue row that predates this release overwrites the tenant
+backfill with an array carrying no `channel_whatsapp`, and the tenant silently
+loses a capability nobody removed. Once TAR-821's fail-closed gate lands, the
+next Polar webhook for a paying tenant refuses WhatsApp connect — precisely the
+day-one breakage decision 4 counts write sites to prevent.
+
+Seed data cannot stand in for it: `db:seed` is in neither `preDeployCommand` in
+`render.yaml`, so an environment carrying `plans` rows from before this release
+is never re-seeded. `20260822130000_billing_polar_provider_ids` is the precedent
+and argues the same case in its own section 3, noting that the contract's delta
+list did not name `plans.entitlements` either.
+
+`20260823140100_channel_entitlement_features` section 3 does it, over every plan
+including inactive ones — `is_active` governs what may be bought, and
+`copyEntitlements` reads the row the subscription names.
+
+**For the Architect:** the count in decision 4 is the part that needs the ruling.
+TAR-821 inherits the hole if the list stays at four.
+
+## Amendment 3 — the backfill's RLS toggle covers reads, not only writes
+
+**Author**: Database Specialist, from a Senior Code Reviewer finding on PR #250.
+**Date**: 2026-08-23. **Status**: fixed in `20260823140000`. Recorded here
+because **TAR-820 re-runs this block verbatim** and would have inherited it.
+
+`FORCE ROW LEVEL SECURITY` binds the **table owner**, and the owner is the role a
+migration runs as. The expand migration's backfill toggled `NO FORCE` on the
+three tables it writes and left `whatsapp_accounts` and `contacts` — which it
+only reads — FORCEd. With no `app.tenant_id` set, those `SELECT`s return zero
+rows, so `INSERT … SELECT` inserts nothing **and reports success**.
+
+Measured on `postgres:16-alpine`, database owned by a non-superuser, migrations
+applied as that role, one WhatsApp number and two contacts already present:
+
+| toggle covers  | `channels` | `contact_identities` | deploy              |
+| -------------- | ---------- | -------------------- | ------------------- |
+| writes only    | 0          | 0                    | **committed clean** |
+| writes + reads | 1          | 2                    | committed clean     |
+
+Two things this taught that are worth carrying forward:
+
+1. **A row-count assertion is not enough on its own.** The first fix added one —
+   `channels` vs `whatsapp_accounts` — and it passed the broken case, because it
+   counts the source through the same blindfold: both sides read 0 and `0 = 0`.
+   The guard that works reads `pg_class.relforcerowsecurity` **before anything
+   reads a row**, because the catalog is the one thing RLS cannot hide.
+2. **No environment this project runs can catch it behaviourally.**
+   `docker-compose.yml` connects as the container's initdb superuser and
+   `render.yaml` records that a managed instance's migration owner is one too;
+   a superuser bypasses RLS outright, so the toggles are inert and a complete
+   list is indistinguishable from an empty one. Both guards are therefore
+   catalog-driven: the migration's own precondition check, and
+   `channel_backfill_toggles_every_table_it_reads` in `channel-schema.int-spec.ts`,
+   which asserts the block's text against the catalog.
+
+**For the Architect, one thing to settle rather than assume:** `render.yaml`
+states the migration owner on a managed instance _is_ a superuser, and
+`20260815120000_branding_and_custom_domains` states that "the migration owner is
+**not** exempt from FORCE". Both are in the repository and they point opposite
+ways. The rule the migrations follow is the conservative one — every table a
+backfill touches gets toggled — and it costs nothing when the owner happens to be
+a superuser. But which is true decides whether this class of defect is latent or
+live, and it should be written down once.

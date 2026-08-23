@@ -195,9 +195,12 @@ change.
   `docs/adr/`.
   Alongside it, three per-channel plan features (`channel_whatsapp`, `channel_instagram`,
   `channel_messenger`) and the backfill that makes them safe to read fail-closed later: every
-  existing entitlements row, the column default, the seeded plan catalogue and the
+  existing entitlements row, the column default, the plan catalogue, the seed and the
   operator-provisioned shape all name `channel_whatsapp`, because every tenant could already
-  connect a WhatsApp number and the entitlement only says so.
+  connect a WhatsApp number and the entitlement only says so. The plan catalogue is the one
+  the ADR did not count and the one the others depend on — a subscription event copies a
+  plan's entitlements over the tenant's, so a catalogue row missing the feature un-grants it
+  again on the next webhook.
 
 - **A supervisor can set how much work auto-assignment sends an agent, from the queue where it
   is in the way** (TAR-384) — shipped across TAR-756 (the API) and TAR-757 (the console).

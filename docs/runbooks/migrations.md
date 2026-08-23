@@ -114,8 +114,54 @@ step, next to the `app-roles.sql` re-run, and it runs in the same window as the 
 VACUUM (ANALYZE) "public"."conversations";
 ```
 
+**Then verify it, because forgetting it fails silently.** The regression is the same
+plan on the same index over the same rows, with several times the buffer reads and no
+error anywhere — nothing surfaces it, and it is transient, so autovacuum eventually
+hides the evidence too. Either check answers "did it run":
+
+```sql
+SELECT relname, last_vacuum, last_autovacuum
+  FROM pg_stat_user_tables WHERE relname = 'conversations';
+```
+
+```sql
+-- Heap Fetches: 0 is the assertion. Anything above it means the visibility map
+-- has not been reset and the Index Only Scan is going to the heap.
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id FROM conversations
+ WHERE tenant_id = '…' AND status = 'open'
+ ORDER BY last_message_at DESC, id DESC LIMIT 25;
+```
+
 `20260823140000_channel_supertype_and_contact_identities` is the worked example, with the
 before/after numbers it was measured against.
+
+Manual-plus-verification is the right weight while the platform is pre-production. The
+breaking point is the first release that applies a full-table backfill to a database with
+live tenants during business hours; at that point this becomes a post-deploy job rather
+than a runbook line.
+
+## A backfill must toggle `FORCE` on every table it touches, reads included
+
+`FORCE ROW LEVEL SECURITY` binds the **table owner**, and the owner is the role a
+migration runs as. So inside a migration — which sets no `app.tenant_id`, because there is
+no single tenant it could set one to — a `SELECT` from a FORCE-RLS table returns **zero
+rows**, and `INSERT … SELECT` from it inserts nothing and reports success.
+
+The rule is therefore about the whole statement, not the write target: **every table named
+in a backfill block gets `NO FORCE` for the duration, and gets it back afterwards.**
+`20260810160000_whatsapp_business_account_entity` and
+`20260816150100_reporting_attribution_backfill` both toggle tables they only read.
+
+Two things make this worth a rule rather than a review habit:
+
+- **Counting rows afterwards does not catch it.** The count reads the source through the
+  same blindfold — both sides come back `0`, and `0 = 0` passes. Assert the _precondition_
+  instead: read `pg_class.relforcerowsecurity` before anything reads a row and raise on a
+  table still forced. The catalog is the one thing RLS cannot hide.
+- **No environment here can catch it behaviourally.** `docker-compose.yml` connects as the
+  container's initdb superuser, and a superuser bypasses RLS outright — so the toggles are
+  inert locally and in CI, and a complete list looks exactly like an empty one.
 
 ## Before shipping a schema change
 
