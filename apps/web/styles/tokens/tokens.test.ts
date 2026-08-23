@@ -407,6 +407,66 @@ describe('the plans surface', () => {
 });
 
 /**
+ * The Arabic branch (TAR-801).
+ *
+ * A language re-declares roles the way a theme does, and the property that makes
+ * that safe is the same one: it moves **values**, never which roles exist. A
+ * branch that introduced a role of its own would be a role every component under
+ * `lang="en"` reads as undefined.
+ *
+ * These assertions are why the branch can land before TAR-806 switches a locale:
+ * nothing renders it yet, so nothing else would catch it drifting.
+ */
+describe('the Arabic branch', () => {
+  const blocks = [
+    ...blocksOf(readTokenFile('primitives.css')),
+    ...blocksOf(readTokenFile('semantic.css')),
+  ];
+  const arabic = blocks.filter((block) => block.selector.includes('[lang'));
+  const baseRoles = new Set(
+    blocks
+      .filter((block) => !block.selector.includes('[lang'))
+      .flatMap((block) => Object.keys(block.declarations)),
+  );
+
+  it('re-points the body family rather than leaving Arabic to the operating system', () => {
+    const declared = Object.assign({}, ...arabic.map((block) => block.declarations)) as Record<
+      string,
+      string
+    >;
+
+    expect(declared['--font-family-body']).toBe('var(--scale-font-family-arabic)');
+  });
+
+  it('matches a regioned tag, which is what a real Accept-Language sends', () => {
+    expect(arabic.map((block) => block.selector)).toContain("[lang|='ar']");
+  });
+
+  it('declares no role the rest of the layer does not already have', () => {
+    for (const block of arabic) {
+      for (const name of Object.keys(block.declarations)) {
+        expect(baseRoles, `${name} exists only under ${block.selector}`).toContain(name);
+      }
+    }
+  });
+
+  /*
+   * `[lang|='ar']` and `:root` weigh the same, so the cascade settles this on
+   * source order alone. A future edit that moves the branch above the block it
+   * overrides would leave a document that is Arabic in its markup and Latin on
+   * the screen — silently, and only under a locale nothing renders yet.
+   */
+  it('declares the body family after the block it overrides', () => {
+    const declaring = blocks
+      .filter((block) => '--font-family-body' in block.declarations)
+      .map((block) => block.selector);
+
+    expect(declaring.at(-1)).toBe("[lang|='ar']");
+    expect(declaring.length).toBeGreaterThan(1);
+  });
+});
+
+/**
  * One role's value in one theme. Throws rather than returning `undefined`: a
  * role this file asks for and the token layer does not declare is the failure
  * these tests exist to catch, and it should not arrive as `NaN` in a ratio.
@@ -440,6 +500,14 @@ function readTokens(): Record<Theme, Record<string, string>> {
 
     for (const block of declarations) {
       if (block.selector.includes("[data-theme='dark']") && theme !== 'dark') {
+        continue;
+      }
+
+      /*
+       * The language branch is not a theme, and a reader that merged it would
+       * report every theme as Arabic (TAR-801). It is asserted on its own below.
+       */
+      if (block.selector.includes('[lang')) {
         continue;
       }
 
