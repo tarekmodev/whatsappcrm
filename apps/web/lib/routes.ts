@@ -194,6 +194,34 @@ export const routes = {
    * them to sign in would make the invitation impossible to accept.
    */
   invite: () => '/invite',
+  /**
+   * Public self-signup: the form a visitor with no account and no tenant fills in
+   * (TAR-36, TAR-405, ADR 0009 decision 3).
+   *
+   * **Served on the platform host only**, and that is not a deployment detail
+   * this file can enforce — it is what the surface *is*. There is no tenant to
+   * resolve until `verifySignup` runs, so a tenant's own white-labelled hosts
+   * have nothing to offer here and the console never links to it from a
+   * tenant-facing screen.
+   *
+   * No query parameters. Nothing about the form is shareable: a pre-filled slug
+   * in a link would be a name somebody else picked, and the address it is for is
+   * typed by the person at the keyboard.
+   */
+  signup: () => '/signup',
+  /**
+   * The target of the signup verification email. The path is fixed by the API's
+   * `VERIFY_LINK_PATH` (`apps/api/src/signup/tenant-signup.service.ts`), which is
+   * what the mailer puts in front of `#token=…`; `routes.test.ts` pins the
+   * spelling so the two cannot drift into a dead link, exactly as it does for
+   * `resetPassword`.
+   *
+   * `verifySignup` here and `/verify` in the URL: the path is read by somebody
+   * who has just been told to check their email and knows what they are
+   * verifying, while this map holds three other kinds of link and needs to say
+   * which one it is.
+   */
+  verifySignup: () => '/verify',
   forgotPassword: () => '/forgot-password',
   /**
    * The target of the link in a password-reset email. The path is fixed by the
