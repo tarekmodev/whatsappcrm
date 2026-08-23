@@ -1,0 +1,95 @@
+/*
+ * Everything below the address input: the hostname it becomes, and whether it is
+ * free.
+ *
+ * The block reserves its own height rather than growing into the form. The
+ * preview appears on the first character typed and the answer arrives a pause
+ * later, and without a floor each of those would push the password fields and
+ * the submit button down the screen while somebody is looking at them.
+ *
+ * Two lines' worth: the preview wraps to two on a phone, and the answer replaces
+ * the pending line rather than stacking under it, so this is the tallest the
+ * region ever gets on a narrow screen.
+ */
+.status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-block-size: calc(2lh + var(--space-1));
+  font-size: var(--font-size-caption);
+  color: var(--color-on-surface-muted);
+}
+
+.preview {
+  /* A long slug plus a long host is one unbreakable token to a browser; without
+     this it takes a 320px screen into horizontal scroll. */
+  overflow-wrap: anywhere;
+}
+
+.hostname {
+  color: var(--color-on-surface);
+}
+
+.pending {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/*
+ * A pulsing dot rather than a spinner: `Spinner` is reserved for a button's
+ * pending state, and this wait is not one the user asked for — it starts on its
+ * own when they stop typing. It stays under the caption line's own colour so it
+ * reads as the sentence's punctuation rather than as a second element.
+ */
+.pulse {
+  flex: 0 0 auto;
+  inline-size: var(--space-2);
+  block-size: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: currentcolor;
+  animation: pulse var(--duration-slow) var(--easing-standard) infinite alternate;
+}
+
+@keyframes pulse {
+  from {
+    opacity: 0.35;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ * A loop is not a duration to shorten — the token layer collapses
+ * `--duration-slow` to 1ms under reduced motion, which would turn this into a
+ * strobe rather than switching it off. Same treatment, and the same reason, as
+ * `Spinner`'s arc.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+/*
+ * The settled answer. `available` is the only state with a colour of its own:
+ * `taken` is drawn by `Field` as the control's error and is carried here for
+ * assistive technology alone, and `unknown` is guidance rather than a verdict,
+ * so it stays in the muted caption colour it inherits.
+ *
+ * The tick is a second carrier beside the colour, on `PasswordRequirements`'
+ * rule — an answer whose only signal is green is one a colour-blind reader
+ * cannot read.
+ */
+.answer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.answer[data-state='available'] {
+  color: var(--color-success);
+}

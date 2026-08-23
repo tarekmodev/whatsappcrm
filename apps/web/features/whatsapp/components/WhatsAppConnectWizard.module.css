@@ -1,0 +1,26 @@
+/*
+ * The panel that appears under the steps once every one of them is behind the
+ * reader. Set apart by a rule rather than by a second card: it belongs to the
+ * wizard above it, and nesting a `SectionCard` inside one would draw a frame
+ * around a frame.
+ */
+.complete {
+  padding-block-start: var(--space-4);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}
+
+.completeHeading {
+  margin: 0;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-heading-sm);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-heading);
+}
+
+.completeBody {
+  margin: 0;
+  max-inline-size: var(--measure-body);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}

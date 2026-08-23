@@ -10,7 +10,7 @@ import { Stack } from '@/components/layout/Stack';
 import { useContent, type Content } from '@/lib/content';
 import {
   ACCOUNT_STATUS_TONES,
-  QUALITY_RATING_TONES,
+  REGISTRATION_STATUS_TONES,
   VERIFICATION_STATUS_TONES,
 } from '../presentation';
 import styles from './ConnectedBusinessAccount.module.css';
@@ -61,7 +61,9 @@ export function ConnectedBusinessAccount({
         getRowKey={(number) => number.id}
       />
 
-      <Notice tone="info">{content.whatsapp.registrationNotice}</Notice>
+      {account.accounts.some((number) => number.registrationStatus !== 'registered') ? (
+        <Notice tone="warning">{content.whatsapp.registrationNotice}</Notice>
+      ) : null}
     </Stack>
   );
 }
@@ -69,6 +71,23 @@ export function ConnectedBusinessAccount({
 /**
  * Built from `content` rather than declared at module scope so a locale added
  * later changes the headers without touching this component.
+ *
+ * ## Three marks, two chips (0001, "A table row is the one place the budget is two")
+ *
+ * The row now answers three questions, and the budget is two — so they are ranked
+ * most-actionable first and the loser goes quiet rather than away.
+ *
+ *   1. **Can it send** (`registrationStatus`). The one a workspace acts on: a
+ *      number that Meta never registered receives normally and refuses every
+ *      send, which is invisible from anywhere else in the console.
+ *   2. **Is it attached** (`status`). Meta reporting the number as unreachable is
+ *      the next thing worth a glance.
+ *   3. **What Meta thinks of it** (`qualityRating`). Real, and nothing to do
+ *      about today — so it keeps its word and gives up its pill.
+ *
+ * A column header stays whether or not its cell has a chip in it, and below 40rem
+ * `DataTable` repeats that header beside the value, so dropping the third mark
+ * would leave a labelled blank that reads as missing data.
  */
 function numberColumns(content: Content): DataTableColumn<WhatsAppAccountResponse>[] {
   return [
@@ -92,9 +111,9 @@ function numberColumns(content: Content): DataTableColumn<WhatsAppAccountRespons
         row.qualityRating === null ? (
           content.whatsapp.noQualityRating
         ) : (
-          <Badge tone={QUALITY_RATING_TONES[row.qualityRating]}>
-            {content.whatsapp.qualityRatings[row.qualityRating]}
-          </Badge>
+          // Third by rank, so `quiet`: the word stays, the pill goes. `tone` is
+          // ignored by the variant, which is why the table above it is not there.
+          <Badge variant="quiet">{content.whatsapp.qualityRatings[row.qualityRating]}</Badge>
         ),
     },
     {
@@ -104,6 +123,16 @@ function numberColumns(content: Content): DataTableColumn<WhatsAppAccountRespons
       render: (row) => (
         <Badge tone={ACCOUNT_STATUS_TONES[row.status]}>
           {content.whatsapp.accountStatuses[row.status]}
+        </Badge>
+      ),
+    },
+    {
+      key: 'registration',
+      header: content.whatsapp.columnRegistration,
+      isNarrow: true,
+      render: (row) => (
+        <Badge tone={REGISTRATION_STATUS_TONES[row.registrationStatus]}>
+          {content.whatsapp.wizard.registrationStatuses[row.registrationStatus]}
         </Badge>
       ),
     },

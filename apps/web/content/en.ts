@@ -27,6 +27,8 @@ import type {
   WhatsAppAccountStatus,
   WhatsAppBusinessVerificationStatus,
   WhatsAppQualityRating,
+  WhatsAppRegistrationFailureReason,
+  WhatsAppRegistrationStatus,
   WorkflowActionOutcome,
   WorkflowActionType,
   WorkflowAssignmentState,
@@ -41,6 +43,7 @@ import type {
   WorkflowTaxonomyKind,
   WorkflowTriggerType,
 } from '@whatsappcrm/contracts';
+import type { StepperStatus } from '@/components/ui/Stepper';
 import type { FileSizeUnit } from '@/lib/format/file-size';
 
 /**
@@ -2477,6 +2480,8 @@ export const content = {
     columnVerifiedName: 'Verified name',
     columnQuality: 'Quality rating',
     columnNumberStatus: 'Status',
+    /** Whether Meta will let this number send — the row's most actionable mark. */
+    columnRegistration: 'Sending',
     wabaIdLabel: 'Meta business account ID',
     unnamedAccount: 'WhatsApp Business Account',
     noVerifiedName: 'Not set yet',
@@ -2487,7 +2492,7 @@ export const content = {
      * API use can receive here but cannot send.
      */
     registrationNotice:
-      'A number that has never been registered for the WhatsApp Cloud API can receive messages here but cannot send yet. Contact support to finish registering it.',
+      'A number that Meta has not registered can receive messages here but cannot send yet. Step 3 of the setup above registers it — nothing else is needed from you.',
 
     verificationStatuses: {
       not_verified: 'Not verified',
@@ -2577,6 +2582,182 @@ export const content = {
         heading: 'We could not complete the connection',
         body: 'Something went wrong on the way to Meta. Start the connection again.',
       },
+    },
+
+    /**
+     * The connect wizard (TAR-814).
+     *
+     * Connecting is four acts, not one: Meta hands back a business account, the
+     * account holds numbers, a number cannot **send** until Meta registers it,
+     * and a number nobody has messaged has never proved it can receive. The copy
+     * here is written so each of those reads as a job with an outcome rather than
+     * as a footnote under a success message.
+     *
+     * Second person throughout, like the onboarding checklist: this talks to an
+     * admin about their own workspace.
+     */
+    wizard: {
+      heading: 'Connect your WhatsApp number',
+      description:
+        'Four steps, in order. You can leave this page at any point — where you got to is remembered on this device.',
+
+      /** The meter's accessible name; the visible count sits beside it. */
+      progressLabel: 'WhatsApp setup progress',
+      progressCount: (resolved: number, total: number) => `${resolved} of ${total} done`,
+
+      /**
+       * The chip on every step. Words, always — the marker's colour reinforces
+       * these and never replaces them.
+       */
+      statuses: {
+        done: 'Done',
+        current: 'To do now',
+        /** Not "blocked": nothing is wrong, the step in front of it just has to happen first. */
+        upcoming: 'Later',
+        error: 'Needs attention',
+      } satisfies Record<StepperStatus, string>,
+
+      /**
+       * Said as soon as a connection is restored rather than made. It is the last
+       * answer the API gave and not a fact re-checked on arrival — there is no
+       * tenant-facing read that could re-check it — and a wizard that quietly
+       * presented remembered state as current state would be the wrong kind of
+       * confident.
+       */
+      restoredNotice:
+        'Picking up where you left off. This is what Meta last told us — if something has changed since, run the step again to find out.',
+
+      completeHeading: 'Your number is live',
+      completeBody:
+        'Messages to this number arrive in the inbox, and your team can reply from there. Nothing else on this page needs doing.',
+      goToInbox: 'Open the inbox',
+      /** Starting over: a second WABA, or the same one after something changed at Meta. */
+      startAgain: 'Connect a different account',
+
+      steps: {
+        connect_account: {
+          title: 'Connect your business account',
+          upcoming: 'Sign in to Meta and approve the connection.',
+          current: 'Sign in to Meta and approve the connection.',
+          /**
+           * What the button says it is doing while it is pending. The default
+           * is the form layer's 'Saving…', which is wrong twice over here:
+           * nothing is being saved, and the wait is Meta's — either their
+           * script arriving or their window being open — not ours.
+           */
+          pendingLabel: 'Waiting for Meta',
+          /** Names what was connected, so a restored wizard is checkable at a glance. */
+          done: (name: string) => `Connected to ${name}.`,
+        },
+        select_number: {
+          title: 'Choose the number to send from',
+          upcoming: 'Pick which of the account’s numbers this workspace uses.',
+          current:
+            'This business account has more than one number. Pick the one this workspace sends from — you can connect the others later.',
+          done: (number: string) => `Sending from ${number}.`,
+          /** The field label on the picker; the step's title is a heading, not a label. */
+          fieldLabel: 'Number',
+          fieldHint: 'Every reply your team sends leaves from this number.',
+          /** The unchosen row. A picker that opens on a value nobody picked reads as a decision already taken. */
+          fieldPlaceholder: 'Choose a number',
+          /** A WABA with nothing attached can neither send nor receive. */
+          noNumbersHeading: 'That account has no numbers on it',
+          noNumbersBody:
+            'A WhatsApp Business Account with no phone number cannot send or receive anything. Add a number in Meta Business Manager, then connect the account again.',
+          unusableHeading: 'Meta reports a problem with that number',
+          unusableBody:
+            'Meta cannot use this number right now. Check it in Meta Business Manager, then connect the account again.',
+        },
+        register_number: {
+          title: 'Register the number for sending',
+          upcoming: 'Meta has to register a number before it can send.',
+          current:
+            'A number Meta has not registered can receive messages here but cannot send a single one. This registers it — it takes a moment and needs nothing from you.',
+          done: 'Registered with Meta. This number can send.',
+          action: 'Register for sending',
+          retryAction: 'Try again',
+          /** After a refusal that only re-connecting can clear. */
+          reconnectAction: 'Connect the account again',
+          pendingHeading: 'Registration is still going',
+          pendingBody:
+            'Meta has an attempt in flight for this number. Give it a minute, then check again.',
+          checkAction: 'Check again',
+        },
+        test_send: {
+          title: 'Send a test message',
+          upcoming: 'Prove the round trip before your team relies on it.',
+          /**
+           * The direction is Meta's rule, not a limitation of this console, and
+           * saying so is what stops it reading as a missing feature: WhatsApp
+           * only lets a business open a conversation with a template Meta has
+           * approved, and a new account has none.
+           */
+          current: (number: string) =>
+            `From your own phone, send a WhatsApp message to ${number}. WhatsApp only lets a business start a conversation with a template Meta has approved, so the first message has to come to you — and one that arrives proves the whole path.`,
+          done: 'A message reached this number and landed in the inbox.',
+          action: 'Check for it',
+          /** While the check is watching. Announced from the button, not a second live region. */
+          pendingLabel: 'Watching the inbox',
+          /** The check ran its course and saw nothing. Not a failure of the connection. */
+          notSeenHeading: 'Nothing has arrived yet',
+          notSeenBody:
+            'No message reached this number while we watched. Send one from WhatsApp on your phone, then check again — delivery can take a few seconds.',
+          replyHint:
+            'Reply to it from the inbox to confirm sending works too. You have 24 hours from their message.',
+        },
+      },
+
+      registrationStatuses: {
+        unregistered: 'Cannot send yet',
+        pending: 'Registering',
+        registered: 'Can send',
+        failed: 'Registration failed',
+      } satisfies Record<WhatsAppRegistrationStatus, string>,
+
+      /**
+       * One entry per published `WhatsAppRegistrationFailureReason`. Distinct
+       * copy per key for the reason the taxonomy exists: "registration failed"
+       * throws away the one thing that tells somebody whether to wait, to reset a
+       * PIN, or to connect the account again.
+       *
+       * Whether a key offers a retry, and which one, is
+       * `isRegistrationFailureRetryable` and `isRegistrationFailureReconnectable`
+       * — copy stays copy.
+       */
+      registrationFailures: {
+        already_registered: {
+          heading: 'This number is already registered',
+          body: 'Meta reports the number as registered somewhere else. If it cannot send from here, contact support — there is nothing left to do on this page.',
+        },
+        pin_rejected: {
+          heading: 'Meta refused the PIN',
+          body: 'This number has a two-step verification PIN that this workspace does not hold. Turn two-step verification off for the number in Meta Business Manager, then register it again.',
+        },
+        credential_rejected: {
+          heading: 'Meta no longer accepts this connection',
+          body: 'The access Meta granted has expired or been withdrawn. Connect the business account again to get fresh access — registering will not work until you do.',
+        },
+        rate_limited: {
+          heading: 'Meta is limiting requests right now',
+          body: 'Too many requests reached Meta just now. Wait a few minutes, then try again.',
+        },
+        upstream_unavailable: {
+          heading: 'Meta is not responding',
+          body: 'Meta could not be reached. Try again shortly — nothing about the number has changed.',
+        },
+        rejected: {
+          heading: 'Meta refused the registration',
+          body: 'Meta turned the registration down without a reason we can act on. Try again, and contact support if it keeps happening.',
+        },
+      } satisfies Record<WhatsAppRegistrationFailureReason, { heading: string; body: string }>,
+
+      /**
+       * A request that never reached the API — a dropped network, a chunk that
+       * would not load. Distinct from anything the API said, because there is no
+       * server message to show and no correlation id to quote.
+       */
+      requestFailedHeading: 'That request could not be sent',
+      requestFailedBody: 'Check your connection and try again.',
     },
   },
 
@@ -3490,6 +3671,151 @@ export const content = {
     workspaceInactiveError: 'This workspace is not active. Contact your administrator.',
     workspaceNotFoundError: 'This address is not set up for a workspace. Check the link you used.',
     signInFailedError: 'We could not sign you in. Try again.',
+
+    // --- Create a workspace (public self-signup) ---------------------------
+    /**
+     * The signed-out surface's only screen that is not about an account that
+     * already exists (TAR-36, TAR-805).
+     *
+     * *Workspace*, throughout, and never *tenant* or *organisation*:
+     * `docs/STYLE.md` fixes *tenant* as the word for the row and *workspace* as
+     * the only word the console says on screen for it. This is the first screen
+     * anybody ever reads, so it is the last place to slip.
+     */
+    signupTitle: 'Create your workspace',
+    signupDescription: 'Set up a new workspace and become its first administrator.',
+    signupSubmit: 'Create workspace',
+    signupPending: 'Creating your workspace…',
+    signupNameLabel: 'Your name',
+    signupNameHint: 'Teammates see this on the conversations you handle.',
+    signupWorkspaceNameLabel: 'Workspace name',
+    signupWorkspaceNameHint: 'Your company or team, as your customers know it.',
+    signupPasswordLabel: 'Choose a password',
+    signupSignInPrompt: 'Already have a workspace?',
+
+    // The address, which is the one field on this form nobody has met before.
+    signupSlugLabel: 'Workspace address',
+    /**
+     * Says what the value *is* before it says what it may contain. "Lowercase
+     * letters, digits and hyphens" first would be a rule with no subject — and
+     * the reason the rule exists (it becomes a DNS label) is not the customer's
+     * problem to know.
+     */
+    signupSlugHint: 'Your team signs in here, and it cannot be changed later.',
+    /**
+     * The address as it will actually be, built from the host this page is
+     * already being served on — so a deployment on its own domain, or a
+     * developer on `localhost:3000`, sees its own hostname rather than one
+     * hardcoded here.
+     */
+    signupSlugPreviewLabel: 'Your workspace address will be',
+    signupSlugChecking: 'Checking that address…',
+    signupSlugAvailable: 'That address is available',
+    /**
+     * The one thing signup will confirm to an anonymous caller, and ADR 0009
+     * accepts it explicitly: a platform subdomain is public DNS, so the answer
+     * is already available to anybody who looks it up. Worded as something to
+     * fix rather than as a refusal, because it is.
+     */
+    signupSlugTakenError: 'That address is already taken. Choose another.',
+    signupSlugRequiredError: 'Choose an address for your workspace',
+    signupSlugTooShortError: (minLength: number) => `Use at least ${minLength} characters`,
+    signupSlugTooLongError: (maxLength: number) => `Use at most ${maxLength} characters`,
+    signupSlugInvalidError:
+      'Use lowercase letters, digits and hyphens, starting and ending with a letter or digit',
+    /**
+     * The availability check failed — offline, throttled, or the API is down.
+     * Deliberately not an error on the field: the check is a courtesy and the
+     * submit is the authority, so a broken check must never be a reason somebody
+     * cannot press the button.
+     */
+    signupSlugCheckUnavailable: 'We could not check that address. You can still continue.',
+    signupWorkspaceNameRequiredError: 'Enter a name for your workspace',
+    signupWorkspaceNameTooLongError: 'That name is too long. Use a shorter one.',
+    signupNameRequiredError: 'Enter your name',
+    signupNameTooLongError: 'That name is too long. Use a shorter one.',
+    signupFailedError: 'We could not create your workspace. Try again.',
+    /**
+     * `SIGNUP_POLICY` bounds signups per address and per email. The wait is not
+     * stated because neither window is published to the client, and inventing
+     * one would be a promise the API has not made.
+     */
+    signupRateLimitedError: 'Too many signup attempts. Wait a little and try again.',
+    /**
+     * `SIGNUP_ENABLED=false`. The API answers `not_found` rather than
+     * `forbidden` so it does not confirm to a prober that self-serve exists
+     * here; this screen is the one place that answer is turned into a sentence,
+     * because somebody who followed a link deserves better than a blank 404.
+     */
+    signupDisabledHeading: 'Self-signup is not available here',
+    signupDisabledBody:
+      'This deployment does not create workspaces from a form. Ask whoever runs it to set one up for you.',
+
+    // Check your email, and the resend that lives on it.
+    signupSentHeading: 'Confirm your email address',
+    /**
+     * Names the address without confirming anything about it. The API answers
+     * the same `202` for a new signup, a repeat, and an address that already
+     * runs a workspace — this line has to hold that, so it says what was *sent*
+     * rather than what was *found*.
+     */
+    signupSentBody: (email: string) =>
+      `We sent a link to ${email}. Open it to finish creating your workspace.`,
+    /** Hours, from `LIFECYCLE_POLICY.signupTokenTtlMs` — never a literal in copy. */
+    signupSentExpiry: (hours: number) =>
+      `The link can be used once, and stops working after ${hours} hours.`,
+    signupSentHint: 'Nothing arrived? Check your spam folder before asking for another link.',
+    signupResend: 'Send the link again',
+    signupResendPending: 'Sending…',
+    signupResendSent: 'A new link is on its way.',
+    /**
+     * `SIGNUP_POLICY.resendsPerSignup` is counted on the pending row itself, so
+     * the console can cap the button at the same number rather than offering a
+     * press that can only be refused. Past it, more mail is not what fixes the
+     * problem.
+     */
+    signupResendExhausted:
+      'We have sent that link as many times as we can. If none of them arrived, the address may not be able to receive our mail — start again with another one.',
+    signupResendRateLimitedError:
+      'That link has been sent too many times. Wait a little, or start again with another address.',
+    signupResendFailedError: 'We could not send that link again. Try once more in a moment.',
+    signupUseAnotherAddress: 'Use a different address',
+    signupStartAgain: 'Start again',
+
+    // --- Verify a signup ---------------------------------------------------
+    verifyTitle: 'Confirming your email address',
+    verifyDescription: 'Confirm your address to finish creating your workspace.',
+    verifyLoading: 'Confirming your email address',
+    /** A transport failure, not a refusal: the same link is still worth pressing. */
+    verifyRetry: 'Try again',
+    verifyPending: 'Setting up your workspace…',
+    verifyDoneHeading: (workspace: string) => `${workspace} is ready`,
+    /**
+     * Names the hostname, because it is not the one they are reading this on and
+     * they are about to be sent there.
+     */
+    verifyDoneBody: (hostname: string) => `Your workspace is set up at ${hostname}.`,
+    /**
+     * ⚠️ The one piece of copy on this screen that exists because of a platform
+     * constraint rather than a product choice, so it has to be said plainly.
+     *
+     * The session cookie the verify call sets carries a `__Host-` prefix and no
+     * `Domain` (`apps/api/src/identity/session-cookie.ts`), which means it is
+     * scoped to the platform host this page is served on and does not travel to
+     * the workspace's own subdomain. So the new administrator signs in once,
+     * there, with the password they chose a moment ago — and being told that
+     * before it happens is the difference between a hand-off and a sign-in
+     * screen that looks like the signup did not work.
+     */
+    verifySignInNotice:
+      'Your workspace has its own address, so sign in there once with the password you just chose. We will take you to the setup checklist from there.',
+    verifyOpenWorkspace: 'Open your workspace',
+    verifyUnusableHeading: 'This confirmation link cannot be used',
+    verifyIncompleteBody:
+      'The link is missing its token, which usually means it was truncated on the way to you. Open the confirmation email again, without editing the address.',
+    verifyDeadLinkBody:
+      'It may have expired, or already been used. If your workspace is not set up yet, start again — the address you chose is free once the old link lapses.',
+    verifyFailedError: 'We could not confirm your email address. Try opening the link again.',
 
     // --- Accept an invitation ----------------------------------------------
     inviteTitle: 'Accept your invitation',
