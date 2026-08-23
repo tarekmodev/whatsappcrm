@@ -212,7 +212,8 @@ async function main(): Promise<void> {
     }
 
     await verify(tenantPrisma, tenantContext, dataset, tenantIds);
-    report(summaries);
+    // `WEB_ORIGIN` so the addresses below are ones you can paste — see `report`.
+    report(summaries, config.get<string>('WEB_ORIGIN') ?? '');
   } finally {
     await Promise.all([systemPrisma.$disconnect(), tenantBase.$disconnect()]);
   }
@@ -545,12 +546,12 @@ function expectRowCount(actual: number, slug: string, table: string, wanted: num
   }
 }
 
-function report(summaries: readonly SeededTenantSummary[]): void {
+function report(summaries: readonly SeededTenantSummary[], webOrigin: string): void {
   console.log('');
 
   for (const summary of summaries) {
     console.log(
-      `  ${summary.slug.padEnd(10)} http://${summary.hostname}  ` +
+      `  ${summary.slug.padEnd(10)} ${consoleUrl(summary.hostname, webOrigin)}  ` +
         [
           plural(summary.users, 'user'),
           plural(summary.conversations, 'conversation'),
@@ -563,8 +564,39 @@ function report(summaries: readonly SeededTenantSummary[]): void {
 
   console.log('');
   console.log('Seeded. Sign-in is TAR-35; until then set AUTH_STUB_ENABLED=true to browse as a');
-  console.log('seeded user, and reach a tenant on the hostname above (*.localhost needs no');
-  console.log('hosts entry in Chrome, Firefox or Safari).');
+  console.log('seeded user, and reach a tenant on one of the addresses above (*.localhost needs');
+  console.log('no hosts entry in Chrome, Firefox or Safari). The console resolves the tenant');
+  console.log('from that host: on a bare localhost it names none and every read answers');
+  console.log('tenant_not_found.');
+}
+
+/**
+ * A tenant's console address: its own hostname, on the scheme and port the
+ * console actually listens on.
+ *
+ * The port is the whole point. This line printed `http://northwind.app.localhost`
+ * — port 80, which reaches neither app — and it is the *only* place the setup
+ * names a tenant hostname at all, so a reader who copied it landed on a dead
+ * link with nothing else to go on (TAR-830). That was survivable while
+ * `NEXT_PUBLIC_USE_MOCK_API` defaulted on and any host worked; it is not now.
+ *
+ * From `WEB_ORIGIN` rather than a literal `3000`, because that is the console's
+ * origin as the API already knows it — a developer who moves the console keeps a
+ * correct line here, and there is no second place to remember to change.
+ *
+ * Same `try`/`catch` shape as `describeTarget` above, and for the same reason: a
+ * seed that has written every row must not die in its closing summary over a
+ * variable it only prints with. The fallback is the portless address this
+ * printed before, which `.env.example` sets `WEB_ORIGIN` precisely to avoid.
+ */
+function consoleUrl(hostname: string, webOrigin: string): string {
+  try {
+    const origin = new URL(webOrigin);
+
+    return `${origin.protocol}//${hostname}${origin.port === '' ? '' : `:${origin.port}`}`;
+  } catch {
+    return `http://${hostname}`;
+  }
 }
 
 /** Every noun in the summary is regular, so one `s` is the whole rule. */

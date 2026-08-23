@@ -74,7 +74,15 @@ describe('TenantDomainsService', () => {
   let tenantContext: TenantContextService;
   let service: TenantDomainsService;
 
+  /**
+   * The clock is frozen at `NOW`, the same way `tenant-domain.mapper.spec.ts`
+   * freezes it and for the same reason: the status these cases assert is derived
+   * from the fixture's `expiresAt` against the current time, not stored. Left on
+   * the real clock, the pending domain below turned `expired` on 2026-08-17 and
+   * every run after that date failed on a fixture that had simply aged out.
+   */
   beforeEach(() => {
+    jest.useFakeTimers().setSystemTime(NOW);
     rows = [PLATFORM_ROW, row()];
     updateMany = jest.fn().mockResolvedValue({ count: 1 });
     update = jest
@@ -111,6 +119,10 @@ describe('TenantDomainsService', () => {
         getOrThrow: (key: string) => (key === 'PLATFORM_DOMAIN' ? 'app.localhost' : 7),
       } as unknown as ConfigService,
     );
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   function as<T>(role: TenantRole, work: () => Promise<T>): Promise<T> {
