@@ -1,0 +1,31 @@
+/*
+ * The notice's own body is `Notice`'s; only the two-part row is here.
+ *
+ * A `span` rather than a `div` because `Notice` renders a `<p>` — a block child
+ * there is invalid markup and React would rebuild the tree around it on
+ * hydration. `Cluster as="span"` keeps the flex behaviour and the valid nesting.
+ */
+.row {
+  /*
+   * The sentence takes what it needs and the button keeps its own width, so a
+   * long count line wraps inside the copy rather than squeezing the control.
+   * Below the wrap the button drops to its own line at the inline start, which
+   * is where every other action on this surface sits.
+   */
+  inline-size: 100%;
+}
+
+.copy {
+  /* Long copy wraps; the button beside it never shrinks below its label. */
+  flex: 1 1 var(--measure-cell);
+  min-inline-size: 0;
+}
+
+/*
+ * The count leads, because it is the fact; the consequence follows it as
+ * ordinary weight. Two sentences rather than one so the reader can stop after
+ * the first and still have the whole answer.
+ */
+.count {
+  font-weight: var(--font-weight-medium);
+}

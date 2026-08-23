@@ -1825,71 +1825,134 @@ export const content = {
     assignTicketNoAgentsError: 'Nobody in this workspace is active enough to take a ticket.',
 
     /**
-     * The cap-edit control (TAR-384). A supervisor looking at "everyone at
-     * capacity" needs a path to raise the limit that is in the way without
-     * leaving the console — and copy that is honest about what raising it does
-     * and does not do.
+     * The cap-edit control (TAR-384; placement settled on TAR-778). A supervisor
+     * looking at "everyone at capacity" needs a path to the limit that is in the
+     * way without leaving the console — and copy that is honest about what
+     * changing it does and does not do.
+     *
+     * Two groups, because two audiences. `capacityNotice*` is the remedy notice
+     * above the table, which everyone who can see the queue reads; `raiseLimit*`
+     * is the dialog behind it, which only a caller who may write a limit opens.
      */
-    editCapacity: 'Agent limits',
+
     /**
-     * Deliberately **not** ticket-scoped, unlike `assignTicketAria` beside it
-     * (TAR-778). The dialog this opens edits an *agent's* limit workspace-wide;
-     * which row opened it changes nothing about what it shows. Naming the ticket
-     * would promise a screen-reader user a different action per row — "Change
-     * agent limits for Ticket #482", "…for Ticket #517" — and then hand each one
-     * the same agent picker with the same default selection. The verb is the
-     * whole subject here, because there is no per-row subject to disambiguate
-     * with.
+     * The fact, on the page, whether or not the reader may act on it.
+     *
+     * Counts the `all_at_capacity` rows **on this page** — the same discipline
+     * `flaggedShowingOldest` keeps about not making claims about the whole queue.
+     * The singular is not a nicety: one at-capacity row is the common case, and
+     * "1 of these are waiting" ships the moment a queue has one.
      */
-    editCapacityAria: 'Change agent limits',
-    capacityTitle: 'Agent ticket limits',
+    capacityNoticeCount: (count: number) =>
+      count === 1
+        ? '1 of these is waiting because every agent is at their limit.'
+        : `${String(count)} of these are waiting because every agent is at their limit.`,
     /**
-     * Says what the write actually achieves. Raising a limit frees the agent for
-     * the *next* ticket routing places; nothing re-routes a ticket already
-     * deferred, so the row in front of the supervisor stays flagged until they
-     * assign it. Left unsaid, the control reads as if the ticket places itself,
-     * and it does not.
+     * Under the "Everyone at capacity" pill the count *is* the list, and "3 of
+     * these" above exactly three rows reads as a riddle. No number, same fact.
      */
-    capacityDescription:
-      'A higher limit frees that agent for the next ticket auto-assignment routes. It does not move this one — assign it when you are ready.',
-    capacityAgentLabel: 'Agent',
-    capacityAgentHint: 'Agents already at their limit are listed first.',
-    /** Said out loud rather than implied: the picker holds one page of agents. */
-    capacityAgentHintTruncated:
-      'Agents already at their limit are listed first. This list holds the first page of agents in this workspace.',
-    capacityAgentOption: (name: string, active: number, limit: number) =>
-      `${name} — ${String(active)} of ${String(limit)}`,
-    capacityLoadLabel: 'Holding now',
-    capacityLoad: (active: number, limit: number) =>
-      `${String(active)} of ${String(limit)} tickets`,
-    capacityAtLimit: 'At their limit',
-    capacityHasRoom: 'Has room',
-    capacityInherited: (workspaceDefault: number) =>
-      `No limit of their own — inherits the workspace default of ${String(workspaceDefault)}.`,
-    capacityOverridden: 'Set for this agent, rather than inherited.',
-    capacityLimitSourceLegend: 'Where this agent’s limit comes from',
-    capacityLimitLabel: 'Ticket limit',
-    capacityLimitHint: (min: number, max: number) =>
+    capacityNoticeCountFiltered:
+      'Every ticket here is waiting because every agent is at their limit.',
+    /**
+     * The consequence, said before the act rather than discovered after it.
+     * Nothing re-routes a ticket that has already deferred (ADR 0008), so raising
+     * a limit frees that agent for the next one and leaves these rows exactly
+     * where they are. Left unsaid, the control reads as if the queue will clear.
+     */
+    capacityNoticeConsequence:
+      'Raising a limit lets that agent take new tickets; it does not place the ones already on this list.',
+    /**
+     * Replaces the sentence above for a reader who may not act. Per 0001 an
+     * action a role cannot perform is not offered, so the button is omitted
+     * rather than disabled — but the fact stays on screen, because knowing why
+     * the queue is stuck is what tells somebody whether to wait or to escalate.
+     */
+    capacityNoticeAskSupervisor: 'Ask an admin or a supervisor to raise an agent’s limit.',
+
+    /**
+     * "Change", not "Raise". The field accepts the whole contract range and the
+     * dialog can also clear an override back to the workspace default, so a label
+     * promising a raise would sometimes be a lie. The notice above explains the
+     * remedy; the button names the action.
+     */
+    raiseLimit: 'Change an agent’s limit',
+    /** The same string as the trigger, so the title matches what was pressed. */
+    raiseLimitTitle: 'Change an agent’s limit',
+    raiseLimitDescription:
+      'Auto-assignment skips an agent who is already at their limit. This changes one agent’s limit only — it does not place the tickets already flagged.',
+    raiseLimitAgentLabel: 'Agent',
+    /**
+     * The hint carries the single-agent scope, not the ordering: every option
+     * shows its own load, so "listed first" only states what the list is visibly
+     * doing. This sentence is how TAR-755's "edits a single agent's cap only"
+     * reaches the person using it instead of living in the issue.
+     *
+     * The truncation sentence is **appended**, not substituted — both facts are
+     * true at once when the workspace holds more agents than one page.
+     */
+    raiseLimitAgentHint: (hasMore: boolean) =>
+      hasMore
+        ? 'Only this agent’s limit changes. Everyone else keeps theirs. This list holds the first page of agents in this workspace.'
+        : 'Only this agent’s limit changes. Everyone else keeps theirs.',
+    /**
+     * The load rides in the option text, so changing agent announces the reading
+     * along with the name rather than leaving the meter below as its only
+     * carrier.
+     */
+    raiseLimitAgentOption: (name: string, load: number, cap: number) =>
+      `${name} — ${String(load)} of ${String(cap)} tickets`,
+    raiseLimitLoadHeading: 'Current load',
+    raiseLimitLoadSummary: (load: number, cap: number) =>
+      `${String(load)} of ${String(cap)} active tickets`,
+    /**
+     * Where the limit came from, **under** the reading rather than above it: the
+     * numbers are the decision and provenance is the footnote to them. It is also
+     * the only place a supervisor can see the inherited-versus-override
+     * distinction at all, which is what stops the edit feeling arbitrary.
+     */
+    raiseLimitInherited: (workspaceDefault: number) =>
+      `Limit inherited from the workspace default (${String(workspaceDefault)}).`,
+    raiseLimitOverridden: 'Limit set for this agent.',
+    raiseLimitValueLabel: 'Ticket limit',
+    raiseLimitValueHint: (min: number, max: number) =>
       `A whole number between ${String(min)} and ${String(max)}.`,
-    capacityUseDefaultLabel: (workspaceDefault: number) =>
-      `Use the workspace default of ${String(workspaceDefault)}`,
-    capacityRangeError: (min: number, max: number) =>
+    raiseLimitValueError: (min: number, max: number) =>
       `Enter a whole number between ${String(min)} and ${String(max)}.`,
     /**
-     * ADR 0008's failure-mode table rules that lowering a cap below an agent's
-     * current load takes no ticket off them — they are skipped by rotation until
-     * they close down to it. It looks like a bug from the queue, so it is said
-     * before the supervisor presses save rather than discovered afterwards.
+     * Sits under the number field, because it modifies that field. Without it the
+     * dialog is a one-way door: `raiseLimitInherited` reports that an agent
+     * inherits, and once somebody has overridden them nothing offers the way back
+     * (TAR-778).
      */
-    capacityBelowLoadWarning: (name: string, active: number) =>
-      `${name} is holding ${String(active)}. A lower limit takes none of those away — they stop receiving new tickets until they are back under it.`,
-    capacitySubmit: 'Save limit',
-    capacitySuccess: (name: string, limit: number) =>
-      limit === 1
-        ? `${name} can now hold 1 ticket at a time`
-        : `${name} can now hold ${String(limit)} tickets at a time`,
-    capacityClearedSuccess: (name: string, workspaceDefault: number) =>
+    raiseLimitUseDefaultLabel: (workspaceDefault: number) =>
+      `Use the workspace default (${String(workspaceDefault)})`,
+    /**
+     * ADR 0008's failure-mode table: a limit below what somebody already holds
+     * takes none of it away — rotation skips them until they close down to it.
+     * From the queue that looks like the control did not work, so it is said in
+     * front of the button. A warning, not an error; the save proceeds.
+     */
+    raiseLimitBelowLoad: (name: string, load: number, value: number) =>
+      `${name} is holding ${String(load)}. Setting ${String(value)} takes nothing off them — they get no new tickets until they are back under the limit.`,
+    raiseLimitSubmit: 'Save limit',
+    raiseLimitSuccess: (name: string, value: number) => `${name}’s limit is now ${String(value)}`,
+    raiseLimitClearedSuccess: (name: string, workspaceDefault: number) =>
       `${name} now uses the workspace default of ${String(workspaceDefault)}`,
+    /**
+     * Two refusals the supervisor cannot answer from inside the dialog, so each
+     * replaces the API's own message and blocks the submit rather than leaving a
+     * button that will only refuse again. Everything else keeps `useActionForm`'s
+     * generic error, which is retryable.
+     */
+    raiseLimitForbidden:
+      'You no longer have permission to change an agent’s limit. Close this and reload the page.',
+    raiseLimitNotFound:
+      'That agent is no longer in this workspace. Close this and reload the queue.',
+    /**
+     * Practically unreachable when the reason is `all_at_capacity` — something has
+     * to be holding those tickets — but rendered rather than crashed.
+     */
+    raiseLimitNoAgentsError: 'No agent in this workspace has a limit this console can read.',
 
     routedToTeam: (teamName: string) => `${teamName} team`,
     routedToNobody: 'Whole workspace',

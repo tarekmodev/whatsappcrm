@@ -1,16 +1,21 @@
 'use client';
 
+import { useId } from 'react';
 import { ASSIGNMENT_POLICY } from '@whatsappcrm/contracts';
-import { Badge } from '@/components/ui/Badge';
-import { CheckboxGroup } from '@/components/ui/CheckboxGroup';
-import { Cluster } from '@/components/layout/Cluster';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { Field } from '@/components/ui/Field';
 import { Notice } from '@/components/ui/Notice';
-import { StaticFieldValue } from '@/components/ui/StaticFieldValue';
 import { TextInput } from '@/components/ui/TextInput';
+import { UsageMeter, type UsageMeterTone } from '@/components/ui/UsageMeter';
 import { useContent } from '@/lib/content';
 import type { AgentCapacityRow } from '../capacity';
-import { resolveTicketLimit, type TicketLimitDraft } from '../capacity-input';
+import {
+  effectiveTicketLimit,
+  withLimit,
+  withUsesDefault,
+  type TicketLimitDraft,
+} from '../capacity-input';
+import styles from './AgentCapacityFields.module.css';
 
 /**
  * One agent's limit, as read and as edited. Usage, inside the cap-edit dialog:
@@ -20,13 +25,19 @@ import { resolveTicketLimit, type TicketLimitDraft } from '../capacity-input';
  * and typed — while the dialog around it owns the agent picker, the submit and
  * the toast. Controlled, so the dialog keeps a single draft it can send.
  *
- * The load line is read-only text rather than a disabled input: it is not a value
- * the supervisor may edit, and a disabled control both implies "not right now"
- * and is skipped by keyboard navigation, which would make the one number the
- * decision rests on unreadable to somebody tabbing through.
+ * **The reading is a `UsageMeter`, not a line of text.** With `value` and `max`
+ * it is a real `progressbar`, so the proportion a supervisor is deciding on can
+ * be reported on request — and the summary states the same two numbers in words,
+ * which is what keeps it correct in forced-colors mode and for anyone who cannot
+ * tell the tones apart. The bar never carries the fact alone.
+ *
+ * Order matters here and was got wrong once (TAR-778): heading, then the numbers,
+ * then where the limit came from. The reading is the decision; provenance is the
+ * footnote that stops the edit feeling arbitrary.
  */
-/** The group's single option value. Never rendered; it only has to be stable. */
-const USES_DEFAULT = 'workspace-default';
+
+/** Above this share of the cap the tone stops being neutral. */
+const WARNING_RATIO = 0.8;
 
 export function AgentCapacityFields({
   row,
@@ -46,105 +57,112 @@ export function AgentCapacityFields({
   onDraftChange: (draft: TicketLimitDraft) => void;
 }) {
   const content = useContent();
-  const resolved = resolveTicketLimit(draft);
-  const isBelowLoad =
-    resolved.status === 'valid' &&
-    resolved.maxConcurrentTickets !== null &&
-    resolved.maxConcurrentTickets < row.capacity.activeTicketCount;
+  const useDefaultId = useId();
+  const { activeTicketCount, effectiveMaxConcurrentTickets } = row.capacity;
+  const ratio = activeTicketCount / effectiveMaxConcurrentTickets;
+
+  // The effective limit, so ticking "use the workspace default" is checked
+  // against the same rule as typing a number — one condition, not two.
+  const effective = effectiveTicketLimit(draft, workspaceDefault);
+  const isBelowLoad = effective !== null && effective < activeTicketCount;
 
   return (
     <>
+      {/* Polite, and around the whole meter: changing agent in the picker above
+          replaces every part of this reading at once, so one announcement is
+          the honest number of announcements. */}
+      <div role="status" className={styles.reading}>
+        <UsageMeter
+          heading={content.assignment.raiseLimitLoadHeading}
+          summary={content.assignment.raiseLimitLoadSummary(
+            activeTicketCount,
+            effectiveMaxConcurrentTickets,
+          )}
+          ratio={ratio}
+          value={activeTicketCount}
+          max={effectiveMaxConcurrentTickets}
+          tone={loadTone(ratio)}
+        >
+          {row.capacity.maxConcurrentTickets === null
+            ? content.assignment.raiseLimitInherited(workspaceDefault)
+            : content.assignment.raiseLimitOverridden}
+        </UsageMeter>
+      </div>
+
       <Field
-        label={content.assignment.capacityLoadLabel}
-        hint={
-          row.capacity.maxConcurrentTickets === null
-            ? content.assignment.capacityInherited(workspaceDefault)
-            : content.assignment.capacityOverridden
-        }
+        label={content.assignment.raiseLimitValueLabel}
+        hint={content.assignment.raiseLimitValueHint(
+          ASSIGNMENT_POLICY.minMaxConcurrentTickets,
+          ASSIGNMENT_POLICY.maxMaxConcurrentTickets,
+        )}
+        error={error}
+        isRequired
       >
-        {({ controlId }) => (
-          <StaticFieldValue id={controlId}>
-            <Cluster gap="2">
-              <span>
-                {content.assignment.capacityLoad(
-                  row.capacity.activeTicketCount,
-                  row.capacity.effectiveMaxConcurrentTickets,
-                )}
-              </span>
-              {/* Colour is never the whole message: the badge says which of the
-                  two states it is, in words. */}
-              <Badge tone={row.isAtCapacity ? 'warning' : 'neutral'}>
-                {row.isAtCapacity
-                  ? content.assignment.capacityAtLimit
-                  : content.assignment.capacityHasRoom}
-              </Badge>
-            </Cluster>
-          </StaticFieldValue>
+        {({ controlId, describedBy, isInvalid }) => (
+          <TextInput
+            id={controlId}
+            aria-describedby={describedBy}
+            aria-invalid={isInvalid}
+            className={styles.limit}
+            name="maxConcurrentTickets"
+            type="number"
+            inputMode="numeric"
+            min={ASSIGNMENT_POLICY.minMaxConcurrentTickets}
+            max={ASSIGNMENT_POLICY.maxMaxConcurrentTickets}
+            step={1}
+            value={draft.limit}
+            // Disabled while the box below is ticked, rather than removed: a
+            // field that vanishes takes the supervisor's place in the form with
+            // it, and the number it shows *is* the limit that would apply.
+            disabled={isDisabled || draft.usesDefault}
+            onChange={(event) => {
+              onDraftChange(withLimit(event.target.value));
+            }}
+          />
         )}
       </Field>
 
-      {/* A group of one, rather than a `Field` wrapping a lone `Checkbox`: a
-          checkbox's label belongs *beside* the box, and `Field` stacks it above,
-          which reads as a heading with an orphaned box under it. Reusing the
-          group is also what keeps the 44px target and the fieldset semantics
-          instead of hand-assembling a label around a control. */}
-      <CheckboxGroup
-        legend={content.assignment.capacityLimitSourceLegend}
-        name="usesDefault"
-        options={[
-          {
-            value: USES_DEFAULT,
-            label: content.assignment.capacityUseDefaultLabel(workspaceDefault),
-          },
-        ]}
-        selectedValues={draft.usesDefault ? [USES_DEFAULT] : []}
-        onChange={(values) => {
-          onDraftChange({ ...draft, usesDefault: values.includes(USES_DEFAULT) });
-        }}
-      />
-
-      {draft.usesDefault ? null : (
-        <Field
-          label={content.assignment.capacityLimitLabel}
-          hint={content.assignment.capacityLimitHint(
-            ASSIGNMENT_POLICY.minMaxConcurrentTickets,
-            ASSIGNMENT_POLICY.maxMaxConcurrentTickets,
-          )}
-          error={error}
-          isRequired
-        >
-          {({ controlId, describedBy, isInvalid }) => (
-            <TextInput
-              id={controlId}
-              aria-describedby={describedBy}
-              aria-invalid={isInvalid}
-              name="maxConcurrentTickets"
-              type="number"
-              inputMode="numeric"
-              min={ASSIGNMENT_POLICY.minMaxConcurrentTickets}
-              max={ASSIGNMENT_POLICY.maxMaxConcurrentTickets}
-              step={1}
-              value={draft.limit}
-              disabled={isDisabled}
-              onChange={(event) => {
-                onDraftChange({ ...draft, limit: event.target.value });
-              }}
-            />
-          )}
-        </Field>
-      )}
+      {/* Under the field, because it modifies the field. The label carries the
+          number, so no group heading above it — `raiseLimitInherited` under the
+          meter already says where a limit comes from, and a legend here would be
+          the third statement of one fact inside one dialog. */}
+      <label className={styles.useDefault} htmlFor={useDefaultId}>
+        <Checkbox
+          id={useDefaultId}
+          name="usesDefault"
+          checked={draft.usesDefault}
+          disabled={isDisabled}
+          onChange={(event) => {
+            onDraftChange(withUsesDefault(draft, event.target.checked, workspaceDefault));
+          }}
+        />
+        <span className={styles.useDefaultLabel}>
+          {content.assignment.raiseLimitUseDefaultLabel(workspaceDefault)}
+        </span>
+      </label>
 
       {/* ADR 0008's failure-mode table: a limit below what somebody already holds
           takes none of it away, which reads as a bug from the queue. Said before
-          the button rather than discovered after it. */}
+          the button rather than discovered after it — and it fires for a ticked
+          workspace default below the load just as it does for a typed one. */}
       {isBelowLoad ? (
         <Notice tone="warning">
-          {content.assignment.capacityBelowLoadWarning(
+          {content.assignment.raiseLimitBelowLoad(
             row.user.displayName,
-            row.capacity.activeTicketCount,
+            activeTicketCount,
+            effective,
           )}
         </Notice>
       ) : null}
     </>
   );
+}
+
+/** Neutral until the agent is close to their cap, danger once they are on it. */
+function loadTone(ratio: number): UsageMeterTone {
+  if (ratio >= 1) {
+    return 'danger';
+  }
+
+  return ratio >= WARNING_RATIO ? 'warning' : 'accent';
 }

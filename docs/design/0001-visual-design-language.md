@@ -668,6 +668,40 @@ ones:
 | `red-300` on `slate-900` (destructive label, dark)       | 9.28:1 | 4.5   |
 | `red-300` on `red-900` (its hover and focus tint, dark)  | 6.41:1 | 4.5   |
 
+#### A remedy above the queue, not inside a row (TAR-778)
+
+Row actions act on **their row**. A control that acts on something the whole list shares —
+a setting, a limit, a configuration the queue is waiting on — does not belong in the
+actions column, however naturally the acceptance criterion reads as "on the row". It goes
+in a `Notice variant="quiet"` between the filter strip and the table, carrying at most one
+`Button variant="secondary" size="sm"`.
+
+The flagged-ticket queue is the case this was learned on. "Everyone at capacity" is fixed
+by raising an _agent's_ limit, which is a workspace-wide act, and putting it on the row
+went wrong in three ways at once:
+
+- **It repeats.** The same dialog, with the same contents and the same default selection,
+  hung off every `all_at_capacity` row — up to a full page of identical buttons doing one
+  identical thing.
+- **Its accessible name cannot be honest.** "Row actions" above requires the verb _and the
+  subject_, and there is no subject: naming the ticket promised a screen-reader user a
+  ticket-scoped change that the dialog does not make, and dropping it left a column of
+  identically-named buttons. A control whose name cannot reference its row is not a row
+  action.
+- **It costs the table width on rows that gain nothing.** A column takes the width of its
+  widest cell, so a two-button cluster on _some_ rows pushed the primary verb out of line
+  on _every_ row. Measured at 1440: the `Assign` button on the at-capacity row sat ~105px
+  inboard of the `Assign` buttons below it, and the reader lost the scan line down the one
+  action the queue exists for.
+
+The section slot costs the table nothing and can do the thing a row cannot — state the
+**aggregate** fact ("2 of these are waiting because…") that makes the remedy legible at
+all. Count what is on the page, never the queue, the same rule the queue header keeps.
+
+Where the reader may not perform the action, the notice still renders and its second
+sentence names who can. The button is omitted, not disabled — "an action a role cannot
+perform is not offered" — but the fact is worth knowing to anyone who can see the list.
+
 #### The queue header (TAR-520)
 
 A list that scrolls owes the reader two facts before the rows start, and both belong **in a
@@ -1099,35 +1133,36 @@ token layer takes the durations to 1ms and `StateLayout` drops the animation out
 Compose these and the screen matches this document without you specifying a colour or a
 space:
 
-| You need                | Use                                                |
-| ----------------------- | -------------------------------------------------- |
-| The frame               | Nothing — `app/(app)/layout.tsx` already has it    |
-| Page gutter and rhythm  | `PageShell`, then `Stack`                          |
-| A full-height workspace | `PageShell variant="fill"`                         |
-| The page title          | `PageHeader`                                       |
-| A section               | `SectionCard`                                      |
-| A table                 | `DataTable` + `DataTableSkeleton`                  |
-| A row's actions         | `RowActions` — see "Row actions" for the ladder    |
-| Tabs                    | `Tabs`                                             |
-| A filter row            | `FilterBar`                                        |
-| Filter pills            | `FilterPills`                                      |
-| A search filter         | `SearchField`                                      |
-| A single choice         | `Select` (`variant="filter"` above a list)         |
-| A settings form         | `SettingsForm` — see "Settings forms"              |
-| An on/off setting       | `Switch` — never a checkbox for a live setting     |
-| A multi-select tick     | `Checkbox`, or `CheckboxGroup` for a whole set     |
-| A value in a range      | `Slider`                                           |
-| A date range            | `DateRangeField`                                   |
-| Collapsed filters       | `FilterMenu` + `ActiveFilterChips`                 |
-| A status chip or count  | `Badge` — see "Status vocabulary" for how many     |
-| The product's identity  | `BrandLockup` — mark plus wordmark, logo-aware     |
-| A link that acts        | `ButtonLink` — a navigation with a button's weight |
-| An icon                 | `Icon`                                             |
-| A person's initial      | `Avatar`                                           |
-| A popup of actions      | `MenuButton`                                       |
-| Explaining a figure     | `InfoPopover` — never prose under the number       |
-| Loading, empty, error   | `Skeleton`, `EmptyState`, `ErrorState`             |
-| A link off-app          | `TextLink isExternal`                              |
+| You need                  | Use                                                                                     |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| The frame                 | Nothing — `app/(app)/layout.tsx` already has it                                         |
+| Page gutter and rhythm    | `PageShell`, then `Stack`                                                               |
+| A full-height workspace   | `PageShell variant="fill"`                                                              |
+| The page title            | `PageHeader`                                                                            |
+| A section                 | `SectionCard`                                                                           |
+| A table                   | `DataTable` + `DataTableSkeleton`                                                       |
+| A row's actions           | `RowActions` — see "Row actions" for the ladder                                         |
+| An action the list shares | `Notice variant="quiet"` above the table, one `Button` — see "A remedy above the queue" |
+| Tabs                      | `Tabs`                                                                                  |
+| A filter row              | `FilterBar`                                                                             |
+| Filter pills              | `FilterPills`                                                                           |
+| A search filter           | `SearchField`                                                                           |
+| A single choice           | `Select` (`variant="filter"` above a list)                                              |
+| A settings form           | `SettingsForm` — see "Settings forms"                                                   |
+| An on/off setting         | `Switch` — never a checkbox for a live setting                                          |
+| A multi-select tick       | `Checkbox`, or `CheckboxGroup` for a whole set                                          |
+| A value in a range        | `Slider`                                                                                |
+| A date range              | `DateRangeField`                                                                        |
+| Collapsed filters         | `FilterMenu` + `ActiveFilterChips`                                                      |
+| A status chip or count    | `Badge` — see "Status vocabulary" for how many                                          |
+| The product's identity    | `BrandLockup` — mark plus wordmark, logo-aware                                          |
+| A link that acts          | `ButtonLink` — a navigation with a button's weight                                      |
+| An icon                   | `Icon`                                                                                  |
+| A person's initial        | `Avatar`                                                                                |
+| A popup of actions        | `MenuButton`                                                                            |
+| Explaining a figure       | `InfoPopover` — never prose under the number                                            |
+| Loading, empty, error     | `Skeleton`, `EmptyState`, `ErrorState`                                                  |
+| A link off-app            | `TextLink isExternal`                                                                   |
 
 If a screen needs something not on that list, add it to `components/ui/` with a usage
 comment and add a row here. A one-off in a feature folder that a second feature then

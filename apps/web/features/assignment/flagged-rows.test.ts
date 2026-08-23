@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TeamResponse, TicketResponse } from '@whatsappcrm/contracts';
-import { toFlaggedTicketRows } from './flagged-rows';
+import { countAtCapacity, toFlaggedTicketRows } from './flagged-rows';
 
 /**
  * The narrowing every cell in the queue depends on: a row exists only when the
@@ -103,5 +103,49 @@ describe('toFlaggedTicketRows', () => {
     );
 
     expect(rows.map((row) => row.ticket.id)).toEqual(['a', 'b']);
+  });
+});
+
+/**
+ * What the remedy notice above the table counts. Rendered rows, never the queue:
+ * a page is capped and a ticket can be dropped, so anything wider would be a
+ * claim nobody checked (TAR-778).
+ */
+describe('countAtCapacity', () => {
+  it('counts only the rows a higher limit would unblock', () => {
+    const rows = toFlaggedTicketRows(
+      [
+        ticket({ id: 'a', number: 1 }),
+        ticket({ id: 'b', number: 2 }),
+        ticket({
+          id: 'c',
+          number: 3,
+          routing: { ...ticket().routing, deferredReason: 'none_available' },
+        }),
+        ticket({
+          id: 'd',
+          number: 4,
+          routing: { ...ticket().routing, deferredReason: 'no_candidate_pool' },
+        }),
+      ],
+      TEAMS,
+    );
+
+    expect(countAtCapacity(rows)).toBe(2);
+  });
+
+  it('counts none on a queue stuck for other reasons', () => {
+    const rows = toFlaggedTicketRows(
+      [
+        ticket({
+          id: 'c',
+          number: 3,
+          routing: { ...ticket().routing, deferredReason: 'none_available' },
+        }),
+      ],
+      TEAMS,
+    );
+
+    expect(countAtCapacity(rows)).toBe(0);
   });
 });

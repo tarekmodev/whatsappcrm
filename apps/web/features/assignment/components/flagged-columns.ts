@@ -8,9 +8,9 @@ import type { FlaggedTicketRow } from '../flagged-rows';
  *
  * `hasRowActions` drops the actions column entirely rather than rendering an
  * empty one, and the skeleton takes the same flag — a placeholder column that the
- * real table will not have is a layout shift with extra steps. It is "any row
- * action at all", not "may assign": a row carries an assign control, a cap-edit
- * control (TAR-384), or both, and the column exists for whichever it has.
+ * real table will not have is a layout shift with extra steps. It is `ticket:assign`
+ * and nothing else: assigning is the only act this queue offers per row, so the
+ * column and the permission are the same question (TAR-778).
  *
  * **Four columns, and that is a ceiling rather than a coincidence.** Where
  * routing *tried* to send a ticket rides inside the ticket cell instead of taking
@@ -18,6 +18,12 @@ import type { FlaggedTicketRow } from '../flagged-rows';
  * past its card, because `Badge` is `white-space: nowrap` and "No agents to route
  * to" is an unbreakable ~150px token that the table cannot shrink below. Adding
  * one back needs a re-measure in that band, not just a wide screen.
+ *
+ * A **second button** in the actions column is the same problem by another route,
+ * and TAR-778 is the case: a column takes the width of its widest cell, so a
+ * two-button cluster on the at-capacity rows pushed the `Assign` button on every
+ * other row out of line with it. Anything that is not a per-row act belongs above
+ * the table — see `CapacityNotice`.
  */
 export function flaggedTicketColumnMeta(
   content: Content,

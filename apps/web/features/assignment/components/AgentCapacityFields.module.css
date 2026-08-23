@@ -1,0 +1,38 @@
+/*
+ * A window is at most four digits — 1000 is the contract's ceiling — and a
+ * full-width box for one invites a wrong answer by looking like it wants a
+ * sentence. Doubly so directly under a full-width `Select`, where the two read
+ * as the same kind of control. `--space-8` is what `SlaWindowForm` and
+ * `AiConfigForm` cap their number fields at, for the same reason.
+ */
+.limit {
+  max-inline-size: var(--space-8);
+}
+
+/*
+ * A plain checkbox and its label, not `CheckboxGroup`'s bordered row: this is one
+ * tick modifying the field above it, and a second bordered box under a text field
+ * reads as a second thing to fill in. The row is still the target, so it clears
+ * 44px without a spacer.
+ */
+.useDefault {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-block-size: var(--size-touch-target);
+  cursor: pointer;
+}
+
+.useDefaultLabel {
+  font-size: var(--font-size-body-sm);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The live region wraps the meter rather than replacing its markup, so switching
+ * agent announces the whole reading — heading, numbers and provenance — in one
+ * polite message instead of three.
+ */
+.reading {
+  min-inline-size: 0;
+}

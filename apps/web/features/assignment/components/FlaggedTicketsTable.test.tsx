@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { TeamResponse, TicketResponse, UserResponse } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
-import { toAgentCapacityRows, type AgentCapacityReport } from '../capacity';
 import { toFlaggedTicketRows } from '../flagged-rows';
 import { FlaggedTicketsTable } from './FlaggedTicketsTable';
 import { FlaggedTicketsTableSkeleton } from './FlaggedTicketsTable.Skeleton';
@@ -74,31 +73,10 @@ function ticket(overrides: Partial<TicketResponse> = {}): TicketResponse {
 
 const ROWS = toFlaggedTicketRows([ticket()], TEAMS);
 
-const CAPACITY: AgentCapacityReport = {
-  rows: toAgentCapacityRows([
-    {
-      ...(USERS[0] as UserResponse),
-      assignmentCapacity: {
-        maxConcurrentTickets: 2,
-        effectiveMaxConcurrentTickets: 2,
-        activeTicketCount: 2,
-      },
-    },
-  ]),
-  workspaceDefault: 5,
-  hasMore: false,
-};
-
 describe('FlaggedTicketsTable', () => {
   it('says why a ticket is unassigned, in words and not only in colour', () => {
     render(
-      <FlaggedTicketsTable
-        rows={ROWS}
-        assignableUsers={USERS}
-        canAssign
-        capacity={null}
-        isFiltered={false}
-      />,
+      <FlaggedTicketsTable rows={ROWS} assignableUsers={USERS} canAssign isFiltered={false} />,
     );
 
     expect(
@@ -128,13 +106,7 @@ describe('FlaggedTicketsTable', () => {
     );
 
     render(
-      <FlaggedTicketsTable
-        rows={rows}
-        assignableUsers={USERS}
-        canAssign
-        capacity={null}
-        isFiltered={false}
-      />,
+      <FlaggedTicketsTable rows={rows} assignableUsers={USERS} canAssign isFiltered={false} />,
     );
 
     expect(
@@ -148,13 +120,7 @@ describe('FlaggedTicketsTable', () => {
 
   it('shows the team routing tried and how long the ticket has waited', () => {
     render(
-      <FlaggedTicketsTable
-        rows={ROWS}
-        assignableUsers={USERS}
-        canAssign
-        capacity={null}
-        isFiltered={false}
-      />,
+      <FlaggedTicketsTable rows={ROWS} assignableUsers={USERS} canAssign isFiltered={false} />,
     );
 
     expect(
@@ -168,13 +134,7 @@ describe('FlaggedTicketsTable', () => {
     const rows = toFlaggedTicketRows([ticket({ assignedTeamId: null })], TEAMS);
 
     render(
-      <FlaggedTicketsTable
-        rows={rows}
-        assignableUsers={USERS}
-        canAssign
-        capacity={null}
-        isFiltered={false}
-      />,
+      <FlaggedTicketsTable rows={rows} assignableUsers={USERS} canAssign isFiltered={false} />,
     );
 
     expect(
@@ -186,13 +146,7 @@ describe('FlaggedTicketsTable', () => {
     const rows = toFlaggedTicketRows([ticket({ subject: null, number: 1043 })], TEAMS);
 
     render(
-      <FlaggedTicketsTable
-        rows={rows}
-        assignableUsers={USERS}
-        canAssign
-        capacity={null}
-        isFiltered={false}
-      />,
+      <FlaggedTicketsTable rows={rows} assignableUsers={USERS} canAssign isFiltered={false} />,
     );
 
     expect(screen.getByText(content.assignment.untitledTicket(1043))).toBeInTheDocument();
@@ -200,13 +154,7 @@ describe('FlaggedTicketsTable', () => {
 
   it('names the assign action after the ticket it acts on', () => {
     render(
-      <FlaggedTicketsTable
-        rows={ROWS}
-        assignableUsers={USERS}
-        canAssign
-        capacity={null}
-        isFiltered={false}
-      />,
+      <FlaggedTicketsTable rows={ROWS} assignableUsers={USERS} canAssign isFiltered={false} />,
     );
 
     expect(
@@ -222,7 +170,6 @@ describe('FlaggedTicketsTable', () => {
         rows={ROWS}
         assignableUsers={USERS}
         canAssign={false}
-        capacity={null}
         isFiltered={false}
       />,
     );
@@ -232,165 +179,33 @@ describe('FlaggedTicketsTable', () => {
   });
 
   /**
-   * TAR-384. Raising a limit is an answer to `all_at_capacity` and to nothing
-   * else: on a row that says nobody was ever configured, or that agents exist but
-   * none is available, a higher limit changes nothing, and offering it there would
-   * send a supervisor to fix the wrong thing.
+   * TAR-778. Changing an agent's limit is not a per-row act — one dialog, one
+   * workspace-wide picker, no subject to tell twenty-five identical buttons
+   * apart — so it moved out of the actions column and into `CapacityNotice`
+   * above the table. This asserts the column it left: every row here is
+   * `all_at_capacity`, the reason that used to carry it, and the only control on
+   * any of them is Assign.
    */
-  describe('the cap-edit control', () => {
-    it('is offered on an at-capacity row', () => {
-      render(
-        <FlaggedTicketsTable
-          rows={ROWS}
-          assignableUsers={USERS}
-          canAssign
-          capacity={CAPACITY}
-          isFiltered={false}
-        />,
-      );
+  it('offers no limit control in a row, whatever the row is stuck on', () => {
+    render(
+      <FlaggedTicketsTable rows={ROWS} assignableUsers={USERS} canAssign isFiltered={false} />,
+    );
 
-      expect(
-        screen.getByRole('button', {
-          name: content.assignment.editCapacityAria,
-        }),
-      ).toBeInTheDocument();
-    });
-
-    /**
-     * TAR-778. The dialog is workspace-wide — `FlaggedTicketsTable` renders one
-     * for the whole table — so an accessible name that named the row would tell a
-     * screen-reader user they were about to change limits *for that ticket*, and
-     * then hand them the same agent picker every other row hands them. The assign
-     * action beside it is the opposite case and keeps its subject.
-     */
-    it('does not promise a ticket-scoped edit in the accessible name', () => {
-      const rows = toFlaggedTicketRows(
-        [ticket({ id: 'a', number: 1 }), ticket({ id: 'b', number: 2 })],
-        TEAMS,
-      );
-
-      render(
-        <FlaggedTicketsTable
-          rows={rows}
-          assignableUsers={USERS}
-          canAssign
-          capacity={CAPACITY}
-          isFiltered={false}
-        />,
-      );
-
-      const buttons = screen.getAllByRole('button', { name: /agent limits/i });
-
-      expect(buttons).toHaveLength(2);
-      expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
-        content.assignment.editCapacityAria,
-        content.assignment.editCapacityAria,
-      ]);
-    });
-
-    it('is not offered on rows a limit would not unblock', () => {
-      const rows = toFlaggedTicketRows(
-        [
-          ticket({
-            id: 'b',
-            number: 2,
-            routing: { ...ticket().routing, deferredReason: 'none_available' },
-          }),
-          ticket({
-            id: 'c',
-            number: 3,
-            routing: { ...ticket().routing, deferredReason: 'no_candidate_pool' },
-          }),
-        ],
-        TEAMS,
-      );
-
-      render(
-        <FlaggedTicketsTable
-          rows={rows}
-          assignableUsers={USERS}
-          canAssign
-          capacity={CAPACITY}
-          isFiltered={false}
-        />,
-      );
-
-      expect(
-        screen.queryByRole('button', { name: /^Change agent limits/ }),
-      ).not.toBeInTheDocument();
-    });
-
-    /**
-     * `capacity` being null is the whole gate — a caller without
-     * `assignment_rule:write`, or an API that does not publish limits yet. There is
-     * no second flag that could disagree with it.
-     */
-    it('is absent when the caller cannot change a limit', () => {
-      render(
-        <FlaggedTicketsTable
-          rows={ROWS}
-          assignableUsers={USERS}
-          canAssign
-          capacity={null}
-          isFiltered={false}
-        />,
-      );
-
-      expect(
-        screen.queryByRole('button', { name: /^Change agent limits/ }),
-      ).not.toBeInTheDocument();
-    });
-
-    /**
-     * The actions column follows from "does any row action exist", not from
-     * `ticket:assign` alone — otherwise a principal who may tune limits but not
-     * assign would have a control with no column to render it in.
-     */
-    it('keeps the actions column when assigning is not permitted but tuning is', () => {
-      render(
-        <FlaggedTicketsTable
-          rows={ROWS}
-          assignableUsers={USERS}
-          canAssign={false}
-          capacity={CAPACITY}
-          isFiltered={false}
-        />,
-      );
-
-      expect(screen.getAllByRole('columnheader')).toHaveLength(4);
-      expect(
-        screen.getByRole('button', {
-          name: content.assignment.editCapacityAria,
-        }),
-      ).toBeInTheDocument();
-    });
+    expect(screen.getByRole('button')).toHaveAccessibleName(
+      content.assignment.assignTicketAria('Refund still not showing on the card'),
+    );
+    expect(screen.getAllByRole('columnheader')).toHaveLength(4);
   });
 
   it('explains an empty queue as good news rather than rendering a blank panel', () => {
-    render(
-      <FlaggedTicketsTable
-        rows={[]}
-        assignableUsers={USERS}
-        canAssign
-        capacity={null}
-        isFiltered={false}
-      />,
-    );
+    render(<FlaggedTicketsTable rows={[]} assignableUsers={USERS} canAssign isFiltered={false} />);
 
     expect(screen.getByText(content.assignment.flaggedEmptyHeading)).toBeInTheDocument();
     expect(screen.getByText(content.assignment.flaggedEmptyBody)).toBeInTheDocument();
   });
 
   it('says the filter is what emptied the list when one is applied', () => {
-    render(
-      <FlaggedTicketsTable
-        rows={[]}
-        assignableUsers={USERS}
-        canAssign
-        capacity={null}
-        isFiltered
-      />,
-    );
+    render(<FlaggedTicketsTable rows={[]} assignableUsers={USERS} canAssign isFiltered />);
 
     expect(screen.getByText(content.assignment.flaggedFilteredEmptyHeading)).toBeInTheDocument();
     expect(screen.getByText(content.assignment.flaggedFilteredEmptyBody)).toBeInTheDocument();
@@ -409,13 +224,7 @@ describe('FlaggedTicketsTableSkeleton', () => {
 
   it('mirrors the loaded table’s column set, so the swap shifts nothing', () => {
     const { unmount } = render(
-      <FlaggedTicketsTable
-        rows={ROWS}
-        assignableUsers={USERS}
-        canAssign
-        capacity={null}
-        isFiltered={false}
-      />,
+      <FlaggedTicketsTable rows={ROWS} assignableUsers={USERS} canAssign isFiltered={false} />,
     );
     const loadedColumnCount = screen.getAllByRole('columnheader').length;
 
