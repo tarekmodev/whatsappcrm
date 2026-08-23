@@ -3491,6 +3491,151 @@ export const content = {
     workspaceNotFoundError: 'This address is not set up for a workspace. Check the link you used.',
     signInFailedError: 'We could not sign you in. Try again.',
 
+    // --- Create a workspace (public self-signup) ---------------------------
+    /**
+     * The signed-out surface's only screen that is not about an account that
+     * already exists (TAR-36, TAR-805).
+     *
+     * *Workspace*, throughout, and never *tenant* or *organisation*:
+     * `docs/STYLE.md` fixes *tenant* as the word for the row and *workspace* as
+     * the only word the console says on screen for it. This is the first screen
+     * anybody ever reads, so it is the last place to slip.
+     */
+    signupTitle: 'Create your workspace',
+    signupDescription: 'Set up a new workspace and become its first administrator.',
+    signupSubmit: 'Create workspace',
+    signupPending: 'Creating your workspace…',
+    signupNameLabel: 'Your name',
+    signupNameHint: 'Teammates see this on the conversations you handle.',
+    signupWorkspaceNameLabel: 'Workspace name',
+    signupWorkspaceNameHint: 'Your company or team, as your customers know it.',
+    signupPasswordLabel: 'Choose a password',
+    signupSignInPrompt: 'Already have a workspace?',
+
+    // The address, which is the one field on this form nobody has met before.
+    signupSlugLabel: 'Workspace address',
+    /**
+     * Says what the value *is* before it says what it may contain. "Lowercase
+     * letters, digits and hyphens" first would be a rule with no subject — and
+     * the reason the rule exists (it becomes a DNS label) is not the customer's
+     * problem to know.
+     */
+    signupSlugHint: 'Your team signs in here, and it cannot be changed later.',
+    /**
+     * The address as it will actually be, built from the host this page is
+     * already being served on — so a deployment on its own domain, or a
+     * developer on `localhost:3000`, sees its own hostname rather than one
+     * hardcoded here.
+     */
+    signupSlugPreviewLabel: 'Your workspace address will be',
+    signupSlugChecking: 'Checking that address…',
+    signupSlugAvailable: 'That address is available',
+    /**
+     * The one thing signup will confirm to an anonymous caller, and ADR 0009
+     * accepts it explicitly: a platform subdomain is public DNS, so the answer
+     * is already available to anybody who looks it up. Worded as something to
+     * fix rather than as a refusal, because it is.
+     */
+    signupSlugTakenError: 'That address is already taken. Choose another.',
+    signupSlugRequiredError: 'Choose an address for your workspace',
+    signupSlugTooShortError: (minLength: number) => `Use at least ${minLength} characters`,
+    signupSlugTooLongError: (maxLength: number) => `Use at most ${maxLength} characters`,
+    signupSlugInvalidError:
+      'Use lowercase letters, digits and hyphens, starting and ending with a letter or digit',
+    /**
+     * The availability check failed — offline, throttled, or the API is down.
+     * Deliberately not an error on the field: the check is a courtesy and the
+     * submit is the authority, so a broken check must never be a reason somebody
+     * cannot press the button.
+     */
+    signupSlugCheckUnavailable: 'We could not check that address. You can still continue.',
+    signupWorkspaceNameRequiredError: 'Enter a name for your workspace',
+    signupWorkspaceNameTooLongError: 'That name is too long. Use a shorter one.',
+    signupNameRequiredError: 'Enter your name',
+    signupNameTooLongError: 'That name is too long. Use a shorter one.',
+    signupFailedError: 'We could not create your workspace. Try again.',
+    /**
+     * `SIGNUP_POLICY` bounds signups per address and per email. The wait is not
+     * stated because neither window is published to the client, and inventing
+     * one would be a promise the API has not made.
+     */
+    signupRateLimitedError: 'Too many signup attempts. Wait a little and try again.',
+    /**
+     * `SIGNUP_ENABLED=false`. The API answers `not_found` rather than
+     * `forbidden` so it does not confirm to a prober that self-serve exists
+     * here; this screen is the one place that answer is turned into a sentence,
+     * because somebody who followed a link deserves better than a blank 404.
+     */
+    signupDisabledHeading: 'Self-signup is not available here',
+    signupDisabledBody:
+      'This deployment does not create workspaces from a form. Ask whoever runs it to set one up for you.',
+
+    // Check your email, and the resend that lives on it.
+    signupSentHeading: 'Confirm your email address',
+    /**
+     * Names the address without confirming anything about it. The API answers
+     * the same `202` for a new signup, a repeat, and an address that already
+     * runs a workspace — this line has to hold that, so it says what was *sent*
+     * rather than what was *found*.
+     */
+    signupSentBody: (email: string) =>
+      `We sent a link to ${email}. Open it to finish creating your workspace.`,
+    /** Hours, from `LIFECYCLE_POLICY.signupTokenTtlMs` — never a literal in copy. */
+    signupSentExpiry: (hours: number) =>
+      `The link can be used once, and stops working after ${hours} hours.`,
+    signupSentHint: 'Nothing arrived? Check your spam folder before asking for another link.',
+    signupResend: 'Send the link again',
+    signupResendPending: 'Sending…',
+    signupResendSent: 'A new link is on its way.',
+    /**
+     * `SIGNUP_POLICY.resendsPerSignup` is counted on the pending row itself, so
+     * the console can cap the button at the same number rather than offering a
+     * press that can only be refused. Past it, more mail is not what fixes the
+     * problem.
+     */
+    signupResendExhausted:
+      'We have sent that link as many times as we can. If none of them arrived, the address may not be able to receive our mail — start again with another one.',
+    signupResendRateLimitedError:
+      'That link has been sent too many times. Wait a little, or start again with another address.',
+    signupResendFailedError: 'We could not send that link again. Try once more in a moment.',
+    signupUseAnotherAddress: 'Use a different address',
+    signupStartAgain: 'Start again',
+
+    // --- Verify a signup ---------------------------------------------------
+    verifyTitle: 'Confirming your email address',
+    verifyDescription: 'Confirm your address to finish creating your workspace.',
+    verifyLoading: 'Confirming your email address',
+    /** A transport failure, not a refusal: the same link is still worth pressing. */
+    verifyRetry: 'Try again',
+    verifyPending: 'Setting up your workspace…',
+    verifyDoneHeading: (workspace: string) => `${workspace} is ready`,
+    /**
+     * Names the hostname, because it is not the one they are reading this on and
+     * they are about to be sent there.
+     */
+    verifyDoneBody: (hostname: string) => `Your workspace is set up at ${hostname}.`,
+    /**
+     * ⚠️ The one piece of copy on this screen that exists because of a platform
+     * constraint rather than a product choice, so it has to be said plainly.
+     *
+     * The session cookie the verify call sets carries a `__Host-` prefix and no
+     * `Domain` (`apps/api/src/identity/session-cookie.ts`), which means it is
+     * scoped to the platform host this page is served on and does not travel to
+     * the workspace's own subdomain. So the new administrator signs in once,
+     * there, with the password they chose a moment ago — and being told that
+     * before it happens is the difference between a hand-off and a sign-in
+     * screen that looks like the signup did not work.
+     */
+    verifySignInNotice:
+      'Your workspace has its own address, so sign in there once with the password you just chose. We will take you to the setup checklist from there.',
+    verifyOpenWorkspace: 'Open your workspace',
+    verifyUnusableHeading: 'This confirmation link cannot be used',
+    verifyIncompleteBody:
+      'The link is missing its token, which usually means it was truncated on the way to you. Open the confirmation email again, without editing the address.',
+    verifyDeadLinkBody:
+      'It may have expired, or already been used. If your workspace is not set up yet, start again — the address you chose is free once the old link lapses.',
+    verifyFailedError: 'We could not confirm your email address. Try opening the link again.',
+
     // --- Accept an invitation ----------------------------------------------
     inviteTitle: 'Accept your invitation',
     inviteDescription: 'Set a password to finish creating your account.',
