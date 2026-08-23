@@ -22,9 +22,10 @@ choose a colour, a duration or a spacing step.
 TAR-800 fixes the pixel-level source of truth as `Reqta CRM.dc.html` and
 `Reqta Admin.dc.html` in the claude.ai/design project "Modular SaaS CRM design".
 
-**Those two files are not reachable from this runtime.** They are not in the repository,
-not attached to TAR-800 or any of its sub-issues, and the design project is not a surface
-the CLI reaches. This spec is therefore written against:
+**Those two files were not reachable when this spec was written.** They were attached to
+TAR-801 on 2026-08-23 and ported there, so the value gap this section describes is closed —
+see 0001's "What TAR-801 ported, and what it did not", and Part 4.1 for what is left. This
+spec was written against:
 
 1. **0001's token layer and component vocabulary**, which is the executable half of the
    design system and is in the repository, and
@@ -131,8 +132,11 @@ only additions this spec asks for**, and each is a role — not a value:
 | `--color-surface-sunken-active` | Its counterpart, for the same reason 0001 needs two hover roles: a row on a sunken column has no surface of its own                               | Conversation rows, list rows    |
 | `--size-tooltip`                | `--size-menu` is a label-plus-a-count width; a tooltip is a short phrase and wants a tighter cap than `--measure-body`                            | The new `Tooltip` — see 1.5     |
 
-**If TAR-801's port from the reference already lands equivalents under different names,
-those names win** and this table is what Part 4's check-in reconciles. Nothing else in this
+**All four landed under exactly these names in TAR-801** (2026-08-23), so there is nothing
+for Part 4.1 to reconcile on this table. `--color-surface-active` and
+`--color-surface-sunken-active` are a step past hover in the direction hover already moved,
+`--easing-exit` is `cubic-bezier(0.4, 0, 1, 1)`, and `--size-tooltip` is 11rem;
+`tokens.test.ts` asserts the properties each was asked for rather than the values. Nothing else in this
 spec should need a new token; if a screen appears to, raise it rather than adding one —
 that is 0001's rule and this document is not an exception to it.
 

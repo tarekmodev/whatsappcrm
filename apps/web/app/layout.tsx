@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { Figtree, IBM_Plex_Sans_Arabic } from 'next/font/google';
+import { Manrope, IBM_Plex_Sans_Arabic } from 'next/font/google';
 import { content } from '@/content/en';
 import { cx } from '@/lib/cx';
 import { readTheme } from '@/lib/theme/read-theme';
@@ -64,7 +64,12 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 /**
- * The console's geometric sans (0001). `next/font` self-hosts it at build time
+ * The console's body face: **Manrope**, which is what both Reqta reference files
+ * load and set as their `--font` (TAR-801). It is the one typographic value the
+ * reference states as a token rather than as an inline literal, so it is the one
+ * this port could take verbatim.
+ *
+ * `next/font` self-hosts it at build time
  * and emits the `@font-face` itself, so there is no request to a third party at
  * runtime and no layout shift to design around: the variable it exposes is what
  * `--scale-font-family-sans` reads.
@@ -73,14 +78,16 @@ export async function generateMetadata(): Promise<Metadata> {
  * favicon, product name and support email. A per-tenant font is a second download
  * on the critical path for every visitor.
  */
-const bodyFont = Figtree({
+const bodyFont = Manrope({
   subsets: ['latin'],
   display: 'swap',
   variable: '--font-sans',
 });
 
 /**
- * The Arabic face (TAR-801). Figtree carries no Arabic glyphs, so without this
+ * The Arabic face (TAR-801), and the reference's own second family — the CRM
+ * file loads it beside Manrope and switches to it under `[lang="ar"]`. Manrope
+ * carries no Arabic glyphs, so without this
  * an Arabic console falls through to whatever face the operating system happens
  * to have — the one typographic decision a token layer must not leave to a
  * machine. `[lang|='ar']` in `semantic.css` is the only thing that reads it.

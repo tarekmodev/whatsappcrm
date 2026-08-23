@@ -3236,7 +3236,7 @@ export const content = {
     productNameRequired: 'Give this workspace a name',
     productNameTooLong: (max: number) => `Use ${max} characters or fewer`,
     supportEmailInvalid: 'Enter an email address, or leave it empty',
-    colorInvalid: 'Use a six-digit hex colour, like #067a52',
+    colorInvalid: 'Use a six-digit hex colour, like #4f46e5',
 
     previewHeading: 'Preview',
     previewDescription: 'Live, and exactly what the console will use once you save.',

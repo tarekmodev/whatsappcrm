@@ -67,8 +67,8 @@ interface ThemeGround {
 }
 
 const THEME_GROUND: Record<BrandTheme, ThemeGround> = {
-  light: { canvas: '#f8fafc', surface: '#ffffff', fallbackFocusRing: '#067a52' },
-  dark: { canvas: '#020617', surface: '#0f172a', fallbackFocusRing: '#6fd2a6' },
+  light: { canvas: '#f6f7f9', surface: '#ffffff', fallbackFocusRing: '#4f46e5' },
+  dark: { canvas: '#0e1117', surface: '#151923', fallbackFocusRing: '#a5b4fc' },
 };
 
 /**
@@ -76,14 +76,16 @@ const THEME_GROUND: Record<BrandTheme, ThemeGround> = {
  *
  * Two would nearly do: for any colour, contrast-to-white × contrast-to-black is
  * exactly 21, so `max(…) >= sqrt(21) ~ 4.58` and a compliant choice always
- * exists against **pure** black. `#020617` — the console's own `slate-950` — only
- * reaches ~20.17, so `sqrt(20.17) ~ 4.49`: there is a narrow band of accent
- * luminances where both `#ffffff` and `#020617` land just under 4.5:1.
+ * exists against **pure** black. `#0e1117` — the console's own darkest ground —
+ * only reaches ~18.90, so `sqrt(18.90) ~ 4.35`: there is a narrow band of accent
+ * luminances where both `#ffffff` and `#0e1117` land just under 4.5:1. TAR-801's
+ * palette port widened that band rather than closing it (the old `#020617`
+ * reached 20.17), which is why the third candidate is not optional.
  * `#000000` is the third candidate that closes it, and
  * `brandCssVariables.test.ts` sweeps the hex space rather than trusting that
  * arithmetic.
  */
-const ON_ACCENT_CANDIDATES = ['#ffffff', '#020617', '#000000'] as const;
+const ON_ACCENT_CANDIDATES = ['#ffffff', '#0e1117', '#000000'] as const;
 
 /**
  * How far `--color-accent-hover` moves from the accent: darker in light, lighter
