@@ -1151,15 +1151,24 @@ rather than recolouring them. `lib/locale/locale.ts` is the one list of locales 
 place a direction is derived; `LocaleToggle` persists a change through a server action and
 flips the two attributes locally so the swap is instant.
 
-**Direction costs the token layer one line.** Because every module styles with logical
+**Direction costs the token layer almost nothing.** Because every module styles with logical
 properties, `dir="rtl"` mirrors the whole console on its own — so the only thing a locale
-actually swaps is the typeface, and that is one `[lang='ar']` branch in `semantic.css`
-pointing `--font-family-body` at `--scale-font-family-arabic` (IBM Plex Sans Arabic, loaded
-by `app/layout.tsx`). The branch is keyed off `lang` rather than `dir` so a future Persian
-locale can take its own face, and it sits on the semantic role rather than the primitive so
-a subtree marked `lang="ar"` — a customer's Arabic message in an English console — picks it
-up too. The Arabic face is declared `preload: false`: it is referenced only from that
-branch, so an English document never requests it.
+actually swaps is the typeface. That is a `[lang='ar']` branch in `semantic.css` pointing
+`--font-family-body` at `--scale-font-family-arabic` (IBM Plex Sans Arabic, loaded by
+`app/layout.tsx`), keyed off `lang` rather than `dir` so a future Persian locale can take
+its own face.
+
+A token alone does not do it, and this is the part worth remembering: **a custom property
+changes nothing where no rule substitutes it.** `font-family` is declared exactly once in
+this app, on `body` in `base.css`; everything below inherits body's already-resolved value.
+So `base.css` also carries `[lang] { font-family: var(--font-family-body) }` — the rule that
+makes an element which names its own language re-resolve the face for itself. Without it the
+branch would only ever work on `<html>`, and `<span lang="ar">العربية</span>` inside an
+English document would fall through to whatever Arabic face the device happened to have. The
+two halves are one change; move either and the other stops meaning anything.
+
+The Arabic face is declared `preload: false`, so an English document never puts it on the
+critical path.
 
 **Horizontal arrow keys are the one thing logical properties do not fix.** `ArrowRight`
 means "the next one" in English and "the previous one" in Arabic, and WAI-ARIA puts a
@@ -1168,10 +1177,15 @@ left/right arrow handling reads its step from `forwardArrowStep()`
 (`lib/locale/reading-direction.ts`) rather than hard-coding `+1` — the calendar grid, the
 composer's tab strip and the daily-volume chart all do. Vertical arrows never mirror.
 
-The toggle itself is behind `NEXT_PUBLIC_ENABLE_LOCALE_SWITCH`, **off by default**, because
-the copy is not translated yet: `content/en.ts` is the only content module that exists, so
-turning it on gives a correctly mirrored console still reading English. The flag comes out
-when `content/ar.ts` lands and `lib/content.ts` selects on the locale.
+The toggle is behind `NEXT_PUBLIC_ENABLE_LOCALE_SWITCH`, **off by default**, because the copy
+is not translated yet: `content/en.ts` is the only content module that exists, so turning it
+on gives a correctly mirrored console still reading English. The flag comes out when
+`content/ar.ts` lands and `lib/content.ts` selects on the locale.
+
+"Off" is enforced on the **read** (`readLocale`) and in the **server action**, not only where
+the toggle is rendered. The cookie is `httpOnly` with a year's `maxAge`, so gating the button
+alone would strand anyone who had already switched: a mirrored console, no control on the
+page to undo it, and no way for script to clear the cookie.
 
 ### Adding a component, with its skeleton
 

@@ -415,9 +415,15 @@
  * `dir="rtl"` on a subtree whose surrounding chrome keeps the console's type.
  *
  * On the *semantic* role rather than the primitive it reads, so a subtree marked
- * `lang="ar"` — a customer's message in an otherwise English inbox — gets the
- * face too. Redefining the primitive would only work on `<html>`: `--font-family-body`
- * has already substituted it by the time it inherits down.
+ * `lang="ar"` — a customer's message in an otherwise English inbox, or the
+ * endonym on the language toggle — gets the face too. Redefining the primitive
+ * would only reach `<html>`, because `--font-family-body` has already
+ * substituted it by the time it inherits down.
+ *
+ * A token alone is not enough to make that subtree case work: `base.css` carries
+ * the `[lang]` rule that actually applies the face, because a custom property
+ * changes nothing where no declaration substitutes it. The two are one change —
+ * move either and the other stops meaning anything.
  */
 [lang='ar'] {
   --font-family-body: var(--scale-font-family-arabic);

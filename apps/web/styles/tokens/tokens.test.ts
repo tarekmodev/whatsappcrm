@@ -437,6 +437,10 @@ function token(theme: Theme, name: string): string {
 describe('the Arabic branch', () => {
   const semantic = readTokenFile('semantic.css');
   const primitives = readTokenFile('primitives.css');
+  // Read here rather than inside a case: jsdom replaces the global `URL` before a
+  // test body runs, and its version resolves a relative path against the document
+  // origin instead of the base it was handed.
+  const base = readTokenFile('../base.css');
 
   it('re-declares the body face for lang="ar"', () => {
     const branch = blocksOf(semantic).find((block) => block.selector.includes("[lang='ar']"));
@@ -446,14 +450,27 @@ describe('the Arabic branch', () => {
 
   /*
    * On the semantic role rather than the primitive it reads. Redefining
-   * `--scale-font-family-sans` would only work on `<html>`: `--font-family-body`
+   * `--scale-font-family-sans` would only reach `<html>`: `--font-family-body`
    * has already substituted it by the time it inherits into a subtree marked
    * `lang="ar"` — a customer's Arabic message inside an English console.
    */
-  it('leaves the primitive scale alone, so a subtree branch still works', () => {
+  it('re-declares the semantic role rather than the primitive scale', () => {
     const branch = blocksOf(semantic).find((block) => block.selector.includes("[lang='ar']"));
 
     expect(branch?.declarations['--scale-font-family-sans']).toBeUndefined();
+  });
+
+  /*
+   * The half that makes the subtree case real. A custom property changes nothing
+   * where no rule substitutes it, and `font-family` is declared once in this app
+   * — on `body`. Without a rule on the element that names its own language, a
+   * `lang="ar"` subtree takes the branch's token and still paints the Latin face
+   * it inherited.
+   */
+  it('is applied by a rule that actually substitutes it', () => {
+    const applied = /\[lang\]\s*\{([^}]*)\}/.exec(base);
+
+    expect(applied?.[1]).toContain('font-family: var(--font-family-body)');
   });
 
   /*

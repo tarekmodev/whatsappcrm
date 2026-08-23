@@ -178,7 +178,6 @@ export const content = {
    * two different things, and one name for both is how they get confused.
    */
   language: {
-    label: 'Language',
     /**
      * The accessible name of the language toggle. It interpolates the target
      * language's name **in that language** (`LOCALE_ENDONYMS`), which is also
