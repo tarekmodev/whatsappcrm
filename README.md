@@ -186,8 +186,8 @@ pnpm test:db
 Step 7 prints what it wrote and where to reach it:
 
 ```text
-  northwind  http://northwind.app.localhost:3000  5 users, 5 conversations, 13 messages, 2 tickets
-  southwind  http://southwind.app.localhost:3000  2 users, 1 conversation, 2 messages, 0 tickets
+  northwind  http://northwind.app.localhost:3000  5 users, 5 conversations, 13 messages, 3 tickets, 1 overdue
+  southwind  http://southwind.app.localhost:3000  2 users, 1 conversation, 2 messages, 0 tickets, 0 overdue
 ```
 
 Once the database and Redis are up, readiness reports them:
@@ -459,11 +459,11 @@ pnpm db:seed
 Two tenants, reachable at `northwind.app.localhost:3000` and `southwind.app.localhost:3000`.
 `northwind` is the one to work in: five agents across the three roles, two teams, two
 WhatsApp numbers under two business accounts, five approved-and-pending templates, four
-contacts, five threads and their messages, two tickets, and a subscription with usage
-counters. `southwind` is small and exists to be **absent** — every list in the console is
-served under row-level security, and a dropped tenant predicate is invisible in a database
-holding one tenant. Its first message reads `SOUTHWIND ONLY —`, so a leak is something you
-notice rather than something you have to query for.
+contacts, five threads and their messages, three tickets with one already overdue, and a
+subscription with usage counters. `southwind` is small and exists to be **absent** — every
+list in the console is served under row-level security, and a dropped tenant predicate is
+invisible in a database holding one tenant. Its first message reads `SOUTHWIND ONLY —`, so
+a leak is something you notice rather than something you have to query for.
 
 Three things about how it is written are worth knowing before you change it:
 
