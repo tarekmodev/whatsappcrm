@@ -1,0 +1,52 @@
+/*
+ * Fixed rather than in flow: the marker has to be true of every screen in both
+ * route groups, and there is no one place in the document a page could put it.
+ */
+.marker {
+  position: fixed;
+  /*
+   * The same shelf the toast region stands on. `--offset-toast-block-end` is `0`
+   * on an ordinary page and the height of a control pinned to the viewport on a
+   * route that has one (`components/ui/useToastClearance.ts`), so this does not
+   * land on the inbox composer.
+   */
+  inset-block-end: calc(
+    var(--offset-toast-block-end) + var(--space-4) + env(safe-area-inset-bottom)
+  );
+  /*
+   * The inline-end corner, deliberately, even though it is the corner the toast
+   * uses. The only reader who ever sees this badge is a developer running
+   * `next dev`, and Next's own dev-tools indicator is pinned to the inline-start
+   * corner — sharing that one hid the marker behind a permanent overlay at
+   * mobile widths. A toast is transient and asked for; the indicator is neither.
+   */
+  inset-inline-end: var(--space-4);
+  /*
+   * Above the page and below the drawer, the modal and the toast. A transient
+   * message the reader asked for outranks a standing fact about the environment,
+   * and a marker that covered a dialog would be a worse bug than the one it is
+   * here to prevent.
+   */
+  z-index: var(--z-sticky);
+  /* A label, not a control: clicks belong to whatever is underneath it. */
+  pointer-events: none;
+}
+
+/*
+ * `Badge` already carries the warning tint and its text colour. The two
+ * additions are what a chip needs to survive being laid over arbitrary page
+ * content rather than sitting in a row: a solid edge, and a shadow that lifts it
+ * off whatever it happens to be covering.
+ */
+.badge {
+  border-color: var(--color-warning);
+  box-shadow: var(--shadow-overlay);
+}
+
+/* The gutter the toast widens to at the same breakpoint, for the same reason. */
+@media (min-width: 40rem) {
+  .marker {
+    inset-block-end: calc(var(--offset-toast-block-end) + var(--space-5));
+    inset-inline-end: var(--space-5);
+  }
+}

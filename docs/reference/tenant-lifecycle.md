@@ -290,16 +290,24 @@ Two shapes worth knowing before they land:
   the cap and names the two parts: "4 of 5, one invitation outstanding" is legible where
   arithmetic the reader has to do is not.
 
-### The console reads a mock today
+### One of the two screens still reads a mock
 
-`/onboarding` and `/settings/workspace` render `OnboardingChecklistResponse` and
-`TenantLifecycleResponse` against the mock transport in `apps/web/lib/api/mock/handlers.ts`,
-selected by `NEXT_PUBLIC_USE_MOCK_API`. That is what TAR-407 and TAR-409 were scoped to do —
-build against the published contract without waiting for the backend — and the resource modules
-in `apps/web/lib/api/` are byte-identical in both modes, so wiring the real endpoints is a
-configuration change rather than a component one.
+`/onboarding` and `/settings/workspace` were both built against the mock transport in
+`apps/web/lib/api/mock/handlers.ts`, selected by `NEXT_PUBLIC_USE_MOCK_API`. That is what
+TAR-407 and TAR-409 were scoped to do — build against the published contract without waiting
+for the backend — and the resource modules in `apps/web/lib/api/` are byte-identical in both
+modes, so wiring the real endpoints is a configuration change rather than a component one.
 
-Pointed at the real API with the flag off, both screens fail: the routes they call do not exist.
+Half of that has since happened, and the flag is now **off** in `.env.example` (TAR-830), so
+the difference is what a default local setup actually gets:
+
+- `/settings/workspace` works against the real API. `GET /v1/tenant/lifecycle` and its
+  `cancel`/`cancel/undo`/`delete` writes are live in
+  `apps/api/src/tenancy/lifecycle/tenant-lifecycle.controller.ts`.
+- `/onboarding` does not. `GET /v1/tenant/onboarding` and its step `PATCH` exist only in the
+  fixtures — TAR-405 is the endpoint — so with the flag off the route renders its error state
+  rather than a checklist. Turning the flag back on is the way to work on that screen, and the
+  console says so on screen while it is on (`components/env/MockModeBadge.tsx`).
 
 ## Errors
 
