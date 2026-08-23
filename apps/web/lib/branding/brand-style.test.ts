@@ -58,3 +58,23 @@ describe('brandStyleSheet', () => {
     expect(SHEET).toContain('--color-brand-decor:#7c3aed');
   });
 });
+
+/**
+ * The unbranded console (TAR-801).
+ *
+ * `withBrandingDefaults` fills a tenant who has configured nothing, so this
+ * function is called on every request whether or not anybody chose a colour. When
+ * nobody has, the platform's own token layer is the better answer than a
+ * round-trip through the tenant derivation — it can invert the accent and its
+ * text per theme, which one tenant hex cannot express.
+ */
+describe('brandStyleSheet with no tenant colours', () => {
+  it('emits nothing, so the platform token layer stands', () => {
+    expect(brandStyleSheet(testBranding({}))).toBe('');
+  });
+
+  it('still emits when the tenant has chosen either colour', () => {
+    expect(brandStyleSheet(testBranding({ primaryColor: '#0f6fde' }))).not.toBe('');
+    expect(brandStyleSheet(testBranding({ accentColor: '#7c3aed' }))).not.toBe('');
+  });
+});

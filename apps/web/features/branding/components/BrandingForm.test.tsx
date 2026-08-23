@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { TenantBranding } from '@whatsappcrm/contracts';
+import { BRANDING_DEFAULTS, type TenantBranding } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { fieldByLabel } from '@/lib/testing/field-queries';
 import { testBranding } from '@/lib/testing/branding';
@@ -162,8 +162,11 @@ describe('BrandingForm', () => {
 
     fireEvent.click(screen.getByRole('button', { name: content.branding.resetColours }));
 
+    // The constant rather than a copy of it: the platform accent moved with the
+    // Reqta palette port (TAR-801), and a literal here would have pinned the test
+    // to the colour instead of to the behaviour it is about.
     expect(fieldByLabel(content.branding.hexLabel(content.branding.primaryColorLabel))).toHaveValue(
-      '#067a52',
+      BRANDING_DEFAULTS.primaryColor,
     );
   });
 });

@@ -88,7 +88,7 @@ takes its place. You can upload a new one at any time.
 
 ## Troubleshooting
 
-**"Use a six-digit hex colour, like #067a52"**
+**"Use a six-digit hex colour, like #4f46e5"**
 The colour needs all six digits and a leading `#`. Three-digit shorthand and colour names are
 not accepted.
 

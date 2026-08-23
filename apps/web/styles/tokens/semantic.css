@@ -4,45 +4,76 @@
  * Every value here maps a *role* ("the surface a card sits on") onto a primitive.
  * Dark mode re-declares the same role names under `[data-theme='dark']`; no
  * component branches on theme, which is what makes the whole identity swappable.
+ *
+ * TAR-801 re-pointed every role in this file at the Reqta palette without adding,
+ * removing or renaming one of them, which is why that port touched no component:
+ * `primitives.css` changed, this file's right-hand column changed, and the 117
+ * modules under `components/ui/` did not. If you are adding a screen, that is the
+ * property to preserve — a role is the contract, a primitive is not.
  */
 
 :root,
 [data-theme='light'] {
   /* --- Surfaces and text -------------------------------------------------- */
-  --color-canvas: var(--palette-slate-50);
+  --color-canvas: var(--palette-grey-25);
   --color-surface: var(--palette-white);
   --color-surface-raised: var(--palette-white);
-  --color-surface-sunken: var(--palette-slate-100);
-  --color-surface-hover: var(--palette-slate-100);
+  --color-surface-sunken: var(--palette-grey-100);
+  /*
+   * The reference's own hover answer, and it is the canvas: `background:var(--bg)`
+   * is what the large majority of its hover declarations say. A row on a card dips to the
+   * colour of the page behind it.
+   */
+  --color-surface-hover: var(--palette-grey-25);
+  /*
+   * derived, and the third token 0002 asks TAR-801 for (its §0.3): the pressed
+   * ground. One step further in the direction hover already moved, so a press
+   * reads as more of the same gesture. Reusing `-selected` — the obvious
+   * shortcut — makes every press look like a selection that did not stick.
+   */
+  --color-surface-active: var(--palette-grey-200);
   /*
    * Hover for something sitting on `surface-sunken` rather than on `surface` —
    * the inbox's conversation rows, which have no surface of their own and take
-   * the column's. `--color-surface-hover` cannot serve them: in this theme it
-   * *is* `surface-sunken`, so a hovered row was exactly the colour it already
-   * was, and a row with no action gave no feedback at all (TAR-517).
+   * the column's. `--color-surface-hover` cannot serve them: it lands within
+   * 0.03 of `surface-sunken`, so a hovered row was almost exactly the colour it
+   * already was, and a row with no action gave no feedback at all (TAR-517).
    */
-  --color-surface-sunken-hover: var(--palette-slate-200);
-  --color-surface-selected: var(--palette-green-100);
-  --color-on-surface: var(--palette-slate-900);
-  --color-on-surface-muted: var(--palette-slate-500);
+  --color-surface-sunken-hover: var(--palette-grey-200);
+  /* Its pressed counterpart, for the same reason (0002 §0.3). */
+  --color-surface-sunken-active: var(--palette-grey-300);
+  --color-surface-selected: var(--palette-indigo-50);
+  --color-on-surface: var(--palette-grey-900);
+  --color-on-surface-muted: var(--palette-grey-500);
   /*
-   * Decoration only — around 2.6:1 against the surface, so it must never carry
-   * text. Anything a user has to read uses `on-surface-muted`, which clears AA in
-   * both themes.
+   * Decoration only — 2.58:1 against the surface, so it must never carry text.
+   * Anything a user has to read uses `on-surface-muted`, which clears AA in both
+   * themes. The reference calls this one `--subtle` and uses it for placeholder
+   * text; we do not, and 0002 §1.1 says why.
    */
-  --color-on-surface-subtle: var(--palette-slate-400);
+  --color-on-surface-subtle: var(--palette-grey-400);
 
   /* --- Borders and focus -------------------------------------------------- */
-  --color-border: var(--palette-slate-200);
-  --color-border-strong: var(--palette-slate-300);
-  --color-focus-ring: var(--palette-green-600);
+  --color-border: var(--palette-grey-200);
+  --color-border-strong: var(--palette-grey-300);
+  --color-focus-ring: var(--palette-indigo-500);
 
   /* --- Accent ------------------------------------------------------------- */
-  --color-accent: var(--palette-green-600);
-  --color-accent-hover: var(--palette-green-700);
-  --color-accent-subtle: var(--palette-green-100);
+  --color-accent: var(--palette-indigo-500);
+  --color-accent-hover: var(--palette-indigo-600);
+  --color-accent-subtle: var(--palette-indigo-50);
   --color-on-accent: var(--palette-white);
-  --color-on-accent-subtle: var(--palette-green-700);
+  --color-on-accent-subtle: var(--palette-indigo-600);
+  /*
+   * The seventh tenant-owned role, and the only one that had no platform value
+   * until TAR-801 — it existed solely because `brandStyleSheet` emitted it on
+   * every request. Once that block stopped being emitted for a tenant on the
+   * defaults, `AuthBrandPanel`’s ring resolved to an invalid `border` shorthand
+   * and painted nothing. A role a component reads unconditionally needs a value
+   * here unconditionally; the tenant’s block overrides it, as it does the other
+   * six.
+   */
+  --color-brand-decor: var(--palette-violet-500);
 
   /* --- Status ------------------------------------------------------------- */
   /*
@@ -50,158 +81,229 @@
    * past, carrying its meaning in the text on it. That is what keeps the accent
    * the loudest thing on a screen — see 0001's "Status vocabulary".
    *
-   * `neutral` is a status like the rest and has its own pair rather than
-   * borrowing `surface-sunken` + `on-surface-muted`, which is how it came to be
-   * the one chip nobody had measured: that pair is 4.34:1, under AA (TAR-514).
+   * The tints are the reference's, exactly. The text on them is not: the
+   * reference draws `--green` on `--green-bg`, which is 2.49:1, and the same
+   * shortfall on three of its five tones. Only the text moved, to the next step
+   * of the same family — see `primitives.css`, which carries the measurement for
+   * each. `neutral` is the one tone whose reference pair already cleared AA — 9.49:1
+   * here and 9.45:1 in the dark theme, where the text is the reference’s own dark
+   * `--ink` — so it is ported untouched in **both** themes.
    */
-  --color-neutral-subtle: var(--palette-slate-100);
-  --color-on-neutral-subtle: var(--palette-slate-600);
-  --color-success: var(--palette-green-600);
-  --color-success-subtle: var(--palette-green-100);
+  --color-neutral-subtle: var(--palette-grey-100);
+  --color-on-neutral-subtle: var(--palette-grey-700);
+  --color-success: var(--palette-green-700);
+  --color-success-subtle: var(--palette-green-50);
   --color-on-success-subtle: var(--palette-green-700);
-  --color-warning: var(--palette-amber-600);
-  --color-warning-subtle: var(--palette-amber-100);
-  --color-on-warning-subtle: var(--palette-amber-600);
-  --color-danger: var(--palette-red-500);
-  --color-danger-hover: var(--palette-red-600);
-  --color-danger-subtle: var(--palette-red-100);
-  --color-on-danger-subtle: var(--palette-red-600);
-  --color-info: var(--palette-blue-500);
-  --color-info-subtle: var(--palette-blue-100);
-  --color-on-info-subtle: var(--palette-blue-500);
+  --color-warning: var(--palette-amber-700);
+  --color-warning-subtle: var(--palette-amber-50);
+  --color-on-warning-subtle: var(--palette-amber-700);
+  /*
+   * `--color-danger` is the *text and border* role, not a fill: `Button`'s
+   * `dangerQuiet` variant draws its label in it, every field in error takes its
+   * border from it, and `--color-delivery-failed` aliases it. So it takes the
+   * family's text step rather than the reference's own `--red` (#f04438), which is
+   * 3.76:1 on white and fails AA as a label and 1.4.11 as a border.
+   *
+   * That shortfall is the reference's, not ours, and it is the same on three of
+   * its four status hues — see 0001's "What the reference could not supply". The
+   * saturated steps are therefore **not** carried into this layer at all: a role
+   * nothing may legally draw with is a trap, not a token.
+   */
+  --color-danger: var(--palette-red-700);
+  --color-danger-hover: var(--palette-red-800);
+  --color-danger-subtle: var(--palette-red-50);
+  --color-on-danger-subtle: var(--palette-red-700);
+  --color-info: var(--palette-blue-700);
+  --color-info-subtle: var(--palette-blue-50);
+  --color-on-info-subtle: var(--palette-blue-700);
 
   /* --- Chart series ------------------------------------------------------- */
   /*
    * A chart's series are the one colour role a tenant does **not** own. See the
-   * primitive family for why: while `--color-accent` carried one of them, a
-   * blue-branded workspace drew both series in the same hue.
+   * primitive family for why, and for why TAR-801 had to move series one: the
+   * reference's accent is an indigo, and the blue this role used sits at 1.07:1
+   * against it.
    */
-  --color-chart-1: var(--palette-chart-blue-500);
+  --color-chart-1: var(--palette-chart-teal-800);
   --color-chart-2: var(--palette-chart-orange-500);
+
   /* --- The console frame -------------------------------------------------- */
   /*
    * The navigation rail is a dark region in both themes — that is the point of
    * the layout, not an accident of the light palette — so these roles map onto
-   * the navy family rather than onto `surface`, and they are the only roles a
-   * theme swap can leave alone.
+   * the reference's *dark* chrome rather than onto `surface`, and they are the
+   * only roles a theme swap leaves alone.
+   *
+   * **The reference disagrees, and TAR-801 did not follow it.** Both `.dc.html`
+   * files draw the sidebar on `--surface` with a `--border` edge and a
+   * `--primary-50` hover — a light rail. Adopting that is not a value port: it
+   * inverts `--color-on-rail`, retires the rail's focus-ring override, and leaves
+   * `AuthBrandPanel` — the signed-out brand panel, which is this rail's colour
+   * carrying a product name — as white text on white. That is a restyle of the
+   * shell and the sign-in screen, which TAR-801 is explicitly told not to do and
+   * TAR-803 exists to do with screenshots in hand. So the rail keeps its
+   * structure and takes the reference's palette: the navy family that had nothing
+   * to do with the reference is gone, and these are its dark greys.
    */
-  --color-rail: var(--palette-navy-900);
-  --color-rail-hover: var(--palette-navy-800);
-  --color-rail-selected: var(--palette-navy-700);
-  --color-rail-border: var(--palette-navy-800);
-  --color-on-rail: var(--palette-slate-300);
+  --color-rail: var(--palette-night-950);
+  --color-rail-hover: var(--palette-night-900);
+  --color-rail-selected: var(--palette-night-800);
+  --color-rail-border: var(--palette-night-800);
+  --color-on-rail: var(--palette-night-25);
   --color-on-rail-strong: var(--palette-white);
   /* The ruled answer for secondary text on the rail — a section heading, a
-     count beside a label. Nothing needs it yet; it is measured here so the
-     first control that does inherits it rather than picking its own grey. */
-  --color-on-rail-muted: var(--palette-slate-400);
+     count beside a label. */
+  --color-on-rail-muted: var(--palette-grey-400);
   /* The marker beside a current entry, so "current" is never colour alone. */
-  --color-rail-marker: var(--palette-green-300);
+  --color-rail-marker: var(--palette-indigo-200);
   /*
    * The rail needs its own focus ring. The global one is `--color-focus-ring`,
-   * which flips with the theme — and the rail does not, so in the light theme
-   * the ordinary ring lands on navy at 2.80:1 and on the current entry at
-   * 1.72:1, under the 3:1 that WCAG 2.2 SC 1.4.11 requires of a focus
-   * indicator. This clears it against all three rail backgrounds in both
-   * themes; see 0001's contrast table.
+   * which flips with the theme — and the rail does not, so the ordinary ring
+   * would land on a near-black rail at well under the 3:1 that WCAG 2.2
+   * SC 1.4.11 requires of a focus indicator. This clears it against all three
+   * rail grounds in both themes (7.11–9.48:1); see 0001's contrast table.
    */
-  --color-focus-ring-on-rail: var(--palette-green-300);
+  --color-focus-ring-on-rail: var(--palette-indigo-200);
 
   --color-bar: var(--palette-white);
-  --color-bar-border: var(--palette-slate-200);
+  --color-bar-border: var(--palette-grey-200);
 
   /* --- Overlays and placeholders ----------------------------------------- */
-  --color-scrim: rgb(13 26 38 / 45%);
-  --color-skeleton-base: var(--palette-slate-200);
-  --color-skeleton-highlight: var(--palette-slate-100);
+  /* The reference's shadow ink (16 24 40), so a scrim and the shadow of the
+     thing it sits under are the same colour rather than two darks. */
+  --color-scrim: rgb(16 24 40 / 45%);
+  --color-skeleton-base: var(--palette-grey-200);
+  --color-skeleton-highlight: var(--palette-grey-100);
+
+  /* --- Elevation ---------------------------------------------------------- */
+  /*
+   * Here rather than with the radii below, because the reference re-declares both
+   * of its shadows under `[data-theme="dark"]`: ink at 6% opacity is invisible on
+   * a near-black canvas. A shadow is a theme value.
+   */
+  --shadow-raised: var(--scale-shadow-sm);
+  --shadow-overlay: var(--scale-shadow-md);
+  --shadow-modal: var(--scale-shadow-lg);
 
   color-scheme: light;
 }
 
 [data-theme='dark'] {
-  --color-canvas: var(--palette-slate-950);
-  --color-surface: var(--palette-slate-900);
-  --color-surface-raised: var(--palette-slate-800);
-  --color-surface-sunken: var(--palette-slate-950);
-  --color-surface-hover: var(--palette-slate-800);
-  /* One step off the near-black column, the way the light theme's is one step
-     off its grey. The direction differs because the two surfaces do. */
-  --color-surface-sunken-hover: var(--palette-slate-800);
-  --color-surface-selected: var(--palette-slate-700);
-  --color-on-surface: var(--palette-slate-100);
-  --color-on-surface-muted: var(--palette-slate-400);
-  --color-on-surface-subtle: var(--palette-slate-500);
-
-  --color-border: var(--palette-slate-700);
-  --color-border-strong: var(--palette-slate-600);
-  --color-focus-ring: var(--palette-green-300);
-
-  --color-accent: var(--palette-green-500);
-  --color-accent-hover: var(--palette-green-300);
+  --color-canvas: var(--palette-night-950);
+  --color-surface: var(--palette-night-900);
   /*
-   * A tint of the accent, not a saturated step of it. The tenant override
-   * derives this same role by mixing the brand colour 86% toward the surface
-   * (`packages/contracts/src/branding-theme.ts`), so a mid-scale primitive here
-   * made the *unbranded* console the only one whose selected rows, avatars and
-   * accent chips were solid blocks of colour. Now both agree.
+   * The same hex as `--color-surface`, which is what the reference does — it has
+   * one card colour per theme and no second. Every consumer (`MenuButton`,
+   * `CannedResponsePicker`, the chart readout, `StickySaveBar`) carries a border
+   * and a shadow, so nothing disappears; but the role carries no information in
+   * this theme, and whether it should is TAR-803’s to decide rather than to
+   * inherit by accident.
    */
-  --color-accent-subtle: var(--palette-green-900);
-  --color-on-accent: var(--palette-slate-950);
-  --color-on-accent-subtle: var(--palette-green-100);
+  --color-surface-raised: var(--palette-night-900);
+  --color-surface-sunken: var(--palette-night-950);
+  /*
+   * Down toward the canvas, not up, and that is the reference's own direction:
+   * in its dark theme a card is *lighter* than the page, so pressing into a row
+   * means moving toward the page rather than away from it. The light theme's
+   * hover does the same thing; the two only look opposite because the two
+   * canvases are.
+   */
+  --color-surface-hover: var(--palette-night-950);
+  --color-surface-active: var(--palette-night-975);
+  /*
+   * A row on the sunken column has nothing below it to dip into, so it lifts
+   * instead — to the surface step, then to the border step. The direction differs
+   * from the block above because the ground does.
+   */
+  --color-surface-sunken-hover: var(--palette-night-900);
+  --color-surface-sunken-active: var(--palette-night-800);
+  --color-surface-selected: var(--palette-indigo-900);
+  --color-on-surface: var(--palette-night-25);
+  --color-on-surface-muted: var(--palette-grey-400);
+  --color-on-surface-subtle: var(--palette-grey-500);
+
+  --color-border: var(--palette-night-800);
+  --color-border-strong: var(--palette-night-700);
+  --color-focus-ring: var(--palette-indigo-200);
 
   /*
-   * The chip tints, one stand-off from the surface for every hue. Before
-   * TAR-514 these were mid-scale primitives — `green-700`, `blue-500`,
-   * `amber-600`, `red-600` — which made a dark conversation row read as four
-   * solid pills beside a button that was quieter than all of them. The
-   * hierarchy is: solid accent button > chip > body text > muted text.
+   * Lighter than the light theme's accent, not darker, and `--color-on-accent`
+   * below inverts with it. An accent is a ground under a button label and a
+   * foreground for a link, and against a near-black page one step cannot be both
+   * — see `primitives.css` for the two measurements that settle it.
    */
-  --color-neutral-subtle: var(--palette-slate-750);
-  --color-on-neutral-subtle: var(--palette-slate-100);
+  --color-accent: var(--palette-indigo-300);
+  --color-accent-hover: var(--palette-indigo-200);
+  /*
+   * A tint of the accent, not a saturated step of it — the reference's own
+   * `--primary-50`, which in its dark theme is the accent at 14% over the
+   * surface. The tenant override derives this same role by mixing the brand
+   * colour 86% toward the surface (`packages/contracts/src/branding-theme.ts`),
+   * so the two agree: an unbranded console and a branded one draw a selected row
+   * the same way.
+   */
+  --color-accent-subtle: var(--palette-indigo-900);
+  --color-on-accent: var(--palette-night-950);
+  --color-on-accent-subtle: var(--palette-indigo-200);
+  --color-brand-decor: var(--palette-violet-300);
+
+  /*
+   * The chip tints, one stand-off from the surface for every hue (1.15–1.26:1,
+   * a spread of 0.11). The hierarchy is: solid accent button > chip > body text >
+   * muted text, and it is what stops a dark conversation row reading as four
+   * solid pills beside a button quieter than all of them.
+   */
+  --color-neutral-subtle: var(--palette-night-750);
+  --color-on-neutral-subtle: var(--palette-night-300);
   --color-success: var(--palette-green-300);
   --color-success-subtle: var(--palette-green-900);
-  --color-on-success-subtle: var(--palette-green-100);
-  --color-warning: var(--palette-amber-100);
+  --color-on-success-subtle: var(--palette-green-300);
+  --color-warning: var(--palette-amber-300);
   --color-warning-subtle: var(--palette-amber-900);
-  --color-on-warning-subtle: var(--palette-amber-100);
+  --color-on-warning-subtle: var(--palette-amber-300);
   --color-danger: var(--palette-red-300);
-  --color-danger-hover: var(--palette-red-100);
+  --color-danger-hover: var(--palette-red-200);
   --color-danger-subtle: var(--palette-red-900);
-  --color-on-danger-subtle: var(--palette-red-100);
+  --color-on-danger-subtle: var(--palette-red-300);
   --color-info: var(--palette-blue-300);
   --color-info-subtle: var(--palette-blue-900);
-  --color-on-info-subtle: var(--palette-blue-100);
+  --color-on-info-subtle: var(--palette-blue-300);
 
   /*
    * The lighter pair, keeping the same relationship the light theme has: series
    * one is the deeper of the two in both themes, so a reader who has learned the
    * chart in one does not have to relearn it in the other.
    */
-  --color-chart-1: var(--palette-chart-blue-300);
+  --color-chart-1: var(--palette-chart-teal-500);
   --color-chart-2: var(--palette-chart-orange-300);
+
   /*
-   * Dark theme drops the navy for the neutral scale: navy against a near-black
-   * canvas reads as a colour cast rather than as a distinct region, and the
-   * separation the rail needs comes from its border instead.
+   * The rail is already the reference's dark chrome in the light theme, so the
+   * dark theme moves it by one step rather than to a different family: the rail
+   * stays the darkest region on the screen while the canvas comes down to meet
+   * it, and its border is what separates the two.
    */
-  --color-rail: var(--palette-slate-950);
-  --color-rail-hover: var(--palette-slate-800);
-  --color-rail-selected: var(--palette-slate-700);
-  --color-rail-border: var(--palette-slate-800);
-  --color-on-rail: var(--palette-slate-300);
-  --color-on-rail-strong: var(--palette-slate-100);
-  --color-on-rail-muted: var(--palette-slate-400);
-  --color-rail-marker: var(--palette-green-300);
-  /* Already clear against the neutral rail; declared for both themes so the
-     role exists wherever the rail does. */
-  --color-focus-ring-on-rail: var(--palette-green-300);
+  --color-rail: var(--palette-night-975);
+  --color-rail-hover: var(--palette-night-900);
+  --color-rail-selected: var(--palette-night-800);
+  --color-rail-border: var(--palette-night-800);
+  --color-on-rail: var(--palette-night-25);
+  --color-on-rail-strong: var(--palette-white);
+  --color-on-rail-muted: var(--palette-grey-400);
+  --color-rail-marker: var(--palette-indigo-200);
+  --color-focus-ring-on-rail: var(--palette-indigo-200);
 
-  --color-bar: var(--palette-slate-900);
-  --color-bar-border: var(--palette-slate-700);
+  --color-bar: var(--palette-night-900);
+  --color-bar-border: var(--palette-night-800);
 
-  --color-scrim: rgb(2 6 23 / 70%);
-  --color-skeleton-base: var(--palette-slate-800);
-  --color-skeleton-highlight: var(--palette-slate-700);
+  --color-scrim: rgb(0 0 0 / 65%);
+  --color-skeleton-base: var(--palette-night-800);
+  --color-skeleton-highlight: var(--palette-night-700);
+
+  /* The reference doubles the ink against a dark ground; see `primitives.css`. */
+  --shadow-raised: var(--scale-shadow-sm-dark);
+  --shadow-overlay: var(--scale-shadow-md-dark);
+  --shadow-modal: var(--scale-shadow-lg-dark);
 
   color-scheme: dark;
 }
@@ -276,11 +378,14 @@
   --radius-sm: var(--scale-radius-sm);
   --radius-md: var(--scale-radius-md);
   --radius-lg: var(--scale-radius-lg);
+  /* A panel rather than a card: the reference's widest step, for the one or two
+     surfaces that frame a whole region instead of an item in it. */
+  --radius-xl: var(--scale-radius-xl);
   --radius-pill: var(--scale-radius-full);
 
-  --shadow-raised: var(--scale-shadow-sm);
-  --shadow-overlay: var(--scale-shadow-md);
-  --shadow-modal: var(--scale-shadow-lg);
+  /* `--shadow-*` are declared in the two theme blocks above, not here: the
+     reference re-states both of its shadows for the dark theme, because ink at
+     6% opacity does not exist on a near-black canvas. */
 
   --duration-instant: var(--scale-duration-instant);
   --duration-fast: var(--scale-duration-fast);
@@ -290,6 +395,9 @@
   --duration-stagger: var(--scale-duration-stagger);
   --easing-standard: var(--scale-easing-standard);
   --easing-enter: var(--scale-easing-decelerate);
+  /* What a dismissal leaves on — a menu closing, a modal going away, a toast
+     expiring. Exits accelerate and are shorter than entrances (0002 §0.2). */
+  --easing-exit: var(--scale-easing-accelerate);
 
   --z-base: var(--scale-z-base);
   --z-sticky: var(--scale-z-sticky);
@@ -315,6 +423,8 @@
   /* The inbox's filter column, and the width a dropdown menu opens to. */
   --size-pane-filters: var(--scale-size-pane-xs);
   --size-menu: var(--scale-size-pane-xs);
+  /* How wide a tooltip may get before it wraps — a phrase, not a paragraph. */
+  --size-tooltip: var(--scale-size-pane-2xs);
   /* How tall a scrolling region may grow before it scrolls rather than the page. */
   --size-scroll-region: var(--scale-size-viewport-tall);
   /* The reporting dashboard's daily-volume chart: its plotting area, and the
