@@ -86,12 +86,20 @@ function renderDialog(onClose = vi.fn(), hasMore = false): { onClose: ReturnType
   return { onClose };
 }
 
+function limitField(): HTMLElement {
+  return fieldByLabel(content.assignment.raiseLimitValueLabel);
+}
+
+function useDefaultBox(): HTMLElement {
+  return screen.getByLabelText(content.assignment.raiseLimitUseDefaultLabel(WORKSPACE_DEFAULT));
+}
+
 function typeLimit(value: string): void {
-  fireEvent.change(fieldByLabel(content.assignment.capacityLimitLabel), { target: { value } });
+  fireEvent.change(limitField(), { target: { value } });
 }
 
 function submit(): void {
-  fireEvent.click(screen.getByRole('button', { name: content.assignment.capacitySubmit }));
+  fireEvent.click(screen.getByRole('button', { name: content.assignment.raiseLimitSubmit }));
 }
 
 describe('AgentCapacityDialog', () => {
@@ -111,9 +119,49 @@ describe('AgentCapacityDialog', () => {
   it('opens on the agent who is at their limit, and says what they are holding', () => {
     renderDialog();
 
-    expect(screen.getByText(content.assignment.capacityLoad(2, 2))).toBeInTheDocument();
-    expect(screen.getByText(content.assignment.capacityAtLimit)).toBeInTheDocument();
-    expect(fieldByLabel(content.assignment.capacityLimitLabel)).toHaveValue(2);
+    expect(screen.getByText(content.assignment.raiseLimitLoadSummary(2, 2))).toBeInTheDocument();
+    expect(limitField()).toHaveValue(2);
+  });
+
+  /**
+   * The numbers are the whole decision, so they are a real `progressbar` as well
+   * as a sentence — the bar alone would be colour, and colour is never the only
+   * carrier.
+   */
+  it('publishes the load as a measured progressbar, not only as a bar', () => {
+    renderDialog();
+
+    const meter = screen.getByRole('progressbar', {
+      name: content.assignment.raiseLimitLoadHeading,
+    });
+
+    expect(meter).toHaveAttribute('aria-valuenow', '2');
+    expect(meter).toHaveAttribute('aria-valuemax', '2');
+  });
+
+  /**
+   * Switching agent replaces every part of the reading at once, so it belongs in
+   * one polite region rather than announcing heading, numbers and provenance as
+   * three separate changes.
+   */
+  it('announces the reading politely, in one region', () => {
+    renderDialog();
+
+    const region = screen.getByRole('status');
+
+    expect(region).toHaveTextContent(content.assignment.raiseLimitLoadSummary(2, 2));
+    expect(region).toHaveTextContent(content.assignment.raiseLimitOverridden);
+  });
+
+  /**
+   * The single-agent scope is TAR-755's acceptance criterion, and the hint is
+   * where it reaches the person using the control rather than staying in the
+   * issue.
+   */
+  it('tells the supervisor that only the picked agent changes', () => {
+    renderDialog();
+
+    expect(screen.getByText(content.assignment.raiseLimitAgentHint(false))).toBeInTheDocument();
   });
 
   it('sends the new limit for the agent on screen', async () => {
@@ -138,7 +186,7 @@ describe('AgentCapacityDialog', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(content.assignment.capacitySuccess('Amina Haddad', 4)),
+        screen.getByText(content.assignment.raiseLimitSuccess('Amina Haddad', 4)),
       ).toBeInTheDocument();
     });
     expect(onClose).toHaveBeenCalled();
@@ -147,7 +195,7 @@ describe('AgentCapacityDialog', () => {
   /**
    * `null` clears the override; omitting the field would leave it alone. The two
    * are distinct on the wire, and this is the only way back to the workspace
-   * default from the console.
+   * default from the console — without it the dialog is a one-way door (TAR-778).
    */
   it('clears the override to the workspace default rather than sending nothing', async () => {
     updateAgentCapacityAction.mockResolvedValue({
@@ -156,7 +204,7 @@ describe('AgentCapacityDialog', () => {
     });
     renderDialog();
 
-    fireEvent.click(fieldByLabel(content.assignment.capacityUseDefaultLabel(WORKSPACE_DEFAULT)));
+    fireEvent.click(useDefaultBox());
     submit();
 
     await waitFor(() => {
@@ -166,9 +214,28 @@ describe('AgentCapacityDialog', () => {
     });
     expect(
       screen.getByText(
-        content.assignment.capacityClearedSuccess('Amina Haddad', WORKSPACE_DEFAULT),
+        content.assignment.raiseLimitClearedSuccess('Amina Haddad', WORKSPACE_DEFAULT),
       ),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * The checkbox and the number are never both authoritative. Ticking it disables
+   * the field and rewrites it to the limit that would actually apply, rather than
+   * hiding it — a field that vanishes takes the reader's place in the form with
+   * it.
+   */
+  it('disables the number field and shows the default while the box is ticked', () => {
+    renderDialog();
+
+    fireEvent.click(useDefaultBox());
+
+    expect(limitField()).toBeDisabled();
+    expect(limitField()).toHaveValue(WORKSPACE_DEFAULT);
+
+    fireEvent.click(useDefaultBox());
+
+    expect(limitField()).toBeEnabled();
   });
 
   /** The validation state: caught before the round trip, and never sent. */
@@ -181,7 +248,7 @@ describe('AgentCapacityDialog', () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          content.assignment.capacityRangeError(
+          content.assignment.raiseLimitValueError(
             ASSIGNMENT_POLICY.minMaxConcurrentTickets,
             ASSIGNMENT_POLICY.maxMaxConcurrentTickets,
           ),
@@ -192,18 +259,75 @@ describe('AgentCapacityDialog', () => {
   });
 
   /**
-   * The permission-denied state, seen from inside the control: the API refuses,
-   * and the supervisor is told why rather than watching the dialog close on a
-   * change that never landed. Nothing is cleared, so a retry costs no retyping.
+   * A server range refusal is about the one value this dialog lets anybody type,
+   * so it lands beside that value rather than in a banner the reader then has to
+   * match up with a field.
    */
-  it('shows the API’s refusal and keeps the form when the write is not permitted', async () => {
+  it('puts a server validation failure in the field, not above the form', async () => {
+    renderDialog();
+
+    updateAgentCapacityAction.mockResolvedValue({
+      status: 'error',
+      message: 'maxConcurrentTickets must be between 1 and 1000.',
+      requestId: 'req-2',
+      code: 'validation_failed',
+    });
+
+    typeLimit('4');
+    submit();
+
+    await waitFor(() => {
+      expect(limitField()).toHaveAttribute('aria-invalid', 'true');
+    });
+
+    const message = screen.getByText('maxConcurrentTickets must be between 1 and 1000.');
+
+    // Wired to the input rather than floating above the form, so a screen reader
+    // hears it on the control it belongs to.
+    expect(limitField().getAttribute('aria-describedby')).toContain(message.id);
+  });
+
+  /**
+   * Two refusals the supervisor cannot answer from in here. The API's own message
+   * is replaced with one that says what to do, and the submit is blocked rather
+   * than left to refuse a second time.
+   */
+  it.each([
+    ['forbidden', content.assignment.raiseLimitForbidden],
+    ['not_found', content.assignment.raiseLimitNotFound],
+  ])('blocks the submit and says what to do on %s', async (code, copy) => {
     const { onClose } = renderDialog();
 
     updateAgentCapacityAction.mockResolvedValue({
       status: 'error',
       message: 'Changing an agent’s ticket limit requires the assignment_rule:write permission.',
       requestId: 'req-1',
-      code: 'forbidden',
+      code,
+    });
+
+    typeLimit('4');
+    submit();
+
+    await waitFor(() => {
+      expect(screen.getByText(copy)).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole('button', { name: content.assignment.raiseLimitSubmit }),
+    ).toBeDisabled();
+    expect(onClose).not.toHaveBeenCalled();
+    // Nothing is cleared, so a reload-and-retry costs no retyping.
+    expect(limitField()).toHaveValue(4);
+  });
+
+  /** Anything else keeps the action's own message, because it is worth retrying. */
+  it('keeps the API’s message and the submit for a retryable failure', async () => {
+    renderDialog();
+
+    updateAgentCapacityAction.mockResolvedValue({
+      status: 'error',
+      message: 'That limit conflicts with a change somebody else just made.',
+      requestId: 'req-3',
+      code: 'conflict',
     });
 
     typeLimit('4');
@@ -211,13 +335,10 @@ describe('AgentCapacityDialog', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(
-          'Changing an agent’s ticket limit requires the assignment_rule:write permission.',
-        ),
+        screen.getByText('That limit conflicts with a change somebody else just made.'),
       ).toBeInTheDocument();
     });
-    expect(onClose).not.toHaveBeenCalled();
-    expect(fieldByLabel(content.assignment.capacityLimitLabel)).toHaveValue(4);
+    expect(screen.getByRole('button', { name: content.assignment.raiseLimitSubmit })).toBeEnabled();
   });
 
   /**
@@ -231,29 +352,79 @@ describe('AgentCapacityDialog', () => {
     typeLimit('1');
 
     expect(
-      screen.getByText(content.assignment.capacityBelowLoadWarning('Amina Haddad', 2)),
+      screen.getByText(content.assignment.raiseLimitBelowLoad('Amina Haddad', 2, 1)),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * Same condition, same warning, whichever way the supervisor got there: a
+   * workspace default below the agent's load is the identical trap as typing a low
+   * number, and two code paths for it would mean one of them stopped warning.
+   */
+  it('warns just the same when the workspace default is below the load', () => {
+    render(
+      <ToastProvider>
+        <AgentCapacityDialog
+          rows={ROWS}
+          // Amina holds 2; inheriting a default of 1 leaves her over it.
+          workspaceDefault={1}
+          hasMore={false}
+          onClose={vi.fn()}
+        />
+      </ToastProvider>,
+    );
+
+    fireEvent.click(screen.getByLabelText(content.assignment.raiseLimitUseDefaultLabel(1)));
+
+    expect(
+      screen.getByText(content.assignment.raiseLimitBelowLoad('Amina Haddad', 2, 1)),
     ).toBeInTheDocument();
   });
 
   it('re-reads the form from the agent that was picked, not the one before', () => {
     renderDialog();
 
-    fireEvent.change(fieldByLabel(content.assignment.capacityAgentLabel), {
+    fireEvent.change(fieldByLabel(content.assignment.raiseLimitAgentLabel), {
       target: { value: LIANG_ID },
     });
 
     // Liang inherits, so the form switches to the workspace default rather than
     // carrying Amina's 2 across under his name.
     expect(
-      screen.getByText(content.assignment.capacityLoad(1, WORKSPACE_DEFAULT)),
+      screen.getByText(content.assignment.raiseLimitLoadSummary(1, WORKSPACE_DEFAULT)),
     ).toBeInTheDocument();
-    expect(screen.getByText(content.assignment.capacityHasRoom)).toBeInTheDocument();
-    expect(screen.queryByLabelText(content.assignment.capacityLimitLabel)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(content.assignment.raiseLimitInherited(WORKSPACE_DEFAULT)),
+    ).toBeInTheDocument();
+    expect(limitField()).toBeDisabled();
   });
 
   it('says out loud when the picker holds only the first page of agents', () => {
     renderDialog(vi.fn(), true);
 
-    expect(screen.getByText(content.assignment.capacityAgentHintTruncated)).toBeInTheDocument();
+    expect(screen.getByText(content.assignment.raiseLimitAgentHint(true))).toBeInTheDocument();
+  });
+
+  /**
+   * Practically unreachable — `loadAgentCapacity` returns `null` rather than an
+   * empty report — but a control that opened onto nothing must say so and refuse
+   * the submit, not crash or offer a save with no subject.
+   */
+  it('renders the empty case rather than a form with nothing to change', () => {
+    render(
+      <ToastProvider>
+        <AgentCapacityDialog
+          rows={[]}
+          workspaceDefault={WORKSPACE_DEFAULT}
+          hasMore={false}
+          onClose={vi.fn()}
+        />
+      </ToastProvider>,
+    );
+
+    expect(screen.getByText(content.assignment.raiseLimitNoAgentsError)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: content.assignment.raiseLimitSubmit }),
+    ).toBeDisabled();
   });
 });

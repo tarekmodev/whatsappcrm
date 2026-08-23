@@ -4,6 +4,9 @@ import type {
   TicketResponse,
 } from '@whatsappcrm/contracts';
 
+/** The one reason a higher limit is an answer to. */
+export const CAPACITY_REASON: FallbackAssignmentReason = 'all_at_capacity';
+
 /**
  * A flagged ticket, narrowed to the shape the queue can actually render.
  *
@@ -68,4 +71,16 @@ export function toFlaggedTicketRows(
       },
     ];
   });
+}
+
+/**
+ * How many rows on this page are stuck on a limit.
+ *
+ * The remedy notice above the table counts **rendered rows**, never the queue:
+ * the page is capped at `FLAGGED_TICKETS_PAGE_SIZE` and `toFlaggedTicketRows`
+ * can drop a ticket besides, so any wider claim would be one nobody checked —
+ * the same discipline `flaggedQueueSummary` keeps one line above it.
+ */
+export function countAtCapacity(rows: readonly FlaggedTicketRow[]): number {
+  return rows.filter((row) => row.reason === CAPACITY_REASON).length;
 }

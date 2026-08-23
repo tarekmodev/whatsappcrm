@@ -84,3 +84,34 @@ export function findCapacityRow(
 ): AgentCapacityRow | null {
   return rows.find((row) => row.user.id === userId) ?? null;
 }
+
+/**
+ * What the remedy notice above the queue can offer its reader.
+ *
+ * A union rather than the two booleans it is derived from, because three of the
+ * four combinations are real and they are not the same absence (TAR-778):
+ *
+ * - `edit` — the reader may change a limit and there are limits to change.
+ * - `denied` — they may not. Per 0001 the button is omitted rather than
+ *   disabled, and the copy names who can act instead.
+ * - `unavailable` — they may, but this console cannot read the limits right now
+ *   (`GET /v1/assignment-settings` unreachable, or the workspace has no agents).
+ *   Telling a supervisor to ask a supervisor would be nonsense, so the notice
+ *   states the fact and offers nothing.
+ *
+ * The notice itself renders in all three: whether the queue is stuck on a limit
+ * is worth knowing even to somebody who cannot move it.
+ */
+export type CapacityRemedy =
+  { kind: 'edit'; report: AgentCapacityReport } | { kind: 'denied' } | { kind: 'unavailable' };
+
+export function capacityRemedy(
+  canEdit: boolean,
+  report: AgentCapacityReport | null,
+): CapacityRemedy {
+  if (!canEdit) {
+    return { kind: 'denied' };
+  }
+
+  return report === null ? { kind: 'unavailable' } : { kind: 'edit', report };
+}

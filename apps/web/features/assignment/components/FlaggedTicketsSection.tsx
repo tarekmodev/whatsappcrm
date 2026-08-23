@@ -2,11 +2,13 @@ import { Stack } from '@/components/layout/Stack';
 import { FilterPills } from '@/components/ui/FilterPills';
 import { SectionCard } from '@/components/ui/SectionCard';
 import { content } from '@/content/en';
+import { capacityRemedy } from '../capacity';
 import { loadAgentCapacity } from '../capacity.data';
 import { loadFlaggedTickets, type FlaggedTicketsFilters } from '../flagged-tickets.data';
 import { deferredReasonFilters } from '../flagged-filters';
 import { flaggedQueueSummary } from '../flagged-summary';
-import { toFlaggedTicketRows } from '../flagged-rows';
+import { CAPACITY_REASON, countAtCapacity, toFlaggedTicketRows } from '../flagged-rows';
+import { CapacityNotice } from './CapacityNotice';
 import { FlaggedTicketsTable } from './FlaggedTicketsTable';
 import { FlaggedTicketsTableSkeleton } from './FlaggedTicketsTable.Skeleton';
 
@@ -57,15 +59,26 @@ export async function FlaggedTicketsSection({
           items={deferredReasonFilters(content, filters.deferredReason)}
         />
 
+        {/* The remedy for the one reason a limit answers, above the table rather
+            than inside it — see `CapacityNotice` for why the row was the wrong
+            place. It is not reserved in the skeleton below: whether any row is
+            at capacity is not known until the rows are, and a placeholder for
+            something that may not arrive shifts the page in the other
+            direction. */}
+        <CapacityNotice
+          atCapacityCount={countAtCapacity(rows)}
+          isFilteredToCapacity={filters.deferredReason === CAPACITY_REASON}
+          remedy={capacityRemedy(canEditCapacity, capacity)}
+        />
+
         {/* Imported directly, not behind a lazy boundary: this is the page's
             primary above-the-fold content, so deferring its chunk would trade a
-            skeleton flash for bytes nobody saves. Only the assign dialog is
-            lazy, and it loads on first open. */}
+            skeleton flash for bytes nobody saves. Only the dialogs are lazy, and
+            each loads on first open. */}
         <FlaggedTicketsTable
           rows={rows}
           assignableUsers={assignableUsers}
           canAssign={canAssign}
-          capacity={capacity}
           isFiltered={filters.deferredReason !== undefined}
         />
       </Stack>

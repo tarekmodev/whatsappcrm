@@ -59,6 +59,12 @@ import { toAgentCapacityRows, type AgentCapacityReport } from './capacity';
  * permission, but nothing in this console reads a limit without offering to
  * change it, so a read for a caller who could only look would be a request nobody
  * asked for.
+ *
+ * That gate no longer hides the *fact* from anyone, which is what made it wrong
+ * before (TAR-778). `CapacityNotice` renders for every reader of the queue and
+ * counts rows rather than limits, so a principal who may not write still sees why
+ * the queue is stuck and who can move it. What `null` withholds is the dialog,
+ * and only the dialog.
  */
 export async function loadAgentCapacity(canEdit: boolean): Promise<AgentCapacityReport | null> {
   if (!canEdit) {

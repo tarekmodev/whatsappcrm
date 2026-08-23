@@ -11,18 +11,17 @@ import { Stack } from '@/components/layout/Stack';
 import { TextLink } from '@/components/ui/TextLink';
 import { useContent } from '@/lib/content';
 import { routes } from '@/lib/routes';
-import type { AgentCapacityReport } from '../capacity';
 import type { FlaggedTicketRow } from '../flagged-rows';
 import { ticketLabel } from '../ticket-label';
 import { DEFERRED_REASON_TONES } from '../presentation';
 import { flaggedTicketColumnMeta } from './flagged-columns';
-import { LazyAgentCapacityDialog, LazyAssignFlaggedTicketDialog } from './flagged-dialogs.lazy';
+import { LazyAssignFlaggedTicketDialog } from './flagged-dialogs.lazy';
 import styles from './FlaggedTicketsTable.module.css';
 
 /**
  * Tickets auto-assignment could not place, and the control that takes one off the
  * list. Usage:
- * `<FlaggedTicketsTable rows={rows} assignableUsers={users} canAssign capacity={report} isFiltered />`.
+ * `<FlaggedTicketsTable rows={rows} assignableUsers={users} canAssign isFiltered />`.
  *
  * A client component because the row action opens a dialog; the data is fetched on
  * the server and passed in, so no client-side waterfall is introduced. Reuses
@@ -35,10 +34,11 @@ import styles from './FlaggedTicketsTable.module.css';
  * need different people to act, and a queue that merged them would send somebody
  * hunting for colleagues who were never configured.
  *
- * A row's actions follow from its reason. Assigning takes any ticket off the
- * list, so it is offered on every row; editing an agent's limit is only an answer
- * to `all_at_capacity`, so it is offered there and nowhere else — on a row that
- * says nobody was ever configured, raising a limit changes nothing (TAR-384).
+ * **One action per row, and it is always the same one.** Assigning takes any
+ * ticket off the list, so it belongs on every row and its accessible name can
+ * carry the ticket. Changing an agent's limit does not: it is a workspace-wide
+ * act with no per-row subject, so it lives in `CapacityNotice` above the table
+ * rather than repeating down the actions column (TAR-778).
  */
 
 export interface FlaggedTicketsTableProps {
@@ -47,13 +47,6 @@ export interface FlaggedTicketsTableProps {
   assignableUsers: readonly UserResponse[];
   /** From the server's `ticket:assign` check. The action asserts it again. */
   canAssign: boolean;
-  /**
-   * Rotation candidates and their limits, or `null` when the cap-edit control
-   * cannot be offered — the caller lacks `assignment_rule:write`, or the API does
-   * not publish capacity. `null` is the whole gate: there is no second flag to
-   * keep in step with it.
-   */
-  capacity: AgentCapacityReport | null;
   /** Changes the empty copy: "nothing is stuck" and "nothing matches" are different news. */
   isFiltered: boolean;
 }
@@ -62,12 +55,10 @@ export function FlaggedTicketsTable({
   rows,
   assignableUsers,
   canAssign,
-  capacity,
   isFiltered,
 }: FlaggedTicketsTableProps) {
   const content = useContent();
   const [assigning, setAssigning] = useState<FlaggedTicketRow | null>(null);
-  const [isEditingCapacity, setIsEditingCapacity] = useState(false);
 
   const columns = useMemo<DataTableColumn<FlaggedTicketRow>[]>(() => {
     const renderers: Record<string, (row: FlaggedTicketRow) => ReactNode> = {
@@ -122,29 +113,15 @@ export function FlaggedTicketsTable({
           });
         }
 
-        if (capacity !== null && row.reason === 'all_at_capacity') {
-          actions.push({
-            key: 'capacity',
-            label: content.assignment.editCapacity,
-            // No ticket in the name, unlike `assign` above. The dialog is
-            // workspace-wide, so naming the row would be a promise this control
-            // does not keep — see `editCapacityAria` (TAR-778).
-            accessibleName: content.assignment.editCapacityAria,
-            onSelect: () => {
-              setIsEditingCapacity(true);
-            },
-          });
-        }
-
         return <RowActions subject={label} actions={actions} />;
       },
     };
 
-    return flaggedTicketColumnMeta(content, canAssign || capacity !== null).map((meta) => ({
+    return flaggedTicketColumnMeta(content, canAssign).map((meta) => ({
       ...meta,
       render: renderers[meta.key] ?? (() => null),
     }));
-  }, [canAssign, capacity, content]);
+  }, [canAssign, content]);
 
   if (rows.length === 0) {
     // The filtered state offers to widen; the unfiltered one is good news and
@@ -178,27 +155,13 @@ export function FlaggedTicketsTable({
         getRowKey={(row) => row.ticket.id}
       />
 
-      {/* Each dialog's chunk loads on first open, not with the page. */}
+      {/* The dialog's chunk loads on first open, not with the page. */}
       {assigning === null ? null : (
         <LazyAssignFlaggedTicketDialog
           row={assigning}
           assignableUsers={assignableUsers}
           onClose={() => {
             setAssigning(null);
-          }}
-        />
-      )}
-
-      {/* One dialog for the table rather than one per row: it edits an *agent's*
-          limit, not the ticket's, so which row opened it changes nothing about
-          what it shows. */}
-      {capacity === null || !isEditingCapacity ? null : (
-        <LazyAgentCapacityDialog
-          rows={capacity.rows}
-          workspaceDefault={capacity.workspaceDefault}
-          hasMore={capacity.hasMore}
-          onClose={() => {
-            setIsEditingCapacity(false);
           }}
         />
       )}

@@ -32,6 +32,41 @@ export function draftForRow(row: AgentCapacityRow): TicketLimitDraft {
 }
 
 /**
+ * Ticking or clearing "use the workspace default".
+ *
+ * Ticking rewrites the number too, so the field a supervisor is reading under a
+ * ticked box shows the limit that would actually apply rather than the override
+ * they are about to discard. Clearing leaves that number in place as the
+ * starting point for an edit — the alternative is blanking a field somebody just
+ * looked at.
+ *
+ * A function here rather than a spread at the call site because it is one half
+ * of an invariant with {@link withLimit}: the checkbox and the number are never
+ * both authoritative (TAR-778).
+ */
+export function withUsesDefault(
+  draft: TicketLimitDraft,
+  usesDefault: boolean,
+  workspaceDefault: number,
+): TicketLimitDraft {
+  return usesDefault
+    ? { usesDefault: true, limit: String(workspaceDefault) }
+    : { usesDefault: false, limit: draft.limit };
+}
+
+/**
+ * Typing a limit, which is also how the checkbox comes off.
+ *
+ * The field is disabled while the box is ticked, so in the browser this can only
+ * arrive unticked — the clause is the invariant stated once rather than a case
+ * anybody has to reach. Without it, a caller could construct a draft that both
+ * inherits and overrides, and `resolveTicketLimit` would silently prefer one.
+ */
+export function withLimit(limit: string): TicketLimitDraft {
+  return { usesDefault: false, limit };
+}
+
+/**
  * What this draft would send, or that it would send nothing.
  *
  * A union rather than `number | null`, because `null` already means something
@@ -62,4 +97,31 @@ export function resolveTicketLimit(draft: TicketLimitDraft): TicketLimitResoluti
     value <= ASSIGNMENT_POLICY.maxMaxConcurrentTickets
     ? { status: 'valid', maxConcurrentTickets: value }
     : { status: 'invalid' };
+}
+
+/**
+ * The limit this draft would actually put in force, or `null` while there is not
+ * a usable one to speak of.
+ *
+ * Distinct from {@link resolveTicketLimit}, which answers *what to send*: there,
+ * `null` means "clear the override" and is a perfectly good thing to send. Here
+ * the question is what number rotation would then compare against, so a cleared
+ * override resolves to the workspace default instead.
+ *
+ * One rule, so the below-load warning fires on the same condition whichever way
+ * the supervisor arrived at it — typing 4 under a load of 6, or ticking a
+ * workspace default of 5 under the same load. Two code paths for that would mean
+ * one of them eventually stops warning (TAR-778).
+ */
+export function effectiveTicketLimit(
+  draft: TicketLimitDraft,
+  workspaceDefault: number,
+): number | null {
+  const resolved = resolveTicketLimit(draft);
+
+  if (resolved.status === 'invalid') {
+    return null;
+  }
+
+  return resolved.maxConcurrentTickets ?? workspaceDefault;
 }

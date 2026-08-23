@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentCapacity, UserResponse } from '@whatsappcrm/contracts';
-import { findCapacityRow, toAgentCapacityRows } from './capacity';
+import { capacityRemedy, findCapacityRow, toAgentCapacityRows } from './capacity';
 
 /**
  * The rule that decides who the cap-edit control offers, and in what order.
@@ -88,5 +88,39 @@ describe('findCapacityRow', () => {
 
     expect(findCapacityRow(rows, 'a')?.user.displayName).toBe('Aisha');
     expect(findCapacityRow(rows, 'gone')).toBeNull();
+  });
+});
+
+/**
+ * The three answers the remedy notice can give, kept apart because two of them
+ * are absences and they are not the same absence (TAR-778).
+ */
+describe('capacityRemedy', () => {
+  const report = {
+    rows: toAgentCapacityRows([agent('a', 'Aisha', capacity(2, 2, 2))]),
+    workspaceDefault: 5,
+    hasMore: false,
+  };
+
+  it('offers the dialog to a caller who may write and has limits to change', () => {
+    expect(capacityRemedy(true, report)).toEqual({ kind: 'edit', report });
+  });
+
+  /**
+   * The permission decides this, not the data: a refused caller never gets a
+   * report in the first place, and the copy has to name who can act instead.
+   */
+  it('reads a caller without the permission as denied, whatever the report says', () => {
+    expect(capacityRemedy(false, null)).toEqual({ kind: 'denied' });
+    expect(capacityRemedy(false, report)).toEqual({ kind: 'denied' });
+  });
+
+  /**
+   * Distinct from `denied` on purpose. This caller *is* the person who could act;
+   * telling them to ask a supervisor would be nonsense, so the notice has to know
+   * the difference.
+   */
+  it('reads a permitted caller with no readable limits as unavailable', () => {
+    expect(capacityRemedy(true, null)).toEqual({ kind: 'unavailable' });
   });
 });

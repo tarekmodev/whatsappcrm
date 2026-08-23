@@ -87,9 +87,10 @@ export default async function AssignmentPage({
               than leaving the previous reason's rows on screen. */}
           <Suspense
             key={filters.deferredReason ?? ''}
-            fallback={
-              <FlaggedTicketsSectionSkeleton hasRowActions={canAssign || canEditCapacity} />
-            }
+            // `canAssign` alone: the queue's only row action is assigning, and
+            // the cap-edit control sits above the table rather than in it
+            // (TAR-778).
+            fallback={<FlaggedTicketsSectionSkeleton hasRowActions={canAssign} />}
           >
             <FlaggedTicketsSection
               filters={filters}

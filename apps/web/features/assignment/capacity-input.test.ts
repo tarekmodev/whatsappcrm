@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ASSIGNMENT_POLICY } from '@whatsappcrm/contracts';
-import { draftForRow, resolveTicketLimit } from './capacity-input';
+import {
+  draftForRow,
+  effectiveTicketLimit,
+  resolveTicketLimit,
+  withLimit,
+  withUsesDefault,
+} from './capacity-input';
 import type { AgentCapacityRow } from './capacity';
 
 /**
@@ -92,5 +98,54 @@ describe('resolveTicketLimit', () => {
       status: 'valid',
       maxConcurrentTickets: 7,
     });
+  });
+});
+
+/**
+ * The invariant behind "nothing is ever both" (TAR-778): the checkbox and the
+ * number field are two views of one decision, so the transitions between them
+ * live here rather than in the component that renders them.
+ */
+describe('withUsesDefault', () => {
+  it('rewrites the number to the default it is about to inherit', () => {
+    expect(withUsesDefault({ usesDefault: false, limit: '9' }, true, 5)).toEqual({
+      usesDefault: true,
+      limit: '5',
+    });
+  });
+
+  /** Clearing it leaves a number to edit rather than blanking a field just read. */
+  it('keeps the number in place when the box comes off', () => {
+    expect(withUsesDefault({ usesDefault: true, limit: '5' }, false, 5)).toEqual({
+      usesDefault: false,
+      limit: '5',
+    });
+  });
+});
+
+describe('withLimit', () => {
+  it('takes the box off, so a typed number and an inherited one cannot both hold', () => {
+    expect(withLimit('7')).toEqual({ usesDefault: false, limit: '7' });
+  });
+});
+
+/**
+ * What rotation would compare against, which is not what the form sends: `null`
+ * on the wire means "clear the override", and the number that then applies is the
+ * workspace default. One rule, so the below-load warning cannot fire for a typed
+ * value and stay silent for the identical inherited one.
+ */
+describe('effectiveTicketLimit', () => {
+  it('resolves a cleared override to the workspace default', () => {
+    expect(effectiveTicketLimit({ usesDefault: true, limit: '' }, 5)).toBe(5);
+  });
+
+  it('resolves a typed value to itself', () => {
+    expect(effectiveTicketLimit({ usesDefault: false, limit: '9' }, 5)).toBe(9);
+  });
+
+  it('has no answer while the typed value is not a limit', () => {
+    expect(effectiveTicketLimit({ usesDefault: false, limit: '0' }, 5)).toBeNull();
+    expect(effectiveTicketLimit({ usesDefault: false, limit: '' }, 5)).toBeNull();
   });
 });
