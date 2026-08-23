@@ -1,0 +1,25 @@
+/*
+ * Skeleton only. It does not reuse `AuthCard` because that component owns the
+ * screen's single `<h1>`, and a heading whose text has not arrived is a heading
+ * a screen reader would announce as empty — `LoadingAnnouncement` says the one
+ * sentence instead.
+ *
+ * The rules below are therefore the two `AuthCard` applies that this has to
+ * match to occupy the same space: the card's own rhythm, and the line box a
+ * heading takes.
+ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* The `1lh` of `--font-size-heading-md`, which is what `AuthCard` renders its
+   title at — so the swap from placeholder to real heading moves nothing. */
+.title {
+  display: flex;
+  align-items: center;
+  block-size: 1lh;
+  font-size: var(--font-size-heading-md);
+}

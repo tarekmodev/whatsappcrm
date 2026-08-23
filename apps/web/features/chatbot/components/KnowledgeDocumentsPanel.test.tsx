@@ -6,6 +6,7 @@ import { ToastProvider } from '@/components/ui/ToastProvider';
 import { createPermissionChecker } from '@/lib/session/permissions';
 import type { PermissionChecker } from '@/lib/session/permissions';
 import type { KnowledgeDocumentsData } from '../chatbot.data';
+import type { KnowledgeListParams } from '../knowledge-params';
 import { CHATBOT_PERMISSIONS, KNOWLEDGE_DOCUMENTS_PAGE_SIZE } from '../constants';
 import { KnowledgeDocumentsPanel } from './KnowledgeDocumentsPanel';
 
@@ -85,20 +86,23 @@ const READER = createPermissionChecker([CHATBOT_PERMISSIONS.read]);
 async function renderPanel(
   data: KnowledgeDocumentsData,
   {
-    isFiltered = false,
+    filters = { q: undefined, status: undefined },
     checker = ADMIN,
-  }: { isFiltered?: boolean; checker?: PermissionChecker } = {},
+  }: { filters?: KnowledgeListParams; checker?: PermissionChecker } = {},
 ) {
   return render(
     <ToastProvider>
       {await KnowledgeDocumentsPanel({
         documentsPromise: Promise.resolve(data),
-        isFiltered,
+        filters,
         checker,
       })}
     </ToastProvider>,
   );
 }
+
+/** Any filter at all: which one it is does not change the truncation notice. */
+const FILTERED: KnowledgeListParams = { q: 'refunds', status: undefined };
 
 function unfilteredNotice() {
   return content.chatbot.knowledgeShowingFirst(KNOWLEDGE_DOCUMENTS_PAGE_SIZE);
@@ -123,7 +127,7 @@ describe('KnowledgeDocumentsPanel', () => {
   it('asks for a narrower search when the entries that overflow are already a filtered set', async () => {
     // A reader who has searched has been told once already that filtering is how
     // to reach the others; repeating it would read as the filter not working.
-    await renderPanel(TRUNCATED, { isFiltered: true });
+    await renderPanel(TRUNCATED, { filters: FILTERED });
 
     expect(screen.getByText(filteredNotice())).toBeInTheDocument();
     expect(screen.queryByText(unfilteredNotice())).not.toBeInTheDocument();
@@ -138,7 +142,7 @@ describe('KnowledgeDocumentsPanel', () => {
     expect(screen.queryByText(filteredNotice())).not.toBeInTheDocument();
 
     unmount();
-    await renderPanel(COMPLETE, { isFiltered: true });
+    await renderPanel(COMPLETE, { filters: FILTERED });
 
     expect(screen.queryByText(unfilteredNotice())).not.toBeInTheDocument();
     expect(screen.queryByText(filteredNotice())).not.toBeInTheDocument();

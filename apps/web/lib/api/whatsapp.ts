@@ -2,8 +2,10 @@ import 'server-only';
 
 import {
   ConnectedWhatsAppBusinessAccountResponseSchema,
+  WhatsAppPhoneNumberRegistrationResponseSchema,
   type ConnectedWhatsAppBusinessAccountResponse,
   type WhatsAppEmbeddedSignupInput,
+  type WhatsAppPhoneNumberRegistrationResponse,
 } from '@whatsappcrm/contracts';
 import { authenticatedRequest } from '@/lib/api/authenticated';
 
@@ -16,7 +18,9 @@ import { authenticatedRequest } from '@/lib/api/authenticated';
  * make: the API publishes this route and no `GET`. Until one exists, the console
  * can show what a connection *just* produced and cannot list what was connected
  * before — flagged on TAR-169 rather than papered over with a claim the console
- * cannot support.
+ * cannot support. TAR-814's connect wizard is what pays for that: it resumes
+ * from a client-side cache of this response (`features/whatsapp/wizard-storage.ts`)
+ * because there is no read to resume from.
  *
  * Nothing about this call is retryable and nothing may defer it: Meta's code is
  * single-use and lives about 30 seconds, which is why the route takes no
@@ -35,4 +39,33 @@ export async function connectWhatsAppBusinessAccount(
   });
 
   return ConnectedWhatsAppBusinessAccountResponseSchema.parse(response);
+}
+
+/**
+ * `POST /api/v1/whatsapp/phone-numbers/{whatsappAccountId}/registration` — try
+ * registering a connected number for sending again (TAR-170).
+ *
+ * The id is **ours** — `accounts[].id` from the connect response above, not
+ * Meta's `phone_number_id`. Interpolated without encoding because the caller
+ * validates it against the contract's `WhatsAppPhoneNumberParamsSchema` first,
+ * which admits UUIDs and nothing else.
+ *
+ * No body, and no `Idempotency-Key`: there is no spent code to protect here, and
+ * the operation is idempotent by construction — a number that already reads
+ * `registered` short-circuits before Meta is touched, which is what makes this
+ * safe to call again to confirm a state rather than to change one.
+ *
+ * **A refused registration is a `200`.** The call did what it was asked and the
+ * outcome rides in `registrationFailureReason` (0002, amendment 12), so a caller
+ * that only branches on a thrown error would read every refusal as a success.
+ */
+export async function registerWhatsAppPhoneNumber(
+  whatsappAccountId: string,
+): Promise<WhatsAppPhoneNumberRegistrationResponse> {
+  const response = await authenticatedRequest({
+    method: 'POST',
+    path: `/v1/whatsapp/phone-numbers/${whatsappAccountId}/registration`,
+  });
+
+  return WhatsAppPhoneNumberRegistrationResponseSchema.parse(response);
 }

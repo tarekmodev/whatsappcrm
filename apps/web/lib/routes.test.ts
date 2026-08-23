@@ -17,6 +17,24 @@ describe('routes', () => {
     expect(routes.resetPassword()).toBe('/reset-password');
   });
 
+  /**
+   * The same assertion for self-signup's own emailed link, which the API builds
+   * as `https://{platformHost}${VERIFY_LINK_PATH}#token=…` with the path declared
+   * in `apps/api/src/signup/tenant-signup.service.ts`.
+   *
+   * Worth pinning twice over: unlike a reset, the recipient of this link has no
+   * account to fall back on and no admin to ask for another one, so a 404 here is
+   * a workspace that can never be created and a slug that stays reserved until it
+   * lapses.
+   */
+  it('serves the signup verification page on the path the API mails out', () => {
+    expect(routes.verifySignup()).toBe('/verify');
+  });
+
+  it('serves the signup form on a bare path, because nothing about it is shareable', () => {
+    expect(routes.signup()).toBe('/signup');
+  });
+
   it('builds a query string only when there is something to put in it', () => {
     expect(routes.settingsPeople()).toBe('/settings/people');
     expect(routes.settingsPeople({ tab: 'teams' })).toBe('/settings/people?tab=teams');
