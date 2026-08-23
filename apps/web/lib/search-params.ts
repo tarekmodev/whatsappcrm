@@ -13,3 +13,18 @@ export function firstSearchParam(value: string | string[] | undefined): string |
 
   return candidate === undefined || candidate.trim() === '' ? undefined : candidate;
 }
+
+/**
+ * A search box's value as the URL carries it: trimmed, or absent when it holds
+ * nothing but spaces.
+ *
+ * The same rule as `firstSearchParam` reads back, written from the other side.
+ * Every filter bar held the identical ternary twice — once in its debounce and
+ * once in the select beside it — and "blank means no `q`" belongs to the URL
+ * contract rather than to any one bar.
+ */
+export function searchTermParam(value: string): string | undefined {
+  const trimmed = value.trim();
+
+  return trimmed === '' ? undefined : trimmed;
+}

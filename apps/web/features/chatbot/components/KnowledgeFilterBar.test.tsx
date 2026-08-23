@@ -75,10 +75,32 @@ describe('KnowledgeFilterBar', () => {
       { scroll: false },
     );
 
+    // `indexed`, not the `failed` the URL still says: the status the reader has
+    // just chosen is the one the search must carry, whether or not its
+    // navigation has landed (TAR-780).
     fireEvent.change(searchBox(), { target: { value: 'delivery' } });
     await waitFor(() => {
-      expect(replace).toHaveBeenCalledWith(
-        routes.settingsChatbot({ q: 'delivery', status: 'failed' }),
+      expect(replace).toHaveBeenLastCalledWith(
+        routes.settingsChatbot({ q: 'delivery', status: 'indexed' }),
+        { scroll: false },
+      );
+    });
+  });
+
+  it('carries a status whose navigation has not landed yet (TAR-780)', async () => {
+    // `useSearchParams` is the URL that has *landed*. Between the select's
+    // replace and the URL arriving it still says "all statuses", and a debounce
+    // tick in that window used to navigate without the status — sending the
+    // select back to "All statuses" without the reader touching it. The spy
+    // never updates the params, so this test sits inside that window.
+    renderBar();
+
+    fireEvent.change(statusSelect(), { target: { value: 'failed' } });
+    fireEvent.change(searchBox(), { target: { value: 'returns' } });
+
+    await waitFor(() => {
+      expect(replace).toHaveBeenLastCalledWith(
+        routes.settingsChatbot({ q: 'returns', status: 'failed' }),
         { scroll: false },
       );
     });

@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { KNOWLEDGE_DOCUMENT_STATUSES, type KnowledgeDocumentStatus } from '@whatsappcrm/contracts';
 import { Field } from '@/components/ui/Field';
 import { FilterBar } from '@/components/ui/FilterBar';
@@ -9,7 +9,9 @@ import { SearchField } from '@/components/ui/SearchField';
 import { Select } from '@/components/ui/Select';
 import { useContent } from '@/lib/content';
 import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from '@/lib/hooks/useDebouncedValue';
-import { routes, searchParamKeys } from '@/lib/routes';
+import { useFilterNavigation } from '@/lib/hooks/useFilterNavigation';
+import { routes, searchParamKeys, type ChatbotQuery } from '@/lib/routes';
+import { searchTermParam } from '@/lib/search-params';
 import { KNOWLEDGE_QUERY_MAX_LENGTH } from '../constants';
 import { ALL_STATUSES_VALUE, knowledgeStatusFilterOptions } from '../presentation';
 
@@ -40,7 +42,6 @@ import { ALL_STATUSES_VALUE, knowledgeStatusFilterOptions } from '../presentatio
  */
 export function KnowledgeFilterBar() {
   const content = useContent();
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   // Narrowed here rather than read raw, so a hand-edited `?status=archived`
@@ -53,6 +54,14 @@ export function KnowledgeFilterBar() {
   const [draftQuery, setDraftQuery] = useState(queryParam);
   const debouncedQuery = useDebouncedValue(draftQuery, SEARCH_DEBOUNCE_MS);
 
+  // Both filters navigate through one place, so each carries the other even
+  // while the URL that set it is still in flight — see `useFilterNavigation`.
+  const filters = useMemo<ChatbotQuery>(
+    () => ({ q: searchTermParam(queryParam), status: statusParam }),
+    [queryParam, statusParam],
+  );
+  const replaceFilters = useFilterNavigation<ChatbotQuery>(filters, routes.settingsChatbot);
+
   // Keeps the box in step when the URL changes from elsewhere — the back button,
   // a shared link, the empty state's "clear filters" link.
   useEffect(() => {
@@ -64,15 +73,8 @@ export function KnowledgeFilterBar() {
       return;
     }
 
-    router.replace(
-      routes.settingsChatbot({
-        q: debouncedQuery.trim() === '' ? undefined : debouncedQuery.trim(),
-        status: statusParam,
-      }),
-      // `replace`, so a search does not fill the back stack with every prefix.
-      { scroll: false },
-    );
-  }, [debouncedQuery, queryParam, statusParam, router]);
+    replaceFilters({ q: searchTermParam(debouncedQuery) });
+  }, [debouncedQuery, queryParam, replaceFilters]);
 
   return (
     <FilterBar label={content.chatbot.knowledgeFiltersLabel}>
@@ -96,16 +98,13 @@ export function KnowledgeFilterBar() {
             value={statusParam ?? ALL_STATUSES_VALUE}
             options={knowledgeStatusFilterOptions(content)}
             onChange={(event) => {
-              router.replace(
-                routes.settingsChatbot({
-                  // The term the box currently *shows*, not the one the URL
-                  // holds: a status chosen mid-word must not discard the
-                  // keystrokes the debounce has not fired yet.
-                  q: draftQuery.trim() === '' ? undefined : draftQuery.trim(),
-                  status: asStatus(event.target.value),
-                }),
-                { scroll: false },
-              );
+              replaceFilters({
+                // The term the box currently *shows*, not the one the URL
+                // holds: a status chosen mid-word must not discard the
+                // keystrokes the debounce has not fired yet.
+                q: searchTermParam(draftQuery),
+                status: asStatus(event.target.value),
+              });
             }}
           />
         )}
