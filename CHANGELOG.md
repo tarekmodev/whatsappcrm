@@ -169,6 +169,51 @@ change.
 
 ### Added
 
+- **A supervisor can set how much work auto-assignment sends an agent, from the queue where it
+  is in the way** (TAR-384) — shipped across TAR-756 (the API) and TAR-757 (the console).
+  `users.max_concurrent_tickets` and `tenant_settings.default_max_concurrent_tickets` have been
+  enforced by rotation since TAR-272, and nothing wrote either: 0008 specified the endpoints,
+  no acceptance criterion claimed them, and the only way to raise a limit was a direct database
+  call. Every workspace therefore ran on the built-in 5, and a supervisor staring at a ticket
+  flagged **Everyone at capacity** had no move but to assign it by hand.
+  Four surfaces. `GET`/`PATCH /api/v1/assignment-settings` is the workspace default;
+  `GET /api/v1/assignment-settings/me` is an agent's own limit and live load, read-only;
+  and the per-agent override is written through `PATCH /api/v1/users/{id}` and published as a
+  gated `assignmentCapacity` on `GET /api/v1/users`. In the console, a ticket flagged
+  **Everyone at capacity** now offers a control that lists the rotation candidates worst-first,
+  shows each one's load against the limit that actually applies, and edits one agent's limit or
+  hands them back to the workspace default.
+  **The story asked for a per-agent roster on `/assignment-settings` and did not get one.** That
+  payload grows with headcount and would re-implement the filtering and paging `GET /users`
+  already has, so 0008's workspace-versus-agent split was kept and the value published on the
+  list that already has a ceiling. Amendment 4 records the trade.
+  Both writes need `assignment_rule:write` — supervisor and admin — never `user:update`:
+  deciding how much work reaches a colleague is the same act as writing a routing rule, so
+  anyone who may edit a display name must not also be able to quietly starve somebody of work.
+  A body carrying `maxConcurrentTickets` without it is refused rather than stripped, and that
+  check runs after the row is resolved so an unknown id stays `not_found` instead of becoming an
+  existence oracle. `assignmentCapacity` is gated in the mapper on `assignment_rule:read` **or**
+  `:write`, because `user:read` is held by every agent and a flat cap field would publish a live
+  readout of a named colleague's workload to the whole workspace. Both writes are audited;
+  neither revokes a session, because a limit changes what work reaches somebody rather than what
+  they may do.
+  No migration: the columns, their `CHECK` constraints and the resolver's `coalesce` all landed
+  with TAR-272. Nothing caches a limit, so a change takes effect on the next routing job with no
+  restart and no invalidation — asserted end to end rather than in prose.
+  Three things the copy says out loud because all three look like bugs otherwise: raising a
+  limit frees the agent for the **next** routed ticket and does not move the flagged one,
+  lowering a limit below what somebody already holds takes none of it away, and the agent picker
+  holds one page.
+  ⚠️ `GET /api/v1/assignment-settings/me` shipped with **no screen behind it** — built, gated and
+  tested, called by nothing. The parent story assumed an agent may view their own limit; no
+  acceptance criterion asked for somewhere to view it.
+  ⚠️ The console control's **placement is not reconciled with its design spec** (TAR-755, which
+  put it in a section-level notice rather than on each row) and is open on TAR-778, along with
+  the permission-denied rendering. What the control does is settled; where it sits may move.
+  Documented in [the assignment settings API reference](docs/reference/assignment-settings-api.md)
+  and, for supervisors,
+  [Clear tickets nobody could take](docs/guides/clear-flagged-tickets.md#raise-an-agents-ticket-limit).
+  (TAR-761)
 - **A number connected through Embedded Signup can now send, and one that could not is
   retryable** (TAR-170) — shipped across TAR-766 (the contract), TAR-767 (the columns) and this
   change (the client, the service, automatic registration and the retry route). Cloud API
