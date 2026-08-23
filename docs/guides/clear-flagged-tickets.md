@@ -130,23 +130,35 @@ Every agent has a **ticket limit** — the most active tickets auto-assignment w
 once. When a ticket is flagged **Everyone at capacity**, that limit is what stood in the way.
 You can change it from the flagged list without leaving the page.
 
-**Before you start:** you are a supervisor or an admin. Agents cannot change any limit,
-including their own — if you do not see the control, that is why.
+**Before you start:** you are a supervisor or an admin. Both roles can change a limit. Agents
+cannot change any limit, including their own, and do not see this page at all. If your own
+account cannot change limits, you still see the notice described in step 1 — it reads **Ask an
+admin or a supervisor to raise an agent’s limit.** and shows no button, so you can still see why
+the queue is stuck and who to ask.
 
-1. On a ticket flagged **Everyone at capacity**, select **Agent limits**. The **Agent ticket
-   limits** dialog opens. The control is offered only on that reason, because a higher limit
-   answers nothing when the problem is that nobody is available.
+1. Find the notice above the list, and select **Change an agent’s limit**. The **Change an
+   agent’s limit** dialog opens. The notice appears whenever a ticket on the page is flagged
+   **Everyone at capacity**, and counts them — for example **2 of these are waiting because every
+   agent is at their limit.** It is offered only on that reason, because a higher limit answers
+   nothing when the problem is that nobody is available.
 2. Under **Agent**, choose the person whose limit you want to change. Agents already at their
    limit are listed first, and each name shows what they are holding now against the limit that
-   applies to them — for example **Liang Wei — 5 of 5**.
-3. Read **Holding now**. It tells you the agent's current load and whether their limit is one
-   set for them or the workspace default they inherit.
+   applies to them — for example **Liang Wei — 5 of 5 tickets**. The hint under the list says
+   **Only this agent’s limit changes. Everyone else keeps theirs.**
+3. Read **Current load**. It tells you the agent's current load against the limit that applies to
+   them — for example **5 of 5 active tickets** — and, on the line under that reading, whether the
+   limit is one set for them or the workspace default they inherit.
 4. Under **Ticket limit**, type the new number. It must be a whole number between 1 and 1000.
    To hand the agent back to the workspace default instead, select **Use the workspace default
-   of 5** — the number in that label is your workspace's own default, not always 5.
+   (5)** — the number in that label is your workspace's own default, not always 5. Ticking that
+   box disables the **Ticket limit** field and shows the default in it. Clear the box to type a
+   number again: an agent who already inherits the default opens with the box ticked, so clearing
+   it is the only way to reach the field.
 5. Select **Save limit**.
 
-A message confirms the new limit — for example **Liang Wei can now hold 8 tickets at a time**.
+A message confirms the new limit — for example **Liang Wei’s limit is now 8**. If you handed the
+agent back to the workspace default, it reads **Liang Wei now uses the workspace default of 5**
+instead.
 
 **The flagged ticket in front of you does not move.** A higher limit frees that agent for the
 _next_ ticket auto-assignment routes; nothing re-routes a ticket that has already been flagged.
