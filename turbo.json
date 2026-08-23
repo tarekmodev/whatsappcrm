@@ -39,6 +39,7 @@
         "APP_DATABASE_URL",
         "SYSTEM_DATABASE_URL",
         "PLATFORM_DOMAIN",
+        "SECRETS_ENCRYPTION_KEY",
         "WHATSAPP_TOKEN_ENCRYPTION_KEY",
         "NODE_ENV"
       ]

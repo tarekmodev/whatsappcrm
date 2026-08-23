@@ -1,6 +1,8 @@
 import { createHmac } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
+import { PLATFORM_SETTINGS } from '../platform-settings/platform-settings.registry';
+import type { PlatformSettingsService } from '../platform-settings/platform-settings.service';
 import { MetaCloudApiClient } from './meta-cloud-api.client';
 import {
   MetaAuthenticationError,
@@ -47,7 +49,35 @@ function configWith(optional: Record<string, string | undefined>): ConfigService
   } as unknown as ConfigService;
 }
 
-const CONFIG = configWith({ META_APP_ID: APP_ID, WHATSAPP_APP_SECRET: APP_SECRET });
+/**
+ * The app id and app secret as the client now reads them (TAR-816): through
+ * `PlatformSettingsService`, which resolves a managed key from its database row
+ * and falls back to the environment variable.
+ *
+ * The stub resolves from the same map the config stub does, through the
+ * registry's own key → variable mapping, so a case that omits a variable
+ * exercises the unconfigured path exactly as it did before the migration — and
+ * so a key renamed in the registry without renaming it here fails to compile
+ * rather than silently reading `undefined`.
+ */
+function platformSettingsWith(
+  optional: Record<string, string | undefined>,
+): PlatformSettingsService {
+  const envVarByKey = new Map<string, string>(
+    PLATFORM_SETTINGS.map((setting) => [setting.key, setting.envVar]),
+  );
+
+  return {
+    get: (key: string) => optional[envVarByKey.get(key) ?? ''] ?? null,
+  } as unknown as PlatformSettingsService;
+}
+
+/** The client wired against one set of optional values, the way the module wires it. */
+function clientWith(optional: Record<string, string | undefined>): MetaCloudApiClient {
+  return new MetaCloudApiClient(configWith(optional), platformSettingsWith(optional));
+}
+
+const CONFIGURED = { META_APP_ID: APP_ID, WHATSAPP_APP_SECRET: APP_SECRET };
 
 /** A `fetch` result, with only the surface the client actually reads. */
 function metaResponds(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -68,7 +98,7 @@ describe('MetaCloudApiClient', () => {
   beforeEach(() => {
     fetchMock = jest.fn();
     globalThis.fetch = fetchMock;
-    client = new MetaCloudApiClient(CONFIG);
+    client = clientWith(CONFIGURED);
   });
 
   /** The single `fetch` call the client made, as `[url, init]`. */
@@ -839,7 +869,7 @@ describe('MetaCloudApiClient', () => {
             [missing]: undefined,
           };
 
-          const unconfigured = new MetaCloudApiClient(configWith(configured));
+          const unconfigured = clientWith(configured);
           const error = await unconfigured
             .exchangeSignupCode({ code: CODE })
             .catch((thrown: unknown) => thrown);
@@ -1219,7 +1249,7 @@ describe('MetaCloudApiClient', () => {
       });
 
       it('omits the proof when no app secret is configured, rather than sending a wrong one', async () => {
-        const unconfigured = new MetaCloudApiClient(configWith({ META_APP_ID: APP_ID }));
+        const unconfigured = clientWith({ META_APP_ID: APP_ID });
 
         fetchMock.mockResolvedValue(metaResponds(200, { id: WABA_ID }));
 

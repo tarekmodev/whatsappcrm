@@ -219,4 +219,86 @@ describe('environment validation', () => {
       );
     });
   });
+  describe('the secrets encryption key (TAR-816)', () => {
+    /** 32 bytes, base64. A test fixture, and obviously not a key from a CSPRNG. */
+    const KEY = Buffer.alloc(32, 7).toString('base64');
+    const OTHER_KEY = Buffer.alloc(32, 9).toString('base64');
+
+    it('accepts the new name on its own', () => {
+      expect(validateEnv({ ...REQUIRED, SECRETS_ENCRYPTION_KEY: KEY }).SECRETS_ENCRYPTION_KEY).toBe(
+        KEY,
+      );
+    });
+
+    it('still accepts the deprecated alias on its own, so a deploy need not move both at once', () => {
+      const env = validateEnv({ ...REQUIRED, WHATSAPP_TOKEN_ENCRYPTION_KEY: KEY });
+
+      expect(env.WHATSAPP_TOKEN_ENCRYPTION_KEY).toBe(KEY);
+      expect(env.SECRETS_ENCRYPTION_KEY).toBeUndefined();
+    });
+
+    it('accepts both when they hold the same key, which is the transition state', () => {
+      expect(() =>
+        validateEnv({
+          ...REQUIRED,
+          SECRETS_ENCRYPTION_KEY: KEY,
+          WHATSAPP_TOKEN_ENCRYPTION_KEY: KEY,
+        }),
+      ).not.toThrow();
+    });
+
+    it('refuses to boot when the two names hold different keys', () => {
+      // Half the readers would take one key and half the other, and the rows
+      // written in between would be unreadable by whichever was wrong. A failed
+      // deploy the previous instance serves through beats that.
+      expect(() =>
+        validateEnv({
+          ...REQUIRED,
+          SECRETS_ENCRYPTION_KEY: KEY,
+          WHATSAPP_TOKEN_ENCRYPTION_KEY: OTHER_KEY,
+        }),
+      ).toThrow(/SECRETS_ENCRYPTION_KEY/);
+    });
+
+    it('never puts a key into the failure message', () => {
+      try {
+        validateEnv({
+          ...REQUIRED,
+          SECRETS_ENCRYPTION_KEY: KEY,
+          WHATSAPP_TOKEN_ENCRYPTION_KEY: OTHER_KEY,
+        });
+        throw new Error('expected validation to fail');
+      } catch (error) {
+        expect((error as Error).message).not.toContain(KEY);
+        expect((error as Error).message).not.toContain(OTHER_KEY);
+      }
+    });
+
+    it('refuses a key that is not 32 bytes of base64, under either name', () => {
+      const short = Buffer.alloc(16, 7).toString('base64');
+
+      expect(() => validateEnv({ ...REQUIRED, SECRETS_ENCRYPTION_KEY: short })).toThrow(
+        /SECRETS_ENCRYPTION_KEY/,
+      );
+      expect(() => validateEnv({ ...REQUIRED, WHATSAPP_TOKEN_ENCRYPTION_KEY: short })).toThrow(
+        /WHATSAPP_TOKEN_ENCRYPTION_KEY/,
+      );
+    });
+
+    it('boots with neither, because an environment that stores no secret still runs', () => {
+      expect(() => validateEnv({ ...REQUIRED, NODE_ENV: 'production' })).not.toThrow();
+    });
+  });
+
+  describe('the platform settings refresh interval (TAR-816)', () => {
+    it('defaults to the interval the existing sweeps use', () => {
+      expect(validateEnv({ ...REQUIRED }).PLATFORM_SETTINGS_REFRESH_MS).toBe(30_000);
+    });
+
+    it('refuses an interval short enough to be a per-request read in disguise', () => {
+      expect(() => validateEnv({ ...REQUIRED, PLATFORM_SETTINGS_REFRESH_MS: '10' })).toThrow(
+        /PLATFORM_SETTINGS_REFRESH_MS/,
+      );
+    });
+  });
 });

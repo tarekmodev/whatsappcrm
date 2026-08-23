@@ -6,6 +6,7 @@ import { WhatsAppCredentialCipher } from './whatsapp-credential.cipher';
 import { AdminWhatsAppController } from './admin/admin-whatsapp.controller';
 import { WhatsAppBusinessAccountConnectionService } from './business-account-connection.service';
 import { WhatsAppBusinessAccountsController } from './business-accounts.controller';
+import { WhatsAppEmbeddedSignupConfigController } from './embedded-signup-config.controller';
 import { WhatsAppEmbeddedSignupService } from './embedded-signup.service';
 import { MessageTemplateAdministrationController } from './message-template-administration.controller';
 import { MessageTemplateAdministrationService } from './message-template-administration.service';
@@ -86,6 +87,7 @@ import { WhatsAppSenderService } from './whatsapp-sender.service';
   controllers: [
     AdminWhatsAppController,
     WhatsAppBusinessAccountsController,
+    WhatsAppEmbeddedSignupConfigController,
     WhatsAppPhoneNumberRegistrationController,
     MessageTemplatesController,
     MessageTemplateAdministrationController,

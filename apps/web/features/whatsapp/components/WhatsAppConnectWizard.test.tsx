@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { ConnectedWhatsAppBusinessAccountResponse } from '@whatsappcrm/contracts';
+import type {
+  ConnectedWhatsAppBusinessAccountResponse,
+  WhatsAppEmbeddedSignupConfigResponse,
+} from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import type { MetaLoginResponse } from '../embedded-signup';
@@ -30,23 +33,29 @@ import { WhatsAppConnectWizard } from './WhatsAppConnectWizard';
  * `fireEvent` rather than `user-event`: the repo does not carry that package.
  */
 
-/** Only the fields the flow reads. Nullable, because "not configured" is a state. */
+/** Only the field the flow still reads from `webEnv` (TAR-816 moved Meta's ids to a prop). */
 interface StubWebEnv {
-  metaAppId: string | null;
-  metaEmbeddedSignupConfigId: string | null;
-  metaGraphApiVersion: string;
   /** The unconfigured state's "Contact support" link, absent unless a test sets it. */
   supportEmail: string | null;
 }
 
 const env = vi.hoisted((): { webEnv: StubWebEnv } => ({
-  webEnv: {
-    metaAppId: '1234567890',
-    metaEmbeddedSignupConfigId: '9876543210',
-    metaGraphApiVersion: 'v23.0',
-    supportEmail: null,
-  },
+  webEnv: { supportEmail: null },
 }));
+
+/**
+ * What `GET /v1/whatsapp/embedded-signup/config` returns, as the server
+ * component hands it to the wizard (TAR-816).
+ *
+ * A prop rather than a mocked module because that is how the value actually
+ * arrives — the ids are no longer compiled into the bundle, so "not configured"
+ * is now a response shape rather than an absent environment variable.
+ */
+let config: WhatsAppEmbeddedSignupConfigResponse = {
+  appId: '1234567890',
+  configId: '9876543210',
+  graphApiVersion: 'v23.0',
+};
 
 const transport = vi.hoisted(() => ({
   connect: vi.fn(),
@@ -155,7 +164,7 @@ const init = vi.fn();
 function renderWizard() {
   return render(
     <ToastProvider>
-      <WhatsAppConnectWizard />
+      <WhatsAppConnectWizard config={config} />
     </ToastProvider>,
   );
 }
@@ -222,12 +231,8 @@ beforeEach(() => {
   loginCallback = null;
   script.hasFiredLoad = false;
   script.isBlocked = false;
-  env.webEnv = {
-    metaAppId: '1234567890',
-    metaEmbeddedSignupConfigId: '9876543210',
-    metaGraphApiVersion: 'v23.0',
-    supportEmail: null,
-  };
+  env.webEnv = { supportEmail: null };
+  config = { appId: '1234567890', configId: '9876543210', graphApiVersion: 'v23.0' };
   window.FB = { init, login };
   // Nothing is remembered between tests: the resume is a behaviour under test
   // here, not a fixture every other case inherits.
@@ -450,7 +455,7 @@ describe('WhatsAppConnectWizard: connecting the account', () => {
   });
 
   it('offers no button at all when the console has no Meta app configured', () => {
-    env.webEnv = { ...env.webEnv, metaAppId: null };
+    config = { ...config, appId: null };
     renderWizard();
 
     expect(screen.getByText(content.whatsapp.unconfiguredHeading)).toBeInTheDocument();
@@ -464,7 +469,8 @@ describe('WhatsAppConnectWizard: connecting the account', () => {
    * rather than leaving them to find an address.
    */
   it('offers the configured support address as a real mailto link', () => {
-    env.webEnv = { ...env.webEnv, metaAppId: null, supportEmail: 'help@operator.example' };
+    config = { ...config, appId: null };
+    env.webEnv = { supportEmail: 'help@operator.example' };
     renderWizard();
 
     expect(
@@ -476,7 +482,8 @@ describe('WhatsAppConnectWizard: connecting the account', () => {
   });
 
   it('keeps the explanation and drops the link where no address is configured', () => {
-    env.webEnv = { ...env.webEnv, metaAppId: null, supportEmail: null };
+    config = { ...config, appId: null };
+    env.webEnv = { supportEmail: null };
     renderWizard();
 
     expect(screen.getByText(content.whatsapp.unconfiguredBody)).toBeInTheDocument();

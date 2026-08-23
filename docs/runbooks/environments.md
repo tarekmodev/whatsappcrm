@@ -190,16 +190,56 @@ accepted; then move the web service onto the new value; then clear
 
 ### Everything else can wait
 
-| Key                                                    | When it is actually needed                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SENTRY_DSN`                                           | Optional. With no DSN the SDK is never started and errors still reach the structured log. Add per environment whenever a Sentry project exists — it is a variable change and a redeploy, no rebuild.                                                                                                                                                                                                                                                    |
-| `WHATSAPP_APP_SECRET`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | TAR-20b. Optional in `env.schema.ts`, but the webhook route refuses every request without them, so an environment expected to receive deliveries needs both. Platform-level — one Meta app serves every tenant. Generate the verify token yourself: `openssl rand -hex 32`; the app secret comes from the Meta app dashboard.                                                                                                                           |
-| `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`    | Never. Both are per tenant, per WABA: they arrive through the admin connection endpoint and live — the token encrypted — in `whatsapp_business_accounts`, not in an environment group. `render.yaml` still prompts for both; leave them blank.                                                                                                                                                                                                          |
-| `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`           | TAR-37. Polar sandbox for development and staging, live only for production. Both stay optional while `BILLING_PROVIDER_DRIVER` is unset — it defaults to `fake`, which is what every environment runs today. Setting the driver to `polar` makes them mandatory and the API refuses to boot without them. The whole procedure, including the webhook endpoint and the per-tier product ids, is [Connecting the billing provider](billing-provider.md). |
+| Key                                                    | When it is actually needed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SENTRY_DSN`                                           | Optional. With no DSN the SDK is never started and errors still reach the structured log. Add per environment whenever a Sentry project exists — it is a variable change and a redeploy, no rebuild.                                                                                                                                                                                                                                                                                                        |
+| `WHATSAPP_APP_SECRET`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | TAR-20b. Optional in `env.schema.ts`, but the webhook route refuses every request without them, so an environment expected to receive deliveries needs both. Platform-level — one Meta app serves every tenant. Generate the verify token yourself: `openssl rand -hex 32`; the app secret comes from the Meta app dashboard.                                                                                                                                                                               |
+| `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`    | Never. Both are per tenant, per WABA: they arrive through the admin connection endpoint and live — the token encrypted — in `whatsapp_business_accounts`, not in an environment group. `render.yaml` still prompts for both; leave them blank.                                                                                                                                                                                                                                                              |
+| `SECRETS_ENCRYPTION_KEY`                               | TAR-816. The one AES-256-GCM key every stored secret is encrypted under — WABA access tokens, registration PINs, and every row in `platform_settings`. Optional, and absent means every WhatsApp connection, send and platform-setting write is refused; reads still fall back to the environment. Generate with `openssl rand -base64 32`. `WHATSAPP_TOKEN_ENCRYPTION_KEY` is the deprecated alias, accepted for one release — set both to the **same** value while migrating, or the API refuses to boot. |
+| `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`           | TAR-37. Polar sandbox for development and staging, live only for production. Both stay optional while `BILLING_PROVIDER_DRIVER` is unset — it defaults to `fake`, which is what every environment runs today. Setting the driver to `polar` makes them mandatory and the API refuses to boot without them. The whole procedure, including the webhook endpoint and the per-tier product ids, is [Connecting the billing provider](billing-provider.md).                                                     |
 
 `DATABASE_URL` and `REDIS_URL` are **not** prompted: the blueprint wires them from
 the database and Key Value instance in the same environment, so they cannot be
 pointed at the wrong one by hand.
+
+### Settings an operator can change without a redeploy
+
+Since TAR-816, four of the keys above are also editable at runtime through
+`GET/PUT/DELETE /api/v1/admin/platform-settings`, authenticated with
+`PLATFORM_ADMIN_TOKEN`: `WHATSAPP_APP_SECRET`,
+`WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `META_APP_ID` and
+`META_EMBEDDED_SIGNUP_CONFIG_ID`.
+
+Resolution is **database row → environment variable → unset**, so:
+
+- An environment that never opens that surface behaves exactly as it always has.
+  Nothing is backfilled; the table starts empty.
+- **Once a key has a row, editing the Render environment group changes nothing.**
+  This is the mistake to expect. Every read reports `source` —
+  `database` / `environment` / `unset` — and
+  `DELETE /api/v1/admin/platform-settings/{key}` reverts a key to the
+  environment. Check `source` before concluding a variable change did not take.
+- A write is effective on the instance that served it immediately, and on every
+  other instance within `PLATFORM_SETTINGS_REFRESH_MS` (default 30 s). **No
+  restart is required.**
+- No endpoint returns a secret's plaintext, to anyone. What an operator gets is
+  `isSet`, `updatedAt`, `updatedByLabel`, an 8-character `fingerprint` —
+  which is how two environments are compared without either revealing a value —
+  and the last four characters as `hint`. Reverting means re-entering the
+  value from the Meta app dashboard; there is no rollback action.
+- Every write is attributed to the label half of the matching
+  `PLATFORM_ADMIN_TOKEN` entry and appended to `platform_setting_changes`,
+  which is append-only against the table owner as well as both application roles.
+
+**Rotating `SECRETS_ENCRYPTION_KEY` now re-encrypts `platform_settings` as
+well as the WABA tokens and registration PINs.** One key, one procedure — which
+is the point of not having added a second. The `v1` tag in the payload is what
+lets old and new rows coexist while re-encryption runs.
+
+**A verify token already in an environment group may be shorter than 32
+characters.** The write floor applies only to values entered through the new
+surface, and the published fingerprint of a low-entropy value is guessable
+offline — rotate those tokens through the admin surface.
 
 ### Rules
 
@@ -212,7 +252,9 @@ pointed at the wrong one by hand.
   point-in-time recovery, and free instances sleep — which breaks both TAR-43 and
   the uptime alerting below.
 - **Rotation** is: change the value in the Render environment group, redeploy.
-  No rebuild, no code change.
+  No rebuild, no code change. For the four keys in the section above, check
+  whether the key has a database row first — if it does, rotate it there instead,
+  which needs no redeploy at all.
 
 ## Health, and the alerting wired to it
 

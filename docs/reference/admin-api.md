@@ -16,7 +16,8 @@ The operator routes on this page stay the fallback for a deployment with `SIGNUP
 The lifecycle routes 0009 specifies for an operator — reactivate, cancel, delete and the
 lifecycle read — are published and not implemented.
 
-**This page covers the two tenant lifecycle routes and the webhook replay route.**
+**This page covers the two tenant lifecycle routes, the webhook replay route and the platform
+settings routes.**
 `/api/v1/admin/*` also carries
 `POST /api/v1/admin/tenants/{slug}/whatsapp/business-accounts` and its
 `{wabaId}/template-sync` sibling, both behind the same `PlatformAdminGuard`. They are
@@ -486,6 +487,199 @@ the table it describes: no `tenant_id`, no RLS policy, no grant for the app role
 — the grant withholds UPDATE and DELETE from `SystemPrisma` too, and a trigger refuses the table
 owner on top of that.
 
+## Platform settings
+
+Four values that used to require a redeploy to change are editable at runtime (TAR-816):
+
+| Key                              | Environment variable             | Sensitivity |
+| -------------------------------- | -------------------------------- | ----------- |
+| `whatsapp.app_secret`            | `WHATSAPP_APP_SECRET`            | `secret`    |
+| `whatsapp.webhook_verify_token`  | `WHATSAPP_WEBHOOK_VERIFY_TOKEN`  | `secret`    |
+| `meta.app_id`                    | `META_APP_ID`                    | `public`    |
+| `meta.embedded_signup_config_id` | `META_EMBEDDED_SIGNUP_CONFIG_ID` | `public`    |
+
+The set is a **closed allowlist in code** — `apps/api/src/platform-settings/platform-settings.registry.ts`
+— not a table an operator can extend. A row whose key is not in it is ignored on load and logged;
+adding a manageable key is a code change and a code review. The bootstrap tier — the database URLs,
+`SECRETS_ENCRYPTION_KEY`, `PLATFORM_ADMIN_TOKEN` — is permanently excluded, and a test asserts it.
+
+### Three things to know before using it
+
+**Resolution is `database row → environment variable → unset`.** The environment is the fallback,
+the database is the override. Nothing is backfilled: the table starts empty, and until an operator
+writes the first row every environment behaves exactly as it did before this surface existed. The
+cost is the mistake to expect — **once a key has a row, editing the environment group changes
+nothing.** Every read reports `source` for that reason, and `DELETE` is "revert to environment".
+
+**No restart is required, and none is reported.** A write is effective on the instance that served
+it by the time it answers, and on every other instance within `PLATFORM_SETTINGS_REFRESH_MS`
+(default 30 s) — the API holds an in-memory snapshot so a read stays synchronous on the inbound
+webhook path, which is where the app secret is read before every signature check. What the console
+shows after a write is that bound, not a restart notice.
+
+**No route returns a secret's plaintext, to anyone.** There is no reveal endpoint and no role that
+unlocks one; once written, a secret's only exit from the database is into the code path that uses
+it. What an operator gets instead answers the questions they actually have:
+
+| Field            | What it is for                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `isSet`          | Whether the key resolves to anything at all                                                                        |
+| `source`         | `database` / `environment` / `unset` — which of the two won                                                        |
+| `fingerprint`    | First 8 hex of SHA-256 of the effective value. How two environments are compared without either revealing one      |
+| `hint`           | Last 4 characters, and only when the value is at least 12 long. How an operator confirms they pasted the right one |
+| `updatedAt`      | When the row was written. Null when `source` is not `database`                                                     |
+| `updatedByLabel` | The **label** half of the `PLATFORM_ADMIN_TOKEN` entry that wrote it, never the secret half                        |
+| `value`          | Present only for `sensitivity: "public"`, and **absent** — not null — for a secret                                 |
+
+Every write is appended to `platform_setting_changes`, which stores fingerprints and actor labels
+and never values, and is append-only against the table owner as well as both application roles.
+That forecloses a one-click rollback deliberately: reverting means re-entering the value, which —
+given its origin is the Meta app dashboard — is a lookup rather than a loss.
+
+### `GET /api/v1/admin/platform-settings`
+
+Every registry key, including the ones nobody has touched. Unpaginated: the list is the registry,
+so it is bounded at review time and cannot grow from traffic.
+
+```bash
+curl -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+  http://localhost:3001/api/v1/admin/platform-settings
+```
+
+```json
+{
+  "settings": [
+    {
+      "key": "whatsapp.app_secret",
+      "description": "The Meta app secret. Verifies every inbound webhook's X-Hub-Signature-256, and completes the Embedded Signup code exchange. Unset, inbound webhooks are rejected and signup refuses before reaching Meta.",
+      "sensitivity": "secret",
+      "source": "environment",
+      "isSet": true,
+      "fingerprint": "d82a6007",
+      "hint": "cret",
+      "updatedAt": null,
+      "updatedByLabel": null
+    },
+    {
+      "key": "meta.app_id",
+      "description": "The Meta app id. Sent as client_id on the Embedded Signup exchange and used by the console to launch FB.login. Not a secret — it already reaches every browser.",
+      "sensitivity": "public",
+      "source": "unset",
+      "isSet": false,
+      "fingerprint": null,
+      "hint": null,
+      "updatedAt": null,
+      "updatedByLabel": null
+    }
+  ]
+}
+```
+
+`GET /api/v1/admin/platform-settings/{key}` returns one entry in the same shape, and `404`s for a
+key the registry does not name.
+
+### `PUT /api/v1/admin/platform-settings/{key}`
+
+The body is `{ "value": string }` and nothing else — the key is in the path, and the sensitivity is
+the registry's to decide. The value is validated against the registry's per-key rule **before**
+anything is encrypted.
+
+```bash
+curl -X PUT -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"value":"1234567890123456"}' \
+  http://localhost:3001/api/v1/admin/platform-settings/meta.app_id
+```
+
+```json
+{
+  "key": "meta.app_id",
+  "description": "The Meta app id. Sent as client_id on the Embedded Signup exchange and used by the console to launch FB.login. Not a secret — it already reaches every browser.",
+  "sensitivity": "public",
+  "source": "database",
+  "isSet": true,
+  "value": "1234567890123456",
+  "fingerprint": "7a51d064",
+  "hint": "3456",
+  "updatedAt": "2026-08-23T11:37:34.185Z",
+  "updatedByLabel": "local-dev"
+}
+```
+
+`200`, not `201`: the setting exists whether or not it has a row, and a caller cannot tell — nor
+need to tell — whether this write created one. A repeat with the same value is a no-op on state.
+
+### `DELETE /api/v1/admin/platform-settings/{key}`
+
+Revert to the environment. Answers `200` with the resulting view rather than `204`, because the
+operator's next question is what the key resolves to now — the environment's value, or nothing at
+all. Idempotent, and reverting a key that has no row writes no history entry, because nothing
+changed.
+
+### `GET /api/v1/admin/platform-settings/{key}/history`
+
+Newest first, capped at 50.
+
+```json
+{
+  "changes": [
+    {
+      "id": "01a02e69-9073-72bd-bb29-79f4a28ca8e7",
+      "key": "whatsapp.app_secret",
+      "action": "cleared",
+      "previousFingerprint": "1113d989",
+      "newFingerprint": null,
+      "actorLabel": "local-dev",
+      "createdAt": "2026-08-23T11:37:45.331Z"
+    },
+    {
+      "id": "01a02e69-6701-774f-9dfa-1fa247e07f7e",
+      "key": "whatsapp.app_secret",
+      "action": "set",
+      "previousFingerprint": null,
+      "newFingerprint": "1113d989",
+      "actorLabel": "local-dev",
+      "createdAt": "2026-08-23T11:37:34.722Z"
+    }
+  ]
+}
+```
+
+### Errors
+
+| Status | Code                | When                                                                         |
+| ------ | ------------------- | ---------------------------------------------------------------------------- |
+| `400`  | `validation_failed` | The value failed the registry rule, or the key is not a dotted lowercase key |
+| `401`  | `unauthenticated`   | Missing or wrong `PLATFORM_ADMIN_TOKEN`                                      |
+| `404`  | `not_found`         | The key is not in the registry                                               |
+| `500`  | `internal_error`    | `SECRETS_ENCRYPTION_KEY` is not configured, so nothing can be stored         |
+
+No error body renders the submitted value. A refusal states the rule instead:
+
+```json
+{
+  "error": {
+    "code": "validation_failed",
+    "message": "The value for `meta.app_id` is not valid: Must be a Meta id (digits only)",
+    "requestId": "86d5e08b-3029-4355-a5ee-a5a26a36a63d"
+  }
+}
+```
+
+### The console's half
+
+`GET /api/v1/whatsapp/embedded-signup/config` serves `meta.app_id`,
+`meta.embedded_signup_config_id` and the pinned `META_GRAPH_API_VERSION` to the console. It is what
+makes an edit to either id actually reach a browser: the console used to read them from
+`NEXT_PUBLIC_*` constants Next.js inlines into the bundle at build time, so a runtime edit would
+have changed nothing anyone could see until the next deploy. Both variables are gone —
+`WhatsAppSections`, a server component on a `force-dynamic` route, reads this endpoint and hands
+the values to the connect wizard as a prop, so an operator's change lands on the next page load.
+
+It is a session-authenticated tenant route requiring `channel:manage`, not part of this admin
+surface, and it carries no secret: what completes the Embedded Signup exchange is
+`whatsapp.app_secret`, which never leaves the API.
+
 ## Verification
 
 Every request and response on this page was executed against a local stack: `pnpm db:up`,
@@ -509,6 +703,13 @@ Two behaviours confirmed rather than assumed:
 - A replay sending a different `name` and different settings returned the **original**
   stored values and changed nothing.
 - A second `deactivate` call returned the **original** `suspendedAt`.
+
+The platform settings section was executed against the same stack on TAR-816's branch: every
+body, fingerprint, timestamp and request id above is what that run returned. Two behaviours were
+confirmed rather than assumed — writing `whatsapp.webhook_verify_token` through the API made
+`GET /api/webhooks/whatsapp` accept the new token and refuse the environment's **without a
+restart**, and reverting the fixture rows afterwards left `platform_settings` empty with all six
+`platform_setting_changes` entries intact.
 
 The webhook replay section was executed against the same stack on TAR-94's branch. The parked row
 was produced the way a real one is — a signed delivery to `POST /api/webhooks/whatsapp` naming a

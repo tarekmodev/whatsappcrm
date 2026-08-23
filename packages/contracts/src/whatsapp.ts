@@ -716,3 +716,57 @@ export type MessageTemplateSendBlocker = z.infer<typeof MessageTemplateSendBlock
 export type MessageTemplateAdminResponse = z.infer<typeof MessageTemplateAdminResponseSchema>;
 export type MessageTemplateAdminListQuery = z.infer<typeof MessageTemplateAdminListQuerySchema>;
 export type MessageTemplateAdminPage = z.infer<typeof MessageTemplateAdminPageSchema>;
+
+// ---------------------------------------------------------------------------
+// What the console needs to launch Embedded Signup (TAR-816)
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /api/v1/whatsapp/embedded-signup/config` — the two Meta ids and the
+ * Graph API version the console's `FB.login` call needs, served from the API's
+ * runtime configuration.
+ *
+ * ## Why this endpoint exists at all
+ *
+ * The console used to read `NEXT_PUBLIC_META_APP_ID` and
+ * `NEXT_PUBLIC_META_EMBEDDED_SIGNUP_CONFIG_ID`, which Next.js inlines into the
+ * browser bundle **at build time**. TAR-816 makes the API's copy of those two
+ * values operator-editable at runtime; without this endpoint that would be a
+ * setting which appears to save and changes nothing, because the browser would
+ * still be holding whatever was compiled in on the last deploy. Both variables
+ * are gone, and this is what replaced them.
+ *
+ * ## Why it is safe to publish
+ *
+ * Neither value is a secret. Both already reach every browser today, by design:
+ * the app id is what `FB.login` is called with and the configuration id names a
+ * public Facebook Login for Business configuration. What completes the exchange
+ * is `WHATSAPP_APP_SECRET`, which is a `secret` key in the platform-settings
+ * registry, never leaves the API, and has no representation in this file.
+ *
+ * The route is session-authenticated and permissioned like the connect call
+ * beside it rather than public — not because the values need protecting, but
+ * because an anonymous endpoint that reports how this platform's Meta app is
+ * configured is a free reconnaissance surface for no gain.
+ *
+ * `null` means unconfigured, and the console must render that as "WhatsApp
+ * connection is not available in this environment" rather than calling
+ * `FB.login` with `undefined`.
+ */
+export const WhatsAppEmbeddedSignupConfigResponseSchema = z.object({
+  /** `client_id` for `FB.login`. Null when neither the database nor the environment holds one. */
+  appId: MetaGraphIdSchema.nullable(),
+  /** The Facebook Login for Business configuration the console launches. */
+  configId: MetaGraphIdSchema.nullable(),
+  /**
+   * The Graph API version the console's SDK should load, so browser and server
+   * agree on one pin. Not operator-managed: a wrong value breaks every send at
+   * once, and the pin is deliberate (0002; TAR-811 flags it as higher-risk than
+   * it looks).
+   */
+  graphApiVersion: z.string().regex(/^v\d+\.\d+$/, 'Must look like `v23.0`'),
+});
+
+export type WhatsAppEmbeddedSignupConfigResponse = z.infer<
+  typeof WhatsAppEmbeddedSignupConfigResponseSchema
+>;

@@ -169,6 +169,36 @@ change.
 
 ### Added
 
+- **An operator can change the platform's Meta credentials without a redeploy** (TAR-816) —
+  `WHATSAPP_APP_SECRET`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `META_APP_ID` and
+  `META_EMBEDDED_SIGNUP_CONFIG_ID` were boot-time environment variables, so rotating one meant
+  editing an environment group and redeploying the platform. They are now also editable at
+  runtime through `GET/PUT/DELETE /api/v1/admin/platform-settings`, behind `PlatformAdminGuard`,
+  against the contract TAR-811 signed off. Resolution is **database row → environment variable →
+  unset**, and nothing is backfilled: the table starts empty, so an environment that never opens
+  the surface behaves byte-identically to before. A write is effective on the instance that
+  served it by the time it answers, and on every other instance within
+  `PLATFORM_SETTINGS_REFRESH_MS` (default 30 s) — the API holds an in-memory snapshot, so the
+  app-secret read stays synchronous on the inbound webhook path and no restart is required. Every
+  value is encrypted at rest with the existing AES-256-GCM construction, now extracted to
+  `AesGcmCipher` and bound per key, and **no route returns a secret's plaintext to anyone**:
+  there is no reveal endpoint, and an operator gets `isSet`, `source`, `updatedAt`,
+  `updatedByLabel`, an 8-character fingerprint and a 4-character hint instead. Which keys exist
+  and which are secret is a closed allowlist in code, so a rogue row cannot introduce a managed
+  key or reclassify a secret as public, and the bootstrap tier — the database URLs, the
+  encryption key, the admin token — is permanently excluded with a test that says so.
+  `platform_setting_changes` records who changed what, storing fingerprints and never values, and
+  is append-only against the table owner as well as both application roles. Neither table is
+  reachable by the tenant connection at all. `GET /api/v1/whatsapp/embedded-signup/config` is the
+  console's half, and `NEXT_PUBLIC_META_APP_ID`, `NEXT_PUBLIC_META_EMBEDDED_SIGNUP_CONFIG_ID` and
+  `NEXT_PUBLIC_META_GRAPH_API_VERSION` are gone with it — the connect wizard's ids now arrive with
+  the page instead of being compiled into the bundle, so a runtime edit to the app id reaches the
+  browser on the next page load rather than the next deploy. `SECRETS_ENCRYPTION_KEY` is the
+  scope-accurate name for
+  `WHATSAPP_TOKEN_ENCRYPTION_KEY`, which stays a deprecated alias for one release — the same 32
+  bytes, so the rename needs no re-encryption, and setting both to different values fails the
+  boot.
+
 - **A supervisor can set how much work auto-assignment sends an agent, from the queue where it
   is in the way** (TAR-384) — shipped across TAR-756 (the API) and TAR-757 (the console).
   `users.max_concurrent_tickets` and `tenant_settings.default_max_concurrent_tickets` have been

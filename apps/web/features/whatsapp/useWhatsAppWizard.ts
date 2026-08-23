@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ConnectedWhatsAppBusinessAccountResponse,
+  WhatsAppEmbeddedSignupConfigResponse,
   WhatsAppRegistrationFailureReason,
   WhatsAppRegistrationStatus,
 } from '@whatsappcrm/contracts';
@@ -115,11 +116,22 @@ export interface UseWhatsAppWizardOptions {
    * this hook holds neither.
    */
   onConnected?: (account: ConnectedWhatsAppBusinessAccountResponse) => void;
+  /**
+   * Meta's app id, configuration id and Graph version, read from the API by the
+   * server that rendered the page (TAR-816).
+   *
+   * Threaded straight through to `useEmbeddedSignup`; this hook does not read
+   * it. Required rather than optional, because a wizard with no configuration is
+   * a wizard whose every step can only fail — the component checks
+   * `signup.isConfigured` and renders an explanation instead.
+   */
+  config: WhatsAppEmbeddedSignupConfigResponse;
 }
 
 export function useWhatsAppWizard({
   onConnected: onConnectedProp,
-}: UseWhatsAppWizardOptions = {}): UseWhatsAppWizard {
+  config,
+}: UseWhatsAppWizardOptions): UseWhatsAppWizard {
   /*
    * Read once, during the first render, rather than in an effect afterwards.
    *
@@ -203,7 +215,7 @@ export function useWhatsAppWizard({
     [commit],
   );
 
-  const signup = useEmbeddedSignup({ onConnected });
+  const signup = useEmbeddedSignup({ onConnected, config });
 
   /*
    * Step one's verdict is **read** from the signup state, not mirrored into
