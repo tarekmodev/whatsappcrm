@@ -21,6 +21,33 @@ import { toAgentCapacityRows, type AgentCapacityReport } from './capacity';
  *
  * `status: 'active'` for the same reason it filters the assign picker: an invited
  * or suspended account holds no tickets and takes none.
+ *
+ * **Why a second `GET /users` rather than reusing the one already in hand**
+ * (TAR-778). `loadFlaggedTickets` fetches `{ status: 'active', limit: 25 }` for
+ * the assign picker and, for a caller who may read capacity, that page now
+ * carries `assignmentCapacity` on every row — so filtering it to `role ===
+ * 'agent'` in memory looks like a free saving. It is not, and the reason is the
+ * API's ordering rather than the count:
+ *
+ * - `UsersService.list` pages `orderBy: { id: 'desc' }` on a UUIDv7 key, i.e.
+ *   **newest account first**. The page in hand is therefore "the 25 most
+ *   recently created active people, any role"; the agents inside it are the
+ *   newest hires, and a long-tenured agent — exactly the one likely to be at
+ *   their limit — can be absent from it entirely. `role: 'agent'` server-side
+ *   pages the agents themselves, so the control is picking from agents rather
+ *   than from whoever happens to be recent.
+ * - `hasMore` would change meaning too. It feeds
+ *   `capacityAgentHintTruncated`, which tells the supervisor this is "the first
+ *   page of agents in this workspace"; derived from a mixed-role page that
+ *   sentence would be a claim about people, not agents, and wrong in both
+ *   directions.
+ *
+ * The cost is one extra indexed read set: `readActiveTicketCounts`' `GROUP BY`
+ * over a bounded id list (served by `tickets_tenant_assigned_user_queue_idx`)
+ * plus the `tenant_settings` primary-key lookup, running twice per page load
+ * instead of once. Both are issued inside the `Promise.all` below, so they cost
+ * no extra round trip in sequence — and a picker that silently omits the agent
+ * the supervisor came here for is the more expensive of the two failures.
  */
 
 /**

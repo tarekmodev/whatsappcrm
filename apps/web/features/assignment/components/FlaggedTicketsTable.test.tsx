@@ -251,9 +251,41 @@ describe('FlaggedTicketsTable', () => {
 
       expect(
         screen.getByRole('button', {
-          name: content.assignment.editCapacityAria('Refund still not showing on the card'),
+          name: content.assignment.editCapacityAria,
         }),
       ).toBeInTheDocument();
+    });
+
+    /**
+     * TAR-778. The dialog is workspace-wide — `FlaggedTicketsTable` renders one
+     * for the whole table — so an accessible name that named the row would tell a
+     * screen-reader user they were about to change limits *for that ticket*, and
+     * then hand them the same agent picker every other row hands them. The assign
+     * action beside it is the opposite case and keeps its subject.
+     */
+    it('does not promise a ticket-scoped edit in the accessible name', () => {
+      const rows = toFlaggedTicketRows(
+        [ticket({ id: 'a', number: 1 }), ticket({ id: 'b', number: 2 })],
+        TEAMS,
+      );
+
+      render(
+        <FlaggedTicketsTable
+          rows={rows}
+          assignableUsers={USERS}
+          canAssign
+          capacity={CAPACITY}
+          isFiltered={false}
+        />,
+      );
+
+      const buttons = screen.getAllByRole('button', { name: /agent limits/i });
+
+      expect(buttons).toHaveLength(2);
+      expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+        content.assignment.editCapacityAria,
+        content.assignment.editCapacityAria,
+      ]);
     });
 
     it('is not offered on rows a limit would not unblock', () => {
@@ -328,7 +360,7 @@ describe('FlaggedTicketsTable', () => {
       expect(screen.getAllByRole('columnheader')).toHaveLength(4);
       expect(
         screen.getByRole('button', {
-          name: content.assignment.editCapacityAria('Refund still not showing on the card'),
+          name: content.assignment.editCapacityAria,
         }),
       ).toBeInTheDocument();
     });

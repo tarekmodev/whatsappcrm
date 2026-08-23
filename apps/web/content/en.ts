@@ -1831,7 +1831,17 @@ export const content = {
      * and does not do.
      */
     editCapacity: 'Agent limits',
-    editCapacityAria: (ticketLabel: string) => `Change agent limits for ${ticketLabel}`,
+    /**
+     * Deliberately **not** ticket-scoped, unlike `assignTicketAria` beside it
+     * (TAR-778). The dialog this opens edits an *agent's* limit workspace-wide;
+     * which row opened it changes nothing about what it shows. Naming the ticket
+     * would promise a screen-reader user a different action per row — "Change
+     * agent limits for Ticket #482", "…for Ticket #517" — and then hand each one
+     * the same agent picker with the same default selection. The verb is the
+     * whole subject here, because there is no per-row subject to disambiguate
+     * with.
+     */
+    editCapacityAria: 'Change agent limits',
     capacityTitle: 'Agent ticket limits',
     /**
      * Says what the write actually achieves. Raising a limit frees the agent for
@@ -1880,13 +1890,6 @@ export const content = {
         : `${name} can now hold ${String(limit)} tickets at a time`,
     capacityClearedSuccess: (name: string, workspaceDefault: number) =>
       `${name} now uses the workspace default of ${String(workspaceDefault)}`,
-    /**
-     * The permission-denied state, seen from inside the control. Read-only rather
-     * than hidden: knowing where the limit sits is what tells a supervisor whether
-     * to wait or to escalate, and hiding it would leave them guessing.
-     */
-    capacityReadOnlyNotice:
-      'Only a supervisor or an admin can change an agent’s limit. You can see the limits here, not edit them.',
 
     routedToTeam: (teamName: string) => `${teamName} team`,
     routedToNobody: 'Whole workspace',
