@@ -75,6 +75,15 @@ describe('TenantDomainsService', () => {
   let service: TenantDomainsService;
 
   beforeEach(() => {
+    // Pinned, because the fixture is. `statusOf` derives `expired` from
+    // `Date.now() - verificationRequestedAt > DOMAIN_VERIFICATION_TTL_DAYS`,
+    // and `row()` stamps the claim at `NOW` — so against the real clock this
+    // suite asserted `pending_verification` on a claim that aged past the
+    // seven-day window on 2026-08-23 and turned red on its own, with nothing
+    // having changed. `tenant-domain.mapper.spec.ts` froze the clock for the
+    // same reason; this is the half that was missed.
+    jest.useFakeTimers().setSystemTime(NOW);
+
     rows = [PLATFORM_ROW, row()];
     updateMany = jest.fn().mockResolvedValue({ count: 1 });
     update = jest
@@ -111,6 +120,10 @@ describe('TenantDomainsService', () => {
         getOrThrow: (key: string) => (key === 'PLATFORM_DOMAIN' ? 'app.localhost' : 7),
       } as unknown as ConfigService,
     );
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   function as<T>(role: TenantRole, work: () => Promise<T>): Promise<T> {
