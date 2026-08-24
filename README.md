@@ -1155,10 +1155,18 @@ flips the two attributes locally so the swap is instant.
 
 **Direction costs the token layer almost nothing.** Because every module styles with logical
 properties, `dir="rtl"` mirrors the whole console on its own — so the only thing a locale
-actually swaps is the typeface. That is a `[lang='ar']` branch in `semantic.css` pointing
+actually swaps is the typeface. That is a `[lang|='ar']` branch in `semantic.css` pointing
 `--font-family-body` at `--scale-font-family-arabic` (IBM Plex Sans Arabic, loaded by
 `app/layout.tsx`), keyed off `lang` rather than `dir` so a future Persian locale can take
-its own face.
+its own face, and matching a regioned tag so `ar-SA` gets it too.
+
+**`apps/admin` is wired the same way and shares the same modules.** Its root layout resolves
+the locale with the same `readLocale`, and the toggle lives in `AdminBar` — rendered twice
+and shown once, because `.end` cannot shrink and a fifth control there takes a 320px row into
+horizontal scroll. Below 48rem the drawer carries it; from 48rem the bar does, which is
+exactly where `MobileMenu` stops existing. In a deployment the two consoles are different
+hosts, so the two cookies are separate; locally they are one host on two ports and cookies do
+not scope by port, so switching either switches both.
 
 A token alone does not do it, and this is the part worth remembering: **a custom property
 changes nothing where no rule substitutes it.** `font-family` is declared exactly once in
@@ -1178,6 +1186,23 @@ horizontal composite's arrows on the reading order rather than the screen. Any w
 left/right arrow handling reads its step from `forwardArrowStep()`
 (`lib/locale/reading-direction.ts`) rather than hard-coding `+1` — the calendar grid, the
 composer's tab strip and the daily-volume chart all do. Vertical arrows never mirror.
+
+**Values that are not prose need marking, and logical properties do not do it.** The
+bidirectional algorithm resolves a neutral character — a `+`, a dot, a colon — from what sits
+either side of it, so under `dir="rtl"` an E.164 phone number renders `966501234567+` and a
+hostname whose first label is all digits renders `app.example.com.123`. Where there is an
+element, mark it: `dir="ltr"` on an **inline** span, never on the block, because `direction`
+also resolves `text-align: start` and marking a `<p>` pulls the line to the opposite edge from
+the one above it. Where the value goes into a string — an `<option>` label, a sentence from
+the content layer — there is nothing to hang an attribute on, so `isolateLtr()`
+(`lib/locale/bidi.ts`) wraps it in U+2066/U+2069 instead. A bare digit string, a
+letter-initial hostname, a ticket reference and an ordinary email are already correct and are
+deliberately left alone.
+
+A `→` between two boxes is the same class of problem and needs the same care: U+2192 is not a
+bidi-mirrored character, so a flex row correctly swaps the boxes either side while the arrow
+keeps pointing right. Mirror it (`[dir='rtl'] .arrow { transform: scaleX(-1) }`) or use
+`Icon`'s `chevronForward`, which already carries `data-directional`.
 
 The toggle is behind `NEXT_PUBLIC_ENABLE_LOCALE_SWITCH`, **off by default**, because the copy
 is not translated yet: `content/en.ts` is the only content module that exists, so turning it
