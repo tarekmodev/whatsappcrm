@@ -10,6 +10,16 @@
  */
 export const WORKFLOWS_SKELETON_COUNT = 3;
 
+/**
+ * Node placeholders the canvas skeleton draws: a trigger, a condition and an
+ * action — the smallest complete workflow, and the shape of most of them.
+ *
+ * Being one out costs nothing here, unlike a list skeleton: the canvas box has a
+ * `60dvh` floor either way, so the placeholders sit *inside* a box whose height
+ * does not depend on how many there are.
+ */
+export const CANVAS_SKELETON_NODE_COUNT = 3;
+
 /** Run rows the run panel's skeleton draws, matching `WORKFLOW_RUNS_PAGE_SIZE`. */
 export const WORKFLOW_RUNS_SKELETON_COUNT = 5;
 

@@ -56,7 +56,6 @@ function renderCard(overrides: Partial<Parameters<typeof WorkflowCard>[0]> = {})
       isReordering={false}
       onMove={vi.fn()}
       onToggle={vi.fn()}
-      onEdit={vi.fn()}
       onTest={vi.fn()}
       onViewRuns={vi.fn()}
       onDelete={vi.fn()}
@@ -119,10 +118,24 @@ describe('WorkflowCard', () => {
     expect(screen.getByRole('button', { name: copy.moveDownAria(WORKFLOW.name) })).toBeDisabled();
   });
 
+  /**
+   * Editing became a route on TAR-812, so this control has to be a real link:
+   * middle-click, copy-link and the browser's back button are the things a
+   * `<button onClick={navigate}>` silently takes away.
+   */
+  it('sends Edit to that workflow’s own canvas, as a link rather than a handler', () => {
+    renderCard();
+
+    const edit = screen.getByRole('link', { name: copy.editWorkflowAria(WORKFLOW.name) });
+
+    expect(edit).toHaveAttribute('href', `/settings/workflows/${WORKFLOW.id}`);
+  });
+
   it('shows a read-only principal the workflow and none of the controls', () => {
     renderCard({ canWrite: false });
 
     expect(screen.getByText(WORKFLOW.name)).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 });

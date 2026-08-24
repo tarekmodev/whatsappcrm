@@ -2415,6 +2415,72 @@ export const content = {
     testNotHeld: 'Did not hold',
     testNoActions: 'Nothing, because the conditions did not match.',
 
+    /*
+     * The canvas that replaced the form dialog (TAR-812). Its own block because
+     * it is a surface, not a field: everything above is shared with the list.
+     */
+    canvasNewTitle: 'New workflow',
+    canvasNewSubtitle:
+      'Build the workflow step by step, then save it. A new workflow starts switched off — test it against a real ticket before you turn it on.',
+    canvasEditSubtitle:
+      'Change any step, then save. Nothing is saved until you choose Save, and saving never turns a workflow on or off.',
+    canvasLoading: 'Loading the workflow',
+    canvasLabel: 'Workflow steps, in the order they run',
+    canvasBack: 'Back to workflows',
+    canvasSaveNew: 'Save workflow',
+    canvasSaveExisting: 'Save changes',
+    canvasCancel: 'Cancel',
+    canvasReadOnly: 'You can read this workflow but not change it.',
+    canvasUnsaved: 'Unsaved changes',
+    canvasLeaveConfirm: 'Leave without saving? The changes on this canvas will be lost.',
+    canvasNotFoundHeading: 'That workflow is gone',
+    canvasNotFoundBody:
+      'It was deleted, or the link points at a workflow this workspace never had. The list shows what is left.',
+
+    /** The three kinds of step, as the node card labels them. */
+    nodeKinds: {
+      trigger: 'Runs when',
+      condition: 'Only when',
+      action: 'Then',
+    } satisfies Record<'trigger' | 'condition' | 'action', string>,
+    nodeSelectAria: (kind: string, summary: string) => `Edit step — ${kind} ${summary}`,
+    /** Says what the condition nodes mean together, so no junction node has to. */
+    conditionBandLabel: 'All of these must be true',
+    /** Shown in place of the condition band when a workflow has none. */
+    conditionBandEmpty: 'No conditions — this runs every time the trigger fires.',
+    nodeNeedsAttention: 'Needs attention',
+    nodeBrokenReference: (count: number) =>
+      count === 1 ? '1 missing reference' : `${String(count)} missing references`,
+
+    inspectorLabel: 'Step settings',
+    inspectorEmptyHeading: 'Nothing selected',
+    inspectorEmptyBody: 'Choose a step on the canvas to change what it does.',
+    inspectorTriggerHeading: 'Trigger',
+    inspectorConditionHeading: (index: number) => `Condition ${String(index)}`,
+    inspectorActionHeading: (index: number) => `Action ${String(index)}`,
+    inspectorRemove: 'Remove step',
+
+    addConditionTypeLabel: 'Condition to add',
+    addActionTypeLabel: 'Action to add',
+    reorderHint:
+      'Actions run top to bottom. Drag one to move it, or use the move controls in the panel.',
+    moveActionEarlier: 'Move earlier',
+    moveActionEarlierAria: (index: number) => `Move action ${String(index)} earlier`,
+    moveActionLater: 'Move later',
+    moveActionLaterAria: (index: number) => `Move action ${String(index)} later`,
+
+    dryRunHeading: 'Dry run',
+    dryRunSubmit: 'Check a ticket',
+    dryRunClear: 'Clear result',
+    dryRunUnsaved: 'Save your changes first — a dry run checks the saved workflow, not this draft.',
+    dryRunUnsavedNew: 'Save this workflow first, then you can check it against a real ticket.',
+    dryRunCouldNotEvaluate: 'Could not be checked',
+    /** Why a dry run could not judge a condition, as the API names the reason. */
+    dryRunReasons: {
+      no_contact: 'The ticket has no contact to check tags against.',
+      business_hours_unconfigured: 'This workspace has not set its business hours yet.',
+    } as Readonly<Record<string, string>>,
+
     runsTitle: (name: string) => `Recent runs of ${name}`,
     runsIntro:
       'The most recent runs, newest first. Start here when a workflow is not doing what you expect.',

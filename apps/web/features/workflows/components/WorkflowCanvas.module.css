@@ -1,0 +1,155 @@
+/*
+ * The canvas viewport and the parts of React Flow's chrome the theme reaches.
+ *
+ * The library paints edges, background and handles from its own `--xy-*` custom
+ * properties (55 of them in 12.11.3's `base.css`); node bodies are ours. Mapping
+ * the handful that are visible onto semantic tokens here is what makes the
+ * canvas swap with the theme rather than staying light-mode blue in the dark
+ * theme — TAR-809's open question 2.
+ */
+
+.viewport {
+  position: relative;
+  /*
+   * A **definite** height, not a minimum, and it belongs here rather than in a
+   * parent's layout. TAR-809 names the failure mode — "container has zero height
+   * → React Flow renders an empty box" — and a `min-block-size` does not avoid
+   * it: the library's own wrapper is `height: 100%`, which resolves against an
+   * `auto`-height parent as zero however tall the box then grows. The nodes are
+   * laid out and then clipped away, with nothing in the console to say so.
+   *
+   * `--size-scroll-region` is `62dvh`: `dvh` rather than `vh` because on iOS
+   * Safari `vh` is the *largest* viewport, so the canvas would sit under the
+   * browser chrome on first paint.
+   */
+  block-size: var(--size-scroll-region);
+  background: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+
+  /* The library's roles, mapped to ours. */
+  --xy-background-color: var(--color-surface-sunken);
+  /* Texture, not information — the dot grid says "this pans", nothing more. */
+  --xy-background-pattern-color: var(--color-border-strong);
+  /*
+   * An `on-surface` role rather than a border one, and measured rather than
+   * assumed: the edges **are** the chain, so they carry meaning and owe WCAG
+   * 1.4.11's 3:1. Against this ground `--color-border-strong` measures 1.34 in
+   * the light theme and 1.81 in the dark — a line nobody can see. This measures
+   * 4.51 and 7.34.
+   */
+  --xy-edge-stroke: var(--color-on-surface-muted);
+  --xy-edge-stroke-selected: var(--color-accent);
+  --xy-edge-stroke-width: var(--border-hairline);
+  --xy-handle-background-color: transparent;
+  --xy-handle-border-color: transparent;
+  --xy-controls-button-background-color: var(--color-surface);
+  --xy-controls-button-background-color-hover: var(--color-surface-hover);
+  --xy-controls-button-color: var(--color-on-surface);
+  --xy-controls-button-color-hover: var(--color-on-surface);
+  --xy-controls-button-border-color: var(--color-border);
+  --xy-selection-background-color: var(--color-accent-subtle);
+  --xy-selection-border: var(--border-hairline) solid var(--color-accent);
+}
+
+/*
+ * **The edge layer needs a size or nothing is drawn.**
+ *
+ * 12.11.3's stylesheet gives `.react-flow__edges svg` `position: absolute` and
+ * `overflow: visible` and no dimensions, so it computes to `width: 0` — and per
+ * the SVG spec a zero width disables rendering of the element outright. Every
+ * path is built with the right geometry, carries the right stroke, reports
+ * `visibility: visible`, and never paints: the spine renders as a column of
+ * unconnected cards, with nothing in the console to say why. `style.css` carries
+ * the identical rule, so this is not a consequence of taking the smaller sheet.
+ *
+ * The only `:global` in this feature, and the documented integration seam the
+ * rule allows one for: it corrects a vendor stylesheet, so it is written in the
+ * vendor's own class names. `overflow: visible` above is what lets the paths
+ * fall outside this box and still draw.
+ */
+.viewport :global(.react-flow__edges),
+.viewport :global(.react-flow__edges svg) {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+/*
+ * Handles exist so the library has anchor points for edge geometry. They are
+ * never connectable here — the grammar has no edges to author — so they are
+ * invisible and inert rather than styled.
+ */
+.handle {
+  visibility: hidden;
+}
+
+/*
+ * "All of these must be true", drawn behind the condition nodes.
+ *
+ * Positioned in canvas units by the renderer through `--band-*`, inside the
+ * library's viewport transform, so it pans and zooms with the nodes it encloses.
+ */
+.conditionBand {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  /*
+   * **Behind the nodes it encloses.** The library renders `ViewportPortal`
+   * children after `.react-flow__nodes`, and a node carries `z-index: 0`, so at
+   * the same layer this band's ground paints straight over the very conditions
+   * it is meant to group — they vanish. Negative, inside the viewport's own
+   * stacking context, puts it under them and over the pane.
+   */
+  z-index: -1;
+  inline-size: var(--band-width);
+  block-size: var(--band-height);
+  translate: var(--band-x) var(--band-y);
+  background: var(--color-accent-subtle);
+  /*
+   * `subtle` is below 3:1 here and that is allowed: the band is a *grouping*,
+   * and what it means is carried by the label below in words. Nothing about the
+   * workflow is knowable only from seeing this rectangle.
+   */
+  border: var(--border-hairline) dashed var(--color-on-surface-subtle);
+  border-radius: var(--radius-lg);
+  pointer-events: none;
+}
+
+.conditionBandLabel {
+  position: absolute;
+  inset-block-end: 100%;
+  inset-inline-start: var(--space-2);
+  padding-inline: var(--space-2);
+  padding-block: var(--space-1);
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+/*
+ * Below the two-column breakpoint the zoom controls stand down.
+ *
+ * `fitView` already has the whole spine inside the box at those widths — the
+ * height is what binds, so there is nothing off screen for zoom to reveal — and
+ * at 320px the control cluster sits on top of a node card. Pinch-zoom is
+ * untouched, and nothing here is reachable only through these buttons.
+ */
+@media (max-width: 63.999rem) {
+  .viewport :global(.react-flow__controls) {
+    display: none;
+  }
+}
+
+/*
+ * Every transition the library runs on a node or an edge, cut to near-instant.
+ * The canvas's own motion is the viewport, which is direct manipulation and is
+ * not animated at all.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .viewport :global(.react-flow__node),
+  .viewport :global(.react-flow__edge-path) {
+    transition-duration: var(--duration-instant);
+  }
+}

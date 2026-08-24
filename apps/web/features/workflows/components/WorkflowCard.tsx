@@ -5,10 +5,12 @@ import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { ButtonLink } from '@/components/ui/ButtonLink';
 import { ClauseList } from '@/components/ui/ClauseList';
 import { Notice } from '@/components/ui/Notice';
 import { useContent } from '@/lib/content';
 import type { ListMoveDirection } from '@/lib/list-order';
+import { routes } from '@/lib/routes';
 import {
   createReferenceLookup,
   describeAction,
@@ -42,7 +44,6 @@ export function WorkflowCard({
   isReordering,
   onMove,
   onToggle,
-  onEdit,
   onTest,
   onViewRuns,
   onDelete,
@@ -65,7 +66,6 @@ export function WorkflowCard({
   isReordering: boolean;
   onMove: (direction: ListMoveDirection) => void;
   onToggle: () => void;
-  onEdit: () => void;
   onTest: () => void;
   onViewRuns: () => void;
   onDelete: () => void;
@@ -175,14 +175,21 @@ export function WorkflowCard({
           >
             {workflow.isActive ? copy.disable : copy.enable}
           </Button>
-          <Button
+          {/*
+            A link, not a button: editing is a navigation to the canvas route
+            now, so middle-click, copy-link and the status bar all work — and the
+            back button returns to this list. The name it reads out is the same
+            one the other controls use, so a row of five does not read as five
+            identical "Edit"s.
+          */}
+          <ButtonLink
+            href={routes.settingsWorkflow(workflow.id)}
             variant="secondary"
             size="sm"
-            aria-label={copy.editWorkflowAria(workflow.name)}
-            onClick={onEdit}
+            ariaLabel={copy.editWorkflowAria(workflow.name)}
           >
             {copy.editWorkflow}
-          </Button>
+          </ButtonLink>
           <Button
             variant="ghost"
             size="sm"

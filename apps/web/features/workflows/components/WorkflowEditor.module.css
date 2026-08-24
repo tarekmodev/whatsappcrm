@@ -1,0 +1,59 @@
+/*
+ * The canvas route's layout: a header, the add controls, then the canvas beside
+ * its inspector, then the dry run.
+ *
+ * Mobile-first and fluid. One column below 64rem — the inspector sits under the
+ * canvas rather than beside it, because at 375px a panel next to a 320px node is
+ * two unusable columns. From 64rem the two share a row, the canvas taking the
+ * space the inspector does not need.
+ */
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-inline-size: 0;
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.name {
+  flex: 1 1 var(--size-pane-list);
+  min-inline-size: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.dirty {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.surface {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (min-width: 64rem) {
+  .surface {
+    grid-template-columns: minmax(0, 1fr) var(--size-pane-side);
+  }
+}
+
+.canvas {
+  min-inline-size: 0;
+}

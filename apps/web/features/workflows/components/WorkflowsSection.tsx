@@ -1,21 +1,23 @@
-'use client';
-
-import { useState } from 'react';
 import type { WorkflowCatalogResponse, WorkflowResponse } from '@whatsappcrm/contracts';
-import { Button } from '@/components/ui/Button';
+import { ButtonLink } from '@/components/ui/ButtonLink';
 import { Notice } from '@/components/ui/Notice';
 import { SectionCard } from '@/components/ui/SectionCard';
 import { useContent } from '@/lib/content';
+import { routes } from '@/lib/routes';
 import type { WorkflowVocabulary } from '../presentation';
 import { WorkflowList, WorkflowListSkeleton } from './WorkflowList';
-import { LazyWorkflowFormDialog } from './workflow-dialogs.lazy';
 
 /**
- * The workflow section: the card, the add trigger and the list. Usage:
+ * The workflow section: the card, the add control and the list. Usage:
  * `<WorkflowsSection workflows={…} catalog={…} vocabulary={…} canWrite />`.
  *
  * `canWrite` comes from the server's permission check, so a principal holding
  * only `workflow:read` is never rendered a control that leads to a refusal.
+ *
+ * Adding is a **link to the canvas route** rather than a dialog it opens, which
+ * is what let this component go back to the server: it holds no state now, so
+ * the whole section renders on the server and only the list — which owns the
+ * on/off switch and the reorder — ships as client code.
  */
 export function WorkflowsSection({
   workflows,
@@ -30,9 +32,8 @@ export function WorkflowsSection({
 }) {
   const content = useContent();
   const copy = content.workflows;
-  const [isAdding, setIsAdding] = useState(false);
-  // The server enforces this too, with `conflict`. Disabling the control is what
-  // stops a supervisor filling in the whole builder before being told.
+  // The server enforces this too, with `conflict`. Standing the control down is
+  // what stops a supervisor building a whole workflow before being told.
   const isFull = workflows.length >= catalog.limits.workflowsPerTenant;
 
   return (
@@ -41,16 +42,10 @@ export function WorkflowsSection({
       title={copy.heading}
       description={copy.sectionDescription}
       action={
-        canWrite ? (
-          <Button
-            variant="primary"
-            disabled={isFull}
-            onClick={() => {
-              setIsAdding(true);
-            }}
-          >
+        canWrite && !isFull ? (
+          <ButtonLink href={routes.settingsWorkflowNew()} variant="primary">
             {copy.addWorkflow}
-          </Button>
+          </ButtonLink>
         ) : undefined
       }
     >
@@ -58,22 +53,7 @@ export function WorkflowsSection({
         <Notice tone="warning">{copy.limitReachedHint(catalog.limits.workflowsPerTenant)}</Notice>
       ) : null}
 
-      <WorkflowList
-        workflows={workflows}
-        catalog={catalog}
-        vocabulary={vocabulary}
-        canWrite={canWrite}
-      />
-
-      {isAdding ? (
-        <LazyWorkflowFormDialog
-          catalog={catalog}
-          vocabulary={vocabulary}
-          onClose={() => {
-            setIsAdding(false);
-          }}
-        />
-      ) : null}
+      <WorkflowList workflows={workflows} vocabulary={vocabulary} canWrite={canWrite} />
     </SectionCard>
   );
 }

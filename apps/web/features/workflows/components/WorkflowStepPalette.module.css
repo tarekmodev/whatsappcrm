@@ -1,0 +1,29 @@
+/* The two add controls, above the canvas. Each is a type picker and a button
+   that appends a blank step of that type. */
+
+.palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: flex-end;
+}
+
+.group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: flex-end;
+  flex: 1 1 var(--size-pane-filters);
+  min-inline-size: 0;
+}
+
+.picker {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}
+
+.hint {
+  flex-basis: 100%;
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+}

@@ -71,7 +71,33 @@ export default tseslint.config(
       // App Router only — this rule looks for a `pages/` directory that will
       // never exist and warns on every run.
       '@next/next/no-html-link-for-pages': 'off',
+      /*
+       * The workflow canvas library is ~59 KB gzipped and belongs to two routes.
+       * A single static import anywhere else — including from a test helper a
+       * barrel re-exports — puts it on every console route, and the leak would
+       * be invisible until somebody read a bundle report. TAR-809 asks for the
+       * containment to be enforced rather than trusted; this is that.
+       *
+       * The one module allowed to import it is exempted below.
+       */
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@xyflow/react', '@xyflow/react/*'],
+              message:
+                'Import @xyflow/react only from features/workflows/components/WorkflowCanvas.tsx, which is behind workflow-canvas.lazy.tsx. See TAR-809 Decision 1.',
+            },
+          ],
+        },
+      ],
     },
+  },
+
+  {
+    files: ['apps/web/features/workflows/components/WorkflowCanvas.tsx'],
+    rules: { 'no-restricted-imports': 'off' },
   },
 
   // Must stay last: turns off every rule that fights Prettier.

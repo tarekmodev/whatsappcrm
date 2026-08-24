@@ -1,0 +1,54 @@
+/*
+ * The panel beside the canvas, where the selected step is actually edited.
+ *
+ * It scrolls independently of the canvas, so a notify action with a message box
+ * cannot push the spine off screen — and it keeps its own scroll position while
+ * the selection moves between steps of different heights.
+ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-inline-size: 0;
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+/* From two columns up, the panel matches the canvas's height and scrolls inside
+   it. Below that it stacks under the canvas and grows with its content, because
+   a scroll region inside a scrolling page is a trap on a phone. */
+@media (min-width: 64rem) {
+  .panel {
+    max-block-size: var(--size-scroll-region);
+    overflow-y: auto;
+  }
+}
+
+.heading {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-heading);
+  color: var(--color-on-surface);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.emptyBody {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-block-start: var(--space-3);
+  border-block-start: var(--border-hairline) solid var(--color-border);
+}
