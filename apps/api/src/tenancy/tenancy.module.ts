@@ -11,6 +11,9 @@ import { TenantLifecycleReader } from './lifecycle/tenant-lifecycle.reader';
 import { TenantLifecycleService } from './lifecycle/tenant-lifecycle.service';
 import { TenantLifecycleSweeper } from './lifecycle/tenant-lifecycle.sweeper';
 import { TenantPurgeService } from './lifecycle/tenant-purge.service';
+import { TenantOnboardingController } from './onboarding/tenant-onboarding.controller';
+import { TenantOnboardingReader } from './onboarding/tenant-onboarding.reader';
+import { TenantOnboardingService } from './onboarding/tenant-onboarding.service';
 import { AdminDomainsController } from './admin/admin-domains.controller';
 import { AdminDomainsService } from './admin/admin-domains.service';
 import { AdminTenantScopeService } from './admin/admin-tenant-scope.service';
@@ -60,6 +63,7 @@ import { TenantProvisioningService } from './tenant-provisioning.service';
   controllers: [
     TenantController,
     TenantLifecycleController,
+    TenantOnboardingController,
     TenantDomainsController,
     AdminTenantsController,
     AdminDomainsController,
@@ -79,6 +83,8 @@ import { TenantProvisioningService } from './tenant-provisioning.service';
     TenantLifecycleSweeper,
     TenantPurgeService,
     LifecycleEventsRepository,
+    TenantOnboardingReader,
+    TenantOnboardingService,
     AdminTenantLifecycleService,
     AdminTenantScopeService,
     AdminDomainsService,
