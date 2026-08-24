@@ -1,0 +1,118 @@
+/*
+ * One step on the workflow canvas.
+ *
+ * The box is a fixed size in canvas units, because that is what makes layout a
+ * pure function of two array lengths rather than a measurement loop (TAR-809
+ * decision 2). `--node-width` / `--node-height` are set by the renderer from
+ * `graph.ts`'s `NODE_WIDTH` / `NODE_HEIGHT`, so the geometry the layout computes
+ * and the geometry the browser paints have one source.
+ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  inline-size: var(--node-width);
+  block-size: var(--node-height);
+  padding: var(--space-3);
+  text-align: start;
+  background: var(--color-surface);
+  /*
+   * Heavier than the `--color-border` a card elsewhere in the console takes, and
+   * the difference is the point: this card **is a button**, so WCAG 1.4.11 wants
+   * 3:1 for the boundary that identifies it as one. On the canvas's sunken ground
+   * the card's own surface differs by 1.10 in the light theme, so the border is
+   * the whole of that boundary — and `--color-border` measures 1.09 against the
+   * ground. This measures 4.51 light and 7.34 dark.
+   *
+   * A list card is not a control and keeps the lighter role; see `WorkflowCard`.
+   */
+  border: var(--border-hairline) solid var(--color-on-surface-muted);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+  overflow: hidden;
+}
+
+/* A button, so the card is reachable and operable from the keyboard without the
+   canvas library having to make it so. Everything below strips the control's own
+   chrome; the card's own border is what it looks like. */
+button.card {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  appearance: none;
+  /*
+   * The library sets `pointer-events: none` on any node it has nothing of its
+   * own to do with — and here that is every node except a draggable action,
+   * because selection, focus and connecting are all switched off. Without this
+   * the trigger and the conditions are reachable by keyboard and dead to a
+   * mouse. The card re-enables them for itself only, so the pane behind it keeps
+   * the drag that pans the canvas.
+   */
+  pointer-events: auto;
+}
+
+button.card:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+button.card:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+button.card:disabled {
+  cursor: default;
+}
+
+/* Selected is carried by the border and the tinted ground *and* by the
+   inspector heading naming the step — never by colour alone. */
+.card[data-selected='true'] {
+  background: var(--color-surface-selected);
+  border-color: var(--color-accent);
+}
+
+/* Invalid, and the badge below says so in words. */
+.card[data-invalid='true'] {
+  border-color: var(--color-danger);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.kind {
+  color: var(--color-on-surface-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  text-transform: none;
+  white-space: nowrap;
+}
+
+/*
+ * The step's own sentence. Two lines, then an ellipsis: the card is a summary
+ * and the inspector holds the detail, so a workflow naming six tags must not be
+ * allowed to grow the box the layout has already placed.
+ */
+.summary {
+  display: -webkit-box;
+  color: var(--color-on-surface);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-tight);
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-block-start: auto;
+}

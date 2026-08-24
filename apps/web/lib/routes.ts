@@ -123,12 +123,29 @@ export const routes = {
    * goes, while a workflow writes to a *ticket* — and the Assignment page is
    * already three independently-streamed sections.
    *
-   * No query parameters. Which workflow is being edited, tested or inspected is
-   * dialog state rather than a shareable view: every one of those is a write or
-   * a per-principal read, so a copied link could only ever reopen a dialog over
-   * a list the recipient may not be entitled to.
+   * No query parameters. Testing a workflow and reading its run history are
+   * still dialogs over this list: both are a per-principal read, so a copied
+   * link could only ever reopen a panel the recipient may not be entitled to.
+   *
+   * *Editing* is no longer among them — see `settingsWorkflow` below.
    */
   settingsWorkflows: () => '/settings/workflows',
+  /**
+   * The canvas that edits one workflow (TAR-812, TAR-809).
+   *
+   * A route rather than the dialog it replaces, and the URL is the point: which
+   * workflow is being edited is the most shareable state this surface has — "the
+   * escalation rule needs another condition" is a link — and a 16-node spine
+   * with an inspector beside it does not fit a modal at any width.
+   *
+   * Nothing else rides here. The *draft* is unsaved local state, so a parameter
+   * naming a selected node would deep-link into a workflow that has since
+   * changed underneath it; the node a supervisor is editing is the one thing on
+   * this screen that is genuinely not shareable.
+   */
+  settingsWorkflow: (workflowId: string) => `/settings/workflows/${workflowId}`,
+  /** The same canvas over a blank draft. `new` is not a workflow id: ids are UUIDs. */
+  settingsWorkflowNew: () => '/settings/workflows/new',
   /** Where a tenant admin connects its own WhatsApp Business Account (TAR-169). */
   /**
    * The tenant's response deadlines — the SLA window every new ticket is

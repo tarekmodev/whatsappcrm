@@ -1,0 +1,39 @@
+/*
+ * The canvas's stand-in. It reproduces the *box* exactly — same min-height, same
+ * border, same ground — because that is what stops the page moving when the
+ * chunk lands.
+ *
+ * Inside it, a spine of node-shaped placeholders at the pitch `layoutSpine`
+ * uses. It cannot be pixel-identical to the loaded canvas: React Flow fits the
+ * spine to the viewport on mount, so where the first node lands depends on a
+ * measurement that has not happened yet. Nothing outside the box moves either
+ * way, which is the guarantee that matters.
+ */
+
+.viewport {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+  block-size: var(--size-scroll-region);
+  padding-block: var(--space-6);
+  background: var(--color-surface-sunken);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.node {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  inline-size: min(var(--node-width), 100%);
+  block-size: var(--node-height);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  /* The same weight the real card carries, so the swap changes nothing but the
+     content — see the note in `WorkflowNodeCard.module.css`. */
+  border: var(--border-hairline) solid var(--color-on-surface-muted);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+}

@@ -191,6 +191,48 @@ export function dropIndex(y: number, actionCount: number): number {
   return clamp(Math.round(y / NODE_PITCH), 0, actionCount - 1);
 }
 
+/**
+ * The `y` of the first action's slot — the origin `dropIndex` measures from.
+ *
+ * Here rather than in the renderer so the pitch arithmetic has one owner: a
+ * canvas that computed `(conditionCount + 1) * (NODE_HEIGHT + NODE_GAP)` itself
+ * would silently disagree with `layoutSpine` the day the gap changes.
+ */
+export function actionBandOrigin(conditionCount: number): number {
+  return (Math.max(conditionCount, 0) + 1) * NODE_PITCH;
+}
+
+/** How far the condition band stands off the nodes it encloses, each side. */
+const BAND_INSET = NODE_GAP / 2;
+
+/**
+ * The box the condition nodes sit in, in canvas units — `null` when there are
+ * none to enclose.
+ *
+ * The band is how the canvas says the conditions are AND'd (TAR-809): a junction
+ * node would be a node with no counterpart in the definition, which is exactly
+ * the kind of thing that makes the mapping non-total. Its geometry is here with
+ * `layoutSpine` because it is the same arithmetic — a band computed from its own
+ * copy of the pitch would drift from the nodes it is meant to enclose.
+ */
+export function conditionBandBox(conditionCount: number): {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+} | null {
+  if (conditionCount <= 0) {
+    return null;
+  }
+
+  return {
+    x: -BAND_INSET,
+    y: NODE_PITCH - BAND_INSET,
+    width: NODE_WIDTH + BAND_INSET * 2,
+    height: (conditionCount - 1) * NODE_PITCH + NODE_HEIGHT + BAND_INSET * 2,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Projection
 // ---------------------------------------------------------------------------

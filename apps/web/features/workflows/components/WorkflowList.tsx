@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { WorkflowCatalogResponse, WorkflowResponse } from '@whatsappcrm/contracts';
+import type { WorkflowResponse } from '@whatsappcrm/contracts';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingAnnouncement } from '@/components/ui/LoadingAnnouncement';
 import { SkeletonLine, SkeletonText } from '@/components/ui/Skeleton';
@@ -19,7 +19,7 @@ import styles from './WorkflowList.module.css';
 
 /**
  * The workflows in execution order, and the dialogs the row actions open. Usage:
- * `<WorkflowList workflows={…} catalog={…} vocabulary={…} canWrite />`.
+ * `<WorkflowList workflows={…} vocabulary={…} canWrite />`.
  *
  * An ordered list rather than a table: the order is meaning here — two workflows
  * setting priority on the same ticket resolve the same way every time because of
@@ -33,12 +33,10 @@ import styles from './WorkflowList.module.css';
  */
 export function WorkflowList({
   workflows,
-  catalog,
   vocabulary,
   canWrite,
 }: {
   workflows: readonly WorkflowResponse[];
-  catalog: WorkflowCatalogResponse;
   vocabulary: WorkflowVocabulary;
   canWrite: boolean;
 }) {
@@ -136,9 +134,6 @@ export function WorkflowList({
             onToggle={() => {
               toggle(workflow);
             }}
-            onEdit={() => {
-              setDialog({ kind: 'edit', workflow });
-            }}
             onTest={() => {
               setDialog({ kind: 'test', workflow });
             }}
@@ -154,8 +149,6 @@ export function WorkflowList({
 
       <WorkflowDialogs
         dialog={dialog}
-        catalog={catalog}
-        vocabulary={vocabulary}
         onClose={() => {
           setDialog(null);
         }}

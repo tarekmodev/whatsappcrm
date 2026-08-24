@@ -12,10 +12,13 @@ import { content } from '@/content/en';
 import {
   NODE_GAP,
   NODE_HEIGHT,
+  NODE_WIDTH,
   TRIGGER_NODE_ID,
+  actionBandOrigin,
   actionNodeId,
   addAction,
   addCondition,
+  conditionBandBox,
   conditionNodeId,
   dropIndex,
   layoutSpine,
@@ -655,6 +658,53 @@ describe('layout', () => {
     expect(dropIndex(-500, 3)).toBe(0);
     expect(dropIndex(9_000, 3)).toBe(2);
     expect(dropIndex(120, 0)).toBe(0);
+  });
+
+  /**
+   * The frame conversion the canvas performs on a drop, checked against the
+   * layout it is meant to agree with rather than against a repeated formula.
+   * This is the pairing that decides where a dragged action lands, and getting it
+   * wrong by one pitch silently reorders the wrong two steps.
+   */
+  it('puts the first action slot exactly where layoutSpine puts it', () => {
+    const positions = layoutSpine(1 + 3 + 2);
+
+    expect(actionBandOrigin(3)).toBe(positions[4]?.y);
+    expect(actionBandOrigin(0)).toBe(positions[1]?.y);
+  });
+
+  it('carries a dragged action back to its own index when it has not moved', () => {
+    const conditionCount = 2;
+    const positions = layoutSpine(1 + conditionCount + 3);
+    // The second action, dropped exactly where it started.
+    const droppedAt = positions[1 + conditionCount + 1]?.y ?? 0;
+
+    expect(dropIndex(droppedAt - actionBandOrigin(conditionCount), 3)).toBe(1);
+  });
+
+  it('encloses the condition nodes in a band, and draws none when there are none', () => {
+    const pitch = NODE_HEIGHT + NODE_GAP;
+    const inset = NODE_GAP / 2;
+    const box = conditionBandBox(3);
+
+    expect(conditionBandBox(0)).toBeNull();
+    expect(box).toEqual({
+      x: -inset,
+      y: pitch - inset,
+      width: NODE_WIDTH + inset * 2,
+      height: 2 * pitch + NODE_HEIGHT + inset * 2,
+    });
+
+    // The band starts above the first condition and ends below the last, which
+    // is the whole of what "around the condition nodes" has to mean.
+    const positions = layoutSpine(1 + 3 + 1);
+
+    expect(box?.y).toBeLessThan(positions[1]?.y ?? 0);
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeGreaterThan(
+      (positions[3]?.y ?? 0) + NODE_HEIGHT,
+    );
+    // …and stops short of the first action, so the band never encloses one.
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThan(positions[4]?.y ?? 0);
   });
 });
 

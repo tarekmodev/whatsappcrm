@@ -30,6 +30,15 @@ export interface ButtonLinkProps {
   isBlock?: boolean;
   /** A `mailto:`, a download or another origin — a plain anchor, as `TextLink`. */
   isExternal?: boolean;
+  /**
+   * Replaces the visible label for assistive technology, for a link whose text
+   * only makes sense beside the row it is in — five workflow rows each offering
+   * "Edit" is a list nobody can use without sight of it.
+   *
+   * The visible label still has to name the action: this widens it, it never
+   * says something different (WCAG 2.5.3).
+   */
+  ariaLabel?: string;
   className?: string;
 }
 
@@ -40,6 +49,7 @@ export function ButtonLink({
   size = 'md',
   isBlock = false,
   isExternal = false,
+  ariaLabel,
   className,
 }: ButtonLinkProps) {
   const attributes = {
@@ -47,6 +57,7 @@ export function ButtonLink({
     'data-variant': variant,
     'data-size': size,
     'data-block': isBlock ? 'true' : undefined,
+    'aria-label': ariaLabel,
   };
 
   if (isExternal) {
