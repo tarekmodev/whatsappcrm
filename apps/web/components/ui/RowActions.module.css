@@ -60,32 +60,12 @@
  * The destructive entry sits under a rule, so it is not the next thing down from
  * the routine one. Colour is never the only carrier here either: it is last, it
  * is separated, and its label is the verb.
+ *
+ * The rule and the danger paint both live on `menuItem`/`menuSeparator` now —
+ * 0001 rules them for *menus* rather than for this component, and the second
+ * menu with a delete in it would otherwise write them again slightly
+ * differently. `data-tone='danger'` on the entry is what turns them on.
  */
 .separated {
-  margin-block-start: var(--space-1);
-  padding-block-start: var(--space-1);
-  border-block-start: var(--border-hairline) solid var(--color-border);
-}
-
-.menuItem[data-tone='danger'] {
-  color: var(--color-danger);
-}
-
-@media (hover: hover) {
-  .menuItem[data-tone='danger']:hover {
-    background: var(--color-danger-subtle);
-  }
-}
-
-/* The same ring the inline destructive control gets — see `Button.module.css`
-   for why this is the one place the global focus colour is overridden. */
-.menuItem[data-tone='danger']:focus-visible {
-  background: var(--color-danger-subtle);
-  outline-color: var(--color-danger);
-}
-
-@media (forced-colors: active) {
-  .menuItem[data-tone='danger']:focus-visible {
-    outline-color: Highlight;
-  }
+  composes: menuSeparator from './MenuButton.module.css';
 }

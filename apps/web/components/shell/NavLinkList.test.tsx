@@ -49,10 +49,37 @@ describe('NavLinkList', () => {
 
   it('keeps the links named when the rail is collapsed', () => {
     // Collapsed hides the labels from the eye only. A link whose text was
-    // dropped is a link with no accessible name.
+    // dropped is a link with no accessible name — and this holds with the
+    // tooltip torn out entirely, which is what makes the tooltip a *visible*
+    // spelling of the name rather than the only copy of it (0002 §1.5).
     render(<NavLinkList items={ITEMS} appearance="rail" isCollapsed primaryCount={1} />);
 
     expect(screen.getByRole('link', { name: 'Inbox' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Inbox' })).toHaveAttribute('title', 'Inbox');
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+  });
+
+  it('spells the collapsed label out on focus, and takes it away again on blur', () => {
+    render(<NavLinkList items={ITEMS} appearance="rail" isCollapsed primaryCount={1} />);
+
+    const link = screen.getByRole('link', { name: 'Inbox' });
+
+    fireEvent.focus(link);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Inbox');
+    // `echoes`: the link is already named by its off-screen span, so wiring the
+    // tip as a description too would have a screen reader say "Inbox" twice.
+    expect(link).not.toHaveAttribute('aria-describedby');
+
+    fireEvent.blur(link);
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+  });
+
+  it('leaves the expanded rail with no tooltip to show', () => {
+    // The label is right there. A tooltip repeating a word already on screen is
+    // a surface over the thing the reader is looking at.
+    render(<NavLinkList items={ITEMS} appearance="rail" primaryCount={1} />);
+
+    fireEvent.focus(screen.getByRole('link', { name: 'Inbox' }));
+
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
   });
 });

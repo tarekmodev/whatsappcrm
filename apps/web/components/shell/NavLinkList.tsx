@@ -4,6 +4,7 @@ import { useId, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Icon } from '@/components/ui/Icon';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { cx } from '@/lib/cx';
 import { useContent } from '@/lib/content';
 import { isCurrentPath } from '@/lib/current-path';
@@ -76,24 +77,32 @@ export function NavLinkList({
 
       {hasBoundary ? (
         <>
-          <button
-            type="button"
-            className={styles.boundary}
-            data-appearance={appearance}
-            data-collapsed={isCollapsed ? 'true' : undefined}
-            aria-expanded={isExpanded}
-            aria-controls={secondaryId}
-            // Collapsed, the word is off-screen and the chevron is all there is.
-            title={isCollapsed ? content.nav.moreLabel : undefined}
-            onClick={() => {
-              setIsExpanded((current) => !current);
-            }}
-          >
-            <Icon name="chevronDown" size="sm" className={styles.boundaryIcon} />
-            <span className={styles.label}>
-              {isExpanded ? content.nav.showLess : content.nav.showMore}
-            </span>
-          </button>
+          {/*
+            Collapsed, the word is off-screen and the chevron is all there is —
+            so the pointer gets the word back. `describes` rather than `echoes`:
+            the button's own name is still "More", and this says which more.
+          */}
+          <Tooltip tip={isCollapsed ? content.nav.moreLabel : undefined}>
+            {(trigger) => (
+              <button
+                {...trigger}
+                type="button"
+                className={styles.boundary}
+                data-appearance={appearance}
+                data-collapsed={isCollapsed ? 'true' : undefined}
+                aria-expanded={isExpanded}
+                aria-controls={secondaryId}
+                onClick={() => {
+                  setIsExpanded((current) => !current);
+                }}
+              >
+                <Icon name="chevronDown" size="sm" className={styles.boundaryIcon} />
+                <span className={styles.label}>
+                  {isExpanded ? content.nav.showLess : content.nav.showMore}
+                </span>
+              </button>
+            )}
+          </Tooltip>
 
           {/*
             Dropped rather than hidden when collapsed: these are links, and a
@@ -141,20 +150,29 @@ function List({
 
         return (
           <li key={item.id}>
-            <Link
-              href={item.href}
-              className={cx(styles.link)}
-              // `aria-current` rather than a class alone, so the state is exposed
-              // to assistive technology and not only to the eye.
-              aria-current={isCurrent ? 'page' : undefined}
-              // Collapsed, the label is the only thing naming the icon, and it is
-              // off-screen — so the pointer gets it back as a native tooltip.
-              title={isCollapsed ? item.label : undefined}
-              onClick={onNavigate}
-            >
-              {item.icon === undefined ? null : <Icon name={item.icon} />}
-              <span className={styles.label}>{item.label}</span>
-            </Link>
+            {/*
+              Collapsed, the label is the only thing naming the icon and it is
+              off-screen — so the pointer gets it back. `echoes`, because the
+              link already *has* that name from the span: wiring the tip as a
+              description too would have a screen reader read the word twice
+              (0002 §1.5's "the accessible name is on the control, always").
+            */}
+            <Tooltip tip={isCollapsed ? item.label : undefined} relationship="echoes">
+              {(trigger) => (
+                <Link
+                  {...trigger}
+                  href={item.href}
+                  className={cx(styles.link)}
+                  // `aria-current` rather than a class alone, so the state is
+                  // exposed to assistive technology and not only to the eye.
+                  aria-current={isCurrent ? 'page' : undefined}
+                  onClick={onNavigate}
+                >
+                  {item.icon === undefined ? null : <Icon name={item.icon} />}
+                  <span className={styles.label}>{item.label}</span>
+                </Link>
+              )}
+            </Tooltip>
           </li>
         );
       })}

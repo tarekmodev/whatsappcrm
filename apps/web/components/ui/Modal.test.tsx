@@ -142,3 +142,58 @@ describe('Modal', () => {
     expect(document.getElementById(MAIN_CONTENT_ID)).toHaveFocus();
   });
 });
+
+/**
+ * Which dismissals a dialog accepts, and what it tells its caller about them
+ * (0002 §1.4). The scrim rule is the one with a cost attached: a form dismissed
+ * by a pointer landing a few pixels wide of the panel is the reader's work gone.
+ */
+describe('Modal dismissal', () => {
+  function renderKind(kind: 'view' | 'form') {
+    const onClose = vi.fn();
+
+    render(
+      <Modal isOpen kind={kind} title="Runs" onClose={onClose}>
+        <p>Body</p>
+      </Modal>,
+    );
+
+    return { dialog: screen.getByRole('dialog'), onClose };
+  }
+
+  it('closes a view on a press outside the panel', () => {
+    const { dialog, onClose } = renderKind('view');
+
+    // The dialog element *is* the backdrop: a click whose target is the dialog
+    // rather than its content landed outside the panel.
+    fireEvent.click(dialog);
+
+    expect(onClose).toHaveBeenCalledWith('scrim');
+  });
+
+  it('does not close a form on a press outside the panel', () => {
+    const { dialog, onClose } = renderKind('form');
+
+    fireEvent.click(dialog);
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('never mistakes a press on the panel for one on the scrim', () => {
+    const { onClose } = renderKind('view');
+
+    fireEvent.click(screen.getByText('Body'));
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('tells the caller which dismissal it was', () => {
+    const { dialog, onClose } = renderKind('view');
+
+    fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    expect(onClose).toHaveBeenCalledWith('escape');
+
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(onClose).toHaveBeenCalledWith('invoked');
+  });
+});
