@@ -11,6 +11,8 @@ import {
 } from 'react';
 import { usePathname } from 'next/navigation';
 import { cx } from '@/lib/cx';
+import { useExitTransition } from '@/lib/hooks/useExitTransition';
+import { inlineShift } from '@/lib/overlay/keep-on-screen';
 import styles from './MenuButton.module.css';
 
 /**
@@ -40,7 +42,20 @@ import styles from './MenuButton.module.css';
  * CSS alone cannot express "flip if it would not fit" portably yet, so this
  * measures the opened panel and nudges it back inside. Measured geometry rather
  * than a breakpoint, because where a trigger sits depends on the bar's wrapping,
- * which depends on how long the signed-in user's name is.
+ * which depends on how long the signed-in user's name is. The measurement lives
+ * in `lib/overlay/keep-on-screen`: `Tooltip` hangs off a control the same way and
+ * reads the same function rather than rounding its own (0002 §1.5).
+ *
+ * ## Leaving
+ *
+ * The panel enters *and* exits — 0002 §0.2's "a panel leaving", the inverse of
+ * the entrance at `--easing-exit`. A dismissed panel therefore stays mounted for
+ * the length of that exit and is `inert` throughout it, so the links inside it
+ * are out of the tab order and out of the accessibility tree from the moment the
+ * reader dismisses them. React keeps owning presence rather than handing it to
+ * `display: … allow-discrete` as `Modal` does, because a `<dialog>`'s display is
+ * the UA's and a panel's is not: panels like `DateRangePanel` draft state on
+ * mount, and one that never unmounts would re-open showing an abandoned draft.
  */
 
 export const MENU_ALIGNMENTS = ['start', 'end'] as const;
@@ -84,6 +99,14 @@ export interface MenuButtonProps {
    * panel holds prose, not a column of entries.
    */
   variant?: MenuTriggerVariant;
+  /**
+   * The trigger cannot be pressed and the panel cannot open — for entries that
+   * exist but need something the reader can supply on this same screen. A
+   * trigger with *nothing* behind it is not rendered at all, which is 0001's
+   * quick-create rule and a different thing: a control that opens an empty panel
+   * is worse than no control.
+   */
+  isDisabled?: boolean;
   className?: string;
   triggerClassName?: string;
   /** Widens or re-pads the panel; the popover's placement stays this component's. */
@@ -96,6 +119,7 @@ export function MenuButton({
   children,
   align = 'end',
   variant = 'bare',
+  isDisabled = false,
   className,
   triggerClassName,
   panelClassName,
@@ -106,6 +130,7 @@ export function MenuButton({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const pathname = usePathname();
+  const { isMounted, surfaceProps } = useExitTransition(isOpen, panelRef);
 
   const closePanel = useCallback(() => {
     setIsOpen(false);
@@ -148,20 +173,10 @@ export function MenuButton({
 
     // Reset before measuring: the shift is part of the geometry being read.
     panel.style.setProperty('--menu-shift', '0px');
-
-    const box = panel.getBoundingClientRect();
-    // `clientWidth`, not `window.innerWidth`: the latter counts a classic
-    // scrollbar's width, which is space the panel cannot occupy. With a ~15px
-    // scrollbar and an 8px margin, a panel overhanging the visible area by up to
-    // 7px would measure as fitting. Overlay scrollbars make the two equal, so
-    // this only shows up on a desktop browser that reserves the gutter.
-    const overflowStart = VIEWPORT_MARGIN_PX - box.left;
-    const overflowEnd = box.right - (document.documentElement.clientWidth - VIEWPORT_MARGIN_PX);
-    // Only one can be positive: `max-inline-size` already caps the panel at the
-    // viewport, so it cannot be too wide to fit once moved.
-    const shift = overflowStart > 0 ? overflowStart : Math.min(0, -overflowEnd);
-
-    panel.style.setProperty('--menu-shift', `${String(Math.round(shift))}px`);
+    panel.style.setProperty(
+      '--menu-shift',
+      `${String(inlineShift(panel.getBoundingClientRect()))}px`,
+    );
   }, []);
 
   useLayoutEffect(() => {
@@ -219,6 +234,7 @@ export function MenuButton({
         type="button"
         className={cx(styles.trigger, triggerClassName)}
         data-variant={variant}
+        disabled={isDisabled}
         aria-expanded={isOpen}
         aria-controls={panelId}
         aria-label={accessibleName}
@@ -230,21 +246,19 @@ export function MenuButton({
       </button>
 
       {/*
-        Dropped from the DOM when closed rather than hidden. The panel does have
-        an *entrance* — see `menuPanelEnter` — but an entrance plays on a node
-        that has just been added, and only an *exit* would need one kept around
-        to play out. It has none, by the reference's own reading: a dismissed
-        menu is the reader having already decided, and leaving links in the tree
-        behind `inert` to animate them away is one attribute away from a set of
-        tab stops nobody can see.
+        Kept in the tree for the length of its exit and `inert` throughout it, so
+        a dismissed panel animates away without leaving a set of tab stops nobody
+        can see — see the component note above for why React owns the presence
+        here rather than `display: … allow-discrete`.
       */}
-      {isOpen ? (
+      {isMounted ? (
         <div
           id={panelId}
           ref={panelRef}
           className={cx(styles.panel, panelClassName)}
           data-align={align}
           data-variant={variant}
+          {...surfaceProps}
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget)) {
               setIsOpen(false);
@@ -261,9 +275,6 @@ export function MenuButton({
     </div>
   );
 }
-
-/** How much of the viewport edge the panel keeps clear of. */
-const VIEWPORT_MARGIN_PX = 8;
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input, select, textarea, [tabindex]';
 
