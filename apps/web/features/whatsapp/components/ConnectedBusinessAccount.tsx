@@ -47,6 +47,9 @@ export function ConnectedBusinessAccount({
         </Cluster>
         <div>
           <p className={styles.metaLabel}>{content.whatsapp.wabaIdLabel}</p>
+          {/* Not marked `dir="ltr"`, unlike the number below: a bare digit
+              string is a single run with no neutral in it, so it renders the
+              same either way — checked in a browser rather than assumed. */}
           <p className={styles.metaValue}>{account.wabaId}</p>
         </div>
       </Stack>
@@ -94,7 +97,13 @@ function numberColumns(content: Content): DataTableColumn<WhatsAppAccountRespons
     {
       key: 'number',
       header: content.whatsapp.columnNumber,
-      render: (row) => row.displayPhoneNumber,
+      // `dir="ltr"`: a phone number reads left to right whatever the surrounding
+      // page does. The number is E.164, so the digits stay together — but the
+      // leading `+` is a neutral with nothing strong before it, and under
+      // `dir="rtl"` it takes the paragraph's direction and lands at the far end:
+      // `+966501234567` renders `966501234567+`. This is the number an admin
+      // copies somewhere it has to be right.
+      render: (row) => <span dir="ltr">{row.displayPhoneNumber}</span>,
     },
     {
       key: 'verifiedName',

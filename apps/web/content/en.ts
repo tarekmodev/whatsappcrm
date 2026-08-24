@@ -175,6 +175,26 @@ export const content = {
     light: 'Light',
   },
 
+  /**
+   * The language toggle's own copy. Named `language`, not `locale`: `locale`
+   * above is the BCP-47 tag this module is *written in*, which `Intl` reads —
+   * two different things, and one name for both is how they get confused.
+   */
+  language: {
+    /**
+     * The accessible name of the language toggle. It interpolates the target
+     * language's name **in that language** (`LOCALE_ENDONYMS`), which is also
+     * the toggle's visible label — so the visible text is a substring of the
+     * accessible name, which is what SC 2.5.3 asks of a control whose label and
+     * name differ.
+     *
+     * Naming the language in itself rather than in the current interface's words
+     * is deliberate: the reader who needs this control is the one who cannot
+     * read the interface it is sitting in, and "Arabic" is no help to them.
+     */
+    switchTo: (language: string) => `Switch language to ${language}`,
+  },
+
   roleStub: {
     label: 'Viewing as',
     hint: 'Stubbed role source — replaced by the session role once TAR-35 lands.',

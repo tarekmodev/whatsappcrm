@@ -449,14 +449,19 @@ describe('the plans surface', () => {
  * branch that introduced a role of its own would be a role every component under
  * `lang="en"` reads as undefined.
  *
- * These assertions are why the branch can land before TAR-806 switches a locale:
- * nothing renders it yet, so nothing else would catch it drifting.
+ * TAR-806 switches the locale that renders it, and adds the cases below that
+ * only mean something once something does: the rule in `base.css` that applies
+ * the face, and the subtree an English console shows Arabic in.
  */
 describe('the Arabic branch', () => {
   const blocks = [
     ...blocksOf(readTokenFile('primitives.css')),
     ...blocksOf(readTokenFile('semantic.css')),
   ];
+  // Read here rather than inside a case: jsdom replaces the global `URL` before a
+  // test body runs, and its version resolves a relative path against the document
+  // origin instead of the base it was handed.
+  const base = readTokenFile('../base.css');
   const arabic = blocks.filter((block) => block.selector.includes('[lang'));
   const baseRoles = new Set(
     blocks
@@ -498,6 +503,56 @@ describe('the Arabic branch', () => {
 
     expect(declaring.at(-1)).toBe("[lang|='ar']");
     expect(declaring.length).toBeGreaterThan(1);
+  });
+
+  /*
+   * On the semantic role rather than the primitive it reads. Redefining
+   * `--scale-font-family-sans` would only reach `<html>`: `--font-family-body`
+   * has already substituted it by the time it inherits into a subtree marked
+   * `lang="ar"` — a customer's Arabic message inside an English console.
+   */
+  it('re-declares the semantic role rather than the primitive scale', () => {
+    for (const block of arabic) {
+      expect(block.declarations['--scale-font-family-sans']).toBeUndefined();
+    }
+  });
+
+  /*
+   * The half that makes the subtree case real. A custom property changes nothing
+   * where no rule substitutes it, and `font-family` is declared once in this app
+   * — on `body`. Without a rule on the element that names its own language, a
+   * `lang="ar"` subtree takes the branch's token and still paints the Latin face
+   * it inherited (TAR-806).
+   */
+  it('is applied by a rule that actually substitutes it', () => {
+    const applied = /\[lang\]\s*\{([^}]*)\}/.exec(base);
+
+    expect(applied?.[1]).toContain('font-family: var(--font-family-body)');
+  });
+
+  /*
+   * Keyed off the language, not the direction. A future Persian locale is also
+   * `dir="rtl"` and wants its own face, and an Arabic quotation inside an English
+   * console is `dir="rtl"` on a subtree that keeps the console's own type.
+   */
+  it('keys off lang rather than dir', () => {
+    const selectors = blocks.map((block) => block.selector);
+
+    expect(selectors.some((selector) => selector.includes("[dir='rtl']"))).toBe(false);
+  });
+
+  /*
+   * Never a bare `var()` with no fallback: an invalid declaration drops the whole
+   * stack and lands the console on the browser's default serif — for the minutes
+   * before the face arrives, and permanently if the file ever goes missing.
+   */
+  it('falls back to a sans face when the download has not landed', () => {
+    const stack = blocks
+      .flatMap((block) => Object.entries(block.declarations))
+      .find(([name]) => name === '--scale-font-family-arabic')?.[1];
+
+    expect(stack).toContain('var(--font-arabic');
+    expect(stack).toContain('sans-serif');
   });
 });
 

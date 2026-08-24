@@ -1,14 +1,17 @@
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
+import { LocaleToggle } from '@/components/locale/LocaleToggle';
 import { TextLink } from '@/components/ui/TextLink';
 import { webEnv } from '@/lib/config/env';
 import { useContent } from '@/lib/content';
 import { mailto } from '@/lib/mailto';
 import type { Theme } from '@/lib/theme/theme';
+import type { Locale } from '@/lib/locale/locale';
 import styles from './AuthFooter.module.css';
 
 /**
- * The line at the foot of a signed-out screen: how to reach a human, and the
- * theme. Usage: `<AuthFooter theme={theme} />` from the `(auth)` layout.
+ * The line at the foot of a signed-out screen: how to reach a human, the
+ * theme, and the language. Usage: `<AuthFooter theme={theme} locale={locale} />`
+ * from the `(auth)` layout.
  *
  * This is where the theme toggle lives now. It used to float unlabelled in the
  * top-right corner of an otherwise empty page, which read as a stray glyph rather
@@ -22,7 +25,7 @@ import styles from './AuthFooter.module.css';
  * than rendered dead, which is the same rule every other surface reading it
  * follows.
  */
-export function AuthFooter({ theme }: { theme: Theme }) {
+export function AuthFooter({ theme, locale }: { theme: Theme; locale: Locale }) {
   const content = useContent();
 
   return (
@@ -33,6 +36,10 @@ export function AuthFooter({ theme }: { theme: Theme }) {
         </TextLink>
       )}
       <ThemeToggle initialTheme={theme} isLabelVisible />
+      {/* Signed-out is where a reader most needs it: somebody who cannot read
+          the sign-in form has no account to have stored a preference under.
+          Gated with the console's copy, for the same reason. */}
+      {webEnv.enableLocaleSwitch ? <LocaleToggle initialLocale={locale} /> : null}
     </footer>
   );
 }

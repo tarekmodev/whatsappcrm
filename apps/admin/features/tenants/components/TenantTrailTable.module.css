@@ -6,8 +6,24 @@
   flex-wrap: wrap;
 }
 
+/*
+ * "From this status, to that one".
+ *
+ * U+2192 is **not** one of the characters the bidirectional algorithm mirrors,
+ * so under `dir="rtl"` the two badges either side swap places and the arrow
+ * keeps pointing right — which then reads as the tenant having gone from its
+ * current status back to the one it left (TAR-806).
+ *
+ * Mirrored explicitly, the same way `Icon` handles its directional glyphs, and
+ * `inline-block` because a transform does not apply to an inline box.
+ */
 .arrow {
+  display: inline-block;
   color: var(--color-on-surface-muted);
+}
+
+[dir='rtl'] .arrow {
+  transform: scaleX(-1);
 }
 
 /*

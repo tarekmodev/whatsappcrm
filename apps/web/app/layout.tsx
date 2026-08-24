@@ -4,6 +4,8 @@ import { Manrope, IBM_Plex_Sans_Arabic } from 'next/font/google';
 import { content } from '@/content/en';
 import { cx } from '@/lib/cx';
 import { readTheme } from '@/lib/theme/read-theme';
+import { readLocale } from '@/lib/locale/read-locale';
+import { directionOf } from '@/lib/locale/locale';
 import { readBranding } from '@/lib/branding/read-branding';
 import { brandStyleSheet } from '@/lib/branding/brand-style';
 import { ToastProvider } from '@/components/ui/ToastProvider';
@@ -88,20 +90,40 @@ const bodyFont = Manrope({
 /**
  * The Arabic face (TAR-801), and the reference's own second family — the CRM
  * file loads it beside Manrope and switches to it under `[lang="ar"]`. Manrope
- * carries no Arabic glyphs, so without this
- * an Arabic console falls through to whatever face the operating system happens
- * to have — the one typographic decision a token layer must not leave to a
- * machine. `[lang|='ar']` in `semantic.css` is the only thing that reads it.
+ * carries no Arabic glyphs, so without this an Arabic console falls through to
+ * whatever face the operating system happens to have — the one typographic
+ * decision a token layer must not leave to a machine. The `[lang|='ar']` branch
+ * in `semantic.css` is the only thing that reads it.
  *
  * Not a variable font, so the three weights the type scale actually uses are
  * named rather than an axis requested.
  *
- * `preload: false` deliberately. This is the root layout, so a preloaded face is
- * a `<link rel="preload">` and a real download on **every** route — and the
- * document still renders `lang="en"` (below), so today that download would be
- * for a face nothing draws with. It stays off until TAR-806 resolves the locale
- * per request; that story turns it on for the Arabic branch, and the `swap`
- * fallback covers the gap in the meantime.
+ * ## `preload: false`, deliberately
+ *
+ * `next/font` preloads by default, and this is the root layout: that would put an
+ * Arabic download on the critical path of **every** route for every English
+ * visitor — the overwhelming majority — for a face almost none of them render a
+ * glyph of. The `@font-face` is still emitted and still self-hosted; it is only
+ * the `<link rel="preload">` that is dropped, so an Arabic reader gets the face
+ * on first paint through `display: 'swap'` instead of ahead of it.
+ *
+ * What an English document actually fetches, now that TAR-806 resolves the locale
+ * per request, since this is easy to state wrongly: the family is reached from
+ * the `[lang|='ar']` branch in `styles/tokens/semantic.css` and applied by the
+ * `[lang]` rule in `styles/base.css`, so it is requested exactly when an element
+ * carrying `lang="ar"` is *painted*. With the locale switch off that is never —
+ * no toggle, no such element, zero Arabic files. With it on it is the toggle's
+ * own endonym, `العربية`, which costs **one** weight rather than the set: at load
+ * on a small screen, where the drawer's panel is laid out off-canvas, and on
+ * first open of the account menu on a large one. The full set arrives only for a
+ * console actually reading Arabic.
+ *
+ * None of that is on the critical path, which is what `preload: false` buys and
+ * why it survives the endonym.
+ *
+ * Both subsets, not just `arabic`: an Arabic console still shows Latin — a
+ * customer's email address, a product name, a phone number — and a face covering
+ * only one script would render those in a second, unrelated one.
  */
 const arabicFont = IBM_Plex_Sans_Arabic({
   subsets: ['arabic', 'latin'],
@@ -112,15 +134,12 @@ const arabicFont = IBM_Plex_Sans_Arabic({
 });
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const [theme, branding] = await Promise.all([readTheme(), readBranding()]);
+  const [theme, locale, branding] = await Promise.all([readTheme(), readLocale(), readBranding()]);
 
   return (
-    // `lang`/`dir` are still fixed: resolving them per request is TAR-806's, and
-    // the token layer's Arabic branch (`semantic.css`) is already waiting for the
-    // day this reads `lang="ar" dir="rtl"`.
     <html
-      lang="en"
-      dir="ltr"
+      lang={locale}
+      dir={directionOf(locale)}
       data-theme={theme}
       className={cx(bodyFont.variable, arabicFont.variable)}
     >

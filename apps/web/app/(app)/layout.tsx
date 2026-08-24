@@ -2,6 +2,7 @@ import { Suspense, type ReactNode } from 'react';
 import { webEnv } from '@/lib/config/env';
 import { verifySession } from '@/lib/session/session';
 import { readTheme } from '@/lib/theme/read-theme';
+import { readLocale } from '@/lib/locale/read-locale';
 import { readBranding } from '@/lib/branding/read-branding';
 import { readRailState } from '@/lib/shell/read-rail';
 import { AppShell } from '@/components/shell/AppShell';
@@ -10,6 +11,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { NAV_ITEMS, visibleNavItems } from '@/components/shell/navigation';
 import { QUICK_CREATE_ITEMS, visibleQuickCreateItems } from '@/components/shell/quick-create';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
+import { LocaleToggle } from '@/components/locale/LocaleToggle';
 import { RoleStubSwitcher } from '@/components/shell/RoleStubSwitcher';
 import { SignOutButton } from '@/components/shell/SignOutButton';
 import { SkipLink } from '@/components/shell/SkipLink';
@@ -40,6 +42,7 @@ import {
  */
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const theme = await readTheme();
+  const locale = await readLocale();
   const railState = await readRailState();
   // Request-scoped and already resolved by the root layout, so this is the same
   // value rather than a second round-trip (`lib/branding/read-branding.ts`).
@@ -51,6 +54,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const utilities = (
     <>
       <ThemeToggle initialTheme={theme} />
+      {/* Off until `content/ar.ts` lands — see `webEnv.enableLocaleSwitch`.
+          The mechanism underneath it is complete; the copy is not. */}
+      {webEnv.enableLocaleSwitch ? <LocaleToggle initialLocale={locale} /> : null}
       {isStubbed && webEnv.enableRoleStub ? <RoleStubSwitcher role={principal.role} /> : null}
       {/* Not offered against a stubbed principal: there is no session to end,
           and the button would look broken. */}

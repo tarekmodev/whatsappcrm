@@ -544,10 +544,19 @@
  * Equal specificity to the `:root` block above and later in the file, which is
  * what makes it win. Keep it last of the selector blocks for that reason.
  *
- * **Scope.** Typography only. `dir`, the logical-property sweep and the mirrored
- * shimmer are TAR-806's, and the document still renders `lang="en" dir="ltr"`
- * (`app/layout.tsx`), so nothing matches this yet — it is the token half landing
- * first so TAR-806 flips a language, not a stylesheet.
+ * **Scope.** Typography only, and that is still true now that TAR-806 resolves
+ * `lang`/`dir` per request (`app/layout.tsx`): direction is carried by logical
+ * properties, which need no token at all. Flipping a language moves one value
+ * here and nothing else in this file.
+ *
+ * On the *semantic* role rather than the primitive it reads, so a subtree marked
+ * `lang="ar"` — a customer's message in an otherwise English inbox, or the
+ * endonym on the language toggle — gets the face too; redefining the primitive
+ * would only reach `<html>`, because `--font-family-body` has already
+ * substituted it by the time it inherits down. A token alone is not enough for
+ * that: `base.css` carries the `[lang]` rule that actually applies the face,
+ * because a custom property changes nothing where no declaration substitutes it.
+ * The two are one change — move either and the other stops meaning anything.
  */
 [lang|='ar'] {
   --font-family-body: var(--scale-font-family-arabic);

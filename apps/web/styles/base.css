@@ -28,6 +28,27 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/*
+ * The other half of the `[lang|='ar']` token branch (`styles/tokens/semantic.css`).
+ *
+ * That branch re-declares `--font-family-body`, but a custom property only
+ * changes what is painted where some rule *substitutes* it — and `font-family`
+ * is declared exactly once in this app, on `body` above. Everything below body
+ * inherits body's already-resolved value, so without this rule an element that
+ * declares its own language would take the branch's token and paint through the
+ * Latin stack anyway: `<span lang="ar">العربية</span>` in an English document
+ * fell through to whatever Arabic face the device happened to have, which is the
+ * outcome the branch exists to avoid.
+ *
+ * Matching `[lang]` rather than `[lang='ar']` keeps the rule about the mechanism
+ * instead of about one locale — any element that names its language re-resolves
+ * the face for itself, and for `lang="en"` that resolves to exactly what it was
+ * inheriting.
+ */
+[lang] {
+  font-family: var(--font-family-body);
+}
+
 h1,
 h2,
 h3,

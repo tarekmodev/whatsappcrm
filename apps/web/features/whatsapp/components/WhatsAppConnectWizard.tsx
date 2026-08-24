@@ -13,6 +13,7 @@ import { useToast } from '@/components/ui/ToastProvider';
 import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
 import { webEnv } from '@/lib/config/env';
+import { isolateLtr } from '@/lib/locale/bidi';
 import { useContent, type Content } from '@/lib/content';
 import { mailto } from '@/lib/mailto';
 import { routes } from '@/lib/routes';
@@ -156,7 +157,10 @@ export function WhatsAppConnectWizard() {
             summary={
               number === null
                 ? copy.steps.select_number.upcoming
-                : copy.steps.select_number.done(number.displayPhoneNumber)
+                : // `isolateLtr`: a summary is a string, so there is no element
+                  // to carry a `dir`, and the number's leading `+` would render
+                  // at the far end of it under `dir="rtl"` — see `lib/locale/bidi`.
+                  copy.steps.select_number.done(isolateLtr(number.displayPhoneNumber))
             }
           >
             {progress.account === null ? null : (

@@ -3,6 +3,7 @@
 import { useId, useRef, useState, type ReactNode } from 'react';
 import { Icon } from '@/components/ui/Icon';
 import { useContent } from '@/lib/content';
+import { forwardArrowStep } from '@/lib/locale/reading-direction';
 import styles from './ThreadComposerTabs.module.css';
 
 /**
@@ -87,12 +88,28 @@ export function ThreadComposerTabs({ reply, note }: ThreadComposerTabsProps) {
               setActive(id);
             }}
             onKeyDown={(event) => {
-              if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+              // WAI-ARIA puts a horizontal tablist's arrows on the *reading*
+              // order, not the screen: under `dir="rtl"` the next tab is the one
+              // to the left. The vertical pair never mirrors — `ArrowDown` is
+              // always the next one, in either direction.
+              const forward = forwardArrowStep(event.currentTarget);
+
+              if (event.key === 'ArrowRight') {
+                event.preventDefault();
+                move(id, forward);
+              }
+
+              if (event.key === 'ArrowLeft') {
+                event.preventDefault();
+                move(id, -forward);
+              }
+
+              if (event.key === 'ArrowDown') {
                 event.preventDefault();
                 move(id, 1);
               }
 
-              if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+              if (event.key === 'ArrowUp') {
                 event.preventDefault();
                 move(id, -1);
               }
