@@ -126,6 +126,7 @@ import {
   type TenantLifecycleResponse,
   type TenantPublicResponse,
   type TenantResponse,
+  type TenantUpdateInput,
   type TicketEscalationResponse,
   type TicketEvent,
   type TicketListQuery,
@@ -689,6 +690,12 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/whatsapp\/business-accounts$/,
     permission: 'channel:manage',
     handle: connectWhatsAppBusinessAccount,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/whatsapp\/phone-numbers\/([^/]+)\/registration$/,
+    permission: 'channel:manage',
+    handle: registerWhatsAppPhoneNumber,
   },
   // --- Tenant, branding and domains (TAR-29) -------------------------------
   {
@@ -2381,6 +2388,18 @@ function changePassword({ body }: RouteContext): null {
 }
 
 // --- Onboarding checklist (TAR-407) ----------------------------------------
+//
+// Still here, deliberately, now that `/onboarding` reads the real endpoint
+// (TAR-835). The mock is a transport, not a per-feature fake: removing these two
+// routes would make this the one screen that breaks with
+// `NEXT_PUBLIC_USE_MOCK_API=true`, which is the mode for working on the console
+// with no API and no database at all.
+//
+// What TAR-835 did do is close the three gaps TAR-832 recorded between the
+// fixtures and the real API, so a reviewer cannot see behaviour here that the
+// deployed endpoint will not produce: `set_branding` now completes from a
+// branding write, `reopen` on a completed step is a no-op, and an unknown step
+// id was already a 404.
 
 /**
  * `GET /v1/tenant/onboarding` — the caller's own checklist.
@@ -2424,12 +2443,21 @@ function updateOnboardingStep({
     throw notFound();
   }
 
-  if (parsed.data.intent === 'skip' && step.status === 'completed') {
-    throw refused(
-      'conflict',
-      'That step is already done, so there is nothing to skip.',
-      HTTP_CONFLICT,
-    );
+  if (step.status === 'completed') {
+    if (parsed.data.intent === 'skip') {
+      throw refused(
+        'conflict',
+        'That step is already done, so there is nothing to skip.',
+        HTTP_CONFLICT,
+      );
+    }
+
+    // `reopen` on a completed step is a 200 no-op rather than a reset, because
+    // completion is derived from what the tenant actually did and there is
+    // nothing here to un-derive: putting the step back would claim the number is
+    // no longer connected. TAR-832 decision 3, and the reason this branch exists
+    // rather than falling through to the write below.
+    return toOnboardingResponse(checklist);
   }
 
   writeOnboardingStep(checklist, stepId, {
@@ -2583,17 +2611,60 @@ function connectWhatsAppBusinessAccount({
         // Meta has not rated a number nobody has messaged yet.
         qualityRating: null,
         status: 'connected',
-        // Registration runs as the last step of the connection, so the mock
-        // reports what the happy path produces: a number that can send from the
-        // moment the console shows it.
-        registrationStatus: 'registered',
+        /*
+         * Unregistered, so the connect wizard's third step has something to do
+         * (TAR-814). Registration does run as the last step of a real
+         * connection, and often succeeds — but the state this transport exists
+         * to make reachable is the one nobody can walk without a Meta app: a
+         * number that arrives able to receive and unable to send. The retry
+         * route below is what moves it on.
+         */
+        registrationStatus: 'unregistered',
         registrationFailureReason: null,
-        registeredAt: MOCK_CREATED_AT,
-        registrationAttemptedAt: MOCK_CREATED_AT,
+        registeredAt: null,
+        registrationAttemptedAt: null,
         createdAt: MOCK_CREATED_AT,
         updatedAt: MOCK_CREATED_AT,
       },
     ],
+  };
+}
+
+/**
+ * A number id this transport always refuses to register, so the wizard's
+ * registration failure branch can be walked without a Meta app.
+ *
+ * Reached from the UI by editing the id in devtools rather than by a control:
+ * inventing a "make this fail" button would be a control shipped to production
+ * for a transport that is not.
+ */
+export const MOCK_UNREGISTRABLE_NUMBER_ID = '0192f100-0000-7000-8000-0000000000ff';
+
+/**
+ * `POST /v1/whatsapp/phone-numbers/{whatsappAccountId}/registration` — the retry
+ * TAR-170 shipped, and the wizard's third step (TAR-814).
+ *
+ * Stateless like the connection above, for the same reason: there is no WABA in
+ * the fixture store, because there is no tenant-facing `GET` for a later render
+ * to read one back from. It answers `registered` for any id but the sentinel,
+ * which is what makes the wizard walkable end to end here.
+ *
+ * A refusal is a `200` with the reason in the body, not an error envelope — the
+ * departure `contracts/whatsapp.ts` documents, and the whole point of exercising
+ * it through this transport is that a caller which only branched on a thrown
+ * error would read it as a success.
+ */
+function registerWhatsAppPhoneNumber({ params }: RouteContext): unknown {
+  const whatsappAccountId = params[0] ?? '';
+  const isRefused = whatsappAccountId === MOCK_UNREGISTRABLE_NUMBER_ID;
+
+  return {
+    whatsappAccountId,
+    phoneNumberId: '106540352242922',
+    registrationStatus: isRefused ? 'failed' : 'registered',
+    registrationFailureReason: isRefused ? 'pin_rejected' : null,
+    registeredAt: isRefused ? null : MOCK_CREATED_AT,
+    registrationAttemptedAt: MOCK_CREATED_AT,
   };
 }
 
@@ -2687,8 +2758,32 @@ function updateTenant({ principal, body }: RouteContext): TenantResponse {
   };
 
   mockState().tenants.set(tenant.id, updated);
+  completeBrandingOnboardingStep(principal, parsed.data.branding);
 
   return asTenantResponse(principal, updated);
+}
+
+/**
+ * Onboarding's "set your branding" is done because the tenant actually edited
+ * branding, never because a checklist was ticked — the same rule the invite and
+ * connect handlers follow.
+ *
+ * A write of nothing but `null` does not count. The real API derives this step
+ * from a `tenant_branding` row holding at least one non-null value (TAR-832
+ * decision 2), so clearing the one value a tenant had set is not an edit that
+ * finishes the step.
+ */
+function completeBrandingOnboardingStep(
+  principal: SessionPrincipal,
+  branding: TenantUpdateInput['branding'],
+): void {
+  const edited = Object.values(branding ?? {}).some(
+    (value) => value !== null && value !== undefined,
+  );
+
+  if (edited) {
+    completeOnboardingStep(principal.tenantId, 'set_branding');
+  }
 }
 
 /**
@@ -3239,6 +3334,10 @@ function putBrandingAsset({ principal, params, body }: RouteContext): TenantBran
   };
 
   mockState().tenants.set(tenant.id, { ...tenant, branding });
+  // A logo is one of the six fields the real API reads for "set your branding"
+  // (TAR-832 decision 2), so uploading one finishes the step exactly as saving a
+  // colour does.
+  completeOnboardingStep(principal.tenantId, 'set_branding');
 
   return branding;
 }

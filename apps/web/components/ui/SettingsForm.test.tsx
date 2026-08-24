@@ -7,7 +7,7 @@ import { TextInput } from './TextInput';
 /**
  * The settings-form layout reaches its fields through context rather than
  * through a prop, which is the part that can silently stop working: a `Field`
- * two components deep — `ModelChoiceField`, `ConfidenceField` — still belongs to
+ * two components deep — `ModelChoiceField`, `ConfidenceBand` — still belongs to
  * the form's layout, and a prop threaded through each of them is a prop one of
  * them ends up missing (TAR-710).
  *

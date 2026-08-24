@@ -1,13 +1,15 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { Figtree, IBM_Plex_Sans_Arabic } from 'next/font/google';
+import { Manrope, IBM_Plex_Sans_Arabic } from 'next/font/google';
 import { content } from '@/content/en';
+import { cx } from '@/lib/cx';
 import { readTheme } from '@/lib/theme/read-theme';
 import { readLocale } from '@/lib/locale/read-locale';
 import { directionOf } from '@/lib/locale/locale';
 import { readBranding } from '@/lib/branding/read-branding';
 import { brandStyleSheet } from '@/lib/branding/brand-style';
 import { ToastProvider } from '@/components/ui/ToastProvider';
+import { MockModeBadge } from '@/components/env/MockModeBadge';
 import './globals.css';
 
 /**
@@ -65,7 +67,12 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 /**
- * The console's geometric sans (0001). `next/font` self-hosts it at build time
+ * The console's body face: **Manrope**, which is what both Reqta reference files
+ * load and set as their `--font` (TAR-801). It is the one typographic value the
+ * reference states as a token rather than as an inline literal, so it is the one
+ * this port could take verbatim.
+ *
+ * `next/font` self-hosts it at build time
  * and emits the `@font-face` itself, so there is no request to a third party at
  * runtime and no layout shift to design around: the variable it exposes is what
  * `--scale-font-family-sans` reads.
@@ -74,39 +81,42 @@ export async function generateMetadata(): Promise<Metadata> {
  * favicon, product name and support email. A per-tenant font is a second download
  * on the critical path for every visitor.
  */
-const bodyFont = Figtree({
+const bodyFont = Manrope({
   subsets: ['latin'],
   display: 'swap',
   variable: '--font-sans',
 });
 
 /**
- * The Arabic face (TAR-806). Figtree carries no Arabic glyphs at all, so a
- * console at `lang="ar"` would otherwise fall through to whatever the device
- * happens to have — which on Windows is a face with different metrics and no
- * relationship to the Latin one beside it.
+ * The Arabic face (TAR-801), and the reference's own second family — the CRM
+ * file loads it beside Manrope and switches to it under `[lang="ar"]`. Manrope
+ * carries no Arabic glyphs, so without this an Arabic console falls through to
+ * whatever face the operating system happens to have — the one typographic
+ * decision a token layer must not leave to a machine. The `[lang|='ar']` branch
+ * in `semantic.css` is the only thing that reads it.
  *
- * Three weights, matching the three the type scale names; a variable Arabic face
- * would be a fourth download for a range nothing uses.
+ * Not a variable font, so the three weights the type scale actually uses are
+ * named rather than an axis requested.
  *
  * ## `preload: false`, deliberately
  *
- * `next/font` preloads by default, which would put an Arabic download on the
- * critical path of every English visitor — the overwhelming majority — for a face
- * almost none of them will render a glyph of. The `@font-face` is still emitted
- * and still self-hosted; it is only the `<link rel="preload">` that is dropped,
- * so an Arabic reader gets the face on first paint through `display: 'swap'`
- * instead of ahead of it.
+ * `next/font` preloads by default, and this is the root layout: that would put an
+ * Arabic download on the critical path of **every** route for every English
+ * visitor — the overwhelming majority — for a face almost none of them render a
+ * glyph of. The `@font-face` is still emitted and still self-hosted; it is only
+ * the `<link rel="preload">` that is dropped, so an Arabic reader gets the face
+ * on first paint through `display: 'swap'` instead of ahead of it.
  *
- * What an English document actually fetches, since this is easy to state wrongly:
- * the family is reached from the `[lang='ar']` branch in `styles/tokens/semantic.css`
- * (and applied by the `[lang]` rule in `styles/base.css`), so it is requested
- * exactly when an element carrying `lang="ar"` is *painted*. With the switch off
- * that is never — no toggle, no such element, zero Arabic files. With it on it is
- * the toggle's own endonym, `العربية`, which costs **one** weight rather than the
- * set: at load on a small screen, where the drawer's panel is laid out off-canvas,
- * and on first open of the account menu on a large one. The full set arrives only
- * for a console actually reading Arabic.
+ * What an English document actually fetches, now that TAR-806 resolves the locale
+ * per request, since this is easy to state wrongly: the family is reached from
+ * the `[lang|='ar']` branch in `styles/tokens/semantic.css` and applied by the
+ * `[lang]` rule in `styles/base.css`, so it is requested exactly when an element
+ * carrying `lang="ar"` is *painted*. With the locale switch off that is never —
+ * no toggle, no such element, zero Arabic files. With it on it is the toggle's
+ * own endonym, `العربية`, which costs **one** weight rather than the set: at load
+ * on a small screen, where the drawer's panel is laid out off-canvas, and on
+ * first open of the account menu on a large one. The full set arrives only for a
+ * console actually reading Arabic.
  *
  * None of that is on the critical path, which is what `preload: false` buys and
  * why it survives the endonym.
@@ -120,7 +130,7 @@ const arabicFont = IBM_Plex_Sans_Arabic({
   weight: ['400', '500', '600'],
   display: 'swap',
   preload: false,
-  variable: '--font-sans-arabic',
+  variable: '--font-arabic',
 });
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
@@ -131,7 +141,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       lang={locale}
       dir={directionOf(locale)}
       data-theme={theme}
-      className={`${bodyFont.variable} ${arabicFont.variable}`}
+      className={cx(bodyFont.variable, arabicFont.variable)}
     >
       <body>
         {/*
@@ -151,6 +161,13 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           dangerouslySetInnerHTML={{ __html: brandStyleSheet(branding) }}
         />
         <ToastProvider>{children}</ToastProvider>
+        {/*
+          Above both route groups because the flag governs both: with the mock
+          transport on, the signed-out screens read their branding from fixtures
+          too. Renders nothing with the flag off, which is every deployed
+          environment (`components/env/MockModeBadge.tsx`).
+        */}
+        <MockModeBadge />
       </body>
     </html>
   );

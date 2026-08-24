@@ -6,7 +6,7 @@ import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { useContent } from '@/lib/content';
 import { formatModelPrice, modelOptions, resolvedModel } from '../presentation';
-import styles from './AiConfigForm.module.css';
+import styles from './ChatbotSettingsForm.module.css';
 
 /**
  * Which model answers, with what it costs shown beside the choice. Usage:

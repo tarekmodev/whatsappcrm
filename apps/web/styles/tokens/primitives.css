@@ -6,6 +6,40 @@
  * The values here are the ones ruled in `docs/design/0001-visual-design-language.md`.
  * Change one and change that document in the same pull request — it is what every
  * screen built after it is measured against.
+ *
+ * ## Where the colours come from (TAR-801)
+ *
+ * Every hex in the palette below is **copied from the Reqta reference**, not
+ * re-derived from a screenshot: the `:root` and `[data-theme="dark"]` blocks of
+ * `Reqta CRM.dc.html` and `Reqta Admin.dc.html`, which declare an identical token
+ * set. Where a value here is *not* in the reference it is marked `derived` with
+ * the reason, and there are only three kinds of those:
+ *
+ *   1. **A darker text step for a chip.** The reference draws chip text in the
+ *      same saturated hue as the chip's own icon — `--green` on `--green-bg` —
+ *      which measures 2.25–3.46:1 and fails WCAG AA outright. The tint is what
+ *      the reader sees and it is ported exactly; only the *text* on it moves, to
+ *      the next step of the same family. See the `*-700` steps below.
+ *   2. **A role the reference has no value for**, because its mock never drew
+ *      that state — a pressed ground, a second border weight, a modal shadow.
+ *   3. **Steps of the same family**, when the reference names a hue but not the
+ *      step a measured pair needs.
+ *
+ * The reference's own families are Untitled UI's (its `--ink` is that system's
+ * Gray 700, its `--green` its Success 500, and so on), so every derived step is
+ * taken from the same system rather than invented — that is what keeps a derived
+ * value recognisably part of the reference's palette rather than beside it.
+ *
+ * ## What the reference does *not* supply, and is therefore unchanged
+ *
+ * The reference has a colour token layer and no other. Its spacing, type, radius
+ * and size values are inline literals in markup — more than two dozen distinct font
+ * sizes between 7px and 34px, most of its body copy at 10.5–12.5px. Porting that is not porting a
+ * scale, it is copying a mock, and it would put unreadable text in every screen.
+ * So the spacing scale and the type scale below stay as 0001 ruled them; the
+ * radii and the elevation **do** move, because those the reference states as
+ * tokens or draws consistently enough to read off. See 0001's "What TAR-801
+ * ported, and what it did not".
  */
 
 :root {
@@ -14,101 +48,178 @@
   --palette-black: #000000;
 
   /*
-   * --- A note on the `*-900` steps, and on `slate-750` ---------------------
+   * --- The light chrome ----------------------------------------------------
    *
-   * They are one family across four hues: the **dark chip tints**, the dark
-   * theme's answer to what `green-100` does in the light one. A status chip
-   * renders on a tint the eye skims past, never on a saturated fill.
-   *
-   * Each is its hue at half saturation, tuned to the *same* stand-off from the
-   * dark surface — 1.45:1, against the light tints' 1.10–1.23:1 below white — so
-   * no status shouts louder than another, and none of them competes with a solid
-   * accent button, which stands off that surface at 2.7–5.4:1 whatever hue a
-   * tenant supplies (TAR-514). The separation is lightness and chroma, never
-   * hue, which is why a blue-branded tenant does not re-break it.
-   *
-   * Re-measure both stand-offs, not only the text pair, before moving one — see
-   * 0001's contrast tables, which `styles/tokens/tokens.test.ts` asserts.
+   * The reference's six light greys, plus one derived step. It is a warm-neutral
+   * ramp rather than the blue-cast slate this file used before TAR-801, and the
+   * difference is visible on every surface in the app — which is the point.
    */
-
-  --palette-slate-50: #f8fafc;
-  --palette-slate-100: #f1f5f9;
-  --palette-slate-200: #e2e8f0;
-  --palette-slate-300: #cbd5e1;
-  --palette-slate-400: #94a3b8;
-  --palette-slate-500: #64748b;
-  --palette-slate-600: #475569;
-  --palette-slate-700: #334155;
+  --palette-grey-25: #f6f7f9; /* `--bg` — the canvas. */
+  --palette-grey-100: #f2f4f7; /* `--ink-bg` — the sunken ground and neutral chip. */
+  --palette-grey-200: #e8eaf0; /* `--border`. */
   /*
-   * The neutral member of the chip-tint family noted above. Between 700 and 800
-   * so a neutral chip clears both the dark surface it sits on and the raised one
-   * (`slate-800`), which `slate-700` — the dark selected row — does not.
+   * derived — the reference draws every border in one weight (`--border`) and has
+   * no second. A text field has to be findable against the
+   * card it sits on before it is focused, so it takes a step the reference does
+   * not name. Untitled UI Gray 300, between `--border` and `--subtle`.
    */
-  --palette-slate-750: #28344a;
-  --palette-slate-800: #1e293b;
-  --palette-slate-900: #0f172a;
-  --palette-slate-950: #020617;
+  --palette-grey-300: #d0d5dd;
+  --palette-grey-400: #98a2b3; /* `--subtle` — decoration, never text. */
+  --palette-grey-500: #667085; /* `--muted`. */
+  --palette-grey-700: #344054; /* `--ink` — the neutral chip's text. */
+  --palette-grey-900: #111827; /* `--text`. */
 
   /*
-   * The one accent family. WhatsApp-adjacent rather than WhatsApp's own green,
-   * and kept as a primitive so the brand can be replaced. Every step is picked
-   * for a contrast pair, not for looks — see 0001 for the table.
+   * --- The dark chrome -----------------------------------------------------
+   *
+   * Its own family rather than more steps of the ramp above, because the
+   * reference's dark theme is not a re-lit version of its light one: there the
+   * canvas is *darker* than a card (`--bg` #0e1117 under `--surface` #151923),
+   * where in the light theme it is lighter. A card is raised in one theme and the
+   * canvas is raised in the other, and two families keep that legible.
    */
-  --palette-green-100: #d6f2e5;
-  --palette-green-300: #6fd2a6;
-  --palette-green-500: #069c68;
-  --palette-green-600: #067a52;
-  --palette-green-700: #05613f;
-  --palette-green-900: #143c2e;
+  --palette-night-25: #f2f4f8; /* dark `--text`. One digit off `--grey-100`, and
+                                  the reference means both — keep them apart. */
+  --palette-night-300: #cdd5e0; /* dark `--ink` — the neutral chip’s text. */
+  --palette-night-700: #344054; /* derived — the dark second border weight, the
+                                   counterpart of `--grey-300` above. */
+  --palette-night-750: #272c37; /* `--ink-bg` composited; the dark neutral chip. */
+  --palette-night-800: #252b38; /* dark `--border`. */
+  --palette-night-900: #151923; /* dark `--surface`. */
+  --palette-night-950: #0e1117; /* dark `--bg`. */
+  /*
+   * derived — the pressed ground on a dark card. Hover moves toward the canvas
+   * (the reference's own `style-hover="background:var(--bg)"`), so a press has to
+   * carry on in that direction, and there is nothing below the canvas to borrow.
+   */
+  --palette-night-975: #090b0f;
 
   /*
-   * Sidebar navy. Its own family rather than a reuse of the slate scale: the
-   * sidebar is a fixed dark region in *both* themes, so its steps are chosen
-   * against white and light-grey text, and retuning it must not move body text.
+   * --- The accent ----------------------------------------------------------
+   *
+   * The reference's indigo, and the one family a tenant can replace (TAR-29).
    */
-  --palette-navy-700: #2e4a63;
-  --palette-navy-800: #1f3448;
-  --palette-navy-900: #16283a;
-  --palette-navy-950: #0d1a26;
+  --palette-indigo-50: #eef2ff; /* `--primary-50`. */
+  --palette-indigo-200: #a5b4fc; /* dark `--primary-700` — text on a dark tint. */
+  --palette-indigo-300: #818cf8; /* dark `--primary-hov`. */
+  /*
+   * --- Why the dark accent is the reference's *hover* step -----------------
+   *
+   * The reference gives its dark theme one `--primary` (#6366f1) and uses it for
+   * both jobs an accent has: the ground under a button label, and the colour of a
+   * link (`a{color:var(--primary)}`, in both files). Those pull in opposite
+   * directions against a dark page, and #6366f1 clears neither — 4.47:1 under its
+   * own white label, and 3.93:1 as text on the dark surface. Both are under AA,
+   * and no single step of an indigo ramp clears both: a colour dark enough to
+   * carry white is too dark to be read on a near-black page.
+   *
+   * So the dark theme splits them the way this file already did before TAR-801:
+   * the accent is **light** and the text on it is **dark**. `--palette-indigo-300`
+   * is the accent (5.89:1 as a link on the dark surface, 6.34:1 under a
+   * `--palette-night-950` label) and `-200` is its hover. Both are the
+   * reference's own values — its dark `--primary-hov` and `--primary-700` — so
+   * nothing here is invented; only which role each one carries has moved.
+   */
+  --palette-indigo-500: #4f46e5; /* `--primary`. */
+  --palette-indigo-600: #4338ca; /* `--primary-hov`, and `--primary-700`. */
+  --palette-indigo-900: #202440; /* `--primary-50` composited; the dark tint. */
 
-  --palette-amber-100: #fdf0d5;
-  --palette-amber-500: #a16207;
-  --palette-amber-600: #854d0e;
-  --palette-amber-900: #443217;
+  /*
+   * --- The decorative second colour ----------------------------------------
+   *
+   * The reference’s `--violet`, and the partner its own sidebar lockup pairs the
+   * accent with (`linear-gradient(135deg,var(--primary),var(--violet))`).
+   *
+   * It is the platform’s value for `--color-brand-decor` — a role a tenant owns
+   * and, until TAR-801, the one of the seven with **no declaration underneath the
+   * tenant’s**. That was invisible while the brand block was emitted on every
+   * request; it stopped being invisible the moment it was not. Decoration only,
+   * never behind text, so it carries no contrast floor — see `branding-theme.ts`.
+   */
+  --palette-violet-300: #9b8afb; /* dark `--violet`. */
+  --palette-violet-500: #7a5af8; /* `--violet`. */
 
-  --palette-red-100: #fde3e3;
-  --palette-red-500: #b3261e;
-  --palette-red-600: #8f1d17;
-  --palette-red-300: #f0a9a4;
-  --palette-red-900: #5c221f;
+  /*
+   * --- Status --------------------------------------------------------------
+   *
+   * Four hues, each with the reference's tint, the reference's saturated step and
+   * a text step. Read the `*-700` note on the first — it is the same reason four
+   * times.
+   */
 
-  --palette-blue-100: #dde9fb;
-  --palette-blue-500: #1d4ed8;
-  --palette-blue-300: #a4bff2;
-  --palette-blue-900: #213263;
+  --palette-green-50: #ecfdf3; /* `--green-bg`. */
+  --palette-green-300: #32d583; /* dark `--green` — the text on the dark tint. */
+  /*
+   * derived. `--green` on `--green-bg` is 2.49:1, and a status nobody can read is
+   * not a status. Untitled UI Success 700 — the same family the reference's own
+   * Success 500 comes from: 5.13:1 on that identical tint.
+   */
+  --palette-green-700: #027a48;
+  --palette-green-900: #152f2d; /* `--green-bg` composited over the dark surface. */
+
+  --palette-amber-50: #fffaeb; /* `--amber-bg`. */
+  --palette-amber-300: #fdb022; /* dark `--amber`. */
+  --palette-amber-700: #b54708; /* derived — 2.25:1 becomes 5.20:1. */
+  --palette-amber-900: #352a1f; /* `--amber-bg` composited. */
+
+  --palette-red-50: #fef3f2; /* `--red-bg`. */
+  --palette-red-300: #f97066; /* dark `--red`. */
+  --palette-red-200: #fda29b; /* derived — the dark theme’s danger hover: one
+                                 step lighter than `--red`, which is the only
+                                 direction hover has against a dark ground. */
+  --palette-red-700: #b42318; /* derived — 3.46:1 becomes 6.05:1. */
+  --palette-red-800: #912018; /* derived — the light theme’s danger hover. */
+  --palette-red-900: #341f26; /* `--red-bg` composited. */
+
+  --palette-blue-50: #eff8ff; /* `--blue-bg`. */
+  --palette-blue-300: #53b1fd; /* dark `--blue`. */
+  --palette-blue-700: #175cd3; /* derived — 3.01:1 becomes 5.57:1. */
+  --palette-blue-900: #192a41; /* `--blue-bg` composited. */
+
+  /*
+   * --- A note on the composited `*-900` steps ------------------------------
+   *
+   * The reference writes its dark tints with alpha — `rgba(18,183,106,.14)` — so
+   * that one declaration serves both dark grounds. They are stored here
+   * **composited over the dark surface** (`--palette-night-900`) as opaque hex,
+   * and that is a decision rather than a simplification: a translucent tint has no
+   * contrast ratio until you know what is behind it, so the alpha form is a chip
+   * nothing can measure and `tokens.test.ts` could not assert. The ground chosen
+   * is the one a chip actually renders on — a card, not the canvas.
+   *
+   * They land at a stand-off of 1.15–1.26:1 from that surface, a spread of 0.11,
+   * which is the "no status shouts louder than another" property the test
+   * asserts. The light tints do the same at 1.04–1.12:1.
+   */
 
   /*
    * --- Chart series (TAR-519) ---------------------------------------------
    *
-   * The two series of the daily-volume chart, and the one colour family in this
-   * file that is deliberately **not** the brand's. TAR-29 lets a tenant replace
-   * the accent, and while one series was taking it, the seeded workspace's blue
-   * rendered `Opened` and `Resolved` as two shades of the same hue — a chart
-   * whose two series cannot be told apart is a chart with no series at all.
+   * The one colour family that is deliberately **not** the brand's, and the one
+   * family TAR-801 had to move rather than re-point.
    *
-   * Blue against orange, chosen twice over: it is the pair that survives every
-   * common colour-vision deficiency (the red/green and the blue/yellow
-   * confusions both leave it standing), and the two steps are separated in
-   * *lightness* as well — close to 2:1 against each other in both themes — so
-   * the distinction also survives a greyscale print.
+   * TAR-519's bug was a series drawn in a hue a tenant could take: a blue-branded
+   * workspace rendered `Opened` and `Resolved` as two shades of one colour. The
+   * reference's accent is an indigo, and the blue this family used before
+   * (`#1d4ed8`) sits at **1.07:1** against it — the same colour, to any reader. So
+   * series one moves to the reference's teal, which nothing in the reference's
+   * palette is adjacent to, and series two keeps the orange that already cleared
+   * every property.
    *
-   * Both steps clear 3:1 against the surface they are drawn on, which is what
-   * WCAG 2.2 SC 1.4.11 asks of a graphic that carries meaning. See 0001's "Data
-   * visualisation" table; `styles/tokens/tokens.test.ts` asserts all three
-   * ratios, in both themes, and that neither series is the accent.
+   * Both steps clear 3:1 against the surface they are drawn on (SC 1.4.11); the
+   * two are separated by 2.25:1 in *lightness* as well as in hue, so the chart
+   * survives a greyscale print and every common colour-vision deficiency; and
+   * series one is the deeper of the two in both themes, so a reader who learned
+   * the chart in one does not relearn it in the other. `tokens.test.ts` asserts
+   * all of it.
    */
-  --palette-chart-blue-500: #1d4ed8;
-  --palette-chart-blue-300: #5b8ce8;
+  --palette-chart-teal-500: #0e9384; /* the reference's `--teal`. */
+  /*
+   * derived — `--teal` alone is 3.80:1 on white, which clears 1.4.11 but leaves
+   * only 1.43:1 between the two series. This is the step that buys the lightness
+   * separation the light theme needs.
+   */
+  --palette-chart-teal-800: #125d56;
   --palette-chart-orange-500: #dd6b12;
   --palette-chart-orange-300: #fdba74;
 
@@ -154,7 +265,10 @@
 
   /*
    * `--font-sans` is the variable `next/font` puts on `<html>` for the
-   * self-hosted geometric sans (`app/layout.tsx`). The fallback inside `var()`
+   * self-hosted body face (`app/layout.tsx`). TAR-801 moved that face to
+   * **Manrope**, which is what both reference files load and set as their
+   * `--font`; it is the one typographic value the reference states as a token
+   * rather than as an inline literal. The fallback inside `var()`
    * is what renders while the face is still loading and if the file is ever
    * missing — without it the whole declaration would be invalid and the browser
    * would fall back to a serif.
@@ -162,34 +276,70 @@
   --scale-font-family-sans:
     var(--font-sans, ui-sans-serif), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
     sans-serif;
+  /*
+   * The Arabic face, and the second family in this file. Figtree has no Arabic
+   * glyphs at all, so a console rendered under `lang="ar"` would fall through to
+   * whatever the operating system happens to ship — three different faces on
+   * three different machines, which is the one thing a token layer exists to
+   * stop. Loaded the same way as the sans (`app/layout.tsx`) and read only by
+   * the `[lang|='ar']` branch in `semantic.css`; nothing else may reference it.
+   *
+   * The Latin fallbacks stay in the stack after it, because Arabic copy carries
+   * Latin runs — a phone number, a product name, an email address — and IBM Plex
+   * Sans Arabic's own Latin is the family's, so the two agree rather than
+   * clashing at a word boundary.
+   */
+  --scale-font-family-arabic:
+    var(--font-arabic, ui-sans-serif), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Tahoma,
+    sans-serif;
   --scale-font-family-mono: ui-monospace, SFMono-Regular, 'Cascadia Mono', monospace;
 
   /*
-   * The Arabic face, held as its own primitive so the branch below has something
-   * to point at. `--font-sans-arabic` is the variable `next/font` puts on
-   * `<html>` for it (`app/layout.tsx`); the fallbacks after it are the faces a
-   * device is likely to have when the download has not landed, in the same
-   * order of preference, so a first paint at `lang="ar"` is still Arabic rather
-   * than a serif.
+   * --- Radii --------------------------------------------------------------
+   *
+   * Read off the reference, which is markedly rounder than what this file
+   * carried before: its dominant control radius is 8px where ours was 6px, its
+   * cards are 12–14px where ours were 8px, and its pills are `999px`. The four
+   * steps below are the clusters its radius declarations fall into, so a control, a
+   * card and a chip each land on the step the reference draws them at rather than
+   * near it.
+   *
+   * Stated as clusters rather than as a tally on purpose: the CRM file attached to
+   * TAR-801 is clipped at 262144 bytes, so any count of how often the reference
+   * *uses* something is a lower bound. The clusters are stable under that; a tally
+   * would not be. See 0001.
    */
-  --scale-font-family-arabic:
-    var(--font-sans-arabic, ui-sans-serif), 'Noto Sans Arabic', 'Segoe UI', Tahoma, ui-sans-serif,
-    system-ui, sans-serif;
-
-  /* --- Radii -------------------------------------------------------------- */
-  --scale-radius-sm: 0.25rem;
-  --scale-radius-md: 0.375rem;
-  --scale-radius-lg: 0.5rem;
+  --scale-radius-sm: 0.375rem; /* 6px — the reference's small chip and swatch. */
+  --scale-radius-md: 0.5rem; /* 8px — buttons, inputs, menu rows. Its default. */
+  --scale-radius-lg: 0.75rem; /* 12px — a card. */
+  --scale-radius-xl: 0.875rem; /* 14px — a large panel, and its widest step. */
   --scale-radius-full: 9999px;
 
   /*
    * --- Elevation ----------------------------------------------------------
-   * Soft and low. A card is separated from the canvas by its border first and
-   * its shadow second; a shadow doing the whole job reads as a floating panel.
+   *
+   * The reference's two shadows, and they are **theme-dependent** — a shadow tuned
+   * for ink on white is invisible on a near-black canvas, so it re-declares both
+   * under `[data-theme="dark"]`. That is why these are two sets rather than one,
+   * and why `semantic.css` maps them inside its theme blocks rather than beside
+   * the radii.
+   *
+   * Soft and low, which is the same rule this file had before: a card is
+   * separated from the canvas by its border first and its shadow second.
    */
-  --scale-shadow-sm: 0 1px 2px rgb(13 26 38 / 6%);
-  --scale-shadow-md: 0 4px 12px rgb(13 26 38 / 10%);
-  --scale-shadow-lg: 0 16px 40px rgb(13 26 38 / 18%);
+  --scale-shadow-sm: 0 1px 2px rgb(16 24 40 / 6%);
+  --scale-shadow-md: 0 6px 16px rgb(16 24 40 / 8%);
+  /*
+   * derived — the reference has no modal, so it names no third shadow. Same ink
+   * and the same direction as `md`, at the distance a dialog sits above the page
+   * it covers rather than above the card it came from.
+   */
+  --scale-shadow-lg: 0 24px 48px rgb(16 24 40 / 16%);
+
+  /* The same three against a dark ground, where the reference doubles the ink. */
+  --scale-shadow-sm-dark: 0 1px 2px rgb(0 0 0 / 40%);
+  --scale-shadow-md-dark: 0 6px 16px rgb(0 0 0 / 45%);
+  --scale-shadow-lg-dark: 0 24px 48px rgb(0 0 0 / 55%);
 
   /* --- Motion ------------------------------------------------------------- */
   --scale-duration-instant: 0ms;
@@ -204,6 +354,13 @@
   --scale-duration-stagger: 12ms;
   --scale-easing-standard: cubic-bezier(0.2, 0, 0, 1);
   --scale-easing-decelerate: cubic-bezier(0, 0, 0, 1);
+  /*
+   * The accelerating counterpart, and the one motion token 0002 asks TAR-801 for
+   * (its §0.3). An entrance is telling the reader where something came from and
+   * is worth decelerating into; a dismissal is the reader having already decided,
+   * so it leaves at increasing speed rather than easing out of the way.
+   */
+  --scale-easing-accelerate: cubic-bezier(0.4, 0, 1, 1);
 
   /* --- Layering ----------------------------------------------------------- */
   --scale-z-base: 0;
@@ -263,6 +420,17 @@
    * which is a 3px rule beside a label and disappears as a circle on its own.
    */
   --scale-size-marker-dot: 0.5rem;
+  /*
+   * The disc a stage marker draws, on the chatbot pipeline rail and on the rule
+   * ladder that borrows its vocabulary (TAR-813).
+   *
+   * Its own step rather than a reuse, because nothing in the set is a small
+   * status disc: `--scale-size-marker` is a 3px edge rule, `--scale-size-marker-dot`
+   * is the dot that goes *inside* this, and `--scale-size-state-plate` is the
+   * 4.5rem plate an empty state draws its icon in. 1.5rem is the smallest disc
+   * that still reads as a node on a line at `--font-size-body-sm`.
+   */
+  --scale-size-stage-marker: 1.5rem;
 
   /*
    * The box a tenant's uploaded logo is drawn into (TAR-29). Fixed in both axes
@@ -298,6 +466,13 @@
   /* Narrower than a pane: a column of filter entries, and a popup of menu
      entries. Both are a label plus a count, never running text. */
   --scale-size-pane-xs: 14rem;
+  /*
+   * Narrower again, and the second token 0002 asks TAR-801 for (its §0.3). A
+   * tooltip is a short phrase — the label of the icon the reader is pointing at —
+   * so it wants a tighter cap than either the menu width or `--measure-body`,
+   * which would let one run the width of a paragraph before it wrapped.
+   */
+  --scale-size-pane-2xs: 11rem;
   --scale-size-media-sm: 8rem;
   --scale-size-media-md: 18rem;
   /*

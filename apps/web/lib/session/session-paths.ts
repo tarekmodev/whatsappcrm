@@ -23,12 +23,20 @@ export const REQUEST_PATH_HEADER = 'x-wac-request-path';
 
 /**
  * Every screen someone with no session must still be able to open: sign-in
- * itself, the invitation they have not accepted yet, and the two password-recovery
- * screens they reach precisely because they cannot sign in.
+ * itself, the invitation they have not accepted yet, the two password-recovery
+ * screens they reach precisely because they cannot sign in, and the two
+ * self-signup screens.
+ *
+ * The signup pair is the strongest case on the list rather than the weakest: a
+ * visitor there has no session **and no tenant**, so a guard that bounced them
+ * to `/login` would send them to a sign-in form for an account that does not
+ * exist yet — the exact dead end TAR-805 exists to close.
  */
 const PUBLIC_PATHS: readonly string[] = [
   routes.login(),
   routes.invite(),
+  routes.signup(),
+  routes.verifySignup(),
   routes.forgotPassword(),
   routes.resetPassword(),
 ];

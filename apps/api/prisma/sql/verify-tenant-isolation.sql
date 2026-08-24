@@ -44,9 +44,10 @@
 --               table returns zero rows. With the GUC set, each tenant sees its
 --               own rows and none of the other's. Writing another tenant's
 --               `tenant_id` is rejected; updating and deleting its rows match
---               nothing. `webhook_events`, `webhook_event_replays` and
---               `tenant_signups` are unreachable by grant. The system role sees
---               across tenants, which is what it is for.
+--               nothing. `webhook_events`, `webhook_event_replays`,
+--               `tenant_signups`, `platform_settings` and
+--               `platform_setting_changes` are unreachable by grant. The system
+--               role sees across tenants, which is what it is for.
 --
 -- The fixture carries a row in `tickets` and `ticket_counters` (TAR-74), one in
 -- each of the five auth tables — `teams`, `invites`, `invite_teams`, `sessions`,
@@ -70,6 +71,11 @@
 -- `Escalate stale tickets`: the unique keys are `(tenant_id, name)`, so this must
 -- be legal, and identically named rows on both sides are what stop a
 -- "saw 1 row of my own" assertion passing on a query that ignored the tenant.
+--
+-- TAR-833 adds one `tenant_onboarding_steps` row per tenant. Its content is a
+-- statement about what one named admin chose not to do yet, and the table stores
+-- skips only — completion is derived — so without a fixture row the catalogue
+-- loop in phase 3a would pass over an empty table having proved nothing.
 --
 -- TAR-468 adds a row to `ticket_events` and an `escalation` row to
 -- `notifications` in each tenant — a manual escalation and the supervisor it
@@ -378,6 +384,11 @@ DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_a
 -- foreign keys cascade, so this is belt and braces — but every delete in this
 -- block is explicit and tenant-qualified, and a cascade that quietly stops
 -- being one should surface here rather than as a stray row later.
+-- TAR-833's skips, before the users they name. The foreign key is NO ACTION,
+-- so a leftover row would refuse the users delete below rather than cascade
+-- with it — the same shape as workflow_references above, and the failure the
+-- purge order in tenant-purge.service.ts exists to avoid.
+DELETE FROM "public"."tenant_onboarding_steps" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."password_reset_tokens" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."sessions" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."invite_teams" WHERE "tenant_id" = :'tenant_a';
@@ -402,6 +413,7 @@ DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."tags" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."tenant_onboarding_steps" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."password_reset_tokens" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."sessions" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."invite_teams" WHERE "tenant_id" = :'tenant_b';
@@ -420,6 +432,20 @@ SET LOCAL app.tenant_id = :'tenant_a';
 
 INSERT INTO "public"."users" ("id", "tenant_id", "email", "name", "updated_at")
     VALUES ('11111111-1111-7111-8111-1111111111a1', :'tenant_a', 'agent@tar48-fixture-a.test', 'Fixture A agent', now());
+-- TAR-833. One skipped onboarding step per tenant, naming the fixture user who
+-- skipped it. It earns a fixture row for a narrower reason than most: the table
+-- stores *skips only* — completion is derived from the tenant's WABA, invites
+-- and branding rows — so it is small enough that phase 3a's catalogue loop over
+-- an empty table would pass without ever proving anything, and its whole content
+-- is a statement about what one named admin chose not to do.
+--
+-- Both tenants skip `set_branding`, deliberately. The unique key is
+-- `(tenant_id, step_id)`, so identical step ids on both sides must be legal, and
+-- they are what stops a "saw 1 row of my own" assertion passing on a query that
+-- ignored the tenant.
+INSERT INTO "public"."tenant_onboarding_steps" ("id", "tenant_id", "step_id", "skipped_at", "skipped_by_user_id", "updated_at")
+    VALUES ('11111111-1111-7111-8111-1111111111c5', :'tenant_a', 'set_branding', now(),
+            '11111111-1111-7111-8111-1111111111a1', now());
 -- The WABA comes before the number it owns (TAR-52): `whatsapp_accounts` is now
 -- its child, and the composite FK is checked at insert.
 INSERT INTO "public"."whatsapp_business_accounts" ("id", "tenant_id", "waba_id", "updated_at")
@@ -520,6 +546,9 @@ SET LOCAL app.tenant_id = :'tenant_b';
 
 INSERT INTO "public"."users" ("id", "tenant_id", "email", "name", "updated_at")
     VALUES ('22222222-2222-7222-8222-2222222222b1', :'tenant_b', 'agent@tar48-fixture-b.test', 'Fixture B agent', now());
+INSERT INTO "public"."tenant_onboarding_steps" ("id", "tenant_id", "step_id", "skipped_at", "skipped_by_user_id", "updated_at")
+    VALUES ('22222222-2222-7222-8222-2222222222c5', :'tenant_b', 'set_branding', now(),
+            '22222222-2222-7222-8222-2222222222b1', now());
 INSERT INTO "public"."whatsapp_business_accounts" ("id", "tenant_id", "waba_id", "updated_at")
     VALUES ('22222222-2222-7222-8222-2222222222b0', :'tenant_b', 'tar48-fixture-b-waba', now());
 INSERT INTO "public"."whatsapp_accounts" ("id", "tenant_id", "whatsapp_business_account_id", "phone_number_id", "display_phone_number", "updated_at")
@@ -908,7 +937,29 @@ BEGIN
         WHERE "ticket_event_id" = '22222222-2222-7222-8222-2222222222be';
     IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s escalation was reachable by ticket event id'; END IF;
 
-    RAISE NOTICE 'ok: tenant A sees its own 23 rows and none of tenant B''s';
+
+    -- TAR-833. The checklist read the onboarding endpoint issues, and the one
+    -- that would be wrong in a way nobody notices: a leaked skip row does not
+    -- corrupt anything, it quietly tells one tenant which parts of setup another
+    -- tenant has been putting off, and names the admin who did.
+    SELECT count(*) INTO n FROM "public"."tenant_onboarding_steps";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 onboarding step row, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."tenant_onboarding_steps" WHERE "tenant_id" = tenant_b;
+    IF n <> 0 THEN RAISE EXCEPTION 'cross-tenant read of tenant_onboarding_steps returned % rows', n; END IF;
+
+    -- By step id, unqualified by tenant — the shape of the upsert's own lookup.
+    -- Both tenants hold a `set_branding` row, so a query that dropped the tenant
+    -- predicate would see two and the reader would resolve the step from whichever
+    -- it read first.
+    SELECT count(*) INTO n FROM "public"."tenant_onboarding_steps" WHERE "step_id" = 'set_branding';
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant A: expected 1 set_branding row across all tenants, saw %', n; END IF;
+
+    -- By id, the way a support lookup would reach for it.
+    SELECT count(*) INTO n FROM "public"."tenant_onboarding_steps"
+        WHERE "id" = '22222222-2222-7222-8222-2222222222c5';
+    IF n <> 0 THEN RAISE EXCEPTION 'another tenant''s onboarding step was reachable by id'; END IF;
+    RAISE NOTICE 'ok: tenant A sees its own 24 rows and none of tenant B''s';
 
     -- 3c. Tenant B, symmetrically. Same connection, same role — only the GUC
     -- changed, which is exactly what the client extension will do per request.
@@ -920,6 +971,12 @@ BEGIN
     SELECT count(*) INTO n FROM "public"."contacts" WHERE "tenant_id" = tenant_a;
     IF n <> 0 THEN RAISE EXCEPTION 'tenant B saw % of tenant A''s contacts', n; END IF;
 
+
+    SELECT count(*) INTO n FROM "public"."tenant_onboarding_steps";
+    IF n <> 1 THEN RAISE EXCEPTION 'tenant B: expected 1 onboarding step row, saw %', n; END IF;
+
+    SELECT count(*) INTO n FROM "public"."tenant_onboarding_steps" WHERE "tenant_id" = tenant_a;
+    IF n <> 0 THEN RAISE EXCEPTION 'tenant B saw % of tenant A''s onboarding steps', n; END IF;
     RAISE NOTICE 'ok: tenant B sees its own rows and none of tenant A''s';
 
     -- 3d. WITH CHECK. Reading is only half of it: a handler that takes a
@@ -1043,13 +1100,14 @@ BEGIN
 
     RAISE NOTICE 'ok: GUC cleared to the empty string -> 0 rows';
 
-    -- 3g. `webhook_events`, `webhook_event_replays`, `tenant_signups` and
-    -- `lifecycle_events` carry no policy by design, so on all four the grant is
-    -- the enforcement. The app role must not be able to read any of them at all.
+    -- 3g. `webhook_events`, `webhook_event_replays`, `tenant_signups`,
+    -- `lifecycle_events`, `platform_settings` and `platform_setting_changes`
+    -- carry no policy by design, so on all six the grant is the enforcement. The
+    -- app role must not be able to read any of them at all.
     --
     -- Asserted here rather than left to phase 1b, which only proves the negative
     -- — "no privilege on an unprotected table" also passes for a table that was
-    -- never created. These four are named, so a grant added by hand or an
+    -- never created. These six are named, so a grant added by hand or an
     -- `app-roles.sql` branch dropped in a refactor fails by name.
     BEGIN
         EXECUTE 'SELECT count(*) FROM "public"."webhook_events"';
@@ -1096,17 +1154,43 @@ BEGIN
             RAISE NOTICE 'ok: lifecycle_events unreachable by the app role (no grant)';
     END;
 
+    -- TAR-811. Platform-wide configuration and its history. Neither carries
+    -- `tenant_id` at all, so — unlike `lifecycle_events` above — neither looks
+    -- scoped to anything reading the catalog, and phase 1a skips both without
+    -- naming them. `platform_settings` holds the Meta app secret encrypted at
+    -- rest, so an accidental grant here would put every tenant's connection one
+    -- SELECT away from the ciphertext of a platform credential.
+    BEGIN
+        EXECUTE 'SELECT count(*) FROM "public"."platform_settings"';
+        RAISE EXCEPTION 'app role can read platform_settings — it holds no policy and must hold no grant';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: platform_settings unreachable by the app role (no grant)';
+    END;
+
+    BEGIN
+        EXECUTE 'SELECT count(*) FROM "public"."platform_setting_changes"';
+        RAISE EXCEPTION 'app role can read platform_setting_changes — it holds no policy and must hold no grant';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE NOTICE 'ok: platform_setting_changes unreachable by the app role (no grant)';
+    END;
+
     -- 3i. The append-only trails stay append-only for `whatsappcrm_system` too
-    -- (TAR-403, TAR-94). Both tables are the record of an operator acting on
-    -- production state, and `SystemPrisma` is the credential a mistake would run
-    -- under — so the grant withholds UPDATE and DELETE from it, and a re-run of
-    -- `app-roles.sql` that lost that branch has to fail here rather than in a
-    -- compliance review.
+    -- (TAR-403, TAR-94, TAR-811). All three tables are the record of an operator
+    -- acting on production state, and `SystemPrisma` is the credential a mistake
+    -- would run under — so the grant withholds UPDATE and DELETE from it, and a
+    -- re-run of `app-roles.sql` that lost that branch has to fail here rather
+    -- than in a compliance review.
+    --
+    -- `platform_settings` is deliberately **not** in this list: it is mutable by
+    -- design, because an operator's write is an upsert and "revert to
+    -- environment" is a DELETE. Only its history is append-only.
     --
     -- Read as privileges rather than attempted as statements: an UPDATE matching
     -- no rows succeeds, so executing one would prove nothing about a table this
     -- fixture leaves empty.
-    FOREACH trail IN ARRAY ARRAY['lifecycle_events', 'webhook_event_replays'] LOOP
+    FOREACH trail IN ARRAY ARRAY['lifecycle_events', 'webhook_event_replays', 'platform_setting_changes'] LOOP
         FOREACH priv IN ARRAY ARRAY['UPDATE', 'DELETE'] LOOP
             IF has_table_privilege('whatsappcrm_system', format('"public".%I', trail), priv) THEN
                 RAISE EXCEPTION 'system role holds % on %, which is append-only', priv, trail;
@@ -1177,6 +1261,11 @@ DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_a
 -- foreign keys cascade, so this is belt and braces — but every delete in this
 -- block is explicit and tenant-qualified, and a cascade that quietly stops
 -- being one should surface here rather than as a stray row later.
+-- TAR-833's skips, before the users they name. The foreign key is NO ACTION,
+-- so a leftover row would refuse the users delete below rather than cascade
+-- with it — the same shape as workflow_references above, and the failure the
+-- purge order in tenant-purge.service.ts exists to avoid.
+DELETE FROM "public"."tenant_onboarding_steps" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."password_reset_tokens" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."sessions" WHERE "tenant_id" = :'tenant_a';
 DELETE FROM "public"."invite_teams" WHERE "tenant_id" = :'tenant_a';
@@ -1201,6 +1290,7 @@ DELETE FROM "public"."contacts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."tags" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_accounts" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."whatsapp_business_accounts" WHERE "tenant_id" = :'tenant_b';
+DELETE FROM "public"."tenant_onboarding_steps" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."password_reset_tokens" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."sessions" WHERE "tenant_id" = :'tenant_b';
 DELETE FROM "public"."invite_teams" WHERE "tenant_id" = :'tenant_b';
@@ -1255,6 +1345,12 @@ BEGIN
 
     SELECT count(*) INTO n FROM "public"."ticket_events" WHERE "tenant_id" IN (tenant_a, tenant_b);
     IF n <> 0 THEN RAISE EXCEPTION 'fixture ticket events survived cleanup: %', n; END IF;
+
+    -- TAR-833, and the one whose survival would break the *next* run rather than
+    -- this one: a leftover skip row holds a NO ACTION key into , so it
+    -- would refuse the fixture user's delete at the start of phase 2.
+    SELECT count(*) INTO n FROM "public"."tenant_onboarding_steps" WHERE "tenant_id" IN (tenant_a, tenant_b);
+    IF n <> 0 THEN RAISE EXCEPTION 'fixture onboarding steps survived cleanup: %', n; END IF;
 
     SELECT count(*) INTO n FROM "public"."tenants" WHERE "id" IN (tenant_a, tenant_b);
     IF n <> 0 THEN RAISE EXCEPTION 'fixture tenants survived cleanup: %', n; END IF;

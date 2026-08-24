@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { brandCssVariables, contrastRatio } from '@whatsappcrm/contracts';
+import { BRAND_TOKEN_NAMES, brandCssVariables, contrastRatio } from '@whatsappcrm/contracts';
 
 /**
  * The contrast guarantees `docs/design/0001-visual-design-language.md` publishes,
@@ -407,6 +407,356 @@ describe('the plans surface', () => {
 });
 
 /**
+ * The Arabic branch (TAR-801).
+ *
+ * A language re-declares roles the way a theme does, and the property that makes
+ * that safe is the same one: it moves **values**, never which roles exist. A
+ * branch that introduced a role of its own would be a role every component under
+ * `lang="en"` reads as undefined.
+ *
+ * TAR-806 switches the locale that renders it, and adds the cases below that
+ * only mean something once something does: the rule in `base.css` that applies
+ * the face, and the subtree an English console shows Arabic in.
+ */
+describe('the Arabic branch', () => {
+  const blocks = [
+    ...blocksOf(readTokenFile('primitives.css')),
+    ...blocksOf(readTokenFile('semantic.css')),
+  ];
+  // Read here rather than inside a case: jsdom replaces the global `URL` before a
+  // test body runs, and its version resolves a relative path against the document
+  // origin instead of the base it was handed.
+  const base = readTokenFile('../base.css');
+  const arabic = blocks.filter((block) => block.selector.includes('[lang'));
+  const baseRoles = new Set(
+    blocks
+      .filter((block) => !block.selector.includes('[lang'))
+      .flatMap((block) => Object.keys(block.declarations)),
+  );
+
+  it('re-points the body family rather than leaving Arabic to the operating system', () => {
+    const declared = Object.assign({}, ...arabic.map((block) => block.declarations)) as Record<
+      string,
+      string
+    >;
+
+    expect(declared['--font-family-body']).toBe('var(--scale-font-family-arabic)');
+  });
+
+  it('matches a regioned tag, which is what a real Accept-Language sends', () => {
+    expect(arabic.map((block) => block.selector)).toContain("[lang|='ar']");
+  });
+
+  it('declares no role the rest of the layer does not already have', () => {
+    for (const block of arabic) {
+      for (const name of Object.keys(block.declarations)) {
+        expect(baseRoles, `${name} exists only under ${block.selector}`).toContain(name);
+      }
+    }
+  });
+
+  /*
+   * `[lang|='ar']` and `:root` weigh the same, so the cascade settles this on
+   * source order alone. A future edit that moves the branch above the block it
+   * overrides would leave a document that is Arabic in its markup and Latin on
+   * the screen — silently, and only under a locale nothing renders yet.
+   */
+  it('declares the body family after the block it overrides', () => {
+    const declaring = blocks
+      .filter((block) => '--font-family-body' in block.declarations)
+      .map((block) => block.selector);
+
+    expect(declaring.at(-1)).toBe("[lang|='ar']");
+    expect(declaring.length).toBeGreaterThan(1);
+  });
+
+  /*
+   * On the semantic role rather than the primitive it reads. Redefining
+   * `--scale-font-family-sans` would only reach `<html>`: `--font-family-body`
+   * has already substituted it by the time it inherits into a subtree marked
+   * `lang="ar"` — a customer's Arabic message inside an English console.
+   */
+  it('re-declares the semantic role rather than the primitive scale', () => {
+    for (const block of arabic) {
+      expect(block.declarations['--scale-font-family-sans']).toBeUndefined();
+    }
+  });
+
+  /*
+   * The half that makes the subtree case real. A custom property changes nothing
+   * where no rule substitutes it, and `font-family` is declared once in this app
+   * — on `body`. Without a rule on the element that names its own language, a
+   * `lang="ar"` subtree takes the branch's token and still paints the Latin face
+   * it inherited (TAR-806).
+   */
+  it('is applied by a rule that actually substitutes it', () => {
+    const applied = /\[lang\]\s*\{([^}]*)\}/.exec(base);
+
+    expect(applied?.[1]).toContain('font-family: var(--font-family-body)');
+  });
+
+  /*
+   * Keyed off the language, not the direction. A future Persian locale is also
+   * `dir="rtl"` and wants its own face, and an Arabic quotation inside an English
+   * console is `dir="rtl"` on a subtree that keeps the console's own type.
+   */
+  it('keys off lang rather than dir', () => {
+    const selectors = blocks.map((block) => block.selector);
+
+    expect(selectors.some((selector) => selector.includes("[dir='rtl']"))).toBe(false);
+  });
+
+  /*
+   * Never a bare `var()` with no fallback: an invalid declaration drops the whole
+   * stack and lands the console on the browser's default serif — for the minutes
+   * before the face arrives, and permanently if the file ever goes missing.
+   */
+  it('falls back to a sans face when the download has not landed', () => {
+    const stack = blocks
+      .flatMap((block) => Object.entries(block.declarations))
+      .find(([name]) => name === '--scale-font-family-arabic')?.[1];
+
+    expect(stack).toContain('var(--font-arabic');
+    expect(stack).toContain('sans-serif');
+  });
+});
+
+/**
+ * The port itself (TAR-801).
+ *
+ * TAR-800 and TAR-801 both say the values come from `Reqta CRM.dc.html` and
+ * `Reqta Admin.dc.html` rather than from a screenshot, and until this block there
+ * was nothing between that sentence and a plausible-looking hex. Each pair below
+ * is a literal from the reference's own `:root` / `[data-theme="dark"]` block,
+ * checked against the role it was ported onto.
+ *
+ * It is deliberately a **sample rather than the whole palette**: asserting every
+ * value would be re-writing `primitives.css` in TypeScript, and a test that is a
+ * copy of the thing it tests fails together with it. These are the roles a wrong
+ * port would be least visible on — the canvas and the border, which nobody looks
+ * at directly, and the accent, which everybody does.
+ */
+describe('the Reqta port', () => {
+  const REFERENCE: Record<Theme, Record<string, string>> = {
+    light: {
+      '--color-canvas': '#f6f7f9', // `--bg`
+      '--color-surface': '#ffffff', // `--surface`
+      '--color-border': '#e8eaf0', // `--border`
+      '--color-on-surface': '#111827', // `--text`
+      '--color-on-surface-muted': '#667085', // `--muted`
+      '--color-accent': '#4f46e5', // `--primary`
+      '--color-accent-hover': '#4338ca', // `--primary-hov`
+      '--color-accent-subtle': '#eef2ff', // `--primary-50`
+      '--color-success-subtle': '#ecfdf3', // `--green-bg`
+      '--color-warning-subtle': '#fffaeb', // `--amber-bg`
+      '--color-danger-subtle': '#fef3f2', // `--red-bg`
+      '--color-info-subtle': '#eff8ff', // `--blue-bg`
+      '--color-neutral-subtle': '#f2f4f7', // `--ink-bg`
+      '--color-on-neutral-subtle': '#344054', // `--ink`
+    },
+    dark: {
+      '--color-canvas': '#0e1117', // dark `--bg`
+      '--color-surface': '#151923', // dark `--surface`
+      '--color-border': '#252b38', // dark `--border`
+      '--color-on-surface': '#f2f4f8', // dark `--text`
+      '--color-on-surface-muted': '#98a2b3', // dark `--muted`
+      '--color-on-neutral-subtle': '#cdd5e0', // dark `--ink`
+      // Both are the reference's, one role along: see `primitives.css` on why
+      // the dark accent is its hover step.
+      '--color-accent': '#818cf8', // dark `--primary-hov`
+      '--color-accent-hover': '#a5b4fc', // dark `--primary-700`
+      '--color-on-accent-subtle': '#a5b4fc', // dark `--primary-700`
+      '--color-success': '#32d583', // dark `--green`
+      '--color-warning': '#fdb022', // dark `--amber`
+      '--color-danger': '#f97066', // dark `--red`
+      '--color-info': '#53b1fd', // dark `--blue`
+    },
+  };
+
+  describe.each(THEMES)('%s theme', (theme) => {
+    it.each(Object.entries(REFERENCE[theme]))('%s is the reference value %s', (role, value) => {
+      expect(token(theme, role)).toBe(value);
+    });
+  });
+
+  /*
+   * The one reference colour TAR-801 did not take, and the reason is a
+   * measurement rather than a preference — so the measurement is what guards it.
+   * The reference's dark `--primary` is `#6366f1` under `--on-primary:#ffffff`,
+   * which is 4.47:1. Anything that drifts back toward it fails here before it
+   * reaches a button.
+   */
+  /*
+   * The accent has two jobs and they pull opposite ways: it is the **ground**
+   * under a button label and the **foreground** of every link (`base.css:80`).
+   * The reference gives its dark theme one step for both and it clears neither,
+   * which is the bug this pair of assertions exists to catch — nothing else in
+   * this file reads the accent as text.
+   */
+  describe.each(THEMES)('%s theme', (theme) => {
+    it.each(['--color-surface', '--color-canvas'])('reads as a link on %s', (ground) => {
+      expect(
+        contrastRatio(token(theme, '--color-accent'), token(theme, ground)),
+      ).toBeGreaterThanOrEqual(AA_TEXT_CONTRAST);
+    });
+
+    it('carries a button label', () => {
+      expect(
+        contrastRatio(token(theme, '--color-on-accent'), token(theme, '--color-accent')),
+      ).toBeGreaterThanOrEqual(AA_TEXT_CONTRAST);
+    });
+
+    /* A hover is more of the same colour, never less. */
+    it('moves hover further from the surface than the accent itself', () => {
+      const surface = token(theme, '--color-surface');
+
+      expect(contrastRatio(token(theme, '--color-accent-hover'), surface)).toBeGreaterThan(
+        contrastRatio(token(theme, '--color-accent'), surface),
+      );
+    });
+  });
+
+  it('keeps a dark primary button’s label above AA, which the reference’s own accent is not', () => {
+    expect(token('dark', '--color-accent')).not.toBe('#6366f1');
+    expect(contrastRatio('#ffffff', '#6366f1')).toBeLessThan(AA_TEXT_CONTRAST);
+    expect(
+      contrastRatio(token('dark', '--color-on-accent'), token('dark', '--color-accent')),
+    ).toBeGreaterThanOrEqual(AA_TEXT_CONTRAST);
+  });
+
+  /*
+   * The other half of that story. The reference draws chip text in the chip's own
+   * saturated hue — `color:var(--green)` on `background:var(--green-bg)` — and
+   * three of its five tones fail AA that way. The tints are ported exactly and
+   * only the text moved, so this asserts both halves at once: the tint is still
+   * the reference's, and the text on it is not.
+   */
+  it.each([
+    ['success', '#12b76a', '#ecfdf3'],
+    ['warning', '#f79009', '#fffaeb'],
+    ['danger', '#f04438', '#fef3f2'],
+    ['info', '#2e90fa', '#eff8ff'],
+  ])(
+    'draws a light %s chip on the reference tint but not in the reference ink',
+    (tone, ink, tint) => {
+      expect(token('light', `--color-${tone}-subtle`)).toBe(tint);
+      expect(contrastRatio(ink, tint)).toBeLessThan(AA_TEXT_CONTRAST);
+      expect(token('light', `--color-on-${tone}-subtle`)).not.toBe(ink);
+    },
+  );
+});
+
+/**
+ * Every tenant-owned role has a platform value underneath it.
+ *
+ * The seven names in `BRAND_TOKEN_NAMES` are *overrides*. A component reads them
+ * unconditionally, so each needs a declaration in this layer for the case where no
+ * tenant block is emitted at all — which is now the normal case for a workspace
+ * that has never chosen a colour (`brandStyleSheet`).
+ *
+ * Six of the seven always had one. `--color-brand-decor` did not: it existed only
+ * because the tenant block was emitted on every request, and the moment that
+ * stopped, the ring in `AuthBrandPanel` resolved to an invalid `border` shorthand
+ * — which resets the whole shorthand, so `border-style` fell to its initial
+ * `none` and the shape painted nothing on `/login`, `/signup` and `/verify`.
+ *
+ * A missing custom property fails silently by design: a `var()` with no fallback
+ * is invalid at computed-value time rather than an error. This is the assertion
+ * that makes it loud.
+ */
+describe('the tenant-owned roles', () => {
+  describe.each(THEMES)('%s theme', (theme) => {
+    it.each(BRAND_TOKEN_NAMES)('%s has a platform value to fall back to', (role) => {
+      expect(token(theme, role)).toMatch(/^#[0-9a-f]{6}$/);
+    });
+  });
+});
+
+/**
+ * The four roles 0002 §0.3 asks TAR-801 for, and the properties that make each
+ * of them worth a name rather than a reuse of something nearby.
+ */
+describe('the roles 0002 asked for', () => {
+  describe.each(THEMES)('%s theme', (theme) => {
+    /*
+     * The whole argument for a pressed ground: `-selected` was the obvious
+     * shortcut, and it makes a press look like a selection that did not stick.
+     * `-hover` is the other one, and it makes a press look like nothing at all.
+     */
+    it.each([
+      ['--color-surface-active', '--color-surface-hover', '--color-surface-selected'],
+      ['--color-surface-sunken-active', '--color-surface-sunken-hover', '--color-surface-selected'],
+    ])('keeps %s distinct from %s and %s', (active, hover, selected) => {
+      expect(token(theme, active)).not.toBe(token(theme, hover));
+      expect(token(theme, active)).not.toBe(token(theme, selected));
+    });
+
+    /*
+     * A press is a step *past* hover, not beside it: it moves further from the
+     * ground it started on, in the same direction. Stated as arithmetic because
+     * the two themes move in opposite directions and a rule about "darker" would
+     * be true in one of them.
+     */
+    it.each([
+      ['--color-surface', '--color-surface-hover', '--color-surface-active'],
+      ['--color-surface-sunken', '--color-surface-sunken-hover', '--color-surface-sunken-active'],
+    ])('moves %s further on press than on hover', (base, hover, active) => {
+      const ground = token(theme, base);
+
+      expect(contrastRatio(token(theme, active), ground)).toBeGreaterThan(
+        contrastRatio(token(theme, hover), ground),
+      );
+    });
+  });
+
+  it('gives a dismissal a curve of its own, which accelerates', () => {
+    const exit = token('light', '--easing-exit');
+
+    expect(exit).not.toBe(token('light', '--easing-enter'));
+    expect(exit).not.toBe(token('light', '--easing-standard'));
+  });
+
+  /* A tooltip is a phrase; the menu width is a label plus a count. */
+  it('caps a tooltip tighter than a menu', () => {
+    expect(remOf(token('light', '--size-tooltip'))).toBeLessThan(
+      remOf(token('light', '--size-menu')),
+    );
+  });
+});
+
+/**
+ * The error ground 0002 §1.1 adds to every text input, and the instruction that
+ * came with it: "do not ship the tint on an unmeasured pair".
+ *
+ * A field in error is a tinted ground carrying the value the reader typed, and a
+ * danger hairline around it. So it is two requirements, not one — 1.4.3 for the
+ * text and 1.4.11 for the border, which is what identifies the state.
+ */
+describe('a field in error', () => {
+  const GRAPHIC_CONTRAST = 3;
+
+  describe.each(THEMES)('%s theme', (theme) => {
+    it('keeps what the reader typed readable on the error ground', () => {
+      expect(
+        contrastRatio(token(theme, '--color-on-surface'), token(theme, '--color-danger-subtle')),
+      ).toBeGreaterThanOrEqual(AA_TEXT_CONTRAST);
+    });
+
+    it('keeps the error border visible against the ground it encloses', () => {
+      expect(
+        contrastRatio(token(theme, '--color-danger'), token(theme, '--color-danger-subtle')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+
+    it('keeps the error border visible against the card the field sits on', () => {
+      expect(
+        contrastRatio(token(theme, '--color-danger'), token(theme, '--color-surface')),
+      ).toBeGreaterThanOrEqual(GRAPHIC_CONTRAST);
+    });
+  });
+});
+
+/**
  * One role's value in one theme. Throws rather than returning `undefined`: a
  * role this file asks for and the token layer does not declare is the failure
  * these tests exist to catch, and it should not arrive as `NaN` in a ratio.
@@ -429,73 +779,6 @@ function token(theme: Theme, name: string): string {
  * matters — a role pointing at a primitive that does not exist — surfaces as an
  * undefined lookup, which the assertions above name.
  */
-/**
- * The Arabic branch (TAR-806). One role, re-declared for `lang="ar"` — the whole
- * of what a locale swaps, because direction is carried by logical properties and
- * needs no token at all.
- */
-describe('the Arabic branch', () => {
-  const semantic = readTokenFile('semantic.css');
-  const primitives = readTokenFile('primitives.css');
-  // Read here rather than inside a case: jsdom replaces the global `URL` before a
-  // test body runs, and its version resolves a relative path against the document
-  // origin instead of the base it was handed.
-  const base = readTokenFile('../base.css');
-
-  it('re-declares the body face for lang="ar"', () => {
-    const branch = blocksOf(semantic).find((block) => block.selector.includes("[lang='ar']"));
-
-    expect(branch?.declarations['--font-family-body']).toBe('var(--scale-font-family-arabic)');
-  });
-
-  /*
-   * On the semantic role rather than the primitive it reads. Redefining
-   * `--scale-font-family-sans` would only reach `<html>`: `--font-family-body`
-   * has already substituted it by the time it inherits into a subtree marked
-   * `lang="ar"` — a customer's Arabic message inside an English console.
-   */
-  it('re-declares the semantic role rather than the primitive scale', () => {
-    const branch = blocksOf(semantic).find((block) => block.selector.includes("[lang='ar']"));
-
-    expect(branch?.declarations['--scale-font-family-sans']).toBeUndefined();
-  });
-
-  /*
-   * The half that makes the subtree case real. A custom property changes nothing
-   * where no rule substitutes it, and `font-family` is declared once in this app
-   * — on `body`. Without a rule on the element that names its own language, a
-   * `lang="ar"` subtree takes the branch's token and still paints the Latin face
-   * it inherited.
-   */
-  it('is applied by a rule that actually substitutes it', () => {
-    const applied = /\[lang\]\s*\{([^}]*)\}/.exec(base);
-
-    expect(applied?.[1]).toContain('font-family: var(--font-family-body)');
-  });
-
-  /*
-   * Keyed off the language, not the direction. A future Persian locale is also
-   * `dir="rtl"` and wants its own face, and an Arabic quotation inside an English
-   * console is `dir="rtl"` on a subtree that keeps the console's own type.
-   */
-  it('keys off lang rather than dir', () => {
-    const selectors = blocksOf(semantic).map((block) => block.selector);
-
-    expect(selectors.some((selector) => selector.includes("[dir='rtl']"))).toBe(false);
-  });
-
-  it('falls back to a sans face when the download has not landed', () => {
-    const stack = blocksOf(primitives)
-      .flatMap((block) => Object.entries(block.declarations))
-      .find(([name]) => name === '--scale-font-family-arabic')?.[1];
-
-    expect(stack).toContain('var(--font-sans-arabic');
-    // Never a bare `var()` with no fallback: an invalid declaration would drop
-    // the whole stack and land the console on the browser's default serif.
-    expect(stack).toContain('sans-serif');
-  });
-});
-
 function readTokens(): Record<Theme, Record<string, string>> {
   const declarations = [
     ...blocksOf(readTokenFile('primitives.css')),
@@ -511,12 +794,10 @@ function readTokens(): Record<Theme, Record<string, string>> {
       }
 
       /*
-       * The locale branch is orthogonal to the theme — it re-declares one role
-       * for `lang="ar"` and applies in both themes. Folding it in here would
-       * silently make every theme's `--font-family-body` the Arabic stack; it
-       * has its own case below instead.
+       * The language branch is not a theme, and a reader that merged it would
+       * report every theme as Arabic (TAR-801). It is asserted on its own below.
        */
-      if (block.selector.includes("[lang='ar']")) {
+      if (block.selector.includes('[lang')) {
         continue;
       }
 
@@ -584,4 +865,22 @@ function resolveValue(value: string, raw: Record<string, string>, depth = 0): st
   }
 
   return resolveValue(target, raw, depth + 1);
+}
+
+/**
+ * A `rem` length as a number, so two size roles can be compared.
+ *
+ * Throws on anything else: every size token in this layer is declared in `rem`
+ * (the type scale's `clamp()` steps are the exception and are not sizes), so a
+ * value in `px` here means somebody stepped outside the scale rather than that
+ * this helper needs a unit table.
+ */
+function remOf(value: string): number {
+  const match = /^([\d.]+)rem$/.exec(value.trim());
+
+  if (match === null) {
+    throw new TypeError(`Expected a rem length, got ${value}`);
+  }
+
+  return Number(match[1]);
 }
