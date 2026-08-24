@@ -305,8 +305,8 @@ export const TenantBrandingSchema = z.object({
  */
 export const BRANDING_DEFAULTS = {
   productName: 'WhatsApp CRM',
-  primaryColor: '#067a52', // green-600, the platform accent
-  accentColor: '#2e4a63', // navy-700
+  primaryColor: '#4f46e5', // indigo-500 — the Reqta reference's `--primary` (TAR-801)
+  accentColor: '#7a5af8', // the reference's `--violet`, its decorative partner
 } as const;
 
 /** Assets are set by their own routes; `PATCH /tenant` never carries bytes. */
