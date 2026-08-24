@@ -18,7 +18,9 @@
   z-index: var(--z-nav);
   display: flex;
   /* One row from 320px up. Four items — the drawer trigger, the wordmark, the
-     environment marker and one control — fit it with room to spare. */
+     environment marker and one control — fit it with room to spare, and that
+     margin is why the language toggle is in the drawer at these widths rather
+     than a fifth item here (see `.wideOnly`). */
   flex-shrink: 0;
   align-items: center;
   gap: var(--space-2);
@@ -84,6 +86,21 @@
   }
 }
 
+/*
+ * The language toggle, which the drawer also carries.
+ *
+ * 48rem is not a third breakpoint: it is the width `MobileMenu` itself stops
+ * existing at, so the two are exactly complementary — one control is reachable
+ * at every width and never two at once. Below it, a fifth item in `.end` (which
+ * is `flex: 0 0 auto` and cannot give a pixel) takes a 320px row into horizontal
+ * scroll, and the toggle's label is the one part of it that must not truncate:
+ * it is the target language's own name, for a reader who may not be able to read
+ * anything else on the screen.
+ */
+.wideOnly {
+  display: none;
+}
+
 @media (min-width: 48rem) {
   .bar {
     gap: var(--space-3);
@@ -92,5 +109,10 @@
   /* The rail carries the wordmark from here up. */
   .brand {
     display: none;
+  }
+
+  .wideOnly {
+    display: flex;
+    align-items: center;
   }
 }
