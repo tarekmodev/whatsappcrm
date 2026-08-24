@@ -22,13 +22,22 @@
 }
 
 @media (hover: hover) {
-  .trigger:hover {
+  .trigger:not(:disabled):hover {
     background: var(--color-surface-hover);
   }
 }
 
+/*
+ * Open is not hover, and 0002 §1.3 asks for that to be *verified* rather than
+ * assumed: an open trigger held the same `--color-surface-hover` its own hover
+ * did, so on a pointer device the control that was showing a panel and the
+ * control the pointer merely happened to be over were the same colour. It takes
+ * the ground one step further in the direction hover already moved — 0002 §0.3's
+ * reading of `--color-surface-active`, which is the held state and is what an
+ * open disclosure is.
+ */
 .trigger[aria-expanded='true'] {
-  background: var(--color-surface-hover);
+  background: var(--color-surface-active);
   border-color: var(--color-border);
 }
 
@@ -50,12 +59,12 @@
 }
 
 .trigger[data-variant='control'][aria-expanded='true'] {
-  background: var(--color-surface-hover);
+  background: var(--color-surface-active);
   border-color: var(--color-border-strong);
 }
 
 @media (hover: hover) {
-  .trigger[data-variant='control']:hover {
+  .trigger[data-variant='control']:not(:disabled):hover {
     background: var(--color-surface-hover);
   }
 }
@@ -90,15 +99,39 @@
   block-size: var(--size-touch-target);
 }
 
+/*
+ * The `icon` trigger's hover is a *colour* change — it has no ground of its own
+ * to move — so open cannot also be one, or the two are identical (0002 §1.3).
+ * Open takes the held ground as well; hover keeps the colour alone.
+ */
 .trigger[data-variant='icon'][aria-expanded='true'] {
+  background: var(--color-surface-active);
   border-color: transparent;
   color: var(--color-on-surface);
 }
 
 @media (hover: hover) {
-  .trigger[data-variant='icon']:hover {
+  .trigger[data-variant='icon']:not(:disabled):hover {
     color: var(--color-on-surface);
   }
+}
+
+/*
+ * A trigger whose entries all need something the reader has not supplied yet.
+ * Last in the trigger section so it outranks the variants above it, and muted
+ * rather than merely dimmed — a faded control reads as a rendering fault rather
+ * than as a rule. `not-allowed` says the same thing to a pointer.
+ *
+ * A trigger with *nothing* behind it is not rendered at all: that is 0001's
+ * quick-create rule and a different thing entirely.
+ */
+.trigger:disabled {
+  color: var(--color-on-surface-muted);
+  cursor: not-allowed;
+}
+
+.trigger[data-variant='control']:disabled {
+  background: var(--color-surface-sunken);
 }
 
 .panel {
@@ -119,40 +152,70 @@
    * it is computed from the panel's own geometry, so it is already correct under
    * `dir="rtl"` — there is no side to mirror.
    */
-  translate: var(--menu-shift, 0) 0;
   padding: var(--space-2);
   background: var(--color-surface-raised);
   border: var(--border-hairline) solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-overlay);
   /*
-   * The panel arrives *from its trigger* rather than appearing on top of it —
-   * 0002's "something arriving from a control's edge" row: opacity plus one
-   * `--space-1` step on the block axis, at `--duration-fast`.
+   * The **closed** state, which is also the state the panel leaves *to*: it is
+   * dismissed back towards the trigger it came from. A transition rather than
+   * the `animation` this used to be, because an `animation` plays on a node that
+   * has just been added and cannot run on one going away — which is the whole of
+   * why this menu arrived and never left (0002 §0.2, "a panel leaving").
    *
-   * The keyframe carries `--menu-shift` through rather than letting it fall back
+   * Both offsets carry `--menu-shift` through rather than letting it fall back
    * to zero. That property is the inline-axis nudge `MenuButton` measures after
-   * the panel opens, and `translate` is a single property: a `from` that named
-   * only the block axis would animate a panel that had just been pushed back on
-   * screen straight off it again for the length of the entrance.
+   * the panel opens, and `translate` is a single property: a from-state naming
+   * only the block axis would drag a panel that had just been pushed back on
+   * screen straight off it again for the length of the motion.
    */
-  animation: menuPanelEnter var(--duration-fast) var(--easing-enter);
+  --menu-enter-offset: calc(var(--space-1) * -1);
+
+  opacity: 0;
+  translate: var(--menu-shift, 0) var(--menu-enter-offset);
+  transition:
+    opacity var(--duration-fast) var(--easing-exit),
+    translate var(--duration-fast) var(--easing-exit);
 }
 
-@keyframes menuPanelEnter {
-  from {
+/*
+ * Open. The panel arrives *from its trigger* rather than appearing on top of it
+ * — 0002's "something arriving from a control's edge" row: opacity plus one
+ * `--space-1` step on the block axis at `--duration-fast`/`--easing-enter`,
+ * against an exit that runs the same distance back on `--easing-exit`.
+ */
+.panel[data-open='true'] {
+  opacity: 1;
+  translate: var(--menu-shift, 0) 0;
+  transition:
+    opacity var(--duration-fast) var(--easing-enter),
+    translate var(--duration-fast) var(--easing-enter);
+}
+
+/*
+ * The from-state of the entrance. `@starting-style` rather than a keyframe so
+ * the enter and the exit are the same two declarations read in opposite
+ * directions; a browser without it shows the panel instantly, which is the same
+ * degradation `Modal` accepts.
+ */
+@starting-style {
+  .panel[data-open='true'] {
     opacity: 0;
-    translate: var(--menu-shift, 0) calc(var(--space-1) * -1);
+    translate: var(--menu-shift, 0) var(--menu-enter-offset);
   }
 }
 
 /*
- * It fades *and* moves, so the preference drops it outright rather than running
- * it in 1ms — `StateLayout`'s rule, and 0002 §0.2's.
+ * It fades *and* moves, so the preference drops the movement outright rather
+ * than running it in 1ms — `StateLayout`'s rule, and 0002 §0.2's. Zeroing the
+ * offset is what takes it out of the enter *and* the exit at once; the fade
+ * stays, already flattened by the token layer, which is what still gives the
+ * exit an end to unmount on.
  */
 @media (prefers-reduced-motion: reduce) {
   .panel {
-    animation: none;
+    --menu-enter-offset: 0px;
   }
 }
 
@@ -174,6 +237,13 @@
 }
 
 /*
+ * ## Entry states, for anything composing `menuItem`
+ *
+ * - `data-tone="danger"` — the irreversible entry. Pair it with `menuSeparator`
+ *   on the list item and put it **last**; see the rules below.
+ * - `aria-disabled="true"` — present but not choosable yet. Keep it focusable.
+ * - `aria-current` — the entry carrying the current value, with `menuTick`.
+ *
  * The panel's contents. Exposed for `composes` rather than applied here, because
  * what goes in a panel is the caller's: a list of links, a form, a group of
  * toggles. These two are the shape every caller has wanted so far, and sharing
@@ -208,9 +278,65 @@
 }
 
 @media (hover: hover) {
-  .menuItem:hover {
+  .menuItem:not([aria-disabled='true']):hover {
     background: var(--color-surface-hover);
   }
+}
+
+/*
+ * An entry that is there but cannot be chosen yet — one needing a selection the
+ * reader can still make on this screen. `aria-disabled` rather than `disabled`,
+ * so it keeps its place in the tab order and a screen-reader user can find out
+ * that it exists and why it is shut (0002 §1.3). The caller still has to ignore
+ * the press: `aria-disabled` tells, it does not enforce.
+ */
+.menuItem[aria-disabled='true'] {
+  color: var(--color-on-surface-muted);
+  cursor: not-allowed;
+}
+
+/*
+ * The irreversible entry. Danger text, and a hover ground that matches
+ * `Button variant="dangerQuiet"` so the same action reads the same whether the
+ * row showed it inline or folded it into the overflow.
+ *
+ * Colour is never the only carrier: `.menuSeparator` puts it under a rule and
+ * `RowActions` orders it last, so it survives forced-colors and a reader who
+ * cannot see red. Shared here rather than in `RowActions` because 0001 rules it
+ * for *menus*, and the second menu with a delete in it would otherwise write
+ * these four declarations again slightly differently.
+ */
+.menuItem[data-tone='danger'] {
+  color: var(--color-danger);
+}
+
+@media (hover: hover) {
+  .menuItem[data-tone='danger']:not([aria-disabled='true']):hover {
+    background: var(--color-danger-subtle);
+  }
+}
+
+/* The same ring the inline destructive control gets — see `Button.module.css`
+   for why this is the one place the global focus colour is overridden. */
+.menuItem[data-tone='danger']:focus-visible {
+  background: var(--color-danger-subtle);
+  outline-color: var(--color-danger);
+}
+
+@media (forced-colors: active) {
+  .menuItem[data-tone='danger']:focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+/*
+ * The rule a destructive entry sits under, so it is not simply the next thing
+ * down from the routine one. Applied to the entry's own list item.
+ */
+.menuSeparator {
+  margin-block-start: var(--space-1);
+  padding-block-start: var(--space-1);
+  border-block-start: var(--border-hairline) solid var(--color-border);
 }
 
 /*

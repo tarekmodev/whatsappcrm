@@ -20,14 +20,40 @@ import styles from './Modal.module.css';
  * On small screens it becomes a full-height sheet — see the module file.
  */
 
+/**
+ * Where a dismissal came from. `escape` and `scrim` are the two a reader can
+ * reach *by accident*; `invoked` is a control that says so — the close button,
+ * a footer's Cancel, a route change. `FormDialog` reads it to decide whether
+ * unsaved input needs confirming, which is a question only the accidental ones
+ * have to ask.
+ */
+export const MODAL_CLOSE_REASONS = ['escape', 'scrim', 'invoked'] as const;
+export type ModalCloseReason = (typeof MODAL_CLOSE_REASONS)[number];
+
+/**
+ * What the dialog holds, which is what decides whether a press on the scrim
+ * dismisses it (0002 §1.4). A **view** is something the reader is looking at and
+ * a press outside it means "I am done looking"; a **form** holds work, and an
+ * accidental click off a half-filled one is that work destroyed by a miss.
+ */
+export const MODAL_KINDS = ['view', 'form'] as const;
+export type ModalKind = (typeof MODAL_KINDS)[number];
+
 export interface ModalProps {
   isOpen: boolean;
-  onClose: () => void;
+  /**
+   * Dismissal. The reason is there for callers that treat an accidental
+   * dismissal differently from a deliberate one; ignoring it is fine and is what
+   * a view dialog does.
+   */
+  onClose: (reason: ModalCloseReason) => void;
   title: string;
   children: ReactNode;
   /** Actions row. Rendered at the block end and stacked full-width on mobile. */
   footer?: ReactNode;
   description?: string;
+  /** `form` withholds scrim-click dismissal. See `MODAL_KINDS`. */
+  kind?: ModalKind;
 }
 
 /**
@@ -60,7 +86,15 @@ function restoreFocus(invoker: HTMLElement | null): void {
   document.getElementById(MAIN_CONTENT_ID)?.focus();
 }
 
-export function Modal({ isOpen, onClose, title, children, footer, description }: ModalProps) {
+export function Modal({
+  isOpen,
+  onClose,
+  title,
+  children,
+  footer,
+  description,
+  kind = 'view',
+}: ModalProps) {
   const content = useContent();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const onCloseRef = useRef(onClose);
@@ -113,7 +147,7 @@ export function Modal({ isOpen, onClose, title, children, footer, description }:
   // A navigation that leaves the dialog mounted must still dismiss it.
   useEffect(() => {
     if (lastPathnameRef.current !== null && lastPathnameRef.current !== pathname) {
-      onCloseRef.current();
+      onCloseRef.current('invoked');
     }
 
     lastPathnameRef.current = pathname;
@@ -129,13 +163,18 @@ export function Modal({ isOpen, onClose, title, children, footer, description }:
       // through `onClose` keeps React's state the source of truth.
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        onClose('escape');
       }}
       // The backdrop is the dialog element itself, outside the panel, so a click
       // landing on the dialog rather than on its content is a backdrop click.
+      //
+      // A form does not take it (0002 §1.4). The reader has nothing to lose by
+      // pressing outside a view; pressing outside a half-filled form loses all
+      // of it, and the miss that does it is a pointer landing a few pixels wide
+      // of the panel. Escape and Cancel are still there and both say so out loud.
       onClick={(event) => {
-        if (event.target === dialogRef.current) {
-          onClose();
+        if (kind === 'view' && event.target === dialogRef.current) {
+          onClose('scrim');
         }
       }}
     >
@@ -154,7 +193,9 @@ export function Modal({ isOpen, onClose, title, children, footer, description }:
           <Button
             variant="ghost"
             size="sm"
-            onClick={onClose}
+            onClick={() => {
+              onClose('invoked');
+            }}
             aria-label={content.common.close}
             className={styles.closeButton}
           >

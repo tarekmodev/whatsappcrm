@@ -46,10 +46,16 @@
   color: var(--color-on-surface);
 }
 
+/*
+ * `--color-on-danger`, not `--color-on-accent`. The accent's ink is tenant-owned
+ * and computed against the tenant's accent; danger's ground is the theme's, so
+ * borrowing the accent's ink drew white on the dark theme's light red at 1.92:1
+ * (TAR-804). Both are pinned in `tokens.test.ts`.
+ */
 .button[data-variant='danger'] {
   background: var(--color-danger);
   border-color: var(--color-danger);
-  color: var(--color-on-accent);
+  color: var(--color-on-danger);
 }
 
 /*

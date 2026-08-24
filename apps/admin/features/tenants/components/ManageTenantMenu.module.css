@@ -1,0 +1,40 @@
+/* The panel's entries. `MenuButton` owns the popover; this is only the list. */
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  inline-size: 100%;
+  min-block-size: var(--size-touch-target);
+  padding-inline: var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--color-on-surface);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.item:hover {
+  background: var(--color-surface-hover);
+}
+
+/*
+ * The destructive entries carry the danger role's text colour on a transparent
+ * ground — `Button`'s `dangerQuiet` treatment, restated for a menu entry so a
+ * row of entries does not become a row of red fills. They are last in the list,
+ * so danger is carried by position as well as by colour.
+ */
+.item[data-tone='danger'] {
+  color: var(--color-danger);
+}
+
+.item[data-tone='danger']:hover {
+  background: var(--color-danger-subtle);
+}

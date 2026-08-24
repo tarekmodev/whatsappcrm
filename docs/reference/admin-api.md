@@ -14,7 +14,11 @@ and RBAC model that TAR-35 and TAR-22 build for tenant-facing routes.
 [the tenant lifecycle reference](tenant-lifecycle.md#provisioning-two-paths-two-starting-states).
 The operator routes on this page stay the fallback for a deployment with `SIGNUP_ENABLED=false`.
 The lifecycle routes 0009 specifies for an operator — reactivate, cancel, delete and the
-lifecycle read — are published and not implemented.
+lifecycle read — are implemented, in `AdminTenantsController` alongside the two documented
+below; this page has not caught up with them yet. What is **not** on the surface, and what
+TAR-804 found by trying to build a console against it, is any _read_ of a tenant that is not
+a by-product of a write: there is no `GET /admin/tenants` and no `GET /admin/tenants/{slug}`.
+See [the platform admin console](platform-admin-console.md) for what that costs an operator.
 
 **This page covers the two tenant lifecycle routes and the webhook replay route.**
 `/api/v1/admin/*` also carries

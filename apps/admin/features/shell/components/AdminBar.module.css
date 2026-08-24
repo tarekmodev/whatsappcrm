@@ -1,0 +1,96 @@
+/*
+ * The operator bar.
+ *
+ * Its geometry is the console bar's, restated rather than imported: `apps/web`'s
+ * `AppTopBar.module.css` belongs to that component, and reaching across an app
+ * boundary for its class names is the "a component never styles another
+ * component's internals" rule. Every value here is a token, so the two bars stay
+ * the same height and honour the same safe-area inset through the layer that is
+ * actually shared.
+ *
+ * What it does *not* carry is the reason it is a separate file: no search, no
+ * quick-create, no alert bell, no account menu (spec §2.1).
+ */
+
+.bar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--z-nav);
+  display: flex;
+  /* One row from 320px up. Four items — the drawer trigger, the wordmark, the
+     environment marker and one control — fit it with room to spare. */
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+  /* Exactly `--size-bar`, plus whatever the device's own chrome asks for. The
+     inset is added to the floor as well as applied as padding, so a notched
+     phone gets the same row *below* its notch rather than including it. */
+  min-block-size: calc(var(--size-bar) + env(safe-area-inset-top));
+  padding-inline: clamp(var(--space-3), 4vw, var(--space-6));
+  padding-block-start: env(safe-area-inset-top);
+  background: var(--color-bar);
+  border-block-end: var(--border-hairline) solid var(--color-bar-border);
+}
+
+.start,
+.end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+/* Takes the slack, so the trailing group sits at the trailing edge. */
+.start {
+  flex: 1 1 auto;
+}
+
+.end {
+  flex: 0 0 auto;
+}
+
+/*
+ * The lockup's link. Below 30rem the drawer trigger, the marker and the control
+ * take the row and the wordmark gives way — 0001's rule that the lockup is the
+ * first thing to stand down. The drawer heads its own navigation with the same
+ * lockup, so the product is still named at 320px.
+ *
+ * `min-inline-size: 0` is what lets it truncate rather than overlap: without it
+ * the automatic minimum is the whole `nowrap` wordmark, and the box cannot give
+ * up a pixel.
+ */
+.brand {
+  display: none;
+  flex: 0 1 auto;
+  align-items: center;
+  min-inline-size: 0;
+  min-block-size: var(--size-touch-target);
+  color: var(--color-on-surface);
+  text-decoration: none;
+}
+
+.drawerBrand {
+  display: flex;
+  align-items: center;
+  min-inline-size: 0;
+  min-block-size: var(--size-touch-target);
+  color: var(--color-on-surface);
+  text-decoration: none;
+}
+
+@media (min-width: 30rem) {
+  .brand {
+    display: flex;
+  }
+}
+
+@media (min-width: 48rem) {
+  .bar {
+    gap: var(--space-3);
+  }
+
+  /* The rail carries the wordmark from here up. */
+  .brand {
+    display: none;
+  }
+}

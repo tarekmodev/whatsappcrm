@@ -14,7 +14,15 @@ import styles from './Notice.module.css';
  * is here rather than in that component so a screen cannot end up with two
  * different-looking ways of saying the same thing.
  */
-export const NOTICE_TONES = ['info', 'warning', 'danger'] as const;
+/**
+ * `success` is the newest of the four and the one worth justifying: a `Notice`
+ * is *content that stays*, and a toast is an announcement that leaves — so the
+ * success tone is for an outcome the reader has to keep reading, not for
+ * confirming a save. The operator console's webhook replay is the case that
+ * earned it (0002 spec §2.9): the result has to sit above a running log while
+ * somebody works through a batch of ids, and a toast would be gone by the second.
+ */
+export const NOTICE_TONES = ['info', 'success', 'warning', 'danger'] as const;
 export type NoticeTone = (typeof NOTICE_TONES)[number];
 
 /**

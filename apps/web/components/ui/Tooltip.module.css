@@ -1,0 +1,108 @@
+/*
+ * The tip. Deliberately **not** light-on-dark: an inverted tooltip is a second
+ * surface vocabulary for one component, and it is the first thing that stops
+ * making sense under TAR-29's per-tenant themes, where the only thing a tenant
+ * owns is the accent. It is `--color-surface-raised` on a hairline like every
+ * other overlay in this app (0002 §1.5).
+ *
+ * Fixed rather than absolute because it is portalled to `<body>`: the rail, the
+ * inbox columns and every scrolling pane clip their overflow, and a tip drawn
+ * inside one is a tip with its end cut off. `Tooltip` measures the trigger and
+ * writes the two anchor properties below.
+ */
+.tip {
+  --tooltip-gap: var(--space-1);
+  /* Toward the trigger: a tip below its control arrives from just above it. */
+  --tooltip-enter-offset: calc(var(--space-1) * -1);
+
+  position: fixed;
+  z-index: var(--z-nav);
+  /*
+   * Physical `top`/`left`, and the only place in this module that is not a
+   * logical property. They are written from `getBoundingClientRect`, which is
+   * already resolved for the writing direction — there is no side to mirror,
+   * and the same reasoning `MenuButton` gives for `--menu-shift`.
+   */
+  top: var(--tooltip-anchor-block, 0);
+  left: var(--tooltip-anchor-inline, 0);
+  max-inline-size: var(--size-tooltip);
+  padding: var(--space-2);
+  background: var(--color-surface-raised);
+  border: var(--border-hairline) solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay);
+  color: var(--color-on-surface);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-tight);
+  /*
+   * A phrase, not a paragraph — but a long one still wraps rather than running
+   * under the edge of the screen, and a single unbroken word breaks rather than
+   * widening the tip past its cap.
+   */
+  overflow-wrap: anywhere;
+  /*
+   * Never a target. It is not a control, it holds no control, and a pointer
+   * travelling toward it would leave the trigger and dismiss it anyway — so
+   * letting it hit-test only puts a dead surface over whatever is underneath.
+   */
+  pointer-events: none;
+
+  /*
+   * The closed state, which is also the state it leaves *to*. `-50%` centres it
+   * on the trigger; `--tooltip-shift` is the inline nudge that keeps it inside
+   * the viewport, measured by the same function `MenuButton`'s panel uses.
+   */
+  opacity: 0;
+  translate: calc(-50% + var(--tooltip-shift, 0px))
+    calc(var(--tooltip-gap) + var(--tooltip-enter-offset));
+  transition:
+    opacity var(--duration-fast) var(--easing-exit),
+    translate var(--duration-fast) var(--easing-exit);
+}
+
+/*
+ * Flipped above the trigger when there is no room below it. `-100%` is the tip's
+ * own height, so it sits clear of the control rather than over it, and the
+ * entrance offset flips with it — it still arrives from the trigger's side.
+ */
+.tip[data-placement='blockStart'] {
+  --tooltip-gap: calc(-100% - var(--space-1));
+  --tooltip-enter-offset: var(--space-1);
+}
+
+.tip[data-open='true'] {
+  opacity: 1;
+  translate: calc(-50% + var(--tooltip-shift, 0px)) var(--tooltip-gap);
+  transition:
+    opacity var(--duration-fast) var(--easing-enter),
+    translate var(--duration-fast) var(--easing-enter);
+}
+
+/*
+ * The from-state of the entrance — the same expression the closed state uses.
+ * Declared as its own rule rather than a keyframe so the enter and the exit are
+ * the same two declarations read in opposite directions; a browser without
+ * `@starting-style` shows the tip instantly, which is the degradation `Modal`
+ * and `MenuButton` both accept.
+ */
+@starting-style {
+  .tip[data-open='true'] {
+    opacity: 0;
+    translate: calc(-50% + var(--tooltip-shift, 0px))
+      calc(var(--tooltip-gap) + var(--tooltip-enter-offset));
+  }
+}
+
+/*
+ * It fades *and* moves, so the preference drops the movement outright rather
+ * than running it in 1ms (0002 §0.2). Zeroing the offset takes it out of the
+ * enter and the exit at once; the gap that positions the tip is untouched,
+ * because that is placement rather than motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .tip,
+  .tip[data-placement='blockStart'],
+  .tip[data-open='true'] {
+    --tooltip-enter-offset: 0px;
+  }
+}

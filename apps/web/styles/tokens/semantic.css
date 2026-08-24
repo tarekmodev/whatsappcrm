@@ -113,6 +113,22 @@
   --color-danger-hover: var(--palette-red-800);
   --color-danger-subtle: var(--palette-red-50);
   --color-on-danger-subtle: var(--palette-red-700);
+  /*
+   * Text on a **solid** danger fill — a confirmation dialog's submit, and the
+   * one control on the platform-admin tenant screen that takes a customer
+   * offline. `Button`'s `danger` variant is the only thing that grounds
+   * `--color-danger`; every other consumer draws it as text or a border, which
+   * is what the block above is about.
+   *
+   * Its own role rather than borrowing `--color-on-accent`, and that is the
+   * whole point (TAR-804). `--color-on-accent` is *tenant-owned*: `brandCssVariables`
+   * computes it to contrast with whatever accent the tenant picked, and emits it
+   * over both themes. Danger is not tenant-owned, so a button drawing its ink
+   * from that token was taking a colour chosen for a different ground — which in
+   * the dark theme meant white on `red-300`, measured at 1.92:1 against the 4.5
+   * AA asks. `tokens.test.ts` pins the pair in both themes.
+   */
+  --color-on-danger: var(--palette-white);
   --color-info: var(--palette-blue-700);
   --color-info-subtle: var(--palette-blue-50);
   --color-on-info-subtle: var(--palette-blue-700);
@@ -265,6 +281,10 @@
   --color-danger-hover: var(--palette-red-200);
   --color-danger-subtle: var(--palette-red-900);
   --color-on-danger-subtle: var(--palette-red-300);
+  /* Dark ink, because the dark theme's danger fill is a *light* red — the same
+     inversion `--color-on-accent` makes for a light accent, and the same value.
+     See the light block. */
+  --color-on-danger: var(--palette-night-950);
   --color-info: var(--palette-blue-300);
   --color-info-subtle: var(--palette-blue-900);
   --color-on-info-subtle: var(--palette-blue-300);
@@ -423,6 +443,14 @@
   /* The inbox's filter column, and the width a dropdown menu opens to. */
   --size-pane-filters: var(--scale-size-pane-xs);
   --size-menu: var(--scale-size-pane-xs);
+  /*
+   * The narrowest a text field may get before the row holding it wraps — a
+   * field-and-button pair puts the button on the next line rather than squeezing
+   * both. Its own role rather than borrowing `--size-menu`: the two are the same
+   * primitive today and one of them is a dropdown's width, so a change to that
+   * would silently move every form.
+   */
+  --size-field: var(--scale-size-pane-xs);
   /* How wide a tooltip may get before it wraps — a phrase, not a paragraph. */
   --size-tooltip: var(--scale-size-pane-2xs);
   /* How tall a scrolling region may grow before it scrolls rather than the page. */

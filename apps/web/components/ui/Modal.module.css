@@ -75,9 +75,27 @@
   background: var(--color-surface);
 }
 
-/* From tablet up the sheet becomes a centred dialog. */
+/*
+ * From tablet up the sheet becomes a centred dialog.
+ *
+ * `[open]`, and that is load-bearing rather than tidy (TAR-804). A `<dialog>` is
+ * `display: none` by the UA stylesheet until it is opened, and an author `display`
+ * on the bare element beats that — so an unqualified `display: grid` here left
+ * every *closed* dialog rendered: `opacity: 0`, `position: absolute` from the same
+ * UA rule, and the height of the viewport. Invisible, out of flow, and still
+ * hit-testing, so it sat over whatever followed it and swallowed the clicks.
+ *
+ * These dialogs are rendered unconditionally beside the control that opens them —
+ * `<FormDialog isOpen={false}>` is the shape every caller uses — so the thing
+ * covered is usually the button next to it. On the platform-admin tenant screen
+ * two of them landed exactly on Suspend and Reactivate, and neither could be
+ * pressed at all.
+ *
+ * Qualifying it also makes the exit transition below work as written: `display`
+ * with `allow-discrete` animates *between* two values, and there was only ever one.
+ */
 @media (min-width: 40rem) {
-  .dialog {
+  .dialog[open] {
     display: grid;
     place-items: center;
     padding: var(--space-5);
@@ -102,24 +120,126 @@
  * Enter/exit transition. `allow-discrete` plus `@starting-style` is what lets a
  * native dialog animate at all; browsers without it simply appear instantly,
  * which is an acceptable degradation. Durations come from tokens, so
- * `prefers-reduced-motion` is already honoured by the token layer.
+ * `prefers-reduced-motion` already shortens every one of them.
+ *
+ * Each state carries its own `transition`, because a transition is timed by the
+ * state it is heading *to*: the unqualified `.dialog` rule is what a dismissal
+ * lands on, so it holds the exit, and `[open]` holds the entrance. That is the
+ * whole of 0002 §0.2's "exits are faster than entrances" — an entrance says
+ * where the dialog came from and is worth `--duration-medium`; an exit is the
+ * reader having already decided, and a slow one is the interface arguing.
  */
 @supports (transition-behavior: allow-discrete) {
   .dialog {
     opacity: 0;
+    transition:
+      opacity var(--duration-fast) var(--easing-exit),
+      overlay var(--duration-fast) var(--easing-exit) allow-discrete,
+      display var(--duration-fast) var(--easing-exit) allow-discrete;
+  }
+
+  .dialog[open] {
+    opacity: 1;
     transition:
       opacity var(--duration-medium) var(--easing-enter),
       overlay var(--duration-medium) var(--easing-enter) allow-discrete,
       display var(--duration-medium) var(--easing-enter) allow-discrete;
   }
 
-  .dialog[open] {
+  @starting-style {
+    .dialog[open] {
+      opacity: 0;
+    }
+  }
+
+  /*
+   * The scrim is deliberately *faster* than the panel (0002 §1.4): the room dims
+   * before the dialog lands rather than with it, which is what makes the dialog
+   * read as arriving into a space that was cleared for it. `--easing-standard`,
+   * because a scrim is not coming from anywhere — it has no edge to arrive from.
+   */
+  .dialog::backdrop {
+    opacity: 0;
+    /*
+     * `opacity` only. The backdrop needs no `overlay`/`display` transition of its
+     * own: it is painted for as long as its dialog is in the top layer, and the
+     * `overlay … allow-discrete` above is what holds the dialog there long enough
+     * for this to play out on the way back down.
+     */
+    transition: opacity var(--duration-fast) var(--easing-standard);
+  }
+
+  .dialog[open]::backdrop {
     opacity: 1;
   }
 
   @starting-style {
-    .dialog[open] {
+    .dialog[open]::backdrop {
       opacity: 0;
+    }
+  }
+
+  /*
+   * The panel arrives rather than materialising. Opacity alone is a dialog that
+   * was always there and only became visible; one `--space-2` step up and a 2%
+   * shrink is one that came from somewhere (0002 §1.4).
+   *
+   * Both amounts are named here rather than tokenised: 0002 §0.3 closed its
+   * token list at four roles and neither of these is one of them. Zeroing them
+   * under the motion preference is also what makes them a pair of custom
+   * properties rather than two literals in four places.
+   */
+  .panel {
+    --modal-panel-offset: var(--space-2);
+    /* Full-bleed at mobile widths — see below. */
+    --modal-panel-scale: 1;
+
+    translate: 0 var(--modal-panel-offset);
+    scale: var(--modal-panel-scale);
+    transition:
+      translate var(--duration-fast) var(--easing-exit),
+      scale var(--duration-fast) var(--easing-exit);
+  }
+
+  .dialog[open] .panel {
+    translate: 0 0;
+    scale: 1;
+    transition:
+      translate var(--duration-medium) var(--easing-enter),
+      scale var(--duration-medium) var(--easing-enter);
+  }
+
+  @starting-style {
+    .dialog[open] .panel {
+      translate: 0 var(--modal-panel-offset);
+      scale: var(--modal-panel-scale);
+    }
+  }
+
+  /*
+   * The shrink belongs to the centred dialog only. From tablet up the panel is a
+   * bounded card with the scrim visible around it, and 2% smaller reads as a
+   * card arriving. Below that it is a full-height sheet filling the viewport, and
+   * the same 2% opens a hairline of scrim down all four edges for the length of
+   * the entrance — a card flashing where a sheet should be rising. The sheet
+   * keeps the `translate`, which is the half of the motion that still means
+   * something at that width.
+   */
+  @media (min-width: 40rem) {
+    .panel {
+      --modal-panel-scale: 0.98;
+    }
+  }
+
+  /*
+   * It fades *and* moves, so the preference drops the movement outright rather
+   * than running it in 1ms — 0002 §0.2, and `StateLayout`'s precedent. The fade
+   * stays; the token layer has already flattened its duration.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .panel {
+      --modal-panel-offset: 0px;
+      --modal-panel-scale: 1;
     }
   }
 }

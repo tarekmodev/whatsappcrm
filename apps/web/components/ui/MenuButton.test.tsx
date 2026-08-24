@@ -73,6 +73,35 @@ describe('MenuButton', () => {
     expect(panelId).not.toBeNull();
     expect(document.getElementById(panelId ?? '')).not.toBeNull();
   });
+
+  it('will not open while it is disabled', () => {
+    render(
+      <MenuButton label="Create" accessibleName="Create" isDisabled>
+        <a href="/settings/people">Invite a teammate</a>
+      </MenuButton>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Create' });
+
+    expect(trigger).toBeDisabled();
+    fireEvent.click(trigger);
+
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: 'Invite a teammate' })).not.toBeInTheDocument();
+  });
+
+  it('takes a dismissed panel out of the tab order before it has finished leaving', () => {
+    // jsdom runs no transitions, so the panel unmounts on the fallback path in
+    // `useExitTransition` — what this pins is that nothing focusable is left
+    // behind either way.
+    const trigger = renderMenu();
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole('link', { name: 'Invite a teammate' })).toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    expect(screen.queryByRole('link', { name: 'Invite a teammate' })).not.toBeInTheDocument();
+  });
 });
 
 /**

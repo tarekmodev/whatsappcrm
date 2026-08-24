@@ -305,6 +305,18 @@ export const content = {
     notifications: 'Notifications',
     clearSearch: 'Clear search',
 
+    // --- Leaving a dialog with unsaved input (0002 §1.4) --------------------
+    /*
+     * Names what is lost rather than asking whether the reader is sure, and puts
+     * the safe answer on the button that is not the danger one — Escape reached
+     * this prompt by accident often enough that "Keep editing" is the likelier
+     * intent of the two.
+     */
+    discardTitle: 'Discard your changes?',
+    discardDescription: 'What you have typed here will not be saved.',
+    discardConfirm: 'Discard changes',
+    keepEditing: 'Keep editing',
+
     /**
      * The overflow trigger on a table row (0001, TAR-709). Named after the row,
      * not after the verb: a column of triggers all reading "More actions" tells
