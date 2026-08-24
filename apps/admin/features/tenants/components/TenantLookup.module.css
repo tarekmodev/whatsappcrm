@@ -1,0 +1,21 @@
+.form {
+  /* The field and the two actions. Bounded so the row does not stretch across a
+     full-width card, where a very wide input reads as a form field rather than as
+     the one-line lookup this is. */
+  max-inline-size: var(--size-container-md);
+}
+
+.row {
+  inline-size: 100%;
+}
+
+/*
+ * `0 1` rather than `1 1`, and that is the fix for a 240px void: `SearchField`
+ * caps the control itself at `--size-container-sm`, so a wrapper allowed to grow
+ * past that grew while the input did not, and the button was pushed out by the
+ * difference. The wrapper now stops where the control stops.
+ */
+.field {
+  flex: 0 1 var(--size-container-sm);
+  min-inline-size: 0;
+}

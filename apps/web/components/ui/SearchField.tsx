@@ -35,6 +35,17 @@ export interface SearchFieldProps {
   /** The query parameter this box drives, for a browser's form autofill. */
   name?: string;
   /**
+   * A validation message for the value in the box, wired to the control through
+   * the `Field` this already renders.
+   *
+   * Most filter boxes never pass one: a filter narrows a list, and a term that
+   * matches nothing is an empty result rather than an error. It exists for the
+   * box whose value is an *identifier the API will reject* — the operator
+   * console's tenant lookup, where the slug has a shape and the reader fixes it
+   * on that screen (`docs/design/0002-reqta-alignment-spec.md` §2.3).
+   */
+  error?: string;
+  /**
    * A native character ceiling, where the query parameter this box drives has
    * one. Native rather than a counter and an error: the parser behind the URL
    * drops an over-long term silently, so a box that cannot produce one is the
@@ -53,6 +64,7 @@ export function SearchField({
   placeholder,
   name = 'q',
   maxLength,
+  error,
   className,
 }: SearchFieldProps) {
   const content = useContent();
@@ -61,13 +73,15 @@ export function SearchField({
 
   return (
     <div className={cx(styles.field, className)}>
-      <Field label={label} isLabelHidden={!isLabelVisible}>
-        {({ controlId }) => (
+      <Field label={label} isLabelHidden={!isLabelVisible} error={error}>
+        {({ controlId, describedBy, isInvalid }) => (
           <div className={styles.control}>
             <Icon name="search" size="sm" className={styles.leadingIcon} />
             <TextInput
               ref={inputRef}
               id={controlId}
+              aria-describedby={describedBy}
+              aria-invalid={isInvalid}
               type="search"
               name={name}
               autoComplete="off"
