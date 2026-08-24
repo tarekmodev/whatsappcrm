@@ -88,6 +88,41 @@ describe('token contrast', () => {
 });
 
 /**
+ * The **solid** destructive control (TAR-804).
+ *
+ * `Button`'s `danger` variant is `--color-on-danger` on a `--color-danger` fill,
+ * and `--color-on-danger` exists because of what happened when it did not: the
+ * variant drew its ink from `--color-on-accent`, which `brandCssVariables`
+ * computes for the *tenant's accent* and emits over both themes. In the dark
+ * theme that put white on `red-300` — 1.92:1, against the 4.5 AA asks — on the
+ * submit button of every confirmation dialog in the app.
+ *
+ * Both directions are pinned because the two themes invert: a dark ink on a
+ * light red, and a light ink on a dark one. A future palette change that flips
+ * one without the other fails here rather than on somebody's screen.
+ */
+describe('the solid destructive control', () => {
+  describe.each(THEMES)('%s theme', (theme) => {
+    it('keeps its label readable on the fill', () => {
+      expect(
+        contrastRatio(token(theme, '--color-on-danger'), token(theme, '--color-danger')),
+      ).toBeGreaterThanOrEqual(AA_TEXT_CONTRAST);
+    });
+
+    /*
+     * The hover fill is a different colour from the resting one in both themes,
+     * and the label does not change with it — so it is its own measurement
+     * rather than one implied by the pair above.
+     */
+    it('keeps its label readable while hovered', () => {
+      expect(
+        contrastRatio(token(theme, '--color-on-danger'), token(theme, '--color-danger-hover')),
+      ).toBeGreaterThanOrEqual(AA_TEXT_CONTRAST);
+    });
+  });
+});
+
+/**
  * The quiet destructive control (TAR-709).
  *
  * `Button`'s `dangerQuiet` variant is `--color-danger` text on a transparent

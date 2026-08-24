@@ -26,12 +26,19 @@ export function AppSidebar({
   items,
   branding,
   footer,
+  homeHref = routes.inbox(),
+  navLabel = content.nav.primaryLabel,
 }: {
   items: readonly NavItem[];
   /**
    * The resolved tenant's branding. Passed in rather than read here, so the
    * shell owns no data access and the value cannot outlive the request it was
    * resolved for (`lib/branding/read-branding.ts`).
+   *
+   * The platform-operator console passes `withBrandingDefaults(null)` — the
+   * platform's own name and mark. That console is *ours*, not a tenant's, and
+   * dressing it in a customer's logo would be the one place white-labelling
+   * would actively mislead (TAR-804).
    */
   branding: TenantBranding;
   /**
@@ -40,6 +47,19 @@ export function AppSidebar({
    * passes one today.
    */
   footer?: ReactNode;
+  /**
+   * Where the lockup links. The tenant console's home is the inbox; the operator
+   * console's is its tenant lookup, and a rail that always went to `/inbox`
+   * would take an operator out of the surface their credential authenticates.
+   */
+  homeHref?: string;
+  /**
+   * The `<nav>` landmark's accessible name. Two navigation landmarks in one
+   * document would be indistinguishable without it — and while no page renders
+   * both today, "Primary" is the tenant console's word for its own nav rather
+   * than a name every rail can wear.
+   */
+  navLabel?: string;
 }) {
   return (
     // A plain wrapper, not `<aside>`: this holds the *primary* navigation, and
@@ -47,7 +67,7 @@ export function AppSidebar({
     // inside is the landmark.
     <div className={styles.rail}>
       <div className={styles.brandRow}>
-        <Link href={routes.inbox()} className={styles.brand} aria-label={branding.productName}>
+        <Link href={homeHref} className={styles.brand} aria-label={branding.productName}>
           {/* The same lockup the top bar and the sign-in screen render, including
               what it does with the tenant's logo and what it drops when the rail
               collapses. */}
@@ -56,7 +76,7 @@ export function AppSidebar({
         <RailToggle />
       </div>
 
-      <nav id={RAIL_NAV_ID} aria-label={content.nav.primaryLabel} className={styles.nav}>
+      <nav id={RAIL_NAV_ID} aria-label={navLabel} className={styles.nav}>
         <RailNav items={items} />
       </nav>
 
