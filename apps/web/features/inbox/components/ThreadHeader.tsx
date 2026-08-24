@@ -100,9 +100,12 @@ export function ThreadHeader({
           <div className={styles.names}>
             <h3 className={styles.name}>{conversation.contact.displayName}</h3>
             {/* `dir="ltr"`: a phone number reads left to right whatever the
-                surrounding text direction is. */}
-            <p className={styles.phone} dir="ltr">
-              {conversation.contact.phone}
+                surrounding text direction is. On the span rather than the `<p>`:
+                `direction` also resolves `text-align: start`, so a `dir` on the
+                block would pull this line to the left edge under `dir="rtl"`
+                while the name above it stayed on the right. */}
+            <p className={styles.phone}>
+              <span dir="ltr">{conversation.contact.phone}</span>
             </p>
           </div>
         </Cluster>

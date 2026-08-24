@@ -7,6 +7,7 @@ import { ErrorState } from '@/components/ui/ErrorState';
 import { Notice } from '@/components/ui/Notice';
 import { Cluster } from '@/components/layout/Cluster';
 import { Stack } from '@/components/layout/Stack';
+import { isolateLtr } from '@/lib/locale/bidi';
 import { useContent } from '@/lib/content';
 import { routes } from '@/lib/routes';
 import type { WhatsAppInboundState } from '../useWhatsAppWizard';
@@ -64,7 +65,14 @@ export function WhatsAppTestSendStep({
 
   return (
     <Stack gap="3">
-      <p className={styles.intro}>{copy.current(number.displayPhoneNumber)}</p>
+      {/*
+        `isolateLtr`: the number is interpolated into a sentence, so there is no
+        element to carry a `dir`, and under `dir="rtl"` its leading `+` would
+        render at the far end. This is the instruction telling somebody which
+        number to message from their own phone — the one place on this screen
+        where that is not a cosmetic problem.
+      */}
+      <p className={styles.intro}>{copy.current(isolateLtr(number.displayPhoneNumber))}</p>
       {/*
         Nothing arrived inside the minute this press bought. A warning and not an
         error state: the connection is not broken, the message simply has not

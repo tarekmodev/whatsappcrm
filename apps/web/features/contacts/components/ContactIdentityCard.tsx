@@ -31,9 +31,12 @@ export function ContactIdentityCard({ contact }: { contact: ContactResponse }) {
           <div className={styles.identity}>
             <p className={styles.name}>{contact.displayName}</p>
             {/* `dir="ltr"`: a phone number reads left to right whatever the
-                surrounding text direction is. */}
-            <p className={styles.phone} dir="ltr">
-              {contact.phone}
+                surrounding text direction is. On the span rather than the `<p>`:
+                `direction` also resolves `text-align: start`, so a `dir` on the
+                block would pull this line to the left edge under `dir="rtl"`
+                while the name above it stayed on the right. */}
+            <p className={styles.phone}>
+              <span dir="ltr">{contact.phone}</span>
             </p>
           </div>
           {contact.optedOutAt === null ? null : (

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ConnectedWhatsAppBusinessAccountResponse } from '@whatsappcrm/contracts';
 import { content } from '@/content/en';
+import { isolateLtr } from '@/lib/locale/bidi';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import type { MetaLoginResponse } from '../embedded-signup';
 import { WhatsAppConnectWizard } from './WhatsAppConnectWizard';
@@ -529,7 +530,7 @@ describe('WhatsAppConnectWizard: the steps after connecting', () => {
     completeConnectStep();
 
     expect(
-      await screen.findByText(WIZARD.steps.select_number.done('+966501234567')),
+      await screen.findByText(WIZARD.steps.select_number.done(isolateLtr('+966501234567'))),
     ).toBeInTheDocument();
     expect(stepByTitle(WIZARD.steps.select_number.title)).toHaveAttribute('data-status', 'done');
     expect(screen.queryByLabelText(WIZARD.steps.select_number.fieldLabel)).toBeNull();
@@ -563,8 +564,54 @@ describe('WhatsAppConnectWizard: the steps after connecting', () => {
     fireEvent.change(picker, { target: { value: SECOND_NUMBER_ID } });
 
     expect(
-      await screen.findByText(WIZARD.steps.select_number.done('+966501234568')),
+      await screen.findByText(WIZARD.steps.select_number.done(isolateLtr('+966501234568'))),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * TAR-806. `PhoneNumberSchema` is strict E.164, so the digits arrive as one
+   * unbroken run and stay in order — but the leading `+` is a neutral with
+   * nothing strong before it, and under `dir="rtl"` it takes the paragraph's
+   * direction: `+966501234567` renders `966501234567+`, measured in Chromium.
+   * On this screen that number is what an admin reads off to message from their
+   * own phone.
+   *
+   * Asserted on the label and the summary rather than on the rendered order,
+   * because jsdom implements no bidi algorithm — what is checkable here is that
+   * the isolate travels with the value everywhere it is shown, in an `<option>`
+   * and in a sentence, neither of which has an element to carry a `dir`.
+   */
+  it('isolates the phone number everywhere it is shown as a string', async () => {
+    renderWizard();
+    completeConnectStep();
+
+    const step = await screen.findByText(
+      WIZARD.steps.select_number.done(isolateLtr('+966501234567')),
+    );
+
+    expect(step).toBeInTheDocument();
+    // Belt and braces: the raw value, unisolated, must not be what was rendered.
+    expect(screen.queryByText(WIZARD.steps.select_number.done('+966501234567'))).toBeNull();
+  });
+
+  it('isolates the phone number in the picker, and leaves the verified name alone', async () => {
+    transport.connect.mockResolvedValue({
+      status: 'success',
+      account: connectedAccount({
+        accounts: [...connectedAccount().accounts, secondNumber()],
+      }),
+    });
+    renderWizard();
+    completeConnectStep();
+
+    const picker = await screen.findByLabelText(WIZARD.steps.select_number.fieldLabel);
+    const option = within(picker)
+      .getAllByRole('option')
+      .find((candidate) => (candidate as HTMLOptionElement).value === NUMBER_ID);
+
+    // The number is isolated; the verified name beside it is not — it is the one
+    // part of this label that is prose, and it may itself be Arabic.
+    expect(option?.textContent).toBe(`${isolateLtr('+966501234567')} — Northwind Support`);
   });
 
   it('reports a WABA that arrived with no numbers as a step that needs attention', async () => {
@@ -698,7 +745,7 @@ describe('WhatsAppConnectWizard: resuming', () => {
     const first = renderWizard();
 
     completeConnectStep();
-    await screen.findByText(WIZARD.steps.select_number.done('+966501234567'));
+    await screen.findByText(WIZARD.steps.select_number.done(isolateLtr('+966501234567')));
 
     // A reload, as far as this component can tell: the tree goes away and a new
     // one mounts against the same storage.
@@ -726,7 +773,7 @@ describe('WhatsAppConnectWizard: resuming', () => {
     const first = renderWizard();
 
     completeConnectStep();
-    await screen.findByText(WIZARD.steps.select_number.done('+966501234567'));
+    await screen.findByText(WIZARD.steps.select_number.done(isolateLtr('+966501234567')));
 
     first.unmount();
     renderWizard();
@@ -738,7 +785,7 @@ describe('WhatsAppConnectWizard: resuming', () => {
     renderWizard();
     completeConnectStep();
 
-    await screen.findByText(WIZARD.steps.select_number.done('+966501234567'));
+    await screen.findByText(WIZARD.steps.select_number.done(isolateLtr('+966501234567')));
 
     expect(screen.queryByText(WIZARD.restoredNotice)).toBeNull();
   });

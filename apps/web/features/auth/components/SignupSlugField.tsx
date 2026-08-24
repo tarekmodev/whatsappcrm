@@ -122,8 +122,18 @@ export function SignupSlugField({
                 {content.auth.signupSlugPreviewLabel}{' '}
                 {/* `<code>` for the same reason the settings screens use it for a
                     hostname: this is a literal to be read character by character,
-                    and the mono face is what makes `rn` and `m` different. */}
-                <code className={styles.hostname}>{`${value}.${platformHost}`}</code>
+                    and the mono face is what makes `rn` and `m` different.
+
+                    `dir="ltr"` because a hostname is not prose, and this one is
+                    typed. A slug starting with a letter is already one
+                    left-to-right run and needs no help — but `TenantSlugSchema`
+                    allows a leading digit, and an all-digit first label is its
+                    own run with a neutral dot after it: under `dir="rtl"`,
+                    `123.app.example.com` renders `app.example.com.123`. The
+                    preview appears on the first character typed, so `1` reaches
+                    it immediately. On the inline element and not the `<p>`, so
+                    the sentence stays aligned with the rest of the form. */}
+                <code className={styles.hostname} dir="ltr">{`${value}.${platformHost}`}</code>
               </p>
             )}
 

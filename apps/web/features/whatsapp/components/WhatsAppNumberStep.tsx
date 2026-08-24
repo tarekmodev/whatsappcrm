@@ -5,6 +5,7 @@ import { ErrorState } from '@/components/ui/ErrorState';
 import { Field } from '@/components/ui/Field';
 import { Select, type SelectOption } from '@/components/ui/Select';
 import { Stack } from '@/components/layout/Stack';
+import { isolateLtr } from '@/lib/locale/bidi';
 import { useContent } from '@/lib/content';
 import type { WhatsAppNumberProblem } from '../wizard';
 import styles from './WhatsAppWizardStep.module.css';
@@ -88,6 +89,14 @@ export function WhatsAppNumberStep({
  * The number, then the name Meta verified for it — the two things that tell an
  * admin which of their numbers this is. Built from `content` so a locale changes
  * the placeholder without touching this component.
+ *
+ * `isolateLtr` on the number because an `<option>` label is a string with no
+ * element to hang a `dir` on. Under `dir="rtl"` an E.164 number's leading `+`
+ * has no strong character before it, so it takes the paragraph's direction and
+ * renders at the trailing end — `+966501234567` as `966501234567+` — in a list
+ * whose entire job is telling two of the workspace's numbers apart. The verified
+ * name is left alone: it is the one part of this label that really is prose, and
+ * it may itself be Arabic.
  */
 function numberOptions(
   account: ConnectedWhatsAppBusinessAccountResponse,
@@ -99,8 +108,8 @@ function numberOptions(
       value: number.id,
       label:
         number.verifiedName === null
-          ? number.displayPhoneNumber
-          : `${number.displayPhoneNumber} — ${number.verifiedName}`,
+          ? isolateLtr(number.displayPhoneNumber)
+          : `${isolateLtr(number.displayPhoneNumber)} — ${number.verifiedName}`,
     })),
   ];
 }

@@ -47,11 +47,7 @@ export const metadata: Metadata = {
 };
 
 export default async function AuthLayout({ children }: { children: ReactNode }) {
-  const [theme, locale, branding] = await Promise.all([
-    readTheme(),
-    readLocale(),
-    readBranding(),
-  ]);
+  const [theme, locale, branding] = await Promise.all([readTheme(), readLocale(), readBranding()]);
 
   return (
     <div className={styles.layout}>
