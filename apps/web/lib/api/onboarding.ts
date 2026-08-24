@@ -14,8 +14,9 @@ import { authenticatedRequest } from '@/lib/api/authenticated';
  * Both go through `authenticatedRequest`, so the tenant they answer for is the
  * one the session cookie resolves to — never an id this process could pass. The
  * response is validated against the contract here and in exactly one place, which
- * is what makes swapping the mock transport for TAR-405's real endpoints a
- * configuration change rather than a component one.
+ * is what made swapping the mock transport for TAR-834's real endpoints a
+ * configuration change rather than a component one — no component was touched
+ * when they landed.
  */
 
 const ONBOARDING_PATH = '/v1/tenant/onboarding';
