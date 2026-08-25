@@ -49,12 +49,42 @@ export const CONTACT_PROJECTION = {
 
 export type ContactRow = Prisma.ContactGetPayload<{ select: typeof CONTACT_PROJECTION }>;
 
+/**
+ * `contacts.phone_e164` as the contract still publishes it — a string.
+ *
+ * The column went nullable in TAR-819 and `ContactResponse.phone` did not, on
+ * purpose. Nothing can create a contact without a phone number until TAR-822
+ * opens the Instagram inbound path, and widening a published response field to
+ * `null` is a contract change for every consumer in `apps/web` — it belongs in
+ * the release where a client can actually receive one, not in an additive schema
+ * migration. ADR 0013 rules on the column and not on this response; TAR-819
+ * flagged the question back to the Architect rather than deciding it here.
+ *
+ * So this is where that invariant is stated, and it throws rather than
+ * substituting a value. An empty string in an E.164 field would satisfy the
+ * types and publish a phone number nobody has; the same judgement
+ * `OutboundMessageDispatcher.send` makes about an unsendable attachment. When
+ * TAR-822 makes the null reachable, this is the line that says so.
+ */
+function publishedPhone(contact: ContactRow): string {
+  if (contact.phoneE164 === null) {
+    throw new Error(
+      `Contact ${contact.id} has no phone number. ContactResponse.phone is not ` +
+        `nullable yet — widening it is TAR-822's, along with the apps/web consumers.`,
+    );
+  }
+
+  return contact.phoneE164;
+}
+
 export function toContactResponse(contact: ContactRow): ContactResponse {
+  const phone = publishedPhone(contact);
+
   return {
     id: contact.id,
-    phone: contact.phoneE164,
+    phone,
     waProfileName: contact.displayName,
-    displayName: contact.displayName ?? contact.phoneE164,
+    displayName: contact.displayName ?? phone,
     email: contact.email,
     tags: contact.tags.map(({ tag }) => toTag(tag)),
     customFields: toCustomFieldValues(contact.customFields),

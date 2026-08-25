@@ -153,6 +153,21 @@ export class OutboundMessageDispatcher {
     const whatsappAccountId = message.conversation.whatsappAccountId;
     const to = message.conversation.contact.phoneE164;
 
+    if (to === null) {
+      // `contacts.phone_e164` went nullable in TAR-819, so a contact known only
+      // by an Instagram IGSID will one day reach here with no phone number.
+      // Nothing can create one until TAR-822, and when something does, the fix
+      // is a `SendPolicy` that refuses the send before it is queued (ADR 0013,
+      // decision 3) rather than a WhatsApp send with an empty recipient. So this
+      // is a fault rather than a rejection, and it fails loudly instead of
+      // guessing an address Meta would refuse anyway — the same call the
+      // unsendable-attachment branch below makes.
+      throw new Error(
+        `Message ${message.id} is addressed to a contact with no phone number, ` +
+          `which WhatsApp cannot send to.`,
+      );
+    }
+
     if (template !== undefined) {
       return this.sender.sendTemplate({
         whatsappAccountId,

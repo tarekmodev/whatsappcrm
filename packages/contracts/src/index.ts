@@ -46,6 +46,9 @@ export * from './sla';
 export * from './tickets';
 export * from './ticket-linking';
 
+// --- Channels ---------------------------------------------------------------
+export * from './channels';
+
 // --- WhatsApp channel -------------------------------------------------------
 export * from './whatsapp';
 

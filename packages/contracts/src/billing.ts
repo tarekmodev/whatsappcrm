@@ -30,6 +30,23 @@ export const PLAN_FEATURES = [
   'custom_domain',
   'advanced_reporting',
   'api_access',
+  // Per-channel connect gates (ADR 0013 decision 4, TAR-819). One per
+  // `ChannelKind`, and `CHANNEL_FEATURE_BY_KIND` in `./channels` is the only
+  // place the two vocabularies are mapped onto each other — a call site that
+  // builds the string with `` `channel_${kind}` `` gets no compile error when a
+  // kind is added and no feature is.
+  //
+  // **These are read fail-closed**, unlike every feature above them:
+  // `PlanFeaturesService.includes()` grants an unstated feature by design, which
+  // is right for `ai_chatbot` and exactly wrong for a channel the tenant was
+  // never sold. TAR-821 adds the second, refusing reader. That is only safe
+  // because `channel_whatsapp` is backfilled into every existing and every
+  // future-default entitlements row by
+  // `20260823140100_channel_entitlement_features` — see that migration for the
+  // four write sites.
+  'channel_whatsapp',
+  'channel_instagram',
+  'channel_messenger',
 ] as const;
 export const PlanFeatureSchema = z.enum(PLAN_FEATURES);
 export type PlanFeature = (typeof PLAN_FEATURES)[number];

@@ -162,7 +162,7 @@ curl https://acme.app.example.com/api/v1/billing/plans \
       "pricePerSeat": { "amountMinor": 2900, "currency": "USD" },
       "interval": "month",
       "entitlements": {
-        "features": ["assignment_rules", "sla_policies"],
+        "features": ["assignment_rules", "sla_policies", "channel_whatsapp"],
         "limits": {
           "seats": 3,
           "conversationsPerPeriod": 1000,
@@ -188,7 +188,8 @@ curl https://acme.app.example.com/api/v1/billing/plans \
           "sla_policies",
           "workflows",
           "advanced_reporting",
-          "api_access"
+          "api_access",
+          "channel_whatsapp"
         ],
         "limits": {
           "seats": 10,
@@ -270,7 +271,8 @@ curl https://acme.app.example.com/api/v1/billing/subscription \
         "sla_policies",
         "workflows",
         "advanced_reporting",
-        "api_access"
+        "api_access",
+        "channel_whatsapp"
       ],
       "limits": {
         "seats": 10,
@@ -288,7 +290,8 @@ curl https://acme.app.example.com/api/v1/billing/subscription \
       "sla_policies",
       "workflows",
       "advanced_reporting",
-      "api_access"
+      "api_access",
+      "channel_whatsapp"
     ],
     "limits": {
       "seats": 10,
